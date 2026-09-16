@@ -8,7 +8,7 @@ async function execute({id,request}) {
     let result;
     switch(request.operation) {
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
-      case "read": result = await wasm.raster_worker_read(Number(request.metadata),request.buffers[0]); break;
+      case "read": result = await wasm.raster_worker_read(request.metadata,request.buffers[0]); break;
       case "png": result = wasm.raster_worker_png(request.metadata,request.buffers); break;
       case "recover-list": result = await recovery("readonly", store=>store.getAllKeys()); break;
       case "recover-get": result = await recovery("readonly", store=>store.get(request.metadata)); break;

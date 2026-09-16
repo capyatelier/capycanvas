@@ -130,7 +130,7 @@ import kotlin.math.roundToInt
                     "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
                         host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                     }
-                    "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
+                    "brush_color" -> ColorControls(host)
                     "layers" -> LayerPanel(host, state, Modifier.heightIn(min = 240.dp, max = 480.dp))
                     "adjustments" -> AdjustmentPanel(host, state, Modifier.height(480.dp))
                     "properties" -> LayerPropertiesPanel(host, state)
@@ -182,15 +182,15 @@ import kotlin.math.roundToInt
       }
     }
 }
-@Composable internal fun ColorControls(host: CanvasHost, rgba: JSONArray) {
-    val values = (0..3).map { rgba.optDouble(it, 1.0).toFloat() }
-    Row(Modifier.fillMaxWidth().height(36.dp).background(Color(values[0], values[1], values[2], values[3]), RoundedCornerShape(6.dp))) {}
-    listOf("Red", "Green", "Blue").forEachIndexed { index, label ->
-        NumericSetting(label, values[index], host.catalog.getJSONObject("opacity")) { value ->
-                val changed = values.toMutableList(); changed[index] = value
-                host.dispatch(obj("type" to "set_color", "rgba" to JSONArray(changed)))
-        }
+@Composable internal fun ColorControls(host: CanvasHost) {
+    val state = host.panelContent?.objectOrNull("state")?.objectOrNull("colors") ?: return
+    val slot = if (state.optString("slot") == "background") "background" else "foreground"
+    ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
+        host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
     }
+    var palettes by remember { mutableStateOf(false) }
+    OutlinedButton({ palettes = true }) { Text("Palettes…") }
+    if (palettes) ColorLibraryDialog(host, slot, { palettes = false })
 }
 @Composable internal fun ConfigurePanel(host: CanvasHost, panel: JSONObject, onHeight: (Float) -> Unit = {}) {
     val density = LocalDensity.current.density

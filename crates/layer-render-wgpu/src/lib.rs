@@ -7,7 +7,6 @@
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
 pub mod native_tiles;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod snapshot;
 mod pixel_rect;
 mod submission;
@@ -743,7 +742,6 @@ pub struct WgpuRasterizer {
     paint_layers: Vec<PaintLayer>,
     raster: Option<raster::RasterRuntime>,
     document_color: layer_core::color::DocumentColor,
-    #[cfg(not(target_arch = "wasm32"))]
     native_edit: Option<raster::native_edit::NativeEdit>,
     raster_buffers: std::sync::Arc<raster::BufferPool>,
     layer_masks: layer_masks::MaskRenderer,
@@ -1133,7 +1131,6 @@ impl WgpuRasterizer {
             paint_layers: Vec::with_capacity(8),
             raster: None,
             document_color: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             native_edit: None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::default()),
             composite_texture: None,
@@ -1476,7 +1473,6 @@ impl WgpuRasterizer {
         layers: &[Layer],
     ) -> Result<bool, GpuRasterError> {
         let resized = self.ensure_document_metadata(extent, layers)?;
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit
             && u64::from(extent[0]) * u64::from(extent[1]) * 16 > native.display_dense_bytes
         {
@@ -3889,10 +3885,7 @@ impl WgpuRasterizer {
 impl CanvasRenderer for WgpuRasterizer {
     fn document_color(&self) -> layer_core::color::DocumentColor { self.document_color }
     fn supports_tiled_sources(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        { self.native_edit.is_some() }
-        #[cfg(target_arch = "wasm32")]
-        { false }
+        self.native_edit.is_some()
     }
     fn supports_raster_damage(&self) -> bool { true }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
@@ -3981,7 +3974,6 @@ impl CanvasRenderer for WgpuRasterizer {
             t.compiled_effects = scene.effects.compilations;
             t.resident_bytes += scene.scratch_bytes();
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit {
             t.resident_bytes += native.storage_bytes();
         }
@@ -4118,14 +4110,12 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
             scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
         }
         self.trim_native_color_cache(packet.dab_batches, packet.document_extent);
-        #[cfg(not(target_arch = "wasm32"))]
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
             // capture spare pool during loading, before the first stroke needs it.
@@ -4147,10 +4137,7 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         let started = self.telemetry.enabled.then(web_time::Instant::now);
         let scene_required = needs_scene(packet) || {
-            #[cfg(not(target_arch = "wasm32"))]
-            { self.native_edit.is_some() }
-            #[cfg(target_arch = "wasm32")]
-            { false }
+            self.native_edit.is_some()
         };
         // Staged native initialization already prepared these general layouts
         // and pipelines. Keep them while displaying the initial paper frame.
@@ -4646,7 +4633,6 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
         let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
 
         self.preview_damage = new_preview_damage;
@@ -5244,7 +5230,6 @@ impl CanvasRenderer for WgpuRasterizer {
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted();
         self.last_submission = Some(submission.clone());
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, submission)?;
         }

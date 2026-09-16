@@ -14,13 +14,13 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   console.log('Initial export',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length,header:Array.from(bytes.slice(0,16))}))'));
   assert.ok(await evaluate('[...rasterFiles.values()].some(bytes=>bytes[0]===137)'));
   await evaluate(`window.rasterBlank=[...rasterFiles.values()][0].slice();`);
-  const point=await evaluate('(()=>{const c=layerApp.app.camera();return{x:c.viewport[0]/2,y:c.viewport[1]/2}})()');
+  const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',75,1],['mouseReleased',75,0]]) {
     await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();
   }
   await wait('layerApp.state().document_file.modified');
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-  assert.equal(await evaluate('new TextDecoder().decode([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,11))'),'CAPYRASTER\x01');
+  assert.equal(await evaluate('new TextDecoder().decode([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,11))'),'CAPYRASTER\x04');
   console.log('Captured raster archive',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length}))'));
   await evaluate(`window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
     window.rasterManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));

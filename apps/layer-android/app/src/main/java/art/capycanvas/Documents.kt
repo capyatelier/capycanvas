@@ -64,7 +64,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val id = picker?.request?.getInt("id") ?: return
         picker = null; complete(id, false, error.message ?: "Could not open the file picker")
     }
-    fun create(request: JSONObject, width: Int, height: Int) = transfer(request, null, approval, width, height)
+    fun create(request: JSONObject, options: JSONObject) = transfer(request, null, approval, options.getJSONArray("extent").getInt(0), options.getJSONArray("extent").getInt(1), options)
     fun cancel(id: Int) = complete(id, false)
     fun close(id: Int, decision: String) {
         host.viewModelScope.launch {
@@ -79,7 +79,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         try { host.withNative { Native.documentComplete(it, id, success, message?.let(JSONObject::quote) ?: "null") }; host.documentChanged() }
         catch (e: Exception) { host.reportActionError(e.message ?: "Could not complete the file operation") }
     }
-    private fun transfer(request: JSONObject, uri: Uri?, approved: Pair<Long, Long>, width: Int = 0, height: Int = 0) {
+    private fun transfer(request: JSONObject, uri: Uri?, approved: Pair<Long, Long>, width: Int = 0, height: Int = 0, options: JSONObject? = null) {
         if (working) return
         working = true
         host.viewModelScope.launch {
@@ -118,6 +118,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 } else {
                     withContext(Dispatchers.IO) {
                         val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
+                        if (options != null) Native.projectOptions(task, options.toString())
                         Native.projectWork(task, fd, width, height)
                     }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
@@ -200,15 +201,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
             "new" -> key(id) {
-                var width by remember { mutableStateOf(options.array("extent").getInt(0).toString()) }; var height by remember { mutableStateOf(options.array("extent").getInt(1).toString()) }
-                val w = width.toIntOrNull(); val h = height.toIntOrNull()
-                AlertDialog(onDismissRequest = { controller.cancel(id) }, title = { Text(options.getString("new_title")) }, text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedTextField(width, { width = it }, label = { Text(options.getString("width_label")) }, modifier = Modifier.testTag("new-document-width"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
-                        OutlinedTextField(height, { height = it }, label = { Text(options.getString("height_label")) }, modifier = Modifier.testTag("new-document-height"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
-                    }
-                }, confirmButton = { TextButton({ controller.create(request, w!!, h!!) }, enabled = w != null && h != null && w in 1..options.getInt("max_dimension") && h in 1..options.getInt("max_dimension"), modifier = Modifier.testTag("new-document-create")) { Text("Create") } },
-                    dismissButton = { TextButton({ controller.cancel(id) }) { Text("Cancel") } })
+                NewDrawingDialog(host, options, { controller.cancel(id) }) { choices -> controller.create(request, choices) }
             }
             "confirm_close" -> AlertDialog(onDismissRequest = { controller.close(id, "cancel") }, title = { Text(document.getString("title")) },
                 text = { Text(options.getString("unsaved_description")) }, confirmButton = {

@@ -145,6 +145,7 @@ impl WgpuRasterizer {
 
     /// A private candidate shares immutable source samples with the current
     /// canvas and its workers, so preview/adoption cannot double that cache.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn color_candidate_staged_cached(
         &self,
         directory: &std::path::Path,
@@ -153,6 +154,16 @@ impl WgpuRasterizer {
         let mut device = PipelineDevice::cached(self.device().clone(), &self.adapter, directory);
         device.source_samples = self.device.source_samples.clone();
         Self::native_staged_on_device(self.adapter.clone(), device, self.queue.clone(), color)
+    }
+
+    /// Portable native integer SDR backing with Float32 working pixels.
+    pub fn from_wgpu_native_staged(
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        color: DocumentColor,
+    ) -> Result<Self, GpuRasterError> {
+        Self::native_staged_on_device(adapter, device.into(), queue, color)
     }
 
     fn native_staged_on_device(
@@ -172,6 +183,7 @@ impl WgpuRasterizer {
 
     /// Native document renderer for headless workflow qualification.
     /// Dab RGB values are linear coordinates in `color.space`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_native_headless(color: DocumentColor) -> Result<Self, GpuRasterError> {
         let mut r = pollster::block_on(Self::headless_with_working_format(
             wgpu::TextureFormat::Rgba32Float,
@@ -184,6 +196,7 @@ impl WgpuRasterizer {
 
     /// Capture is already on a worker and does not draw new strokes. Retain
     /// lazy pipeline recipes instead of warming every brush, tip and transform.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new_native_capture(color: DocumentColor) -> Result<Self, GpuRasterError> {
         let mut r = pollster::block_on(Self::headless_with_working_format(
             wgpu::TextureFormat::Rgba32Float,
@@ -243,6 +256,8 @@ impl WgpuRasterizer {
             runtime.worker = Some(CaptureWorker::new(
                 (*self.device).clone(),
                 self.raster_buffers.clone(),
+                #[cfg(target_arch = "wasm32")]
+                runtime.encoder.clone().ok_or_else(|| GpuRasterError::Effect("Browser raster worker is unavailable".into()))?,
             )?);
         }
         let runtime = self.raster.as_ref().unwrap();

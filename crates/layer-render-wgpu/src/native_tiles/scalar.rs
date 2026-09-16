@@ -6,12 +6,10 @@ use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, IntegerDepth, PixelDescriptor, TransferEncoding};
 
 /// Exact native coverage restored into a private R32Float working candidate.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct NativeScalarRestore<'a> {
     pub blob: &'a layer_core::raster::TileBlob,
     pub working: &'a wgpu::Texture,
 }
-#[cfg(not(target_arch = "wasm32"))]
 impl crate::WgpuRasterizer {
     /// Cold restore work shares the source/raster upload ceiling. Call outside
     /// input handling. No live page or revision is replaced here; discard all
@@ -57,7 +55,6 @@ impl crate::WgpuRasterizer {
         result
     }
 }
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn restore_upload(
     r: &crate::WgpuRasterizer,
     request: &NativeScalarRestore<'_>,

@@ -873,9 +873,11 @@ pub extern "system" fn Java_art_capycanvas_Native_colorHueStops(
     mut env: JNIEnv,
     _: JClass,
     shape: JString,
+    space: JString,
 ) -> jstring {
     let result = color_shape(&mut env, &shape).and_then(|shape| {
         let mut state = layer_ui::ColorState::default();
+        state.set_rgb_space(serde_json::from_value(serde_json::Value::String(read(&mut env, &space)?)).map_err(error)?)?;
         state.apply(layer_ui::ColorAction::Shape { shape })?;
         serde_json::to_string(state.wheel_hue_stops()).map_err(error)
     });
@@ -889,6 +891,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
     size: jint,
     hue: jfloat,
     shape: JString,
+    space: JString,
 ) -> jintArray {
     let result = (|| {
         if !(1..=2048).contains(&size) || !hue.is_finite() {
@@ -896,15 +899,8 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
         }
         let shape = color_shape(&mut env, &shape)?;
         let mut rgba = vec![0; size as usize * size as usize * 4];
-        let valid = match shape {
-            layer_ui::ColorShape::Circle => {
-                layer_ui::render_okhsv_disc(size as u32, hue, &mut rgba)
-            }
-            layer_ui::ColorShape::Triangle => {
-                layer_ui::render_hls_field(size as u32, hue, &mut rgba)
-            }
-            layer_ui::ColorShape::Square => false,
-        };
+        let space = serde_json::from_value(serde_json::Value::String(read(&mut env, &space)?)).map_err(error)?;
+        let valid = layer_ui::render_color_field(size as u32, shape, hue, space, layer_core::color::RgbSpace::Srgb, &mut rgba);
         if !valid {
             return Err("Unsupported color field raster".into());
         }

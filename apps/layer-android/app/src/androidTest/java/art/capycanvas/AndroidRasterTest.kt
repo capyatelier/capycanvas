@@ -157,11 +157,40 @@ class AndroidRasterTest {
         } finally {Native.projectFree(task)}
     }
     private fun manifest(bytes: ByteArray): JSONObject {
-        assertArrayEquals("CAPYRASTER\u0001\u0000".toByteArray(),bytes.copyOfRange(0,12))
+        assertArrayEquals("CAPYRASTER\u0004\u0000".toByteArray(),bytes.copyOfRange(0,12))
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+    @Test fun sixteenBitWideColorSurvivesSaveAndGpuReplacement() {
+        val job = native { handle ->
+            val (id, file) = request(handle, "new_document")
+            Native.projectTask(handle, id, "null", file.getLong("epoch"), file.getLong("revision"))
+        }
+        try {
+            Native.projectOptions(job, obj("extent" to org.json.JSONArray(listOf(513, 257)),
+                "color" to obj("space" to "ProPhoto", "depth" to "U16"), "background" to "White").toString())
+            Native.projectWork(job, -1, 513, 257)
+            native { Native.projectAdopt(it, job, "null") }
+        } finally { Native.projectFree(job) }
+        native { Native.dispatch(it, obj("type" to "invoke", "command" to "fit_canvas").toString()) }; tick()
+        stroke(0.0)
+        val before = manifest(save("wide16.capy"))
+        assertEquals("ProPhoto", before.getJSONObject("document").getJSONObject("color").getString("space"))
+        assertEquals("U16", before.getJSONObject("document").getJSONObject("color").getString("depth"))
+        assertTrue(before.getJSONArray("blobs").length() > 0)
+        assertTrue(before.getJSONArray("blobs").objects().all { it.getJSONObject("descriptor").getInt("bits_per_channel") == 16 })
+        native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(10_000) { host.failure != null }
+        compose.runOnUiThread { host.restartCanvas() }
+        compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+        assertNull(host.failure)
+        assertEquals(before.getJSONArray("blobs").toString(), manifest(save("wide16-recovered.capy")).getJSONArray("blobs").toString())
+        open(File(files, "wide16.capy"))
+        val after = manifest(save("wide16-reopened.capy"))
+        assertEquals(before.getJSONObject("document").getJSONObject("color").toString(), after.getJSONObject("document").getJSONObject("color").toString())
+        assertEquals(before.getJSONArray("blobs").toString(), after.getJSONArray("blobs").toString())
+    }
     @Test fun exactSnapshotsSurviveFilesGpuReplacementAndRecovery() {
         stroke(0.0)
         val first=save("first.capy")

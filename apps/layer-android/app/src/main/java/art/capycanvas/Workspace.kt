@@ -151,7 +151,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         AlertDialog(onDismissRequest = { host.customize(obj("type" to "close_control")) },
                             title = { Text(if (control == "brush_color") "Color" else "Opacity") },
                             text = { Column {
-                                if (control == "brush_color") ColorControls(host, state.getJSONObject("brush").array("color"))
+                                if (control == "brush_color") ColorControls(host)
                                 else NumericSetting("Opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
                                     host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                                 }

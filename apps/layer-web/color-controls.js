@@ -69,3 +69,37 @@ export function colorButton({app, label, element, button, change, current = () =
   };
   return {node, update, disable: disabled => node.disabled = disabled};
 }
+
+export function choosePalette({app, element, button, applyChange}) {
+  return new Promise(resolve => {
+    const root=element('dialog','document-dialog color-library'), form=element('form');form.method='dialog';
+    const select=element('select'), name=element('input'), list=element('div','color-library-list'), error=element('p'), footer=element('footer');
+    select.setAttribute('aria-label','Palette');name.setAttribute('aria-label','New palette or swatch name');name.placeholder='Name';name.maxLength=64;
+    let paletteId=app.state().colors.library.palettes[0].id, result=null;
+    const apply=action=>{try{applyChange(app.dispatch({type:'color',action:{op:'library',action}}));error.textContent='';return true;}catch(e){error.textContent=String(e);return false;}};
+    const refresh=()=>{
+      const library=app.state().colors.library;
+      if(!library.palettes.some(p=>p.id===paletteId))paletteId=library.palettes[0].id;
+      select.replaceChildren(...library.palettes.map(p=>{const option=element('option','',p.name);option.value=String(p.id);return option;}));select.value=String(paletteId);
+      const palette=library.palettes.find(p=>p.id===paletteId);list.replaceChildren();
+      const previews=[];for(let i=0;i<palette.swatches.length;i+=1024)previews.push(...app.color_ui({type:'preview',colors:palette.swatches.slice(i,i+1024).map(s=>s.color)}));
+      for(const [i,swatch] of palette.swatches.entries()){
+        const row=element('div','color-library-row'), use=button(swatch.name,()=>{result=swatch.color;root.close();},'color-library-swatch');
+        use.style.background=colorCss(previews[i]);use.title=previews[i].in_gamut?swatch.name:`${swatch.name} · outside sRGB preview gamut`;
+        const text=element('input');text.value=swatch.name;text.setAttribute('aria-label',`Name for ${swatch.name}`);text.maxLength=64;
+        row.append(use,text,button('Rename',()=>{if(apply({op:'rename',id:swatch.id,name:text.value}))refresh();}),
+          button('Remove',()=>{if(apply({op:'remove',id:swatch.id}))refresh();}));list.append(row);
+      }
+      if(!palette.swatches.length)list.append(element('p','','No saved colors yet.'));
+    };
+    select.onchange=()=>{paletteId=app.state().colors.library.palettes.find(p=>String(p.id)===select.value).id;refresh();};
+    const controls=element('div','color-library-actions');controls.append(
+      button('New Palette',()=>{if(apply({op:'create_palette',name:name.value})){paletteId=app.state().colors.library.palettes.at(-1).id;refresh();}}),
+      button('Rename Palette',()=>{if(apply({op:'rename_palette',id:paletteId,name:name.value}))refresh();}),
+      button('Remove Palette',()=>{if(confirm('Remove this palette and its saved colors?')&&apply({op:'remove_palette',id:paletteId}))refresh();}),
+      button('Save Current Color',()=>{const colors=app.state().colors,slot=colors.slot==='background'?'background':'foreground';if(apply({op:'store',palette:paletteId,name:name.value,color:colors[slot]}))refresh();})
+    );
+    footer.append(button('Close',()=>root.close()));form.append(element('h2','','Palettes'),select,name,controls,error,list,footer);root.append(form);document.body.append(root);
+    form.onsubmit=e=>e.preventDefault();root.addEventListener('close',()=>{root.remove();resolve(result);},{once:true});refresh();root.showModal();
+  });
+}

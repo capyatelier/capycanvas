@@ -1423,7 +1423,7 @@ try {
   await loadIcons();
   refreshPreferences = createPreferences({ element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences() });
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
-  editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake});
+  editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange});
   buildHeader();
   buildPanels();
   customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
@@ -1492,7 +1492,7 @@ async function startGpu() {
 }
 
 async function createGpu() {
-  return gpuOperation(() => WebGpu.create(canvas));
+  return gpuOperation(() => WebGpu.create(canvas, app.document_color()));
 }
 async function gpuOperation(operation) {
   // A browser API exception can escape a Wasm future without rejecting its

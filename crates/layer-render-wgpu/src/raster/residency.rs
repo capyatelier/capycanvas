@@ -5,13 +5,7 @@ use super::*;
 
 impl WgpuRasterizer {
     pub(crate) fn native_backing(&self, id: LayerId) -> Option<&Arc<RasterData>> {
-        #[cfg(not(target_arch = "wasm32"))]
         return self.native_edit.as_ref()?.backing.get(&id);
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = id;
-            None
-        }
     }
 
     pub(crate) fn native_color_tile(
@@ -45,7 +39,6 @@ impl WgpuRasterizer {
     }
 
     pub(crate) fn retain_native_backing(&mut self, layers: &[Layer], reset: bool) {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &mut self.native_edit {
             if reset {
                 native.backing.clear();
@@ -56,8 +49,6 @@ impl WgpuRasterizer {
                     .any(|l| l.id == *id || l.masks().any(|m| m.id == *id))
             });
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (layers, reset);
     }
 
     /// Live reconciliation may keep cold color in its original integer backing.
@@ -68,7 +59,6 @@ impl WgpuRasterizer {
         previous: &RasterData,
         data: &Arc<RasterData>,
     ) -> Result<(), GpuRasterError> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit {
             let paint = self.paint_layers.iter().find(|l| l.id == target);
             data.validate_index(self.document_extent, paint.is_none(), self.document_color())
@@ -128,7 +118,6 @@ impl WgpuRasterizer {
     /// those workloads need separate scheduling. No backing wait or readback
     /// happens here.
     pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], extent: [u32; 2]) {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &self.native_edit {
             if self.transform_preview.is_some()
                 || self.transforms.as_ref().is_some_and(|t| t.has_preview())
@@ -188,8 +177,6 @@ impl WgpuRasterizer {
                 });
             }
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (batches, extent);
     }
 }
 

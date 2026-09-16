@@ -11,7 +11,7 @@ pub type BrowserRasterEncoder = Rc<
 >;
 
 pub(super) struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<Vec<RasterCapture>>>,
+    sender: Option<mpsc::SyncSender<CaptureBatch>>,
     pending: Arc<AtomicUsize>,
     pub(super) staging: Arc<AtomicU64>,
     pub(super) error: Arc<std::sync::Mutex<Option<String>>>,
@@ -23,7 +23,7 @@ impl CaptureWorker {
         _pool: Arc<BufferPool>,
         encoder: BrowserRasterEncoder,
     ) -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<Vec<RasterCapture>>(16);
+        let (sender, receiver) = mpsc::sync_channel::<CaptureBatch>(16);
         let pending = Arc::new(AtomicUsize::new(0));
         let staging = Arc::new(AtomicU64::new(0));
         let error = Arc::new(std::sync::Mutex::new(None));
@@ -46,13 +46,11 @@ impl CaptureWorker {
                 })
                 .await;
                 let Some(captures) = captures else { break };
-                let size: u64 = captures.iter().map(|c| c.staging_bytes).sum();
-                for capture in captures {
-                    if failure.lock().unwrap().is_some() {
-                        drop(capture);
-                    } else if let Err(message) = capture.finish_browser(&encoder).await {
-                        *failure.lock().unwrap() = Some(message);
-                    }
+                let size = captures.storage_bytes();
+                if failure.lock().unwrap().is_some() {
+                    drop(captures);
+                } else if let Err(message) = captures.finish_browser(&encoder).await {
+                    *failure.lock().unwrap() = Some(message);
                 }
                 bytes.fetch_sub(size, Ordering::Release);
                 count.fetch_sub(1, Ordering::Release);
@@ -68,10 +66,13 @@ impl CaptureWorker {
     }
     pub(super) fn ready(&self) -> bool {
         self.pending.load(Ordering::Acquire) < 16
-            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
     }
     pub(super) fn submit(&self, captures: Vec<RasterCapture>) -> Result<(), GpuRasterError> {
-        let size = captures.iter().map(|c| c.staging_bytes).sum();
+        self.submit_batch(CaptureBatch::Mapped(captures))
+    }
+    pub(super) fn submit_batch(&self, captures: CaptureBatch) -> Result<(), GpuRasterError> {
+        let size = captures.storage_bytes();
         self.pending.fetch_add(1, Ordering::Release);
         self.staging.fetch_add(size, Ordering::Release);
         if self.sender.as_ref().unwrap().try_send(captures).is_err() {
@@ -97,7 +98,7 @@ impl Drop for CaptureWorker {
 }
 
 impl RasterCapture {
-    async fn finish_browser(mut self, encoder: &BrowserRasterEncoder) -> Result<(), String> {
+    pub(super) async fn finish_browser(mut self, encoder: &BrowserRasterEncoder) -> Result<(), String> {
         let result: Result<(), String> = async {
             if let Some(validation) = &mut self.validation {
                 (&mut validation.ready)

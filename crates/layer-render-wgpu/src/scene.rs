@@ -7,15 +7,12 @@ mod images;
 #[path = "filter_previews.rs"]
 mod previews;
 mod metadata;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
-#[cfg(not(target_arch = "wasm32"))]
 mod sources;
 
 #[derive(Clone)]
 enum Job {
-    #[cfg(not(target_arch = "wasm32"))]
     DecodedTile(std::sync::Arc<sources::PendingTile>),
     SourceUpload {
         buffer: wgpu::Buffer,
@@ -53,7 +50,6 @@ enum Job {
     },
 }
 pub(super) struct Scene {
-    #[cfg(not(target_arch = "wasm32"))]
     source_tiles: sources::DecodedTiles,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -83,7 +79,6 @@ pub(super) struct Pipelines {
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
-    #[cfg(not(target_arch = "wasm32"))]
     pub source: sources::Pipelines,
 }
 
@@ -129,17 +124,13 @@ impl Scene {
         ]
     }
     pub fn source_cache_work(&self) -> [u64; 2] {
-        #[cfg(not(target_arch = "wasm32"))]
-        { [self.source_tiles.hits, self.source_tiles.misses] }
-        #[cfg(target_arch = "wasm32")]
-        { [0; 2] }
+        [self.source_tiles.hits, self.source_tiles.misses]
     }
     pub fn scratch_bytes(&self) -> u64 {
         let mut bytes = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
             + self.images.storage_bytes();
-        #[cfg(not(target_arch = "wasm32"))]
         { bytes += self.source_tiles.gpu_bytes(); }
         bytes
     }
@@ -325,7 +316,6 @@ impl Scene {
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
             source_tiles: sources::DecodedTiles::new(r.document_color().space),
             pool: Vec::new(),
             used: Vec::new(),
@@ -371,7 +361,6 @@ impl Scene {
         self.used[id] = false;
     }
     fn source_tile(&mut self, r: &WgpuRasterizer, layer: &Layer, coordinate: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
             let space = r.document_color().space;
             let (tile, pending) = self.source_tiles.plan_raster(r, &blob, space, space)?;
@@ -382,14 +371,11 @@ impl Scene {
         if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
             return Ok(None);
         }
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
             if let Some(pending) = pending { self.jobs.push(Job::DecodedTile(std::sync::Arc::new(pending))); }
             Ok(Some(tile.view))
         }
-        #[cfg(target_arch = "wasm32")]
-        Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
     }
     /// Consume a bounded group before gathering the next one: these textures
     /// belong to the fixed, queue-ordered source cache.
@@ -400,7 +386,6 @@ impl Scene {
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::source_access::RawTile, GpuRasterError> {
-        #[cfg(not(target_arch = "wasm32"))]
         {
             debug_assert!(self.jobs.is_empty());
             let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
@@ -413,14 +398,10 @@ impl Scene {
             }
             Ok(tile)
         }
-        #[cfg(target_arch = "wasm32")]
-        Err(GpuRasterError::Color("Tiled source conversion is not integrated in this host".into()))
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
         self.source_tiles.prepare_transfer(&r.device, space)
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn restore_native_tiles(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -443,7 +424,6 @@ impl Scene {
         }
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn restore_native_scalars(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -460,7 +440,6 @@ impl Scene {
         }
         Ok(())
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepared_source_view(
         &self,
         source: &std::sync::Arc<layer_core::color::source::SourceImage>,
@@ -468,11 +447,9 @@ impl Scene {
     ) -> Option<&wgpu::TextureView> {
         self.source_tiles.prepared_view(source, coordinate)
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn prepared_raster_view(&self, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace) -> Option<&wgpu::TextureView> {
         self.source_tiles.prepared_raster_view(blob, space)
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
         let (tile, pending) = self.source_tiles.plan_raster(r, blob, space, r.document_color().space)?;
         if let Some(pending) = pending {
@@ -1331,7 +1308,6 @@ impl Scene {
         overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &r.native_edit
             && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?
         {
@@ -1521,7 +1497,6 @@ impl Scene {
         for (i, job) in self.jobs.iter().enumerate() {
             let data = match job {
                 Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data),
-                #[cfg(not(target_arch = "wasm32"))]
                 Job::DecodedTile(pending) => pending.data.as_ref(),
                 _ => None,
             };
@@ -1549,7 +1524,6 @@ impl Scene {
                 continue;
             }
             match job {
-                #[cfg(not(target_arch = "wasm32"))]
                 Job::DecodedTile(pending) => {
                     if self.source_tiles.uploads_full() {
                         Self::submit_source_uploads(r, encoder)?;
@@ -1773,7 +1747,6 @@ impl Pipelines {
             })
         });
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
             source: sources::Pipelines::new(device, &uniforms),
             uniforms,
             layout,

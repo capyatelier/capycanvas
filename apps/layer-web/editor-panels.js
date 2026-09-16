@@ -1,5 +1,6 @@
+import { chooseColor, choosePalette } from './color-controls.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake }) {
+export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange }) {
   const updates = new Map(), navigators = new Set();
   let positioning = 0, nextNavigator = 1;
   const color = action => dispatch({ type: "color", action });
@@ -74,6 +75,14 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
   }
   function colorWheel(root) {
     const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
+    const edit=button("Edit Color…",async()=>{
+      const slot=state().colors.slot==="background"?"background":"foreground";
+      const selected=await chooseColor({app,color:state().colors[slot],element,button});
+      if(selected)color({op:"set_slot",slot,color:selected});
+    });
+    const palettes=button("Palettes…",async()=>{const slot=state().colors.slot==="background"?"background":"foreground";
+      const selected=await choosePalette({app,element,button,applyChange});if(selected)color({op:"set_slot",slot,color:selected});});
+    const tools=element("div","color-library-actions");tools.append(edit,palettes);root.append(tools);
     const wheel=element("canvas","color-wheel");wheel.setAttribute("aria-label","Color wheel");stage.append(wheel);
     // Paint order also controls hit testing in the intentional swatch overlap.
     const choices=["background","foreground","transparent"].map(slot=>{
@@ -109,33 +118,20 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       if(wheel.width!==pixels){wheel.width=wheel.height=pixels;}
       ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
-      if(view.shape==="square") {
-        const [x,y,w]=g.square.map(v=>v*side);
-        ctx.save();ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();
-        const saturation=ctx.createLinearGradient(x,y,x+w,y);saturation.addColorStop(0,"white");saturation.addColorStop(1,rgba(view.wheel_hue_color));ctx.fillStyle=saturation;ctx.fillRect(x,y,w,w);
-        const value=ctx.createLinearGradient(x,y,x,y+w);value.addColorStop(0,"transparent");value.addColorStop(1,"black");ctx.fillStyle=value;ctx.fillRect(x,y,w,w);ctx.restore();
-      } else {
-        // The smooth disc needs one color sample per logical pixel; bilinear
-        // scaling retains its gradient while ring, clip and markers stay HiDPI.
-        const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
-        const key=JSON.stringify([view.shape,view.wheel_components[0],fieldPixels]);
-        if(key!==fieldKey) {
-          // Rust produces CPU pixels. Keep this staging canvas in CPU memory;
-          // drawing through an extra GPU Canvas 2D surface adds an upload/readback.
-          fieldKey=key;if(field.width!==fieldPixels){field.width=field.height=fieldPixels;}
-          const bytes=app.color_field_pixels(fieldPixels);
-          // The Wasm binding already copies its result into owned JS memory.
-          // ImageData can view those same bytes without another full image copy.
-          const clamped=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength);
-          fieldContext.putImageData(new ImageData(clamped,fieldPixels,fieldPixels),0,0);
-        }
-        ctx.save();
-        if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
-        ctx.drawImage(field,0,0,side,side);ctx.restore();
+      const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
+      const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],fieldPixels]);
+      if(key!==fieldKey) {
+        fieldKey=key;if(field.width!==fieldPixels){field.width=field.height=fieldPixels;}
+        const bytes=app.color_field_pixels(fieldPixels);
+        fieldContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),fieldPixels,fieldPixels),0,0);
       }
+      ctx.save();
+      if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
+      else if(view.shape==="square"){const [x,y,w]=g.square.map(v=>v*side);ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();}
+      ctx.drawImage(field,0,0,side,side);ctx.restore();
       // The ring depends on the color model and size, never the selected hue.
       // Retain its raster so a drag only repaints the changing field and markers.
-      const nextRing=JSON.stringify([view.shape,pixels,side,g,view.wheel_hue_start_degrees]);
+      const nextRing=JSON.stringify([view.rgb_space,view.shape,pixels,side,g,view.wheel_hue_start_degrees]);
       if(nextRing!==ringKey){
         ringKey=nextRing;ring.width=ring.height=pixels;ringContext.scale(pixels/side,pixels/side);
         const hue=ringContext.createConicGradient(view.wheel_hue_start_degrees*Math.PI/180,cx,cy);

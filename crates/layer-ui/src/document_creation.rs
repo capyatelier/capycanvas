@@ -137,6 +137,23 @@ impl NewDocumentSettings {
     }
 }
 
+/// Native and browser creation sheets use the same independent options.
+#[derive(Serialize)]
+pub struct NewDocumentForm {
+    pub options: NewDocumentOptions,
+    pub presets: Vec<NewDocumentPreset>,
+    pub spaces: Vec<(RgbSpace, &'static str)>,
+}
+impl NewDocumentSettings {
+    pub fn form(&self) -> NewDocumentForm {
+        NewDocumentForm {
+            options: self.defaults,
+            presets: NewDocumentPreset::builtins().into_iter().chain(self.presets.iter().cloned()).collect(),
+            spaces: RgbSpace::ALL.into_iter().map(|space| (space, space.name())).collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

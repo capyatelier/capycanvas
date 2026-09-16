@@ -131,6 +131,7 @@ pub struct SnapshotRenderer {
 impl SnapshotRenderer {
     /// Run on a worker: resolves pending immutable raster backing and prepares a
     /// native Float32 device. No full composite or full paint image is created.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         project: Project,
         background: [f32; 4],
@@ -140,6 +141,7 @@ impl SnapshotRenderer {
         Self::with_control(project, background, time, limits, CaptureControl::default())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_control(
         project: Project,
         background: [f32; 4],
@@ -234,7 +236,10 @@ impl SnapshotRenderer {
                 gpu.queue.clone(),
                 project.document.color,
             )?,
+            #[cfg(not(target_arch = "wasm32"))]
             None => WgpuRasterizer::new_native_capture(project.document.color)?,
+            #[cfg(target_arch = "wasm32")]
+            None => return Err(GpuRasterError::Color("Browser capture requires the canvas device".into())),
         };
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
@@ -267,6 +272,7 @@ impl SnapshotRenderer {
     }
     /// Full-resolution committed composite, including visible paper but never
     /// checkerboard, proof, monitor conversion, selection or warning overlays.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn histogram(&mut self) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
         let mut result = layer_core::color::histogram::Histogram::new(self.color());
         let mut y = 0;
@@ -289,6 +295,7 @@ impl SnapshotRenderer {
     /// separate captures of one tile row repeat composition, source decoding and
     /// mapping. The CPU band is at most 32 MiB; planning includes its GPU target
     /// and readback copy. Complex dependencies shrink the band before GPU work.
+    #[cfg(not(target_arch = "wasm32"))]
     fn read_band(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
         let [width, height] = self.extent;
         if y >= height {
@@ -310,10 +317,10 @@ impl SnapshotRenderer {
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
     /// mask-area tint, checkerboard or UI overlays participate. Waits on this
     /// capture only; call from the owning file/inspection worker.
-    pub fn read_region(
+    fn prepare_region(
         &mut self,
         [x, y, width, height]: [u32; 4],
-    ) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+    ) -> Result<RegionReadback, GpuRasterError> {
         self.check_cancelled()?;
         let region = PixelRect::new(
             x,
@@ -501,16 +508,53 @@ impl SnapshotRenderer {
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
+        Ok(RegionReadback { buffer, stride, width, height })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_region(&mut self, region: [u32; 4]) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        let readback = self.prepare_region(region)?;
         let (tx, rx) = mpsc::channel();
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result.map_err(|e| e.to_string()));
-            });
-        crate::raster::wait_mapping(&r.device, &rx).map_err(GpuRasterError::MapFailed)?;
-        let bytes = buffer
-            .slice(..)
-            .get_mapped_range()
+        readback.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
+        crate::raster::wait_mapping(&self.renderer.device, &rx).map_err(GpuRasterError::MapFailed)?;
+        self.finish_region(readback)
+    }
+
+    /// Yields to WebGPU while mapping one bounded Float32 region. Callers await
+    /// raster backing before creating the immutable capture, and await each
+    /// region before submitting the next; no blocking browser device poll.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn read_region_async(&mut self, region: [u32; 4]) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        let readback = self.prepare_region(region)?;
+        let (tx, rx) = futures_channel::oneshot::channel();
+        readback.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
+        rx.await.map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
+            .map_err(GpuRasterError::MapFailed)?;
+        self.finish_region(readback)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn read_band_async(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
+        let [width, height] = self.extent;
+        if y >= height { return Err(GpuRasterError::InvalidExtent); }
+        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        let mut rows = maximum.min(height - y);
+        loop {
+            match self.read_region_async([0, y, width, rows]).await {
+                Ok(pixels) => return Ok((rows, pixels)),
+                Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => rows = (rows / 2).max(16),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn finish_region(&mut self, readback: RegionReadback) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        let RegionReadback { buffer, stride, width, height } = readback;
+        let bytes = buffer.slice(..).get_mapped_range()
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
         let mut pixels = Vec::with_capacity(width as usize * height as usize);
         for row in bytes.chunks_exact(stride as usize) {
@@ -522,14 +566,24 @@ impl SnapshotRenderer {
         }
         drop(bytes);
         buffer.unmap();
-        r.refresh_storage_metrics();
+        self.renderer.refresh_storage_metrics();
         self.check_cancelled()?;
         Ok(pixels)
     }
 }
 
+struct RegionReadback {
+    buffer: wgpu::Buffer,
+    stride: u32,
+    width: u32,
+    height: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 mod output;
+#[cfg(not(target_arch = "wasm32"))]
 mod preview;
+#[cfg(not(target_arch = "wasm32"))]
 pub use preview::SnapshotPreview;
 
 #[cfg(test)]

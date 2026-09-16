@@ -20,7 +20,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
-  let buttonContact;
+  let buttonContact, colorKey;
   function clearButtonPress(e) {
     if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
     buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
@@ -175,8 +175,11 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     }
     root.dataset.size=size.id;
     const cssColor=rgba=>`rgb(${rgba.slice(0,3).map(v=>Math.round(v*255)).join(' ')} / ${rgba[3]})`;
-    root.style.setProperty('--header-foreground',cssColor(state().colors.foreground));
-    root.style.setProperty('--header-background',cssColor(state().colors.background));
+    const colors=[state().colors.foreground,state().colors.background], nextColors=JSON.stringify(colors);
+    if(nextColors!==colorKey){colorKey=nextColors;const previews=app.color_ui({type:"preview",colors});
+      root.style.setProperty('--header-foreground',cssColor(previews[0].rgba));
+      root.style.setProperty('--header-background',cssColor(previews[1].rgba));
+    }
     for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon})) {
       root.style.setProperty(`--header-${name}`,`${value}px`);
       bank.style.setProperty(`--header-${name}`,`${value}px`);

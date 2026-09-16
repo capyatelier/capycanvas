@@ -441,12 +441,7 @@ impl ColorState {
         self.render_field_in(side, RgbSpace::Srgb, rgba)
     }
     pub fn render_field_in(&self, side: u32, display: RgbSpace, rgba: &mut [u8]) -> bool {
-        let hue = self.wheel_components()[0];
-        match self.wheel_shape() {
-            ColorShape::Circle => render_okhsv_disc_in(side, hue, self.rgb_space, display, rgba),
-            ColorShape::Square => render_hsv_field_in(side, hue, self.rgb_space, display, rgba),
-            ColorShape::Triangle => render_hls_field_in(side, hue, self.rgb_space, display, rgba),
-        }
+        render_color_field(side, self.wheel_shape(), self.wheel_components()[0], self.rgb_space, display, rgba)
     }
     /// Only the Okhsv circle rotates: its RGB blue hue is about 264 degrees,
     /// compared with HSV's 240. Keep legacy host geometry and HSV/HLS unchanged.
@@ -941,6 +936,14 @@ pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
 }
 
 /// Opaque sRGB HSV field. Hosts retain it by hue/size and clip the rounded square.
+pub fn render_color_field(side: u32, shape: ColorShape, hue: f32, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
+    match shape {
+        ColorShape::Circle => render_okhsv_disc_in(side, hue, space, display, rgba),
+        ColorShape::Square => render_hsv_field_in(side, hue, space, display, rgba),
+        ColorShape::Triangle => render_hls_field_in(side, hue, space, display, rgba),
+    }
+}
+
 pub fn render_hsv_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
     render_hsv_field_in(side, hue, RgbSpace::Srgb, RgbSpace::Srgb, rgba)
 }

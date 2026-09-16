@@ -29,14 +29,12 @@ impl PublicationViews {
 /// Restore a committed integer tile into a private 256×256 RGBA32Float candidate.
 /// Original images and native paint share the renderer's bounded decode cache.
 /// The profile identities are explicit, independent of the integer descriptor.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct NativeTileRestore<'a> {
     pub blob: &'a std::sync::Arc<layer_core::raster::TileBlob>,
     pub space: layer_core::color::RgbSpace,
     pub destination: layer_core::color::RgbSpace,
     pub working: &'a wgpu::Texture,
 }
-#[cfg(not(target_arch = "wasm32"))]
 impl crate::WgpuRasterizer {
     /// Prepare and share the same transfer buffer used by source/raster decode
     /// with native writeback. Call during mode preparation, before interaction.

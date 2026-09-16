@@ -189,7 +189,7 @@ class AndroidColorPanelTest {
                     val geometry = view().getJSONObject("geometry")
                     val radius = (geometry.number("inner") + geometry.number("outer")) * wheel.width / 2
                     val marker = view().array("wheel_hue_marker").let { wheel.topLeft + Offset(it.getDouble(0).toFloat(), it.getDouble(1).toFloat()) * wheel.width }
-                    val stops = JSONArray(Native.colorHueStops(shape)).objects()
+                    val stops = JSONArray(Native.colorHueStops(shape, "Srgb")).objects()
                     for (degrees in listOf(15, 75, 135, 195, 255, 315)) {
                         val radians = degrees * PI / 180
                         val at = wheel.center + Offset(cos(radians).toFloat(), sin(radians).toFloat()) * radius

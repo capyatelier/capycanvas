@@ -758,3 +758,10 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .color-dialog form { display: flex; flex-direction: column; gap: 10px; }
 .color-form-preview { min-height: 48px; border: 1px solid var(--border); border-radius: 6px; }
 .property-color { min-width: 56px; min-height: 28px; max-width: 120px; overflow: hidden; text-indent: -9999px; border: 1px solid currentColor; border-radius: 6px; }
+
+.color-library { width: min(640px, 90vw); }
+.color-library-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 6px; }
+.color-library-list { max-height: 50vh; overflow: auto; }
+.color-library-row { display: flex; align-items: center; gap: 6px; margin-block: 6px; }
+.color-library-row input { width: 100px; flex: 1; min-width: 60px; }
+.color-library-swatch { width: 42px; height: 32px; font-size: 0; border: 1px solid currentColor; }

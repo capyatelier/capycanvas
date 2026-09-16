@@ -531,7 +531,8 @@ impl WebApp {
 
 #[wasm_bindgen]
 impl WebGpu {
-    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebGpu, JsValue> {
+    pub async fn create(canvas: web_sys::HtmlCanvasElement, color: JsValue) -> Result<WebGpu, JsValue> {
+        let color = serde_wasm_bindgen::from_value(color).map_err(js)?;
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -562,7 +563,8 @@ impl WebGpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("web canvas GPU"),
-                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE),
                 required_limits: limits,
                 ..Default::default()
             })
@@ -578,7 +580,7 @@ impl WebGpu {
         }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let presenter = ViewportPresenter::new(&device, config.format);
-        let mut renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue)
+        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
         raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
@@ -629,6 +631,9 @@ impl WebApp {
 impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
+    }
+    pub fn document_color(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.engine().document().color)
     }
     pub fn color_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;

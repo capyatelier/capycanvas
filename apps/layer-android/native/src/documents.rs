@@ -222,6 +222,22 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     Ok(())
 }
 
+/// Configure a private New task before its worker runs. No live state changes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
+    mut env: JNIEnv, _: JClass, handle: jlong, options: JString,
+) {
+    let result = (|| {
+        let options: layer_ui::NewDocumentOptions = serde_json::from_str(&read(&mut env, &options)?).map_err(error)?;
+        options.validate()?;
+        let Payload::Open { environment: Some(environment), .. } = &mut unsafe { task(handle) }.payload
+            else { return Err("New drawing task is no longer configurable".into()) };
+        environment.new_options = options;
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+
 /// The worker exclusively owns the job and detached descriptor for this call.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectWork(

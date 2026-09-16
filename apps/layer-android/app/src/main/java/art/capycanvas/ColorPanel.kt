@@ -64,9 +64,10 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         override val minimumTouchTargetSize = DpSize.Zero
     } }
     fun color(action: JSONObject) = host.dispatch(obj("type" to "color", "action" to action))
+    Column {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val side = minOf(maxWidth, (availableHeight - 16.dp).coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
-        SideEffect { onHeight(maxWidth.coerceAtLeast(128.dp).value, side.value) }
+        val side = minOf(maxWidth, (availableHeight - 112.dp).coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
+        SideEffect { onHeight(maxWidth.coerceAtLeast(128.dp).value + 96f, side.value + 96f) }
         val layout = remember(side) { JSONObject(Native.colorPanelLayout(side.value)) }
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.size(side).testTag("color-panel")) {
@@ -74,7 +75,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                 // Foreground paints/hits above background in their shared overlap.
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
-                    ColorSwatch(swatch, Modifier.place(layout.array(slot)), ::color)
+                    ColorSwatch(host, swatch, Modifier.place(layout.array(slot)), ::color)
                 }
                 view.array("other_shapes").values().forEachIndexed { index, value ->
                     val shape = value as String
@@ -97,6 +98,8 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                 }
             }
         }
+    }
+    ColorControls(host)
     }
 }
 
@@ -129,11 +132,12 @@ private class ReadoutCorner(private val radius: Float) : Shape {
     }
 }
 
-@Composable private fun ColorSwatch(swatch: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
+@Composable private fun ColorSwatch(host: CanvasHost, swatch: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
     val colors = LocalPalette.current
     val slot = swatch.getString("slot")
     val selected = swatch.getBoolean("selected")
     var menu by remember { mutableStateOf(false) }
+    var edit by remember { mutableStateOf(false) }
     val focusedWindow = LocalWindowInfo.current.isWindowFocused
     ColorButton(swatch.getString("label"), modifier.testTag("color-swatch-$slot").semantics { this.selected = selected }.clip(CircleShape)
         .then(if (slot == "transparent") Modifier else Modifier
@@ -195,7 +199,15 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             val stroke = (if (selected || hovered) 2.dp else 1.dp).toPx()
             drawCircle(colors.text.copy(alpha = if (selected || hovered) 1f else .25f), radius - stroke / 2, style = Stroke(stroke))
         }
+        if (edit) {
+            val paintSlot = if (slot == "background") "background" else "foreground"
+            val definition = host.panelContent!!.getJSONObject("state").getJSONObject("colors").getJSONObject(paintSlot)
+            ColorEditorDialog(host, definition, { edit = false }) { selected ->
+                edit = false; color(obj("op" to "set_slot", "slot" to paintSlot, "color" to selected))
+            }
+        }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Edit Color…") }, onClick = { menu = false; edit = true })
             DropdownMenuItem(text = { Text("Swap foreground and background") }, leadingIcon = { SharedIcon("color-swap", null) },
                 modifier = Modifier.testTag("color-swap-menu"), onClick = { menu = false; color(obj("op" to "swap")) })
         }
@@ -204,12 +216,13 @@ private class ReadoutCorner(private val radius: Float) : Shape {
 
 @Composable private fun ColorWheel(view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
+    val rgbSpace = view.getString("rgb_space")
     val hue = view.array("wheel_components").getDouble(0).toFloat()
     // ShaderBrush retains its native shader until the drawing size changes.
     // Keep the brush across color picks and overlap redraws; rebuilding it in
     // Canvas would also copy hundreds of stops and recreate the sweep shader.
-    val hueRing = remember(shape) {
-        val stops = JSONArray(Native.colorHueStops(shape)).objects().map { it.number("offset") to it.array("color").color() }.toTypedArray()
+    val hueRing = remember(shape, rgbSpace) {
+        val stops = JSONArray(Native.colorHueStops(shape, rgbSpace)).objects().map { it.number("offset") to it.array("color").color() }.toTypedArray()
         Brush.sweepGradient(*stops)
     }
     val focused = LocalWindowInfo.current.isWindowFocused
@@ -219,8 +232,8 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         val pixels = ceil(maxWidth.value * if (shape == "circle") 1f else density).toInt().coerceIn(1, 2048)
         // Like GTK/Web, sample the smooth disc once per logical pixel. Keep the
         // ring, clip, triangle and marker outlines at the tablet's physical DPI.
-        val field = remember(shape, hue, pixels) {
-            if (shape == "square") null else Bitmap.createBitmap(Native.colorFieldPixels(pixels, hue, shape), pixels, pixels, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val field = remember(shape, hue, pixels, rgbSpace) {
+            Bitmap.createBitmap(Native.colorFieldPixels(pixels, hue, shape, rgbSpace), pixels, pixels, Bitmap.Config.ARGB_8888).asImageBitmap()
         }
         Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = "Color wheel" }
             .pointerInput(shape, focused) {
@@ -255,10 +268,9 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                 val length = square.getDouble(2).toFloat() * side
                 val outline = Path().apply { addRoundRect(RoundRect(Rect(origin, Size(length, length)), CornerRadius(min(6.dp.toPx(), side * .02f)))) }
                 clipPath(outline) {
-                    drawRect(Brush.horizontalGradient(listOf(Color.White, view.array("wheel_hue_color").color()), origin.x, origin.x + length), origin, Size(length, length))
-                    drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black), origin.y, origin.y + length), origin, Size(length, length))
+                    drawImage(field, dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = FilterQuality.Low)
                 }
-            } else if (field != null) {
+            } else {
                 val outline = Path().apply {
                     if (shape == "circle") {
                         val radius = geometry.number("disc_radius") * side

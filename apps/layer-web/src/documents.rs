@@ -24,6 +24,7 @@ pub struct WebProject {
     revision: u64,
     closing: bool,
     recovered: bool,
+    photo: bool,
 }
 
 #[wasm_bindgen]
@@ -121,6 +122,8 @@ impl WebApp {
         epoch: u64,
         revision: u64,
         recovered: Option<bool>,
+        source_name: Option<String>,
+        options: JsValue,
     ) -> Result<js_sys::Promise, JsValue> {
         self.session.require_document_idle().map_err(js)?;
         if self.session.state().document_file.epoch != epoch
@@ -181,6 +184,10 @@ impl WebApp {
         let config = live.config.clone();
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
+        let photo_policy = self.session.state().settings.photo_open;
+        let new_options: layer_ui::NewDocumentOptions = if options.is_undefined() || options.is_null() {
+            layer_ui::NewDocumentOptions { extent: [width, height], ..self.session.state().settings.new_document.defaults }
+        } else { serde_wasm_bindgen::from_value(options).map_err(js)? };
         Ok(future_to_promise(async move {
             // Yield before decoding so the file-progress UI is painted first.
             yield_browser().await?;
@@ -191,12 +198,15 @@ impl WebApp {
                     .min(ProjectLimits::default().dimension),
                 ..Default::default()
             };
+            let photo = bytes.as_ref().is_some_and(|bytes| bytes.subarray(0, 4).to_vec() != b"CAPY");
             let project = match bytes {
-                Some(bytes) => raster_project::open(bytes, limits.dimension).await?,
-                None => layer_ui::new_drawing(width, height).map_err(js)?,
+                Some(bytes) => raster_project::open(bytes, raster_project::OpenOptions {
+                    dimension: limits.dimension, photo_policy, name: source_name.unwrap_or_else(|| "Photo".into()), recovered,
+                }).await?,
+                None => new_options.project().map_err(js)?,
             };
             let mut renderer =
-                WgpuRasterizer::from_wgpu_staged(adapter, device, queue).map_err(js)?;
+                WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, project.document.color).map_err(js)?;
             raster_worker::install(&mut renderer);
             let mut programs = Vec::new();
             for effect in project
@@ -259,6 +269,7 @@ impl WebApp {
                 revision,
                 closing,
                 recovered,
+                photo,
             }
             .into())
         }))
@@ -270,6 +281,7 @@ impl WebApp {
     ) -> Result<JsValue, JsValue> {
         let location: Option<DocumentLocation> =
             serde_wasm_bindgen::from_value(location).map_err(js)?;
+        let location = if project.photo { None } else { location };
         if project.closing && !self.session.state().document_file.close_ready {
             return Err(js("Document close was cancelled"));
         }

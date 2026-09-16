@@ -35,6 +35,7 @@ internal object Native {
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
     /** File worker only; consumes the detached descriptor, retains the task. */
+    @JvmStatic external fun projectOptions(task: Long, options: String)
     @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)
     @JvmStatic external fun projectAdopt(handle: Long, task: Long, location: String)
     @JvmStatic external fun projectFree(task: Long)
@@ -46,7 +47,7 @@ internal object Native {
     /** Pure shared color-wheel hit geometry, independent of the render thread. */
     @JvmStatic external fun colorWheelHit(request: String): String
     @JvmStatic external fun colorPanelLayout(size: Float): String
-    @JvmStatic external fun colorHueStops(shape: String): String
+    @JvmStatic external fun colorHueStops(shape: String, space: String): String
     /** Shared sRGB field raster as Android ARGB pixels; no session access. */
-    @JvmStatic external fun colorFieldPixels(size: Int, hue: Float, shape: String): IntArray
+    @JvmStatic external fun colorFieldPixels(size: Int, hue: Float, shape: String, space: String): IntArray
 }

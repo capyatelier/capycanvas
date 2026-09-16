@@ -37,7 +37,8 @@ impl WebApp {
             "zen_toolbars": {"sections": []},
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
             "document_options": json!({
-                "extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
+                "extent": state.settings.new_document.defaults.extent,
+                "creation": state.settings.new_document.form(),
                 "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
                 "width_label": layer_ui::DOCUMENT_WIDTH_LABEL,
                 "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
@@ -63,13 +64,8 @@ impl WebApp {
             return Err(js("Invalid color field size"));
         }
         let state = &self.session.state().colors;
-        let hue = state.wheel_components()[0];
         let mut pixels = vec![0; side as usize * side as usize * 4];
-        let valid = match state.wheel_shape() {
-            layer_ui::ColorShape::Circle => layer_ui::render_okhsv_disc(side, hue, &mut pixels),
-            layer_ui::ColorShape::Triangle => layer_ui::render_hls_field(side, hue, &mut pixels),
-            layer_ui::ColorShape::Square => false,
-        };
+        let valid = state.render_field(side, &mut pixels);
         if !valid {
             return Err(js("Color field does not use a raster"));
         }

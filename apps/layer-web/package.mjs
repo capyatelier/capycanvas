@@ -77,12 +77,12 @@ export function fingerprintAssets(directory) {
   publish("system-status.js");
   publish("header.js", replaceRequired(read(join(directory, "header.js")), "from './workspace-switcher.js'", `from "./${names["workspace-switcher.js"]}"`));
   publish("color-controls.js");
-  publish("editor-panels.js");
+  publish("editor-panels.js", replaceRequired(read(join(directory, "editor-panels.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
   publish("workspace-chrome.js");
   publish("documents.js");
   publish("preferences.js");
   publish("gpu.js");
-  publish("customization.js");
+  publish("customization.js", replaceRequired(read(join(directory, "customization.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
   publish("numeric.js");
   publish("layers.js");
   publish("effects.js", replaceRequired(read(join(directory, "effects.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));

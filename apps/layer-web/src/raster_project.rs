@@ -31,6 +31,7 @@ struct Metadata {
     rasters: Vec<Raster>,
     blobs: Vec<Blob>,
     sources: Vec<Source>,
+    originals: Vec<Original>,
 }
 #[derive(Serialize, Deserialize)]
 struct Raster {
@@ -50,6 +51,15 @@ struct Source {
     extent: [u32; 2],
     format: ProjectAssetFormat,
     data: Vec<usize>,
+}
+#[derive(Serialize, Deserialize)]
+struct Original {
+    layers: Vec<LayerId>,
+    kind: layer_core::color::source::SourceKind,
+    extent: [u32; 2],
+    resolution: Option<layer_core::ImageResolution>,
+    interpretation: layer_core::color::source::SourceInterpretation,
+    tiles: Vec<([u32; 2], usize)>,
 }
 struct Part {
     bytes: Arc<[u8]>,
@@ -96,6 +106,7 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
         rasters: Vec::new(),
         blobs: Vec::new(),
         sources: Vec::new(),
+        originals: Vec::new(),
     };
     let mut parts = Vec::new();
     let mut dedup = BTreeMap::new();
@@ -107,25 +118,31 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
             let mut tiles = Vec::new();
             for (key, tile) in &data.tiles {
                 let blob = tile.wait_backing()?;
-                let index = *dedup.entry(blob.digest).or_insert_with(|| {
-                    let index = metadata.blobs.len();
-                    metadata.blobs.push(Blob {
-                        descriptor: blob.descriptor,
-                        digest: blob.digest,
-                        data: parts.len(),
-                    });
-                    parts.push(Part {
-                        bytes: blob.compressed_owned(),
-                        range: 0..blob.compressed().len(),
-                    });
-                    index
-                });
+                let index = push_blob(&blob, &mut metadata.blobs, &mut parts, &mut dedup);
                 tiles.push((*key, index));
             }
             metadata.rasters.push(Raster {
                 target,
                 tiles,
                 watercolor: data.watercolor,
+            });
+        }
+    }
+    let mut originals = BTreeMap::new();
+    for layer in &project.document.layers {
+        let Some(source) = &layer.source else { continue };
+        let identity = Arc::as_ptr(source) as usize;
+        if let Some(&index) = originals.get(&identity) {
+            let original: &mut Original = &mut metadata.originals[index];
+            original.layers.push(layer.id);
+        } else {
+            let tiles = source.tiles.iter().map(|(coordinate, blob)| {
+                (*coordinate, push_blob(blob, &mut metadata.blobs, &mut parts, &mut dedup))
+            }).collect();
+            originals.insert(identity, metadata.originals.len());
+            metadata.originals.push(Original {
+                layers: vec![layer.id], kind: source.kind, extent: source.extent,
+                resolution: source.resolution, interpretation: source.interpretation.clone(), tiles,
             });
         }
     }
@@ -146,6 +163,16 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
         });
     }
     Ok((metadata, parts))
+}
+
+fn push_blob(blob: &Arc<TileBlob>, blobs: &mut Vec<Blob>, parts: &mut Vec<Part>,
+    dedup: &mut BTreeMap<[u8; 32], usize>) -> usize {
+    *dedup.entry(blob.digest).or_insert_with(|| {
+        let index = blobs.len();
+        blobs.push(Blob { descriptor: blob.descriptor, digest: blob.digest, data: parts.len() });
+        parts.push(Part { bytes: blob.compressed_owned(), range: 0..blob.compressed().len() });
+        index
+    })
 }
 
 async fn pack(project: Project) -> Result<JsValue, JsValue> {
@@ -197,7 +224,8 @@ async fn unpack(
         assets: BTreeMap::new(),
     };
     let budget = limits(ProjectLimits::default().dimension);
-    if metadata.blobs.len() > budget.tiles || metadata.rasters.len() > budget.layers * 2 {
+    if metadata.blobs.len() > budget.tiles || metadata.rasters.len() > budget.layers * 2
+        || metadata.originals.len() > budget.layers {
         return Err(js("Oversized project worker index"));
     }
     let mut tiles = Vec::new();
@@ -211,7 +239,7 @@ async fn unpack(
             TileBlob::from_compressed(blob.descriptor, blob.digest, bytes.into())
         }
         .map_err(js)?;
-        tiles.push(RasterTile::backed(tile));
+        tiles.push(Arc::new(tile));
         if copied >= BLOCK {
             copied = 0;
             documents::yield_browser().await?;
@@ -228,7 +256,7 @@ async fn unpack(
         };
         for (key, index) in raster.tiles {
             let tile = tiles.get(index).ok_or_else(|| js("Missing project tile"))?;
-            if data.tiles.insert(key, tile.clone()).is_some() {
+            if data.tiles.insert(key, RasterTile::backed_shared(tile.clone())).is_some() {
                 return Err(js("Duplicate project tile"));
             }
         }
@@ -261,6 +289,27 @@ async fn unpack(
             .sum::<usize>()
     {
         return Err(js("Incomplete project raster transfer"));
+    }
+    let mut source_layers = BTreeSet::new();
+    for original in metadata.originals {
+        let mut source = layer_core::color::source::SourceImage {
+            kind: original.kind, extent: original.extent, resolution: original.resolution,
+            interpretation: original.interpretation, tiles: BTreeMap::new(),
+        };
+        for (coordinate, index) in original.tiles {
+            let tile = tiles.get(index).ok_or_else(|| js("Missing original source tile"))?;
+            if source.tiles.insert(coordinate, tile.clone()).is_some() {
+                return Err(js("Duplicate original source tile"));
+            }
+        }
+        source.validate().map_err(js)?;
+        let source = Arc::new(source);
+        for id in original.layers {
+            if !source_layers.insert(id) { return Err(js("Duplicate original source layer")); }
+            let layer = project.document.layers.iter_mut().find(|l| l.id == id)
+                .ok_or_else(|| js("Missing original source layer"))?;
+            layer.source = Some(source.clone());
+        }
     }
     let mut total = 0u64;
     for source in metadata.sources {
@@ -311,25 +360,37 @@ pub(super) async fn save(project: Project) -> Result<JsValue, JsValue> {
     JsFuture::from(raster_worker::call("write", &metadata, &buffers)?).await
 }
 
-pub(super) async fn open(bytes: js_sys::Uint8Array, dimension: u32) -> Result<Project, JsValue> {
+#[derive(Serialize, Deserialize)]
+pub(super) struct OpenOptions {
+    pub dimension: u32,
+    pub photo_policy: layer_ui::PhotoOpenPolicy,
+    pub name: String,
+    pub recovered: bool,
+}
+pub(super) async fn open(bytes: js_sys::Uint8Array, options: OpenOptions) -> Result<Project, JsValue> {
     let buffers = js_sys::Array::new();
     buffers.push(&bytes);
     let wire = JsFuture::from(raster_worker::call(
-        "read",
-        &dimension.to_string(),
-        &buffers,
-    )?)
-    .await?;
+        "read", &serde_json::to_string(&options).map_err(js)?, &buffers,
+    )?).await?;
     let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
-        .as_string()
-        .ok_or_else(|| js("Missing project worker metadata"))?;
+        .as_string().ok_or_else(|| js("Missing project worker metadata"))?;
     let buffers = js_sys::Reflect::get(&wire, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
     unpack(&metadata, buffers, true).await
 }
 
 #[wasm_bindgen]
-pub async fn raster_worker_read(dimension: u32, bytes: Vec<u8>) -> Result<JsValue, JsValue> {
-    let project = Project::read(bytes.as_slice(), limits(dimension)).map_err(js)?;
+pub async fn raster_worker_read(options: &str, bytes: Vec<u8>) -> Result<JsValue, JsValue> {
+    let options: OpenOptions = serde_json::from_str(options).map_err(js)?;
+    let project = if bytes.starts_with(b"CAPY") {
+        Project::read(bytes.as_slice(), limits(options.dimension)).map_err(js)?
+    } else {
+        if options.recovered { return Err(js("Recovery file is not a native drawing")); }
+        let source = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).map_err(js)?;
+        let depth = options.photo_policy.editing_depth(source.interpretation.depth);
+        let name = options.name.rsplit_once('.').map_or(options.name.as_str(), |(stem, _)| stem);
+        layer_color::photo_project(source, name, depth).map_err(js)?
+    };
     drop(bytes);
     pack(project).await
 }

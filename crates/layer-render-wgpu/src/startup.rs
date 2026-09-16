@@ -225,7 +225,6 @@ impl WgpuRasterizer {
             required
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
-            #[cfg(not(target_arch = "wasm32"))]
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {
@@ -233,7 +232,6 @@ impl WgpuRasterizer {
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 required.render.push(mip.reduce.clone());
             }
-            #[cfg(not(target_arch = "wasm32"))]
             if document.layers.iter().any(|l| l.source.is_some()) {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }

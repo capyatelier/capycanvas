@@ -16,7 +16,6 @@ use layer_core::raster::MAX_CAPTURE_BYTES;
 // Immutable native outputs are separate from mapped transfer memory. A full
 // 60 MP U16 edit exceeds 256 MiB; color plus linked scalar planes fit this
 // publication bound. Readback still uses one 16 MiB chunk at a time.
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_NATIVE_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[cfg(target_arch = "wasm32")]
@@ -28,9 +27,7 @@ use browser::CaptureWorker;
 
 mod pool;
 pub(super) use pool::BufferPool;
-#[cfg(not(target_arch = "wasm32"))]
 mod deferred;
-#[cfg(not(target_arch = "wasm32"))]
 use deferred::{CaptureBatch, NativeCapture, NativeOutput};
 
 fn capture_allocation(bytes: u64) -> u64 {
@@ -599,13 +596,14 @@ impl WgpuRasterizer {
             .is_none_or(CaptureWorker::ready)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn prepare_source_backing(&mut self) -> Result<(), GpuRasterError> {
         let runtime = self.raster.get_or_insert_with(Default::default);
         if runtime.worker.is_none() {
             runtime.worker = Some(CaptureWorker::new(
                 (*self.device).clone(),
                 self.raster_buffers.clone(),
+                #[cfg(target_arch = "wasm32")]
+                runtime.encoder.clone().ok_or_else(|| GpuRasterError::Effect("Browser raster worker is unavailable".into()))?,
             )?);
         }
         Ok(())
@@ -674,7 +672,6 @@ impl WgpuRasterizer {
                     };
                     if runtime.targets.get(&id).is_some_and(|t| t.source != source) {
                         runtime.targets.remove(&id);
-                        #[cfg(not(target_arch = "wasm32"))]
                         if let Some(native) = &mut self.native_edit { native.backing.remove(&id); }
                     }
                     let wanted = match revision.try_data() {
@@ -1094,7 +1091,6 @@ impl WgpuRasterizer {
                     )
                 }
             };
-            #[cfg(not(target_arch = "wasm32"))]
             if self.native_edit.is_some() {
                 let color = self.document_color();
                 if key.plane == RasterPlane::Color {
@@ -1200,7 +1196,6 @@ impl WgpuRasterizer {
         self.preview_watercolor_wetness_pages.clear();
         self.preview_damage = PixelRect::EMPTY;
         self.preview_layer_id = None;
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(native) = &mut self.native_edit {
             native.backing.insert(target, Arc::new(data.clone()));
         }
@@ -1214,7 +1209,6 @@ impl WgpuRasterizer {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod native_tests;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) mod native_edit;
 mod residency;
 

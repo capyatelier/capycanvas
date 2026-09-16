@@ -1,3 +1,4 @@
+import { colorButton } from './color-controls.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, workspace, panels, groups,
@@ -142,11 +143,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       case "layer_opacity":
         range(() => state().layers.find((l) => l.selected).opacity,
           (opacity) => ({ type: "set_layer_opacity", opacity })); break;
-      case "brush_color":
-        input = element("input"); input.type = "color";
-        input.addEventListener("input", () => dispatch({ type: "set_color",
-          rgba: [1, 3, 5].map((i) => parseInt(input.value.slice(i, i + 2), 16) / 255).concat(1) }));
-        sync = () => { input.value = hexColor(state().brush.color); }; row.append(input); break;
+      case "brush_color": {
+        const selectedSlot=()=>state().colors.slot==="background"?"background":"foreground";
+        const picker=colorButton({app,label:"Edit Color…",element,button,current:selectedSlot,
+          change:color=>dispatch({type:"color",action:{op:"set_slot",slot:selectedSlot(),color}})});
+        input=picker.node;sync=()=>picker.update(state().colors[selectedSlot()]);row.append(input);break;
+      }
       case "brushes":
       case "layers": {
         input = element("select");

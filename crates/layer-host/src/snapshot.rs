@@ -230,7 +230,8 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("color_panel", &state.colors.view())?;
-        map.serialize_entry("document_options", &json!({"extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
+        map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
+            "creation": state.settings.new_document.form(),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
             "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
             "new_title": layer_ui::DocumentRequest::New.title(),

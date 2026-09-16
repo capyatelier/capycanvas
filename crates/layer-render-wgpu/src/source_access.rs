@@ -72,7 +72,6 @@ impl WgpuRasterizer {
             {
                 return &page.active().view;
             }
-            #[cfg(not(target_arch = "wasm32"))]
             if let Ok(Some(blob)) = self.native_color_tile(layer.id, neighbor)
                 && let Some(view) = self
                     .scene
@@ -81,7 +80,6 @@ impl WgpuRasterizer {
             {
                 return view;
             }
-            #[cfg(not(target_arch = "wasm32"))]
             if let Some(source) = self.tiled_sources.get(&layer.id)
                 && let Some(view) = self
                     .scene
@@ -113,7 +111,6 @@ impl WgpuRasterizer {
                 view: page.active().view.clone(),
             }));
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(blob) = self.native_color_tile(layer, coordinate)? {
             return self
                 .backed_raster_tile(&blob, self.document_color().space, encoder)
@@ -142,7 +139,6 @@ impl WgpuRasterizer {
         result.map(Some)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn backed_raster_tile(
         &mut self,
         blob: &std::sync::Arc<layer_core::raster::TileBlob>,

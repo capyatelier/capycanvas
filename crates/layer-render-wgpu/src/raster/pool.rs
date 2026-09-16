@@ -4,14 +4,12 @@ use std::sync::Mutex;
 
 pub(super) enum Resource {
     Buffer(wgpu::Buffer),
-    #[cfg(not(target_arch = "wasm32"))]
     Texture(wgpu::Texture),
 }
 impl Resource {
     pub fn bytes(&self) -> u64 {
         match self {
             Self::Buffer(buffer) => buffer.size(),
-            #[cfg(not(target_arch = "wasm32"))]
             Self::Texture(texture) => texture_bytes(texture),
         }
     }
@@ -22,7 +20,6 @@ pub(crate) struct BufferPool {
     pub bytes: AtomicU64,
     pub working: AtomicU64,
     pub transfer: AtomicU64,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) priority: Arc<deferred::PresentationPriority>,
 }
 impl BufferPool {
@@ -58,7 +55,6 @@ impl BufferPool {
             mapped_at_creation: false,
         })
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn take_native(&self, device: &wgpu::Device, descriptor: PixelDescriptor) -> Resource {
         if descriptor.channels == 1 {
             return Resource::Buffer(self.take_buffer(

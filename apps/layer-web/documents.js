@@ -14,23 +14,39 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
   });
   const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
   async function newDocument() {
-    const spec=app.editor_models(innerWidth,innerHeight).document_options;
+    const spec=app.editor_models(innerWidth,innerHeight).document_options,model=spec.creation;
     return dialog(spec.new_title,(form,finish)=>{
-      const fields=spec.extent.map((value,i)=>{
-        const label=element("label","document-size",i?spec.height_label:spec.width_label),input=element("input");
-        Object.assign(input,{type:"number",min:1,max:spec.max_dimension,step:1,value,required:true});
-        input.setAttribute("aria-label",label.textContent);label.append(input);form.append(label);return input;
+      const field=(title,node)=>{const label=element("label","document-size",title);node.setAttribute("aria-label",title);label.append(node);form.append(label);return node;};
+      const select=(title,choices,value)=>{const node=element("select");for(const [id,label] of choices){const option=element("option","",label);option.value=id;node.append(option);}node.value=value;return field(title,node);};
+      const preset=select("Preset",[["custom","Custom"],...model.presets.map((p,i)=>[String(i),p.name])],"custom");
+      const fields=model.options.extent.map((value,i)=>{
+        const input=element("input");Object.assign(input,{type:"number",min:1,max:spec.max_dimension,step:1,value,required:true});
+        return field(i?spec.height_label:spec.width_label,input);
       });
-      const footer=element("footer");cancel(footer,finish);const create=button("Create",()=>{if(form.reportValidity())finish(fields.map(i=>Number(i.value)));},"suggested-action");
-      footer.append(create);form.append(footer);
-      form.onsubmit=e=>{e.preventDefault();create.click();};
+      const space=select("Color space",model.spaces,model.options.color.space);
+      const depth=select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"]],model.options.color.depth);
+      const background=select("Background",[["White","White"],["Transparent","Transparent"]],model.options.background);
+      const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value});
+      preset.onchange=()=>{const p=model.presets[Number(preset.value)];if(!p)return;fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;};
+      const name=field("Save as preset",element("input"));name.maxLength=64;name.placeholder="Optional name";
+      const remember=element("input");remember.type="checkbox";field("Use as defaults",remember);
+      const error=element("p","error-message");form.append(error);
+      const footer=element("footer");cancel(footer,finish);
+      const create=button("Create",()=>{if(!form.reportValidity())return;const options=read();try{
+        if(name.value.trim()||remember.checked){const settings=structuredClone(app.state().settings.new_document);
+          if(name.value.trim())settings.presets.push({name:name.value.trim(),options});if(remember.checked)settings.defaults=options;
+          applyChange(app.dispatch({type:"new_document_settings",settings}));
+        }
+        finish(options);
+      }catch(e){error.textContent=String(e);}},"suggested-action");
+      footer.append(create);form.append(footer);form.onsubmit=e=>{e.preventDefault();create.click();};
     });
   }
   function chooseFile() {
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:false,types:[{description:"Capy Canvas drawing",accept:{"application/octet-stream":[".capy"]}}]})
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:false,types:[{description:"Drawing or photo",accept:{"application/octet-stream":[".capy"],"image/jpeg":[".jpg",".jpeg"],"image/png":[".png"],"image/tiff":[".tif",".tiff"]}}]})
       .then(async([handle])=>({file:await handle.getFile(),handle}));
     return new Promise(resolve=>{
-      const input=element("input");input.type="file";input.accept=".capy";input.hidden=true;document.body.append(input);
+      const input=element("input");input.type="file";input.accept=".capy,.jpg,.jpeg,.png,.tif,.tiff";input.hidden=true;document.body.append(input);
       const done=value=>{input.remove();resolve(value);};
       input.onchange=()=>done(input.files[0]?{file:input.files[0]}:null);input.oncancel=()=>done(null);input.click();
     });
@@ -72,12 +88,12 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
       if(r.type==="new"||r.type==="open") {
-        const fileState=app.state().document_file;let bytes,extent=[0,0],target=null;
-        if(r.type==="new") {extent=await newDocument();if(!extent){applyChange(app.finish_document(id,false));return;}}
+        const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;
+        if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
         else {const chosen=await chooseFile();if(!chosen){applyChange(app.finish_document(id,false));return;}
           bytes=new Uint8Array(await chosen.file.arrayBuffer());target=location(chosen.file.name,chosen.handle);}
         message("Preparing drawing…");
-        candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision));
+        candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options));
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
         await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
