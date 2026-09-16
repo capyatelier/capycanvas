@@ -22,7 +22,12 @@ pub(super) fn source_black(
         && intent == RenderingIntent::RelativeColorimetric
     {
         let perceptual = Pcs::new(profile, RenderingIntent::Perceptual)?;
-        pcs.roundtrip(&perceptual, [0.; 3])
+        // The v4 perceptual connection maps Lab's zero black into the reference
+        // medium black before entering the inverse table, even with BPC off.
+        let input = if profile.version() >= moxcms::ProfileVersion::V4_0 {
+            [0.00336, 0.0034731, 0.00287]
+        } else { [0.; 3] };
+        pcs.roundtrip(&perceptual, input)
     } else {
         pcs.to_xyz([if cmyk { 1. } else { 0. }; 4])
     };

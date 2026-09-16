@@ -5,6 +5,7 @@ use super::*;
 pub struct ProofLut {
     space: RgbSpace,
     edge: usize,
+    dark_grid: bool,
     // R varies fastest, matching a 3D GPU texture. Linear working RGB plus the
     // first and second gamut round-trip distances; alpha belongs to the sampled artwork, never this texture.
     samples: Box<[[f32; 5]]>,
@@ -20,8 +21,8 @@ impl ProofLut {
     ) -> Result<Self, String> {
         let transform = ProofTransform::new(space, recipe)?;
         let mut reason = String::new();
-        for edge in [65, 129] {
-            let result = Self::at_resolution(space, &transform, edge, &cancelled)?;
+        for (edge, dark_grid) in [(65, false), (129, false), (129, true)] {
+            let result = Self::at_resolution(space, &transform, edge, dark_grid, &cancelled)?;
             match result.quality(&transform, &cancelled) {
                 Ok(()) => return Ok(result),
                 Err(error) => reason = error,
@@ -38,6 +39,10 @@ impl ProofLut {
     pub fn edge(&self) -> u32 {
         self.edge as u32
     }
+    /// A squared encoded grid concentrates samples in steep shadow mappings.
+    pub fn dark_grid(&self) -> bool {
+        self.dark_grid
+    }
     pub fn samples(&self) -> &[[f32; 5]] {
         &self.samples
     }
@@ -49,6 +54,7 @@ impl ProofLut {
         space: RgbSpace,
         transform: &ProofTransform,
         edge: usize,
+        dark_grid: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Self, String> {
         let from_xyz = builtin(space)?.colorant_matrix().inverse().v;
@@ -62,7 +68,10 @@ impl ProofLut {
             }
             for g in 0..edge {
                 for r in 0..edge {
-                    let rgb = [r, g, b].map(|v| v as f32 / (edge - 1) as f32);
+                    let rgb = [r, g, b].map(|v| {
+                        let t = v as f32 / (edge - 1) as f32;
+                        if dark_grid { t * t } else { t }
+                    });
                     let sample = transform.sample(rgb)?;
                     let working = layer_core::color::rgb::apply(from_xyz, sample.xyz);
                     samples.push([
@@ -78,6 +87,7 @@ impl ProofLut {
         Ok(Self {
             space,
             edge,
+            dark_grid,
             samples: samples.into_boxed_slice(),
         })
     }
@@ -91,7 +101,8 @@ impl ProofLut {
         {
             return Err("Soft proof input is outside the bounded SDR domain".into());
         }
-        let coordinate = encoded.map(|v| v * (self.edge - 1) as f32);
+        let coordinate =
+            encoded.map(|v| (if self.dark_grid { v.sqrt() } else { v }) * (self.edge - 1) as f32);
         let mut low = coordinate.map(|v| (v as usize).min(self.edge - 2));
         let t: [f32; 3] = std::array::from_fn(|i| coordinate[i] - low[i] as f32);
         let mut axes = [0, 1, 2];
@@ -198,6 +209,7 @@ impl ProofLut {
                 }
             }
             if (direct.gamut_distance - 5.).abs() > 1.
+                && direct.gamut_roundtrips.iter().all(|v| (*v - 5.).abs() > 1.)
                 && (direct.gamut_distance > 5.) != (gamut_score(sample) > 5.)
             {
                 return Err(format!(

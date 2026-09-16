@@ -98,6 +98,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.document_file.unsaved_name = candidate.state.document_file.unsaved_name.clone();
         self.state.document_file.location = location;
         self.state.document_file.epoch = next;
+        self.state.soft_proof = false;
+        self.state.gamut_warning = false;
         self.state.document_file.close_ready = false;
         self.engine.start_document_view(
             self.state.camera.view(),

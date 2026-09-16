@@ -401,3 +401,59 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         );
     }
 }
+
+#[test]
+fn proof_view_matches_cpu_and_never_changes_artwork_or_export() {
+    use layer_core::color::ProofRecipe;
+    check_proof_view(&ProofRecipe::new("sRGB proof".into(), ColorProfile::Builtin(RgbSpace::Srgb)));
+}
+
+#[test]
+#[ignore = "local licensed CMYK profile in LAYER_GPU_PROOF_PROFILE"]
+fn proof_shadow_grid_matches_cpu_and_never_changes_artwork_or_export() {
+    use layer_core::color::{ProofRecipe, RenderingIntent};
+    let profile = ColorProfile::Icc(std::fs::read(std::env::var_os("LAYER_GPU_PROOF_PROFILE").unwrap()).unwrap().into());
+    let mut recipe = ProofRecipe::new("CMYK saturation".into(), profile);
+    recipe.conversion.intent = RenderingIntent::Saturation;
+    recipe.simulate_black_ink = false;
+    let lut = layer_color::ProofLut::build(RgbSpace::ProPhoto, &recipe, || false).unwrap();
+    assert!(lut.dark_grid(), "this fixture exercises the refined shadow grid");
+    check_proof_view(&recipe);
+}
+
+fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
+    for space in RgbSpace::ALL {
+        let lut = Arc::new(layer_color::ProofLut::build(space, recipe, || false).unwrap());
+        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
+            let format = wgpu::TextureFormat::Rgba8Unorm;
+            let target = texture(&r, format);
+            let target_view = target.create_view(&Default::default());
+            for surface in [SdrSurfaceColor::Srgb, SdrSurfaceColor::DisplayP3] {
+                let mut presenter = ViewportPresenter::for_surface(&r, format, surface).unwrap();
+                for codes in [[63124, 2917, 23000, 0], [32768, 23111, 11300, 1],
+                    [432, 893, 200, 17000], [61111, 51222, 9999, 65535], [30000; 4]] {
+                    frame(&mut r, &source(space, codes));
+                    let raw = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+                    let exported = r.readback_srgb_rgba8().unwrap();
+                    let alpha = codes[3] as f32 / 65535.;
+                    let input = std::array::from_fn(|i| if i == 3 { alpha }
+                        else { space.decode(codes[i] as f64 / 65535.) as f32 * alpha });
+                    for (proof, warning) in [(false, false), (true, false), (true, true), (false, true), (false, false)] {
+                        presenter.set_proof(&r, Some(lut.clone()), proof, warning).unwrap();
+                        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+                        let actual = crate::layer_tests::page_bytes(&r, &target);
+                        let expected = lut.apply_premultiplied(input, proof, warning);
+                        let expected = rgb::apply(space.linear_transform(surface.primaries()),
+                            [expected[0] as f64, expected[1] as f64, expected[2] as f64])
+                            .map(|v| v + 0.94 * (1. - alpha as f64));
+                        let i = (16 * 256 + 16) * 4;
+                        close(&actual[i..i+4], bytes(expected, 1.), "CPU/GPU proof parity");
+                        assert_eq!(r.readback_srgb_rgba8().unwrap(), exported, "proof must not reach export");
+                        assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), raw);
+                    }
+                }
+            }
+        }
+    }
+}

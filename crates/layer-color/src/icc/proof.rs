@@ -3,6 +3,7 @@ use super::*;
 use layer_core::color::ProofRecipe;
 mod black;
 mod lut;
+mod memory;
 mod view_lut;
 pub use view_lut::ProofLut;
 mod pcs;
@@ -35,7 +36,9 @@ impl ProofTransform {
     /// a profile has both device directions needed to simulate printing.
     pub fn new(space: RgbSpace, recipe: &ProofRecipe) -> Result<Self, String> {
         recipe.validate()?;
+        let parse_memory = memory::preflight(&recipe.profile)?;
         let profile = open(&recipe.profile)?;
+        memory::validate(&profile, parse_memory, recipe.conversion.intent)?;
         let source_profile = builtin(space)?;
         let intent = recipe.conversion.intent;
         let target = Pcs::new(&profile, intent)?;

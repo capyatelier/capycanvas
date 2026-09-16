@@ -1,6 +1,7 @@
 mod alert;
 mod canvas;
 mod display_color;
+mod proof_view;
 mod effects;
 mod files;
 mod histogram;

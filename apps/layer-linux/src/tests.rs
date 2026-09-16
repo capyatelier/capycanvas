@@ -9,6 +9,8 @@ mod native_navigation;
 mod color_panel;
 #[path = "color_management_tests.rs"]
 mod color_management;
+#[path = "proof_tests.rs"]
+mod proof;
 #[path = "effect_color_tests.rs"]
 mod effect_color;
 #[path = "export_resize_tests.rs"]

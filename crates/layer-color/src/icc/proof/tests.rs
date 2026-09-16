@@ -57,6 +57,36 @@ fn conflicting_policy_invalid_profile_and_outside_domain_fail_explicitly() {
 }
 
 #[test]
+fn proof_requires_complete_directions_matching_channels_and_an_image_profile() {
+    use moxcms::{LutDataType, LutStore, LutType, LutWarehouse};
+    let lut = LutWarehouse::Lut(LutDataType {
+        num_input_channels: 3, num_output_channels: 3, num_clut_grid_points: 2,
+        matrix: builtin(RgbSpace::Srgb).unwrap().colorant_matrix(),
+        num_input_table_entries: 2, num_output_table_entries: 2,
+        input_table: LutStore::Store16(vec![0, 65535].repeat(3)),
+        output_table: LutStore::Store16(vec![0, 65535].repeat(3)),
+        clut_table: LutStore::Store16(vec![0; 24]), lut_type: LutType::Lut16,
+    });
+    let mut profile = builtin(RgbSpace::Srgb).unwrap();
+    profile.lut_a_to_b_perceptual = Some(lut.clone());
+    assert!(Pcs::new(&profile, RenderingIntent::Perceptual).err().unwrap().contains("PCS-to-device"));
+    profile.lut_a_to_b_perceptual = None;
+    profile.lut_b_to_a_perceptual = Some(lut.clone());
+    assert!(Pcs::new(&profile, RenderingIntent::Perceptual).err().unwrap().contains("device-to-PCS"));
+    profile.lut_a_to_b_perceptual = Some(lut);
+    let Some(LutWarehouse::Lut(lut)) = &mut profile.lut_a_to_b_perceptual else { panic!() };
+    lut.num_input_channels = 4;
+    assert!(Pcs::new(&profile, RenderingIntent::Perceptual).err().unwrap().contains("channel count"));
+    let mut profile = builtin(RgbSpace::Srgb).unwrap();
+    profile.pcs = DataColorSpace::Lab;
+    assert!(Pcs::new(&profile, RenderingIntent::Perceptual).is_err());
+    let mut bytes = profile_bytes(&ColorProfile::default()).unwrap();
+    bytes[12..16].copy_from_slice(b"link");
+    let recipe = ProofRecipe::new("Device link".into(), ColorProfile::Icc(bytes.into()));
+    assert!(ProofTransform::new(RgbSpace::Srgb, &recipe).err().unwrap().contains("image color space"));
+}
+
+#[test]
 fn paper_scales_media_white_and_viewing_black_mapping_keeps_white() {
     let mut profile = builtin(RgbSpace::Srgb).unwrap();
     profile.media_white_point = Some(moxcms::Xyzd {
@@ -168,14 +198,17 @@ fn proof_matches_independent_cmm() {
         let expected = floats(&case["xyz"]);
         let gamut = floats(&case["gamut"]);
         assert_eq!(input.len(), expected.len());
-        assert_eq!(input.len() / 3, gamut.len());
+        assert_eq!(input.len(), gamut.len());
         let mut errors = Vec::new();
         let mut max_xyz = 0f64;
         let mut mismatches = 0;
+        let mut boundary = 0;
+        let mut raw_disagreements = 0;
+        let mut distance_error = 0f64;
         for ((rgb, xyz), gamut) in input
             .chunks_exact(3)
             .zip(expected.chunks_exact(3))
-            .zip(gamut)
+            .zip(gamut.chunks_exact(3))
         {
             let result = proof.sample(rgb.try_into().unwrap()).unwrap();
             let xyz = [xyz[0] as f64, xyz[1] as f64, xyz[2] as f64];
@@ -183,9 +216,12 @@ fn proof_matches_independent_cmm() {
             for i in 0..3 {
                 max_xyz = max_xyz.max((result.xyz[i] - xyz[i]).abs());
             }
-            if (gamut - 5.).abs() > 1. && (gamut > 5.) != (result.gamut_distance > 5.) {
-                mismatches += 1;
-            }
+            let ambiguous = gamut.iter().any(|v| (*v - 5.).abs() <= 1.);
+            boundary += usize::from(ambiguous);
+            let disagree = (gamut[0] > 5.) != (result.gamut_distance > 5.);
+            raw_disagreements += usize::from(disagree);
+            mismatches += usize::from(disagree && !ambiguous);
+            for i in 0..2 { distance_error = distance_error.max((f64::from(gamut[i+1]) - result.gamut_roundtrips[i]).abs()); }
         }
         let mut subset_report = Vec::new();
         for (name, range) in case["subsets"].as_object().unwrap() {
@@ -207,7 +243,8 @@ fn proof_matches_independent_cmm() {
             case["depth"], recipe.conversion.intent, recipe.conversion.black_point_compensation
         );
         eprintln!(
-            "{label}: xyz={max_xyz:.6} dE99={p99:.4} dEmax={max:.4} gamut_mismatch={mismatches}; {}",
+            "{label}: xyz={max_xyz:.6} dE99={p99:.4} dEmax={max:.4} gamut_mismatch={mismatches} raw_disagreement={raw_disagreements} boundary={boundary}/{} distance_error={distance_error:.5}; {}",
+            gamut.len() / 3,
             subset_report.join(" ")
         );
         if max_xyz > 0.02 || p99 > 2. || max > 4. || mismatches > 0 {

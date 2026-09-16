@@ -10,6 +10,7 @@ pub(crate) mod export;
 pub(crate) mod open;
 mod properties;
 mod color;
+mod proof;
 mod place;
 pub(crate) mod profile;
 mod source;
@@ -122,6 +123,7 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::SoftProofSetup => proof::run(&w).await,
                                 HostRequestKind::Histogram => {
                                     crate::histogram::show(&w);
                                     Ok(())

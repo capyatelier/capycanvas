@@ -46,6 +46,10 @@ pub struct ViewportPresenter {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
+    proof_buffer: wgpu::Buffer,
+    proof_uniform: wgpu::Buffer,
+    proof_options: [u32; 4],
+    proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
     selection_buffer: Option<wgpu::Buffer>,
     composite_view: Option<wgpu::TextureView>,
@@ -72,6 +76,69 @@ pub struct ViewportPresenter {
 }
 
 impl ViewportPresenter {
+    pub fn proof_storage_bytes(&self) -> u64 {
+        if self.proof_lut.is_some() { self.proof_buffer.size() } else { 0 }
+    }
+
+    /// Explicit viewport captures share immutable samples and the same viewing
+    /// options; they do not allocate another LUT. Export never calls this path.
+    pub fn inherit_proof(&mut self, source: &Self) {
+        self.proof_buffer = source.proof_buffer.clone();
+        self.proof_uniform = source.proof_uniform.clone();
+        self.proof_options = source.proof_options;
+        self.proof_lut = source.proof_lut.clone();
+        self.bind_group = None;
+    }
+
+    /// Publish a complete viewing derivative without changing artwork caches or
+    /// recompiling shaders. Hosts prepare the LUT on a separate CPU worker.
+    pub fn set_proof(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        lut: Option<std::sync::Arc<layer_color::ProofLut>>,
+        enabled: bool,
+        gamut: bool,
+    ) -> Result<(), GpuRasterError> {
+        if lut.as_ref().is_some_and(|l| l.space() != renderer.device.working_space()) {
+            return Err(GpuRasterError::Color("Proof preview working space is stale".into()));
+        }
+        let same = match (&self.proof_lut, &lut) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            let size = lut.as_ref().map_or(20, |l| l.byte_len()) as u64;
+            if size > renderer.device.limits().max_storage_buffer_binding_size as u64 {
+                return Err(GpuRasterError::Color("Proof preview exceeds the GPU buffer limit".into()));
+            }
+            let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("proof viewing samples"), size,
+                usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: true,
+            });
+            if let Some(lut) = &lut {
+                // Nested f32 arrays have no padding or uninitialized bytes.
+                let bytes = unsafe { std::slice::from_raw_parts(lut.samples().as_ptr().cast::<u8>(), lut.byte_len()) };
+                buffer.slice(..).get_mapped_range_mut()
+                    .map_err(|e| GpuRasterError::Color(e.to_string()))?.copy_from_slice(bytes);
+            }
+            buffer.unmap();
+            self.proof_buffer = buffer;
+            self.proof_lut = lut;
+            self.bind_group = None;
+        }
+        let options = self.proof_lut.as_ref().map_or([0; 4], |lut| [
+            lut.edge(), layer_core::color::RgbSpace::ALL.iter().position(|s| *s == lut.space()).unwrap() as u32 | (u32::from(lut.dark_grid()) << 8),
+            u32::from(enabled), u32::from(gamut),
+        ]);
+        if self.proof_options != options {
+            let bytes = unsafe { std::slice::from_raw_parts(options.as_ptr().cast::<u8>(), 16) };
+            renderer.queue.write_buffer(&self.proof_uniform, 0, bytes);
+            self.proof_options = options;
+        }
+        Ok(())
+    }
+
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self::with_device(&device.clone().into(), format, SdrSurfaceColor::Srgb)
     }
@@ -175,6 +242,26 @@ impl ViewportPresenter {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(20),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(16),
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -186,9 +273,11 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     crate::view_color::shader(device.working_space(), color.primaries()),
+                    include_str!("sdr_color.wgsl"),
+                    include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
                     include_str!("present.wgsl")
                 )
@@ -265,6 +354,17 @@ impl ViewportPresenter {
             pipeline,
             layout,
             uniform,
+            proof_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("disabled proof samples"), size: 20,
+                usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+            }),
+            proof_uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("proof viewing options"), size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            proof_options: [0; 4],
+            proof_lut: None,
             bind_group: None,
             selection_buffer: None,
             composite_view: None,
@@ -537,6 +637,8 @@ impl ViewportPresenter {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(next),
                     },
+                    wgpu::BindGroupEntry { binding: 7, resource: self.proof_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 8, resource: self.proof_uniform.as_entire_binding() },
                 ],
             }));
             self.document_extent = renderer.document_extent;

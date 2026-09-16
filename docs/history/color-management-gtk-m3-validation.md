@@ -23,8 +23,8 @@ Wayland presentation feedback, not physical input-to-photon. The pen-up test use
 12 800 ms, size-720 palette-knife contacts on a 4096² ProPhoto U16 document with
 32 paint layers. Every terminal raster commit and host-backed publication passes.
 Worker CPU p95/p99 1.030/1.210 ms; GPU p95/p99 1.194/1.409 ms. Process high-water
-reported by the wrapper is 455,376 KiB. Final proof measurements and broader
-baseline workload coverage remain outstanding.
+reported by the wrapper is 455,376 KiB. Additional fresh 24/45/60 MP baseline runs are retained alongside this run.
+Final proof measurements are recorded below once qualification finishes.
 
 ```sh
 cargo test -p layer-linux --release --locked --offline --no-run --message-format=json
@@ -40,88 +40,141 @@ LAYER_TEST_MONITOR=3840x2160@120 LAYER_TEST_SCALE=2 GSK_RENDERER=vulkan \
  native_penup_and_following_strokes artifacts/color-m3/baseline/penup
 ```
 
-## Numerical proof evaluator checkpoint
+## Numerical and storage qualification
 
-`layer-color` now evaluates original matrix/shaper and mft1/mft2/mAB/mBA stages
-parsed by moxcms. It applies explicit image-intent/BPC and separate paper/ink
-viewing policy in D50 XYZ. Unsupported/conflicting requests fail. Device gamut is
-determined by repeated relative PCS/device round trips; a channel-clipping test
-alone is not used. The recipe type is independent of delivery. It is not yet
-connected to saved documents, cached viewing or GTK controls at this checkpoint.
+Production uses portable Rust and the original matrix/shaper and
+mft1/mft2/mAB/mBA profile stages. The independent oracle is system LittleCMS 2.16
+(`2160`), no optimization/cache, full adaptation and an explicitly bounded physical
+device connection. The [design](../development/color-management-m3-gtk-design.md)
+records the failed prototypes, interpolation choices, v4 CMYK black correction,
+gamut-boundary reporting correction and refined shadow grid. Failed runs remain
+in the ignored artifact directory. No independent CMM is linked into production.
 
-The original compiled-CMM prototype failed the declared gates. Replacing its
-fixed intermediate grid with original profile stages resolves the errors without
-relaxing tolerances. A further diagnostic established LittleCMS uses trilinear
-interpolation for Lab-indexed reverse tables and tetrahedral device interpolation.
-The production evaluator matches those choices. Failed runs and the raw endpoint
-diagnostic are retained under `artifacts/color-m3/references/`.
+All **1,512 reference cases** pass: nine targets × four working spaces × two input
+depths × seven intent/BPC combinations × three simulation states. Each has 2,010
+cube/dark-neutral/dark-random/random samples. Maximum XYZ component difference:
+**0.001123**; largest case p99 CIE76: **0.1087**; maximum CIE76: **0.1601**.
+Subset maximum CIE76: cube 0.1482, dark-neutral 0.1360, dark-random 0.1601,
+random 0.1208. Black endpoints also pass their separate 0.0002 XYZ gate.
 
-The independent fixture generator uses system LittleCMS 2.16 (`2160`), no cache,
-no optimization, full adaptation, and an explicit bounded device step between CMM
-legs. The design records why unbounded matrix round trips were an invalid oracle
-for physical target gamut. Production retains only portable Rust dependencies.
+Gamut classification agrees outside the ±1 band around each decision threshold.
+Deduplicating the intent/simulation repetitions leaves 144,720 samples across
+72 working-space/target/depth combinations: **17,301 boundary samples**, including
+**45 raw classification disagreements**. Those exclusions are not an overall
+accuracy claim. Maximum difference between individual round-trip distances is
+0.16182. Raw distances and boundaries are retained in the reference fixtures.
 
-All **672 cases** pass: four working spaces × two quantized input depths × four
-targets × seven image intent/BPC combinations × three simulation states. Each case
-contains 2,010 cube/dark-neutral/dark-random/random inputs. Maximum XYZ component
-error is **0.000292**, largest case p99 CIE76 is **0.0486**, and maximum CIE76 is
-**0.0523**, inside the declared interoperability limits. All gamut classifications
-agree outside the ±1 CIE76 boundary band. Source and destination black detection
-is compared independently for every target/working profile and applicable intent.
+The corpus contains built-in v4 matrices, a v2 matrix written by LittleCMS,
+v2 CMYK mft2, two real v4 RGB mAB/mBA output profiles, a v4 CMYK mft2 exchange
+profile, and independently generated XYZ-PCS mft1/mft2/mAB profiles. The last
+three are synthetic encoding coverage, not printer-characterization evidence.
+`references/oracle-expanded/reference.json` records exact profile hashes, CMM
+version, sample subsets, black endpoints and fixture hashes. No third-party
+profile is redistributed. Downloaded target identities:
 
-The actual corpus currently covers built-in v4 RGB matrices, a v2 CMYK mft2
-profile installed with Krita, and two real WhiteWall v4 RGB mAB/mBA output
-profiles. More synthetic encoding/failure cases and v4 CMYK coverage remain to
-be added; these 672 cases are not the full phase-3 acceptance claim. No third-party
-profile is redistributed. `oracle-bounded/reference.json` contains exact bytes'
-SHA-256, source paths, CMM version, black endpoints, sample subsets and per-file
-fixture hashes.
+| Target | SHA-256 |
+| --- | --- |
+| Krita `cmyk.icm` | `156e7c14f244cfc4ed83a755ca4803d80e15dd249b40fae82cb127d3902e15c7` |
+| WhiteWall Fuji glossy | `dbeaef9a7db0d8b1c2e90a9f900be7ba73559461d1a3c5850fccc020c0010a95` |
+| WhiteWall William Turner | `ad081178572f4f4edfcf6ad49f6436e43ec27cc6cdf10bf157177007dd2030cf` |
+| ICC PRMG CMYK v2.0.1 | `4fefdeba2c2ee7b0ab7d7a8801b4cfdca824c106834d4054eac94ce9e8a0726d` |
+
+Sources: [WhiteWall profile instructions](https://service.whitewall.com/hc/en-us/articles/213813645-Does-WhiteWall-offer-color-management-ICC-color-profiles),
+[Fuji glossy](https://static.whitewall.com/ICC/WhiteWall_ICC_Lambda_Fuji_Crystal_DP_II_glossy.icc),
+[William Turner](https://static.whitewall.com/ICC/WhiteWall_ICC_Inkjet_Hahnemuehle_William_Turner.icc),
+[ICC exchange-profile description](https://registry.color.org/profile-library/exchange-space-profile),
+[PRMG profile](https://registry.color.org/profile-library/profiles/PRMG_v2.0.1_MR.icc).
+
+All **420 viewing-cache builds** pass the original off-grid appearance and neutral
+limits, covering five real/built-in targets, all four spaces, seven intent/BPC
+policies and three simulation states. 357 use 65³, 61 use uniform 129³ and two
+ProPhoto/CMYK saturation cases use squared-grid 129³. Each candidate checks 4,096
+independent off-grid inputs in both sRGB and P3 viewing. Samples occupy 5,492,500
+or 42,933,780 bytes; qualification cold builds range 87–4,166 ms (median 206 ms).
+The complete 420-case process peaked at 48,752 KiB RSS. This is transform-only
+memory, not GTK/driver memory. Profiles that exceed admission or quality limits
+fail explicitly; successful parsing alone is not acceptance for proofing.
+
+GPU parity tests pass for both uniform and refined shadow caches in every working
+space, both depths and both managed surfaces, with zero, near-zero, fractional
+and full coverage. Preview agrees with CPU within one encoded byte. Export bytes
+and exact artwork/composite buffers remain unchanged through proof/warning toggles.
+Native recipes preserve exact profile bytes, deduplicate source/proof payloads,
+participate in ordinary undo/redo and dirty checkpoints, and round-trip at both
+depths without changing raster data. Invalid profile direction/channel/class,
+version, recipe, archive reference and memory-admission cases fail.
 
 ```sh
 cargo run -p layer-color --example proof_profiles --locked --offline -- artifacts/color-m3/references/working
+python3 tools/validation/proof_synthetic.py artifacts/color-m3/references/synthetic
 python3 tools/validation/proof_reference.py artifacts/color-m3/references/working \
- artifacts/color-m3/references/oracle-bounded \
+ artifacts/color-m3/references/oracle-expanded \
  --target /usr/share/color/icc/krita/cmyk.icm \
  --target artifacts/color-m3/references/whitewall-fuji-glossy.icc \
  --target artifacts/color-m3/references/whitewall-william-turner.icc \
- --target artifacts/color-m3/references/working/srgb.icc
-LAYER_PROOF_REFERENCE="$PWD/artifacts/color-m3/references/oracle-bounded" \
+ --target artifacts/color-m3/references/prmg-cmyk.icc \
+ --target artifacts/color-m3/references/working/srgb.icc \
+ --target artifacts/color-m3/references/synthetic/matrix-v2.icc \
+ --target artifacts/color-m3/references/synthetic/mft1-xyz.icc \
+ --target artifacts/color-m3/references/synthetic/mft2-xyz.icc \
+ --target artifacts/color-m3/references/synthetic/mab-xyz.icc
+LAYER_PROOF_REFERENCE="$PWD/artifacts/color-m3/references/oracle-expanded" \
  cargo test -p layer-color --locked --offline --lib proof_matches_independent_cmm -- --ignored --nocapture
-cargo test -p layer-core -p layer-color --locked --offline --lib
+cargo run -p layer-color --release --locked --offline --example proof_lut -- \
+ /usr/share/color/icc/krita/cmyk.icm \
+ artifacts/color-m3/references/whitewall-fuji-glossy.icc \
+ artifacts/color-m3/references/whitewall-william-turner.icc \
+ artifacts/color-m3/references/prmg-cmyk.icc artifacts/color-m3/references/working/srgb.icc
+cargo test -p layer-render-wgpu --locked --offline proof_view_matches_cpu_and_never_changes_artwork_or_export -- --nocapture
+LAYER_GPU_PROOF_PROFILE=/usr/share/color/icc/krita/cmyk.icm \
+ cargo test -p layer-render-wgpu --locked --offline proof_shadow_grid_matches_cpu_and_never_changes_artwork_or_export -- --ignored --nocapture
+cargo test -p layer-core -p layer-color -p layer-ui -p layer-engine --locked --offline --lib
+cargo check --workspace --all-targets --locked --offline
 ```
 
-Lab download URLs are linked by the current
-[WhiteWall profile instructions](https://service.whitewall.com/hc/en-us/articles/213813645-Does-WhiteWall-offer-color-management-ICC-color-profiles):
-[Fuji glossy](https://static.whitewall.com/ICC/WhiteWall_ICC_Lambda_Fuji_Crystal_DP_II_glossy.icc),
-[William Turner](https://static.whitewall.com/ICC/WhiteWall_ICC_Inkjet_Hahnemuehle_William_Turner.icc).
-The shared run passed 78 core and 64 color tests; optional independent/device
-fixtures remain explicitly ignored in the ordinary suite. The proof reference
-test was run separately and passed. No render-path or UI performance acceptance
-is implied by this numerical checkpoint.
+Final shared results: 80 core, 67 color (five optional fixtures ignored), 431 UI
+and 63 engine tests pass. Workspace check passes with existing platform warnings.
+Reference and hardware GPU tests were run explicitly, separately from those
+ordinary suites. Logs are under `artifacts/color-m3/references/`.
 
-## Saved recipe and cached-view checkpoint
+## GTK workflow qualification
 
-Native projects now embed the optional proof recipe through the existing binary
-profile index. Identical source/proof profile bytes share one payload and one
-restored Arc. Recipe edits use ordinary undo/redo and dirty checkpoints without
-invalidating the artwork composite. Both depths pass exact save/reopen/re-save,
-profile deduplication, undo and unchanged raster digests. Malformed references,
-oversized/empty names and conflicting simulation policy fail before payload reads.
-The shared suite passes 80 core and 65 color tests (5 optional fixture tests ignored).
+The final release GTK test executable SHA-256 is
+`52b798b90d988e402d6ef15b7a8ffa9db1d0faefd008fd58236c13c666cd6a50`, preserved
+at `artifacts/color-m3/final-performance/gtk-tests`. Cargo artifact records are
+`references/gtk-final-build.{jsonl,log}`. Native tests each run in their own
+process because GTK initialization is confined to the initial test thread.
 
-The derived view uses 65³ or 129³ tetrahedral Float32 samples with three appearance
-components and two independent gamut round-trip distances. Interpolating the final
-discontinuous gamut score failed nine ProPhoto/CMYK cases; retaining the distances
-resolves all nine without changing thresholds. All 108 cache builds pass for
-three targets, four spaces, three intent/BPC choices and three simulation states.
-This is not yet the full cache intent/BPC/reference corpus. Cache sizes are
-5,492,500 or 42,933,780 bytes. Typical 65³ cold builds take 200–300 ms; 129³ builds
-take roughly 1.8–2.3 s on this host. Logs: `lut-distances.log` and
-`lut-rgb-distances.log`; command: the `layer-color` release example `proof_lut`
-with the three profile paths recorded above. The design records the revised
-96 MiB GPU cache budget needed for atomic replacement.
+The actual setup dialog, file chooser, pointer button signals and keyboard
+controller pass setup → compare → paint → exact undo/redo → Save As → reopen →
+explicit RGB U16 TIFF export. A CMYK proof is preserved alongside independent
+sRGB delivery; exported files exactly match a normal-view export. Temporary view
+toggles do not dirty the document, change its archive or compile another cache.
+Screenshots and exact files are in `artifacts/color-m3/gtk-journey/`.
 
-Fresh pre-render-integration native 24/45/60 MP navigation runs also pass using
-the saved baseline executable and the same 4K/200%/120 Hz flags. Artifacts are
-`baseline/navigation-{24mp,45mp,60mp}*`, including `/usr/bin/time -v` records.
-Detailed distributions and final comparisons remain outstanding.
+Separate tests pass setup/preparation cancellation, rapid target supersession,
+invalid saved-profile failure and recovery by undo. The old target is retired on
+failure and never relabelled as the requested target. Diagnostics and deliberately
+injected GPU failure/recovery pass with proof enabled in P3 U8 and ProPhoto U16;
+recovery reuses the validated CPU cache and republishes it to the replacement GPU.
+Expected injected GPU panic messages are retained in the recovery log.
+
+```sh
+# Build as above, preserve executable, then run each filter separately:
+GSK_RENDERER=vulkan bash tools/performance/gtk-raster.sh \
+ artifacts/color-m3/final-performance/gtk-tests \
+ native_proof_setup_compare_history_save_reopen_and_rgb_export \
+ artifacts/color-m3/final-performance/journey
+GSK_RENDERER=vulkan bash tools/performance/gtk-raster.sh \
+ artifacts/color-m3/final-performance/gtk-tests \
+ native_proof_cancellation_supersession_and_failed_profile \
+ artifacts/color-m3/final-performance/cancellation
+LAYER_BENCH_PROOF=/usr/share/color/icc/krita/cmyk.icm GSK_RENDERER=vulkan \
+ bash tools/performance/gtk-raster.sh artifacts/color-m3/final-performance/gtk-tests \
+ native_wide_color_gpu_failure_recovery artifacts/color-m3/final-performance/recovery
+```
+
+## Final performance and delivery
+
+Native navigation, drawing, concurrent save/export measurements and the standalone
+review build are being completed. Manual acceptance remains pending.

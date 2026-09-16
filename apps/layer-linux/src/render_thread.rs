@@ -67,6 +67,7 @@ impl Frame {
     }
 }
 enum Command {
+    Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     PrepareColor(Box<color::Request>),
     AdoptColor(u64),
     DiscardColor(u64, mpsc::Sender<()>),
@@ -112,6 +113,7 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    pub(crate) proof_owner: u64,
     transform_preview: Option<layer_render::TransformPreview>,
     initialized: bool,
     snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
@@ -152,6 +154,12 @@ pub struct RenderWorker {
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
 impl RenderWorker {
+    pub(crate) fn set_proof(&self, lut: Option<Arc<layer_color::ProofLut>>, enabled: bool, gamut: bool)
+        -> Result<mpsc::Receiver<Result<(), String>>, String> {
+        let (tx, rx) = mpsc::channel();
+        self.send(Command::Proof(lut, enabled, gamut, tx)).map_err(error)?;
+        Ok(rx)
+    }
     pub(super) fn capture(&self) -> Result<ReadbackImage, String> {
         self.capture_in(crate::display_color::ViewColor::Srgb)
     }
@@ -165,6 +173,8 @@ impl RenderWorker {
         area: gtk::glib::SendWeakRef<gtk::Picture>,
         color: layer_core::color::DocumentColor,
     ) -> Result<Self, String> {
+        static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let proof_owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
         let (commands, receiver) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
         let failure = Arc::new(std::sync::OnceLock::new());
@@ -226,6 +236,7 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
+            proof_owner,
             transform_preview: None,
             initialized: false,
             snapshot_gpu: None,
@@ -744,6 +755,7 @@ impl Worker {
             }
             if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
                 *snapshot = self.renderer.telemetry();
+                snapshot.resident_bytes += self.presenter.proof_storage_bytes();
             }
             #[cfg(test)]
             timing.presented(self.child.take_presented());
@@ -839,6 +851,11 @@ impl Worker {
                 continue;
             }
             match command {
+                Command::Proof(lut, enabled, gamut, reply) => {
+                    let result = self.presenter.set_proof(&self.renderer, lut, enabled, gamut).map_err(error);
+                    if result.is_ok() { self.pending_present = self.last_view.is_some(); }
+                    let _ = reply.send(result);
+                }
                 Command::PrepareColor(request) => self.prepare_color(*request, !pending_frames.is_empty()),
                 Command::AdoptColor(id) => {
                     self.adopt_color(id, telemetry_enabled)?;
@@ -1279,6 +1296,7 @@ impl Worker {
                 view_formats: &[],
             });
         let mut presenter = ViewportPresenter::for_surface(&self.renderer, texture.format(), color.surface()).map_err(error)?;
+        presenter.inherit_proof(&self.presenter);
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         presenter.set_overviews(&self.renderer, &self.overviews);
         let mut encoder = self

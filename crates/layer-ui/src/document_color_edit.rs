@@ -3,6 +3,23 @@ use super::*;
 use layer_core::{ColorTransition, PreparedColorTransition, Project};
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// A host validates the actual bidirectional ICC transform before publishing
+    /// this saved recipe. Temporary comparison toggles never enter history.
+    pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, String> {
+        self.require_document_idle()?;
+        if !CommandId::SoftProofSetup.available_on(self.state.platform) {
+            return Err("Soft proofing is unavailable on this host".into());
+        }
+        if recipe != self.engine.document().proof {
+            self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
+        }
+        self.state.soft_proof = self.engine.document().proof.is_some();
+        if !self.state.soft_proof { self.state.gamut_warning = false; }
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
+    }
+
     pub fn prepare_document_color_transition(
         &self,
         transition: ColorTransition,

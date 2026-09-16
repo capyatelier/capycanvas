@@ -124,7 +124,7 @@ def gamut_scores(reference, source, target, values):
     for i in range(0, len(values), 3):
         first = math.dist(original[i:i + 3], once[i:i + 3])
         second = math.dist(once[i:i + 3], twice[i:i + 3])
-        scores.append(first if second < 5 else first / second)
+        scores.extend([first if second < 5 else first / second, first, second])
     return scores
 
 
@@ -156,6 +156,7 @@ def main():
     manifest = {"lcms_version": reference.cms.cmsGetEncodedCMMversion(),
                 "flags": NO_OPTIMIZE, "adaptation": 1., "cases": [], "profiles": {},
                 "device_boundary": "float device coordinates clamped between independent CMM legs",
+                "gamut_components": ["score", "first_delta_e76", "repeat_delta_e76"],
                 "simulation": {"adapted": "relative white, compensate viewing black",
                                "ink": "relative white, retain target black",
                                "paper": "absolute white, retain target black"}}

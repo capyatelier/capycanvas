@@ -127,11 +127,38 @@ storage, exact editing and export retain the existing precision contract.
   p99 ≤ 0.5, maximum ≤ 2; neutral encoded error ≤ 1/255. Test interior off-grid
   samples and dark ramps, not only LUT vertices. Refine the method if it fails.
 - Gamut decisions must agree with the independent round-trip classifier away
-  from a ±1 CIE76 band around its threshold. Report boundary ambiguity explicitly;
+  from a ±1 band around each of its decision thresholds (first/repeated CIE76
+  distances and their dimensionless ratio). Report boundary ambiguity explicitly;
   do not count boundary exclusions as overall classification accuracy.
 - Include all intents, BPC enabled/disabled where meaningful, three simulation
   states, RGB matrix/LUT and CMYK targets, both depths/all working spaces, alpha
   0/near-zero/fractional/opaque, invalid and unsupported profiles.
+
+Extended-fixture correction: the first validation implementation checked only
+the final score's boundary. The synthetic XYZ-PCS LUT corpus exposed the second
+round-trip threshold: 4.99916 in production versus just above 5 in LittleCMS flips
+the final score from 8.339 to 1.664 despite closely agreeing color transforms.
+The reference fixture now retains both distances, and the declared boundary band
+is tested at **both** CIE76 decisions as well as the ratio. Report raw decision
+disagreements and excluded boundary samples separately, preserving the failed
+single-boundary run. Appearance and black endpoint tolerances are unchanged.
+
+The full intent corpus also exposed a ProPhoto/CMYK saturation shadow error of
+2.685 CIE76 at uniform 129³. A third candidate uses a squared encoded grid at the
+same 129³ size, with matching square-root lookup on CPU/GPU. Both failed cases
+then meet the original appearance limits; memory does not increase. Record the
+selected grid with measurements rather than silently accepting a coarse cache.
+
+Preparation admission counts tag aliases before parsing: at most 256 tags,
+8 MiB of summed encoded tag payloads and a 16 MiB file. A conservative estimate
+for parsed data, original transform stages and fixed overhead must fit 44 MiB.
+Together with two maximum-size CPU LUTs this fits the 128 MiB derived-cache
+budget. Unusually large otherwise-valid profiles fail with a memory-limit error.
+The budget excludes document-owned ICC bytes, ordinary renderer allocations and
+driver overhead; it is not a whole-process RSS limit. Only one CPU preparation
+runs per window, including setup, cancellation, reopening and target replacement.
+An old GPU cache is retired before background replacement; explicit setup keeps
+the old view until the new recipe and complete cache can be published together.
 
 ## Baseline, final gates and review
 

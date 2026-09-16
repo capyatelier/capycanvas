@@ -208,6 +208,9 @@ fn key(key: &str, command: bool, shift: bool) -> KeyChord {
 }
 pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     let chord = match id {
+        "command.SoftProofSetup" => KeyChord { key: "p".into(), command: true, shift: true, alt: true },
+        "command.SoftProof" => KeyChord { key: "p".into(), command: true, shift: false, alt: true },
+        "command.GamutWarning" => KeyChord { key: "g".into(), command: true, shift: true, alt: false },
         "tools.ink" => key("p", false, false),
         "tools.paint" => key("b", false, false),
         "tools.blend" => key("j", false, false),

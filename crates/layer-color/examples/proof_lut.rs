@@ -13,35 +13,39 @@ fn main() {
             for intent in [
                 RenderingIntent::RelativeColorimetric,
                 RenderingIntent::Perceptual,
+                RenderingIntent::Saturation,
                 RenderingIntent::AbsoluteColorimetric,
             ] {
+                for bpc in [false, true] {
+                    if bpc && intent == RenderingIntent::AbsoluteColorimetric { continue; }
                 for simulation in ["adapted", "ink", "paper"] {
                     let mut recipe = ProofRecipe::new(
                         path.file_name().unwrap().to_string_lossy().into(),
                         profile.clone(),
                     );
                     recipe.conversion.intent = intent;
-                    recipe.conversion.black_point_compensation =
-                        intent != RenderingIntent::AbsoluteColorimetric;
+                    recipe.conversion.black_point_compensation = bpc;
                     recipe.simulate_black_ink = simulation != "adapted";
                     recipe.simulate_paper = simulation == "paper";
                     let started = Instant::now();
                     match layer_color::ProofLut::build(space, &recipe, || false) {
                         Ok(lut) => println!(
-                            "{} {space:?} {intent:?} {simulation}: edge={} bytes={} cold_ms={:.2}",
+                            "{} {space:?} {intent:?} bpc={bpc} {simulation}: edge={} dark_grid={} bytes={} cold_ms={:.2}",
                             path.display(),
                             lut.edge(),
+                            lut.dark_grid(),
                             lut.byte_len(),
                             started.elapsed().as_secs_f64() * 1000.
                         ),
                         Err(error) => {
                             eprintln!(
-                                "{} {space:?} {intent:?} {simulation}: ERROR {error}",
+                                "{} {space:?} {intent:?} bpc={bpc} {simulation}: ERROR {error}",
                                 path.display()
                             );
                             failures += 1;
                         }
                     }
+                }
                 }
             }
         }

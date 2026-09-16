@@ -9,12 +9,17 @@ pub(crate) use library::manage;
 
 #[derive(Clone)]
 pub(super) enum ProfilePurpose {
+    Proof,
     Output,
     Source(SourceInterpretation),
 }
 impl ProfilePurpose {
     pub(super) fn validate(&self, profile: &ExportProfile, working: RgbSpace) -> Result<(), String> {
         match self {
+            Self::Proof => {
+                let recipe = layer_core::color::ProofRecipe::new(profile.name.clone(), profile.profile.clone());
+                layer_color::ProofTransform::new(working, &recipe)?;
+            }
             Self::Output => {
                 // An input profile need not be usable for delivery.
                 let recipe = ExportRecipe {
@@ -74,12 +79,15 @@ impl ProfileChooser {
         purpose: ProfilePurpose,
     ) -> Self {
         let is_output = matches!(purpose, ProfilePurpose::Output);
-        let prefix = if is_output { "export" } else { "source" };
-        let role = if is_output { "delivery" } else { "source" };
+        let is_proof = matches!(purpose, ProfilePurpose::Proof);
+        let prefix = if is_output { "export" } else if is_proof { "proof" } else { "source" };
+        let role = if is_output { "delivery" } else if is_proof { "proof" } else { "source" };
         let row = adw::ActionRow::builder()
             .title("ICC profile")
             .subtitle(if is_output {
                 "Choose an RGB, grayscale or CMYK delivery profile"
+            } else if is_proof {
+                "Choose an RGB or CMYK printer and paper profile"
             } else {
                 "Choose a profile matching the original image channels"
             })
@@ -236,6 +244,8 @@ async fn choose_file(parent: &adw::ApplicationWindow, working: RgbSpace, purpose
     let dialog = gtk::FileDialog::builder()
         .title(if matches!(purpose, ProfilePurpose::Output) {
             "Choose delivery profile"
+        } else if matches!(purpose, ProfilePurpose::Proof) {
+            "Choose proof profile"
         } else {
             "Choose source profile"
         })
