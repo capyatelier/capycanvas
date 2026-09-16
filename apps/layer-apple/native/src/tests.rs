@@ -10,6 +10,8 @@ mod color;
 mod document_color;
 #[path = "source_tests.rs"]
 mod source;
+#[path = "inspection_tests.rs"]
+mod inspection;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {

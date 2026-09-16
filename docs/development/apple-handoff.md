@@ -4,7 +4,7 @@ For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
 paint/palette workflows, retained photo Open/Place/Paste and document profile/depth
-editing, retained-source editing and ICC file import are integrated; the remaining host workflows and device
+editing, retained-source editing, ICC file import and histogram/sampling are integrated; the remaining host workflows and device
 acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
@@ -437,9 +437,50 @@ Artist review apps and drawings are preserved. The isolated Mac test app is
 closed after testing. Main was fetched with no incoming changes before this
 grouped milestone.
 
-Next are histogram/sampling, retained photo corrections/masks, ICC library and
-profiled export, managed displays and remaining device/performance acceptance.
+The subsequent inspection milestone below closes histogram/sampling. Retained
+photo corrections/masks, ICC library/profiled export, managed displays and
+remaining device/performance acceptance stay open.
 The overall Apple goal remains incomplete.
+
+## Histogram and sample-area workflows
+
+Both Apple hosts now expose the shared full-resolution histogram in a nonmodal
+inspector: RGB/individual channels/luminance, log scale, clipping/endpoints,
+manual Refresh and debounced Auto update. Immutable project/GPU capture stays
+on the existing owner/worker boundary. Document changes, closure and canvas
+loss cancel stale work; animated effects disclose the captured time. Visible
+paper participates while transparent pixels and display overlays do not.
+Point, 3×3 and 5×5 controls now use the existing shared eyedropper model for
+both Visible color and Layer color; no host-side averaging is added.
+
+The known-pixel Metal fixture exposed a real shared readback defect: an omitted
+row pitch loses lower rows of area samples. Direct GPU requests reproduce it
+independently of pointer delivery. One explicit aligned row pitch fixes the
+existing per-row copies while retaining tightly packed, bounded storage.
+Before/after raw texels are retained with the failed run; temporary diagnostics
+are removed. Coverage-weighted document-linear averages, tagged paint,
+independent brush opacity and unchanged artwork/history now pass on both Apple
+policies. Histogram tests also cover P3/U8 and ProPhoto/U16, all captured pixels,
+partial/zero alpha, visible paper, immutable revision identity and cancellation.
+
+All 65 Apple bridge tests, 456 active shared UI/host tests and five existing
+renderer sampling tests pass; one pre-existing shared case remains ignored.
+The Swift/Metal workflow passes both policies, including manual and automatic
+refresh, Undo, close/reopen with late worker results, and sample-control selection.
+Evidence is `artifacts/apple-histogram-v1/`.
+
+The native Mac workflow passes editing with the inspector open, manual/automatic
+refresh, channels/log scale, close/reopen and all sampling choices. The first UI
+fixture read AppKit text labels instead of their values; the corrected check
+passes. Its isolated window is resized clear of the deferred iCloud prompt,
+without interacting with that permission. Captures expose a minor shadow issue;
+the final presentation limits the shadow to the card background. Both final
+Release builds pass without compiler warnings. The final native run passes one
+test with no failures/skips; all three final captures are reviewed. Physical UIKit
+controls and sustained inspection performance remain unqualified. The installed
+artist review apps and drawings are preserved. Remaining phase 2 work starts with photo
+corrections/masks, ICC library/profiled export and managed displays; provider,
+61 MP and sustained performance acceptance remain open.
 
 ## Native provider acceptance
 

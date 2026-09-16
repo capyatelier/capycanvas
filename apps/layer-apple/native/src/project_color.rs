@@ -182,6 +182,7 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
     let result = task.perform(|payload| {
         json = match payload {
             Payload::Info(info) => serde_json::to_string(&info.describe()?),
+            Payload::Inspection(inspection) => serde_json::to_string(&inspection.histogram(task)?),
             Payload::Source(source) => serde_json::to_string(&source.details()?),
             Payload::Color(t) => serde_json::to_string(&serde_json::json!({
                 "color":t.original.document.color, "result":t.candidate.as_ref().map(|p| p.document.color),

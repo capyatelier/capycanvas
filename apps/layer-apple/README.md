@@ -977,6 +977,33 @@ overview pixels, clipping, transparency, camera changes and resource reuse.
 Full visual and physical performance acceptance remains in
 [the matrix](../../docs/history/apple-acceptance.md).
 
+## Histogram and color sampling
+
+View → Histogram opens a nonmodal inspector on both Apple hosts. RGB/luminance,
+linear/log chart scaling, clipping/endpoints, manual Refresh and debounced Auto
+update use the shared full-resolution committed composite. Visible paper counts;
+transparent pixels and display/selection overlays do not. Animated effects report
+the captured time. Closing, replacing the drawing or editing it cancels obsolete
+worker results. Capture retains immutable project/GPU state and never a session
+pointer; GPU inspection runs on the existing document worker.
+
+Eyedropper exposes Point, 3×3 and 5×5 sampling for Visible color and Layer color.
+Shared sampling averages premultiplied document-linear color and coverage before
+unassociating. Paint retains the document tag and brush opacity stays independent.
+An explicit aligned single-row copy pitch fixes omitted Metal readback rows;
+there is no separate Apple averaging or color-conversion path.
+
+```sh
+cargo test -p layer-apple tests::inspection -- --test-threads=1
+cargo test -p layer-render-wgpu sampling -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/inspection-owner.swift
+```
+
+The native `testNativeHistogram` workflow checks editor changes while inspection
+is open, manual/automatic refresh, channels/log scale, close/reopen and sample
+controls. Physical Pencil sampling and sustained inspection performance remain
+part of final device acceptance.
+
 ## Implementation status
 
 Workspace customization shares its presentation and gesture ownership across

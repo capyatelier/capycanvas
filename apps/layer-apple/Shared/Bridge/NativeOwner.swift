@@ -212,7 +212,9 @@ final class NativeOwner: @unchecked Sendable {
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
-            let ready = kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
+            // Inspection validates a committed snapshot in Rust; it does not
+            // wait for unrelated filter-library compilation or block drawing.
+            let ready = kind == .histogram ? 0 : kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
             if ready == 1 {
                 if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(nil, "Document preparation timed out") }

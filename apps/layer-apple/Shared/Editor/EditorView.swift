@@ -34,6 +34,7 @@ struct EditorView<Canvas: View>: View {
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
             }
+            HistogramPresentation(model: store.histogram, palette: palette)
             if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Canvas error").font(.headline)

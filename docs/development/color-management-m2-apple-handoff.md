@@ -33,7 +33,9 @@ Source-profile repair and full-extent rasterization now reuse shared source edit
 the document worker and comparison form. Native ICC import is available in both
 repair and missing-profile prompts; see the
 [source workflow record](apple-handoff.md#retained-source-editing-and-icc-import).
-**Continue with histogram/sampling, photo corrections and the remaining host workflows in step 3**, then
+Histogram and Point/3×3/5×5 sampling now reuse shared inspection and eyedropper
+paths; see the [inspection record](apple-handoff.md#histogram-and-sample-area-workflows).
+**Continue with photo corrections and the remaining host workflows in step 3**, then
 display integration and physical acceptance. Profiled export and device
 performance are not closed.
 

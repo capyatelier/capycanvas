@@ -24,6 +24,8 @@ pub use color::*;
 #[path = "project_source.rs"]
 mod source;
 pub use source::*;
+#[path = "project_inspection.rs"]
+mod inspection;
 
 struct Environment {
     adapter: wgpu::Adapter,
@@ -40,6 +42,7 @@ enum Payload {
     Color(Box<color::Task>),
     Source(Box<source::Task>),
     Info(layer_color::DocumentInfo),
+    Inspection(Box<inspection::Task>),
     Save {
         snapshot: Option<Project>,
         project: Option<Project>,
@@ -184,6 +187,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Info(layer_color::DocumentInfo::capture(session.engine().document()))
         } else if opening == 6 {
             Payload::Source(Box::new(source::Task::capture(session)?))
+        } else if opening == 7 {
+            Payload::Inspection(Box::new(inspection::Task::capture(session)?))
         } else if opening == 1 || opening == 3 {
             session.require_document_idle()?;
             let place = if opening == 3 {

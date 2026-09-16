@@ -3874,7 +3874,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
-        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android)
+        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios)
             && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
                 [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
@@ -6855,7 +6855,7 @@ mod tests {
     #[test]
     fn sdr_host_sample_area_cancels_stale_results_and_keeps_document_and_opacity() {
         use layer_render::{ColorSample, ColorSampleArea, ColorSampleSource};
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut s = session();
         s.set_platform(platform);
         invoke(&mut s, CommandId::Eyedropper);

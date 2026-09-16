@@ -175,6 +175,9 @@ impl WgpuRasterizer {
                             buffer: &buffer,
                             layout: wgpu::TexelCopyBufferLayout {
                                 offset: u64::from(((row - top) * width + column - left) * stride),
+                                // Metal needs an explicit row pitch even for these
+                                // single-row copies. Offsets still pack at most 25 texels.
+                                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
                                 ..Default::default()
                             },
                         },
