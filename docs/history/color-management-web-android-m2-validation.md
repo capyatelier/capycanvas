@@ -455,3 +455,41 @@ Validation:
 Flattened conversion copies remain the final feature gap. Broader workflows and
 viewing agreement, then the fresh tablet navigation/memory benchmark, still need
 qualification before final deployment and user testing.
+
+## Flattened color-conversion copies — 2026-09-16
+
+Convert Color Space now offers Editable layers or Save flattened copy on Web and
+Android. Both compare the complete native-resolution composition before saving.
+A copy contains one rasterized layer in the destination space at the original
+integer precision, canvas extent and physical resolution. The original master,
+its save location, dirty checkpoint, layers and history are unchanged. The copy
+requires a separate `.capy` destination and rejects the known master handle/URI.
+Android encodes into a private temporary file before opening the destination;
+Web prepares native output on the file worker. Cancellation drains preparation
+and publishes no image. Publication disables cancellation once writing starts.
+
+The native row-to-project builder is shared by GTK, Android and Web, replacing
+GTK's duplicate copy builder. This also preserves physical resolution in GTK
+copies, which the previous builder omitted. Web reuses bounded full-resolution
+output bands rather than allocating a full Float32 export frame.
+
+Validation:
+
+- `shared-flatten-copy.log`: the masked/effect composition matches native GPU
+  rendering within one U16 code; full extent, 300 PPI, exact copy save/reopen and
+  cancellation passed (3.03 s).
+- `tablet-native-flatten-copy.log`: existing exact color-history/depth checks,
+  full-copy preview/write/reopen, rejected adoption over the master, unchanged
+  epoch/revision/location/dirty state and actual copy-dialog cancellation passed
+  (13.568 s).
+- `tablet-web-flatten-copy.log`: the SDR/output-preview, color/history/depth and
+  copy workflows passed, including actual copy-picker cancellation, unchanged
+  master checkpoints, full extent/precision and exact native copy reopen.
+- `android-flatten-copy-build.log`, `android-flatten-copy-tests-build.log`,
+  `web-flatten-copy-build.log`, `gtk-flatten-copy-check.log`,
+  `package-flatten-copy.log`: ARM64/Wasm builds, GTK check and all 13 Web packaging
+  tests passed.
+
+Remaining: broader correction/effect/display qualification, followed by fresh
+matching tablet navigation/memory measurements and final deployment for user
+confirmation. No tablet 120 Hz performance claim is made at this checkpoint.

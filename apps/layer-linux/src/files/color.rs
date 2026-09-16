@@ -5,7 +5,6 @@ use layer_core::{ColorTransition, PreparedColorTransition, color::*};
 use layer_render_wgpu::snapshot::CaptureControl;
 use std::{
     cell::{Cell, RefCell},
-    sync::Arc,
     time::Duration,
 };
 mod flatten;

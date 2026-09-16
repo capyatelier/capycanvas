@@ -502,11 +502,36 @@ class AndroidRasterTest {
         assertTrue(reduced.getJSONArray("blobs").objects().all {it.getJSONObject("descriptor").getInt("bits_per_channel")==8})
         change("undo");sameBacking(converted,manifest(save("color-depth-undo.capy")))
         change("redo");sameBacking(reduced,manifest(save("color-depth-redo.capy")))
+
+        val copyFile=File(files,"converted-copy.capy")
+        val originalState=native {state(it).getJSONObject("document_file")}
+        val flag=Native.captureControl()
+        val copyId=native {request(it,"convert_color_space").first}
+        val copyTask=native {Native.colorTask(it,copyId,flag)}
+        try {
+            Native.colorWork(copyTask,obj("Convert" to obj("space" to "Srgb","options" to obj("intent" to "RelativeColorimetric","black_point_compensation" to false))).toString(),true)
+            assertTrue(Native.colorPreview(copyTask,true).size>8)
+            Native.colorWriteCopy(copyTask,ParcelFileDescriptor.open(copyFile,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd())
+            try {native {Native.colorAdopt(it,copyTask)};fail("Copy adopted over master")}catch(e:Exception){assertTrue(e.message.orEmpty().contains("separate document"))}
+            native {Native.documentComplete(it,copyId,true,"null")}
+        } finally {Native.colorFree(copyTask);Native.captureFree(flag)}
+        val afterCopy=native {state(it).getJSONObject("document_file")}
+        for(key in listOf("epoch","revision","modified","location"))assertEquals(originalState.get(key).toString(),afterCopy.get(key).toString())
+        sameBacking(reduced,manifest(save("copy-master-unchanged.capy")))
+        val copied=manifest(copyFile.readBytes())
+        assertEquals(1,copied.getJSONObject("document").getJSONArray("layers").length())
+        assertEquals("Srgb",copied.getJSONObject("document").getJSONObject("color").getString("space"))
+        assertEquals("U8",copied.getJSONObject("document").getJSONObject("color").getString("depth"))
+        assertEquals("Rasterized",copied.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getString("kind"))
+        open(copyFile);sameBacking(copied,manifest(save("copy-reopened.capy")))
+
         open(File(files,"color-depth.capy"));sameBacking(reduced,manifest(save("color-reopened.capy")))
         DocumentController.nativeFileJobsForTest=false
-        compose.runOnUiThread {host.invoke("assign_profile")}
+        compose.runOnUiThread {host.invoke("convert_color_space")}
         compose.waitUntil(10_000) {compose.onAllNodesWithText("Preview Complete Result").fetchSemanticsNodes().isNotEmpty()}
-        compose.onNodeWithText("Preview Complete Result").performClick()
+        compose.onNodeWithTag("color-choice-Result").performScrollTo().performClick()
+        compose.onNodeWithText("Save flattened copy").performClick()
+        compose.onNodeWithText("Preview Complete Result").performScrollTo().performClick()
         compose.waitUntil(60_000) {compose.onAllNodesWithContentDescription("Prepared composition").fetchSemanticsNodes().isNotEmpty()}
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}

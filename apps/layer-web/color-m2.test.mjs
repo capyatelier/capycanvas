@@ -144,7 +144,7 @@ export async function checkColorEdits({call,evaluate,settle}) {
   await history('undo',converted);await history('redo',reduced);
   await evaluate(`window.sdrColorMaster=sdrFiles.get('untagged.capy').slice();window.showOpenFilePicker=async()=>[{name:'untagged.capy',async getFile(){return new File([sdrColorMaster],'untagged.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(reduced));
-  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await evaluate(`(()=>{const f=document.querySelector('select[aria-label="Format"]');f.value='Png';f.dispatchEvent(new Event('change'))})()`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);assert.ok(await evaluate('sdrFiles.get("untagged.png")?.length>100'));
   console.log('Full-image comparison, canceled/committed assignment, conversion, depth change, exact undo/redo and native reopen passed; retained source samples/profile unchanged');
 }
@@ -292,4 +292,41 @@ export async function checkProfileLibrary({evaluate}) {
   await wait(`![...document.querySelectorAll('.profile-library .profile-entry')].some(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   await evaluate(`[...document.querySelectorAll('.profile-library button')].find(b=>b.textContent==='Done').click();layerApp.dispatch({type:'close_settings'});`);
   console.log('ICC library exact bytes/dedup, corruption rejection/repair, independent embedded preset ownership, saved-profile export picker and Preferences management passed');
+}
+
+
+export async function checkFlattenedCopy({evaluate}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const saved=await evaluate('({file:JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v)),color:layerApp.app.document_color(),count:sdrFiles.size})');
+  const prepare=async()=>{
+    await invoke('convert_color_space');await wait(`!!document.querySelector('select[aria-label="Result"]')`);
+    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));}})()`);
+    await click('Preview Complete Result');await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
+    assert.ok(await evaluate(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Save Copy…'&&!b.disabled)`));
+  };
+  await prepare();await click('Cancel');await idle();assert.equal(await evaluate('sdrFiles.size'),saved.count);
+  // Cancel the actual destination after a complete candidate; publish no bytes.
+  await evaluate(`window.sdrCopyPicker=showSaveFilePicker;window.showSaveFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')}`);
+  await prepare();await click('Save Copy…');await idle();assert.equal(await evaluate('sdrFiles.size'),saved.count);
+  assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  await evaluate('window.showSaveFilePicker=sdrCopyPicker');
+  await prepare();await click('Save Copy…');await idle();
+  const copyName=saved.file.location.name.replace(/\.[^.]+$/,'')+' converted.capy';
+  const copied=await evaluate(`sdrManifest(sdrFiles.get(${JSON.stringify(copyName)}))`);
+  assert.deepEqual(copied.document.color,{space:'Srgb',depth:saved.color.depth});
+  assert.equal(copied.document.layers.length,1);assert.equal(copied.tiled_sources.images[0].kind,'Rasterized');
+  const current=await evaluate('JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v))');
+  for(const key of ['epoch','revision','modified','location'])assert.deepEqual(current[key],saved.file[key]);
+  await invoke('save_document_as');await idle();
+  const master=await evaluate(`sdrManifest(sdrFiles.get(${JSON.stringify(saved.file.location.name)}))`);
+  assert.deepEqual(master.document.color,saved.color);
+  assert.deepEqual([copied.document.width,copied.document.height],[master.document.width,master.document.height]);
+  assert.deepEqual(copied.document.resolution,master.document.resolution);
+  await evaluate(`window.sdrCopy=sdrFiles.get(${JSON.stringify(copyName)});window.showOpenFilePicker=async()=>[{name:'converted.capy',async getFile(){return new File([sdrCopy],'converted.capy')}}]`);
+  await invoke('open_document');await idle();await invoke('save_document_as');await idle();
+  const reopened=await evaluate('sdrManifest(sdrFiles.get("converted.capy"))');assert.deepEqual(reopened.tiled_sources,copied.tiled_sources);assert.deepEqual(reopened.blobs,copied.blobs);
+  console.log('Flattened full-composition conversion, preview/copy-picker cancellation, native copy reopen, preserved extent/precision and unchanged master checkpoints passed');
 }

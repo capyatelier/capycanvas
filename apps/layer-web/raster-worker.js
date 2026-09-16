@@ -30,10 +30,10 @@ async function execute({id,request}) {
       case "output-encode": {
         const metadata=JSON.parse(request.metadata),job=outputJob(metadata.token);
         if(!metadata.original && job.offset!==metadata.extent[0]*metadata.extent[1]*16)throw new Error("Incomplete output capture");
-        if(metadata.preview) {
+        if(metadata.preview||metadata.flatten) {
           try {result=await wasm.raster_worker_output(request.metadata,request.buffers,(offset,size)=>{
             const bytes=new Uint8Array(size);if(job.raw.read(bytes,{at:offset})!==size)throw new Error("Incomplete output row");return bytes;
-          },()=>{throw new Error("Preview cannot write output");});}finally{await closeOutput(metadata.token);}
+          },()=>{throw new Error("Prepared output cannot write an image file");});}finally{await closeOutput(metadata.token);}
           break;
         }
         const handle=await job.directory.getFileHandle("image",{create:true}),output=await handle.createSyncAccessHandle();

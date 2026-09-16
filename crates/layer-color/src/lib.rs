@@ -17,3 +17,6 @@ pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_
 
 mod document_info;
 pub use document_info::DocumentInfo;
+
+mod flatten;
+pub use flatten::flattened_document;

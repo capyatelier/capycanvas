@@ -20,6 +20,7 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
       const space=!history&&!source&&operation!=="depth"?select("Color space",[["Srgb","sRGB"],["DisplayP3","Display P3"],["AdobeRgb","Adobe RGB"],["ProPhoto","ProPhoto RGB"]],current.space):null;
       const depth=operation==="depth"?select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"]],current.depth):null;
       const dither=operation==="depth"?select("Dither",[["None","None"],["Stochastic8","Stochastic (8-bit)"]],"None"):null;
+      const result=operation==="convert"?select("Result",[["layers","Editable layers"],["copy","Save flattened copy"]],"layers"):null;
       const intent=operation==="convert"?select("Rendering intent",[["RelativeColorimetric","Relative colorimetric"],["Perceptual","Perceptual"],["Saturation","Saturation"],["AbsoluteColorimetric","Absolute colorimetric"]],"RelativeColorimetric"):null;
       const status=element("p"),comparison=element("div","color-comparison"),footer=element("footer");
       const apply=button(source?(rasterize?"Rasterize":"Apply Profile"):"Apply",()=>{accepted=true;finish(true);},"suggested-action");apply.disabled=true;
@@ -34,7 +35,7 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
         running=(async()=>{
           try {
             const next=await gpuOperation(async()=>{
-              if(!source)return app.prepare_color(id,choice,control);
+              if(!source)return app.prepare_color(id,choice,control,result?.value==="copy");
               const prepared=await app.prepare_source(id,choice,control);
               return app.prepare_source_comparison(prepared);
             });
@@ -49,6 +50,7 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
             });
             status.textContent=candidate.clipped_channels()>0?"Some colors exceed the destination gamut. Compare the result before applying.":"Complete composition · sRGB display preview";
             if(source){status.textContent=`Current source profile: ${candidate.source_profile()}. `+status.textContent;if(candidate.adds_layer())status.textContent+=" Apply adds a corrected original as a new layer; the existing layer keeps its edits, masks and adjustments.";apply.textContent=rasterize?"Rasterize":candidate.adds_layer()?"Add Corrected Source":"Apply Profile";}
+            if(!source)apply.textContent=candidate.is_copy()?"Save Copy…":"Apply";
             apply.disabled=false;
           }catch(error){const wasCancelled=control.cancelled();control.cancel();if(!closed&&!wasCancelled)status.textContent=String(error);}
           finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);preview.disabled=false;}}

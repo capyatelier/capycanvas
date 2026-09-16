@@ -366,19 +366,39 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
 
 #[test]
 fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close() {
-    for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 }] {
+    for color in [
+        DocumentColor::default(),
+        DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        },
+    ] {
         let project = rich_project(color, 1);
         let (mut live, expected) = frame(&project);
         let cached_before = live.source_sample_cache_stats();
         let expected = Arc::new(expected);
         let [width, height] = [project.document.width, project.document.height];
-        let mut capture = live.snapshot_gpu().capture(project.clone(), [0.; 4], 0., Default::default(), Default::default()).unwrap();
-        assert!(Arc::ptr_eq(&live.device.source_samples, &capture.renderer.device.source_samples),
-            "file workers must share the live canvas's sample budget");
+        let mut capture = live
+            .snapshot_gpu()
+            .capture(
+                project.clone(),
+                [0.; 4],
+                0.,
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(
+                &live.device.source_samples,
+                &capture.renderer.device.source_samples
+            ),
+            "file workers must share the live canvas's sample budget"
+        );
         let check = |actual: &[[f32; 4]], expected: &[[f32; 4]]| {
             assert_eq!(actual.len(), expected.len());
             for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
-                assert!((a-b).abs() <= 2e-6, "shared capture changed: {a} != {b}");
+                assert!((a - b).abs() <= 2e-6, "shared capture changed: {a} != {b}");
             }
         };
         let saved = expected.clone();
@@ -394,24 +414,37 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
             layers[0].opacity = if i % 2 == 0 { 0.2 } else { 0.9 };
             live.submit(FramePacket {
                 view: layer_render::ViewState {
-                    width_px: width, height_px: height,
+                    width_px: width,
+                    height_px: height,
                     background_rgba_linear: [0.; 4],
                     document_to_surface: [1., 0., 0., 1., 0., 0.],
                 },
-                document_extent: [width, height], layers: &layers,
-                dabs: &[], dab_batches: &[], restore_rasters: &[],
-                reset_layers: false, composite_all: true, time_seconds: 0.,
-            }).unwrap();
+                document_extent: [width, height],
+                layers: &layers,
+                dabs: &[],
+                dab_batches: &[],
+                restore_rasters: &[],
+                reset_layers: false,
+                composite_all: true,
+                time_seconds: 0.,
+            })
+            .unwrap();
             live.wait_idle().unwrap();
         }
         let mut capture = worker.join().unwrap();
         let cached_after = live.source_sample_cache_stats();
-        assert!(cached_after.hits > cached_before.hits, "private GPU captures reuse exact source samples");
+        assert!(
+            cached_after.hits > cached_before.hits,
+            "private GPU captures reuse exact source samples"
+        );
         assert!(cached_after.peak_bytes <= cached_after.limit_bytes);
         drop(live);
         // Closing a canvas releases its resources, not the device still owned
         // by an immutable file worker. The snapshot remains exactly its own.
-        check(&capture.read_region([0, 0, width, height]).unwrap(), &expected);
+        check(
+            &capture.read_region([0, 0, width, height]).unwrap(),
+            &expected,
+        );
         capture.control().cancel();
         assert!(capture.read_region([0, 0, 1, 1]).is_err());
     }
@@ -419,14 +452,23 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
 
 #[test]
 fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
-    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let color = DocumentColor {
+        space: RgbSpace::ProPhoto,
+        depth: IntegerDepth::U16,
+    };
     let project = rich_project(color, 1);
     let control = CaptureControl::with_allocation_tracking();
-    let mut reader = SnapshotRenderer::with_control(project, [0.; 4], 0., Default::default(), control.clone()).unwrap();
+    let mut reader =
+        SnapshotRenderer::with_control(project, [0.; 4], 0., Default::default(), control.clone())
+            .unwrap();
     let [width, height] = reader.extent();
     let mut reference = Vec::new();
     for y in (0..height).step_by(16) {
-        reference.extend(reader.read_region([0, y, width, 16.min(height-y)]).unwrap());
+        reference.extend(
+            reader
+                .read_region([0, y, width, 16.min(height - y)])
+                .unwrap(),
+        );
     }
     let mut actual = Vec::new();
     let mut y = 0;
@@ -439,7 +481,10 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
         bands += 1;
     }
     assert_eq!(bands, 2);
-    assert_eq!(actual, reference, "band boundaries must not change exact capture pixels");
+    assert_eq!(
+        actual, reference,
+        "band boundaries must not change exact capture pixels"
+    );
     let mut expected = layer_core::color::histogram::Histogram::new(color);
     expected.add(&reference).unwrap();
     assert_eq!(reader.histogram().unwrap(), expected);
@@ -461,7 +506,10 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let (rows, pixels) = reader.read_band(0).unwrap();
     assert_eq!(rows, 16);
     assert_eq!(pixels, reference[..width as usize * 16]);
-    assert_eq!(control.allocation_peaks().unwrap().observations, observations + 1);
+    assert_eq!(
+        control.allocation_peaks().unwrap().observations,
+        observations + 1
+    );
     reader.control().cancel();
     assert!(reader.read_band(0).is_err());
 }
@@ -694,7 +742,8 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
     };
     let project = source_project(color, [513, 35]);
     let original = project.clone();
-    let mut reader = SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+    let mut reader =
+        SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: IntegerDepth::U8,
@@ -753,3 +802,71 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
 }
 
 mod resized;
+
+#[test]
+fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution() {
+    let mut original = rich_project(
+        DocumentColor {
+            space: RgbSpace::ProPhoto,
+            depth: IntegerDepth::U16,
+        },
+        2,
+    );
+    original.document.resolution = Some(layer_core::ImageResolution::ppi(300));
+    let (_, full) = frame(&original);
+    let mut reader =
+        SnapshotRenderer::new(original.clone(), [0.; 4], 0., Default::default()).unwrap();
+    let color = DocumentColor {
+        space: RgbSpace::DisplayP3,
+        depth: IntegerDepth::U16,
+    };
+    let result = reader
+        .flattened_document(color, Default::default(), 64 * 1024 * 1024)
+        .unwrap();
+    let copy = result.project;
+    assert_eq!(copy.document.color, color);
+    assert_eq!(
+        [copy.document.width, copy.document.height],
+        [original.document.width, original.document.height]
+    );
+    assert_eq!(copy.document.resolution, original.document.resolution);
+    assert_eq!(copy.document.layers.len(), 1);
+    let source = copy.document.layers[0].source.as_ref().unwrap();
+    assert_eq!(
+        source.kind,
+        layer_core::color::source::SourceKind::Rasterized
+    );
+    assert_eq!(source.resolution, original.document.resolution);
+    let encoder = layer_color::WorkingEncoder::new(
+        original.document.color.space,
+        &source.interpretation,
+        Default::default(),
+    )
+    .unwrap();
+    let mut expected = vec![0; full.len() * 8];
+    encoder
+        .encode_premultiplied(&full, &mut expected, None, [0, 0])
+        .unwrap();
+    let actual = raw_rows(source);
+    for (a, b) in actual.chunks_exact(2).zip(expected.chunks_exact(2)) {
+        assert!(
+            u16::from_le_bytes(a.try_into().unwrap())
+                .abs_diff(u16::from_le_bytes(b.try_into().unwrap()))
+                <= 1
+        );
+    }
+    let mut bytes = Vec::new();
+    copy.write(&mut bytes).unwrap();
+    let reopened = Project::read(Cursor::new(bytes), Default::default()).unwrap();
+    assert_eq!(
+        raw_rows(reopened.document.layers[0].source.as_ref().unwrap()),
+        actual
+    );
+    assert_eq!(reopened.document.resolution, original.document.resolution);
+    reader.control().cancel();
+    assert!(
+        reader
+            .flattened_document(color, Default::default(), 64 * 1024 * 1024)
+            .is_err()
+    );
+}

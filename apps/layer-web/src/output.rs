@@ -40,6 +40,7 @@ struct OutputMetadata {
     recipe: ExportRecipe,
     original: Option<String>,
     preview: bool,
+    flatten: Option<layer_core::color::DocumentColor>,
 }
 
 #[wasm_bindgen]
@@ -108,126 +109,132 @@ impl WebApp {
             .renderer
             .snapshot_gpu();
         let control = control.inner.clone();
-        Ok(future_to_promise(async move {
-            raster_project::wait_backing(&snapshot.project).await?;
-            let mut metadata = OutputMetadata {
-                token: String::new(),
-                extent: [
-                    snapshot.project.document.width,
-                    snapshot.project.document.height,
-                ],
-                color: snapshot.project.document.color,
-                resolution: recipe
-                    .output_resolution(snapshot.project.document.resolution)
-                    .map_err(js)?,
-                recipe,
-                original: None,
-                preview,
-            };
-            let mut capture = gpu
-                .capture(
-                    snapshot.project,
-                    snapshot.background,
-                    snapshot.time,
-                    Default::default(),
-                    control.clone(),
-                )
+        Ok(future_to_promise(render_output(
+            gpu, snapshot, recipe, control, preview, None,
+        )))
+    }
+}
+
+pub(super) async fn render_output(
+    gpu: layer_render_wgpu::snapshot::SnapshotGpu,
+    snapshot: layer_ui::DocumentExport,
+    recipe: ExportRecipe,
+    control: CaptureControl,
+    preview: bool,
+    flatten: Option<layer_core::color::DocumentColor>,
+) -> Result<JsValue, JsValue> {
+    raster_project::wait_backing(&snapshot.project).await?;
+    let mut metadata = OutputMetadata {
+        token: String::new(),
+        extent: [
+            snapshot.project.document.width,
+            snapshot.project.document.height,
+        ],
+        color: snapshot.project.document.color,
+        resolution: recipe
+            .output_resolution(snapshot.project.document.resolution)
+            .map_err(js)?,
+        recipe,
+        original: None,
+        preview,
+        flatten,
+    };
+    let mut capture = gpu
+        .capture(
+            snapshot.project,
+            snapshot.background,
+            snapshot.time,
+            Default::default(),
+            control.clone(),
+        )
+        .map_err(js)?;
+    let before = if preview {
+        Some(
+            capture
+                .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
+                .await
+                .map_err(js)?,
+        )
+    } else {
+        None
+    };
+    let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
+    let original = if flatten.is_none()
+        && extent == metadata.extent
+        && metadata.recipe.encoding.conversion == Default::default()
+        && metadata.recipe.background.matte().is_none()
+    {
+        capture.identity_source(&metadata.recipe.interpretation())
+    } else {
+        None
+    };
+    let buffers = if let Some(original) = original {
+        let project =
+            layer_color::photo_project((*original).clone(), "Original", metadata.color.depth)
                 .map_err(js)?;
-            let before = if preview {
-                Some(
-                    capture
-                        .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
-                        .await
-                        .map_err(js)?,
-                )
-            } else {
-                None
-            };
-            let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
-            let original = if extent == metadata.extent
-                && metadata.recipe.encoding.conversion == Default::default()
-                && metadata.recipe.background.matte().is_none()
-            {
-                capture.identity_source(&metadata.recipe.interpretation())
-            } else {
-                None
-            };
-            let buffers = if let Some(original) = original {
-                let project = layer_color::photo_project(
-                    (*original).clone(),
-                    "Original",
-                    metadata.color.depth,
-                )
-                .map_err(js)?;
-                let packed = raster_project::pack(project).await?;
-                metadata.original = Some(
-                    js_sys::Reflect::get(&packed, &js("metadata"))?
-                        .as_string()
-                        .ok_or_else(|| js("Missing original metadata"))?,
-                );
-                js_sys::Reflect::get(&packed, &js("buffers"))?.dyn_into::<js_sys::Array>()?
-            } else {
-                js_sys::Array::new()
-            };
-            metadata.token = JsFuture::from(raster_worker::call(
-                "output-begin",
-                "",
-                &js_sys::Array::new(),
-            )?)
-            .await?
-            .as_string()
-            .ok_or_else(|| js("Missing output worker token"))?;
-            let result = async {
-                if metadata.original.is_none() {
-                    let mut y = 0;
-                    while y < metadata.extent[1] {
-                        let (rows, pixels) = capture.read_band_async(y).await.map_err(js)?;
-                        let mut bytes = Vec::with_capacity(pixels.len() * 16);
-                        for pixel in pixels {
-                            for channel in pixel {
-                                bytes.extend_from_slice(&channel.to_le_bytes());
-                            }
-                        }
-                        let parts = js_sys::Array::new();
-                        parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
-                        drop(bytes);
-                        JsFuture::from(raster_worker::call(
-                            "output-band",
-                            &metadata.token,
-                            &parts,
-                        )?)
-                        .await?;
-                        y += rows;
+        let packed = raster_project::pack(project).await?;
+        metadata.original = Some(
+            js_sys::Reflect::get(&packed, &js("metadata"))?
+                .as_string()
+                .ok_or_else(|| js("Missing original metadata"))?,
+        );
+        js_sys::Reflect::get(&packed, &js("buffers"))?.dyn_into::<js_sys::Array>()?
+    } else {
+        js_sys::Array::new()
+    };
+    metadata.token = JsFuture::from(raster_worker::call(
+        "output-begin",
+        "",
+        &js_sys::Array::new(),
+    )?)
+    .await?
+    .as_string()
+    .ok_or_else(|| js("Missing output worker token"))?;
+    let result = async {
+        if metadata.original.is_none() {
+            let mut y = 0;
+            while y < metadata.extent[1] {
+                let (rows, pixels) = capture.read_band_async(y).await.map_err(js)?;
+                let mut bytes = Vec::with_capacity(pixels.len() * 16);
+                for pixel in pixels {
+                    for channel in pixel {
+                        bytes.extend_from_slice(&channel.to_le_bytes());
                     }
                 }
-                drop(capture);
-                JsFuture::from(raster_worker::call(
-                    "output-encode",
-                    &serde_json::to_string(&metadata).map_err(js)?,
-                    &buffers,
-                )?)
-                .await
+                let parts = js_sys::Array::new();
+                parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
+                drop(bytes);
+                JsFuture::from(raster_worker::call("output-band", &metadata.token, &parts)?)
+                    .await?;
+                y += rows;
             }
-            .await;
-            if result.is_err() || control.is_cancelled() {
-                let _ = JsFuture::from(raster_worker::call(
-                    "output-close",
-                    &metadata.token,
-                    &js_sys::Array::new(),
-                )?)
-                .await;
-            }
-            cancelled(&control)?;
-            let result = result?;
-            if let Some(before) = before {
-                let previews = js_sys::Array::new();
-                previews.push(&preview_value(&before)?);
-                previews.push(&js_sys::Reflect::get(&result, &js("preview"))?);
-                js_sys::Reflect::set(&result, &js("previews"), &previews)?;
-            }
-            Ok(result)
-        }))
+        }
+        drop(capture);
+        JsFuture::from(raster_worker::call(
+            "output-encode",
+            &serde_json::to_string(&metadata).map_err(js)?,
+            &buffers,
+        )?)
+        .await
     }
+    .await;
+    if result.is_err() || control.is_cancelled() {
+        let _ = JsFuture::from(raster_worker::call(
+            "output-close",
+            &metadata.token,
+            &js_sys::Array::new(),
+        )?)
+        .await;
+    }
+    cancelled(&control)?;
+    let result = result?;
+    if let Some(before) = before {
+        let previews = js_sys::Array::new();
+        previews.push(&preview_value(&before)?);
+        previews.push(&js_sys::Reflect::get(&result, &js("preview"))?);
+        js_sys::Reflect::set(&result, &js("previews"), &previews)?;
+    }
+    Ok(result)
 }
 
 /// The worker owns the synchronous OPFS file. Rust controls codec seek/write
@@ -296,48 +303,59 @@ pub async fn raster_worker_output(
         length: 0,
     };
     let mut preview = None;
-    let write =
-        |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
-            if metadata.preview {
-                let (extent, pixels) = layer_color::preview_encoded_rows(
-                    extent,
-                    [512, 384],
-                    layer_core::color::RgbSpace::Srgb,
-                    target,
-                    rows,
-                )?;
-                preview = Some(layer_render_wgpu::snapshot::SnapshotPreview {
-                    extent,
-                    pixels,
-                    space: layer_core::color::RgbSpace::Srgb,
-                });
-                return Ok(());
-            }
-            match recipe.format {
-                ExportFormat::Png => layer_color::photo::write_png_rows(
-                    output,
-                    extent,
-                    target,
-                    metadata.resolution,
-                    rows,
-                ),
-                ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
-                    output,
-                    extent,
-                    target,
-                    metadata.resolution,
-                    rows,
-                ),
-                ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
-                    output,
-                    extent,
-                    target,
-                    metadata.resolution,
-                    recipe.jpeg_quality,
-                    rows,
-                ),
-            }
-        };
+    let mut flattened = None;
+    let write = |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
+        if let Some(color) = metadata.flatten {
+            flattened = Some(layer_color::flattened_document(
+                extent,
+                color,
+                metadata.resolution,
+                target,
+                512 * 1024 * 1024,
+                rows,
+            )?);
+            return Ok(());
+        }
+        if metadata.preview {
+            let (extent, pixels) = layer_color::preview_encoded_rows(
+                extent,
+                [512, 384],
+                layer_core::color::RgbSpace::Srgb,
+                target,
+                rows,
+            )?;
+            preview = Some(layer_render_wgpu::snapshot::SnapshotPreview {
+                extent,
+                pixels,
+                space: layer_core::color::RgbSpace::Srgb,
+            });
+            return Ok(());
+        }
+        match recipe.format {
+            ExportFormat::Png => layer_color::photo::write_png_rows(
+                output,
+                extent,
+                target,
+                metadata.resolution,
+                rows,
+            ),
+            ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
+                output,
+                extent,
+                target,
+                metadata.resolution,
+                rows,
+            ),
+            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
+                output,
+                extent,
+                target,
+                metadata.resolution,
+                recipe.jpeg_quality,
+                rows,
+            ),
+        }
+    };
     let clipped = if let Some(original) = metadata.original {
         let project = raster_project::unpack(&original, buffers, true).await?;
         let source = project
@@ -391,6 +409,11 @@ pub async fn raster_worker_output(
         .map_err(js)?
         .clipped_channels
     };
+    if let Some(project) = flattened {
+        let wire = raster_project::pack(project).await?;
+        js_sys::Reflect::set(&wire, &js("clipped"), &JsValue::from_f64(clipped as f64))?;
+        return Ok(wire);
+    }
     let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))?;
     if let Some(preview) = preview {
         js_sys::Reflect::set(&result, &js("preview"), &preview_value(&preview)?)?;

@@ -112,7 +112,26 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         applyChange(app.finish_document(id,true));
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
-        if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
+        if(candidate?.is_copy?.()) {
+          const master=app.state().document_file.location;
+          const target=await destination({name:(master?.name??"Drawing.capy").replace(/\.[^.]+$/,"")+" converted.capy"});
+          if(!target.location.name.toLowerCase().endsWith(".capy"))throw new Error("Use a .capy filename for the converted drawing.");
+          const original=handles.get(master?.uri);
+          if(original&&target.handle&&await original.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
+          const progress=element("aside","file-progress");progress.setAttribute("role","status");
+          let cancelled=false;
+          progress.append(element("span","","Preparing converted copy…"),button("Cancel",()=>{cancelled=true;candidate.cancel();}));document.body.append(progress);
+          try {
+            const bytes=await app.save_color_copy(candidate);
+            if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");
+            progress.firstChild.textContent="Writing converted copy…";progress.querySelector("button").disabled=true;
+            let success;
+            if(target.handle){const stream=await target.handle.createWritable();try{await stream.write(bytes);await stream.close();success=true;}catch(error){try{await stream.abort();}catch{}throw error;}}
+            else success=!!await download(bytes,target.location.name,"application/octet-stream");
+            applyChange(app.finish_document(id,success));
+          } catch(error){if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");throw error;}
+          finally{progress.remove();}
+        } else if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
       } else if(["new","open","place","paste"].includes(r.type)) {
         const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;

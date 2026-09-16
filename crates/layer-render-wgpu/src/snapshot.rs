@@ -707,6 +707,8 @@ struct RegionReadback {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+mod flatten;
+#[cfg(not(target_arch = "wasm32"))]
 mod output;
 #[cfg(not(target_arch = "wasm32"))]
 mod preview;

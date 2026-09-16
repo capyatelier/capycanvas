@@ -18,6 +18,7 @@ pub struct WebColorCandidate {
     control: CaptureControl,
     previews: Vec<SnapshotPreview>,
     clipped: u64,
+    copy: bool,
 }
 #[wasm_bindgen]
 impl WebColorCandidate {
@@ -35,6 +36,12 @@ impl WebColorCandidate {
         }
         Ok(result.into())
     }
+    pub fn cancel(&self) {
+        self.control.cancel();
+    }
+    pub fn is_copy(&self) -> bool {
+        self.copy
+    }
     pub fn clipped_channels(&self) -> f64 {
         self.clipped as f64
     }
@@ -46,7 +53,9 @@ impl WebApp {
         id: u32,
         choice: JsValue,
         control: &output::WebCaptureControl,
+        copy: Option<bool>,
     ) -> Result<js_sys::Promise, JsValue> {
+        let copy = copy.unwrap_or(false);
         let s = &self.session;
         s.require_document_idle().map_err(js)?;
         let request = s
@@ -92,6 +101,17 @@ impl WebApp {
             }
             _ => return Err(js("Not a document color request")),
         };
+        if copy
+            && !matches!(
+                change,
+                Some(layer_color::DocumentColorChange::Convert { .. })
+            )
+        {
+            return Err(js("Only color conversion can create a flattened copy"));
+        }
+        if copy && transition.is_some() {
+            return Err(js("A history operation cannot create a copy"));
+        }
         let original = s.capture_project_recovery().map_err(js)?;
         let live = s
             .engine()
@@ -113,6 +133,44 @@ impl WebApp {
             let history = transition.is_some();
             let (project, clipped) = if let Some(project) = candidate {
                 (project, 0)
+            } else if copy {
+                let Some(layer_color::DocumentColorChange::Convert { space, options }) = change
+                else {
+                    unreachable!()
+                };
+                let color = layer_core::color::DocumentColor {
+                    space,
+                    depth: original.document.color.depth,
+                };
+                let mut recipe = layer_ui::ExportRecipe::further_editing(color);
+                recipe.depth = color.depth;
+                recipe.encoding.conversion = options;
+                let wire = output::render_output(
+                    gpu.clone(),
+                    layer_ui::DocumentExport {
+                        project: original.clone(),
+                        background: view.background_rgba_linear,
+                        time,
+                    },
+                    recipe,
+                    control.clone(),
+                    false,
+                    Some(color),
+                )
+                .await?;
+                output::cancelled(&control)?;
+                let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
+                    .as_string()
+                    .ok_or_else(|| js("Missing converted copy"))?;
+                let buffers =
+                    js_sys::Reflect::get(&wire, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
+                let clipped = js_sys::Reflect::get(&wire, &js("clipped"))?
+                    .as_f64()
+                    .unwrap_or(0.) as u64;
+                (
+                    raster_project::unpack(&metadata, buffers, true).await?,
+                    clipped,
+                )
             } else {
                 let mut transfer = original.clone();
                 for layer in &mut transfer.document.layers {
@@ -194,26 +252,31 @@ impl WebApp {
                     );
                 }
             }
-            let mut canvas = gpu
-                .color_canvas(project.clone(), &brush, view, time, control.clone())
-                .map_err(js)?;
-            let start = js_sys::Date::now();
-            loop {
-                canvas.compile_step().await.map_err(js)?;
-                if canvas.poll().map_err(js)? {
-                    break;
+            let renderer = if copy {
+                None
+            } else {
+                let mut canvas = gpu
+                    .color_canvas(project.clone(), &brush, view, time, control.clone())
+                    .map_err(js)?;
+                let start = js_sys::Date::now();
+                loop {
+                    canvas.compile_step().await.map_err(js)?;
+                    if canvas.poll().map_err(js)? {
+                        break;
+                    }
+                    if js_sys::Date::now() - start > 120_000. {
+                        return Err(js("Color canvas preparation timed out"));
+                    }
+                    documents::yield_browser().await?;
                 }
-                if js_sys::Date::now() - start > 120_000. {
-                    return Err(js("Color canvas preparation timed out"));
-                }
-                documents::yield_browser().await?;
-            }
-            let mut renderer = canvas.take_ready().map_err(js)?;
-            raster_worker::install(&mut renderer);
+                let mut renderer = canvas.take_ready().map_err(js)?;
+                raster_worker::install(&mut renderer);
+                Some(renderer)
+            };
             Ok(WebColorCandidate {
                 project,
                 transition,
-                renderer: Some(renderer),
+                renderer,
                 request: id,
                 epoch,
                 revision,
@@ -221,11 +284,31 @@ impl WebApp {
                 control,
                 previews,
                 clipped,
+                copy,
             }
             .into())
         }))
     }
+    pub fn save_color_copy(
+        &self,
+        candidate: &WebColorCandidate,
+    ) -> Result<js_sys::Promise, JsValue> {
+        if !candidate.copy || candidate.previews.len() != 2 {
+            return Err(js("Preview a flattened copy before saving"));
+        }
+        output::cancelled(&candidate.control)?;
+        let project = candidate.project.clone();
+        let control = candidate.control.clone();
+        Ok(future_to_promise(async move {
+            let bytes = raster_project::save(project).await?;
+            output::cancelled(&control)?;
+            Ok(bytes.into())
+        }))
+    }
     pub fn adopt_color(&mut self, mut candidate: WebColorCandidate) -> Result<JsValue, JsValue> {
+        if candidate.copy {
+            return Err(js("Save the converted copy as a separate document"));
+        }
         let s = &mut self.session;
         output::cancelled(&candidate.control)?;
         s.require_document_idle().map_err(js)?;
