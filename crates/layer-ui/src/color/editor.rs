@@ -2,8 +2,10 @@
 //! not quantize or reinterpret the retained paint definition.
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorInputModel {
+    #[default]
     DocumentRgb,
     SrgbHex,
     Hsv,
@@ -64,6 +66,9 @@ impl ColorEditor {
     }
     pub fn fields(&self) -> &[String; 4] {
         &self.fields
+    }
+    pub fn definition(&self) -> RgbColor {
+        self.definition
     }
     pub fn set_field(&mut self, index: usize, text: String) -> Result<(), String> {
         if index >= 4 {

@@ -217,25 +217,9 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
                     Text(label, Modifier.weight(1f)); Switch(value as Boolean, { change(it) }, enabled = enabled)
                 }
                 "choice" -> { Text(label); PropertyChoice(label, kind.array("options").values().map { it.toString() }, (value as Number).toInt(), enabled) { change(it) } }
-                "color" -> PropertyColor(host,label,value as JSONArray,enabled) { change(it) }
+                "color" -> ManagedColorButton(host,label,value as JSONObject,enabled) { change(it) }
                 "gradient" -> GradientControl(host,layer,control,enabled)
             }
-        }
-    }
-}
-
-/** Compact color swatch expands to the existing native numeric controls. */
-@Composable private fun PropertyColor(host:CanvasHost,label:String,value:JSONArray,enabled:Boolean,onChange:(JSONArray)->Unit) {
-    var expanded by remember(label) { mutableStateOf(false) }
-    val rgba=(0..3).map { value.getDouble(it).toFloat() }
-    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-        Text(label,Modifier.weight(1f))
-        Box(Modifier.size(48.dp,28.dp).clip(RoundedCornerShape(6.dp)).background(Color(rgba[0],rgba[1],rgba[2],rgba[3]))
-            .clickable(enabled=enabled) {expanded=!expanded})
-    }
-    if(expanded) listOf("Red","Green","Blue","Alpha").forEachIndexed { i,name ->
-        NumericSetting(name,rgba[i],host.catalog.getJSONObject("opacity"),enabled=enabled) { next ->
-            val color=rgba.toMutableList();color[i]=next;onChange(JSONArray(color))
         }
     }
 }
@@ -247,7 +231,11 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
     var selected by remember(layer,key) {mutableIntStateOf(0)}
     val index=selected.coerceIn(stops.indices)
     val current by rememberUpdatedState(stops)
-    fun change(i:Int?,position:Float,color:JSONArray?=null,remove:Boolean=false) = host.effect(obj("op" to "gradient_stop","layer" to layer,"key" to key,"index" to i,"position" to position,"color" to color,"remove" to remove))
+    fun change(i:Int?,position:Float,color:JSONObject?=null,remove:Boolean=false) = host.effect(obj("op" to "gradient_stop","layer" to layer,"key" to key,"index" to i,"position" to position,"color" to color,"remove" to remove))
+    val samples = remember(control.getJSONObject("value").toString(), documentRgbSpace(host)) {
+        JSONArray(Native.colorUi(obj("type" to "gradient", "stops" to control.getJSONObject("value").getJSONArray("value"),
+            "document_space" to documentRgbSpace(host)).toString())).objects()
+    }
     Canvas(Modifier.fillMaxWidth().height(44.dp).testTag("effect-gradient").pointerInput(layer,key,enabled) {
         if(!enabled)return@pointerInput
         awaitEachGesture {
@@ -257,12 +245,12 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
         }
     }) {
         val margin=6.dp.toPx();val width=size.width-2*margin
-        val ramp=stops.map { s -> val c=s.getJSONArray("color");s.number("position") to Color(c.getDouble(0).toFloat(),c.getDouble(1).toFloat(),c.getDouble(2).toFloat(),c.getDouble(3).toFloat()) }.toTypedArray()
+        val ramp=samples.mapIndexed { i, sample -> i.toFloat() / (samples.size - 1) to displayColor(sample) }.toTypedArray()
         drawRect(Brush.horizontalGradient(*ramp,startX=margin,endX=size.width-margin),Offset(margin,0f),androidx.compose.ui.geometry.Size(width,32.dp.toPx()))
         stops.forEachIndexed { i,s ->drawCircle(colors.text,(if(index==i)4f else 2.5f).dp.toPx(),Offset(margin+s.number("position")*width,39.dp.toPx())) }
     }
     NumericSetting("Position",stops[index].number("position"),host.catalog.getJSONObject("opacity"),enabled=enabled && index>0 && index<stops.lastIndex) {change(index,it)}
-    PropertyColor(host,"Color",stops[index].getJSONArray("color"),enabled) {change(index,stops[index].number("position"),it)}
+    ManagedColorButton(host,"Color",stops[index].getJSONObject("color"),enabled) {change(index,stops[index].number("position"),it)}
     Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
         TextButton(enabled=enabled && index>0 && index<stops.lastIndex,onClick={selected=(index-1).coerceAtLeast(0);change(index,0f,remove=true)}) {Text("Remove stop")}
         TextButton(enabled=enabled,onClick={host.effect(obj("op" to "reset","layer" to layer,"key" to key))}) {Text("Reset")}

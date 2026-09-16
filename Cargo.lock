@@ -994,6 +994,7 @@ name = "layer-android"
 version = "0.1.0"
 dependencies = [
  "jni",
+ "layer-color",
  "layer-core",
  "layer-engine",
  "layer-host",

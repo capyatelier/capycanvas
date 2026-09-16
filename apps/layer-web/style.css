@@ -752,3 +752,9 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 @media(prefers-reduced-motion:reduce) { .header-dragging .header-item { transition:none; } }
 .header-tool.brush-color .success { fill:var(--header-foreground); }
 .header-tool.brush-color .warning { fill:var(--header-background); }
+
+/* Tagged color forms use the same shared numeric editor as native hosts. */
+.color-dialog { max-width: min(420px, calc(100vw - 24px)); }
+.color-dialog form { display: flex; flex-direction: column; gap: 10px; }
+.color-form-preview { min-height: 48px; border: 1px solid var(--border); border-radius: 6px; }
+.property-color { min-width: 56px; min-height: 28px; max-width: 120px; overflow: hidden; text-indent: -9999px; border: 1px solid currentColor; border-radius: 6px; }

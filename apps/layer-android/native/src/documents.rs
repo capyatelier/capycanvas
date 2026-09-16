@@ -13,7 +13,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     os::fd::FromRawFd,
     time::{Duration, Instant},
 };
@@ -25,6 +25,9 @@ struct Environment {
     viewport: [u32; 2],
     brush: layer_core::BrushSnapshot,
     cache: String,
+    new_options: layer_ui::NewDocumentOptions,
+    photo_policy: layer_ui::PhotoOpenPolicy,
+    source_name: String,
 }
 enum Payload {
     Save(Option<Project>),
@@ -42,6 +45,7 @@ struct Task {
     revision: u64,
     request: u32,
     recovered: bool,
+    photo: bool,
     gpu_generation: u64,
     payload: Payload,
 }
@@ -98,6 +102,10 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                         viewport: session.state().camera.viewport,
                         brush: session.engine().configured_brush().clone(),
                         cache: a.cache_directory.clone(),
+                        new_options: session.state().settings.new_document.defaults,
+                        photo_policy: session.state().settings.photo_open,
+                        source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(&mut env, &location)?).map_err(error)?
+                            .map(|location| location.name).unwrap_or_else(|| "Photo".into()),
                     }),
                     candidate: None,
                 }
@@ -109,6 +117,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             revision: session.engine().document().revision,
             request: id as u32,
             recovered: false,
+            photo: false,
             gpu_generation: a.gpu_generation,
             payload,
         })) as jlong)
@@ -140,14 +149,27 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         ..Default::default()
     };
     let project = match input {
-        Some(file) => Project::read(BufReader::new(file), limits)?,
-        None => layer_ui::new_drawing(width, height)?,
+        Some(file) => {
+            let mut input = BufReader::new(file);
+            if input.fill_buf().map_err(error)?.starts_with(b"CAPY") {
+                Project::read(input, limits)?
+            } else {
+                if t.recovered { return Err("Recovery file is not a native drawing".into()); }
+                let source = layer_color::photo::read_photo(input, Default::default())?;
+                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
+                t.photo = true;
+                let name = e.source_name.rsplit_once('.').map_or(e.source_name.as_str(), |(stem, _)| stem);
+                layer_color::photo_project(source, name, depth)?
+            }
+        },
+        None => layer_ui::NewDocumentOptions { extent: [width, height], ..e.new_options }.project()?,
     };
-    let mut gpu = WgpuRasterizer::from_wgpu_staged_cached(
+    let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
         e.adapter,
         e.device,
         e.queue,
         std::path::Path::new(&e.cache),
+        project.document.color,
     )
     .map_err(error)?;
     gpu.finish_startup_cache();
@@ -261,6 +283,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         let t = unsafe { task(transfer) };
         let location: Option<DocumentLocation> =
             serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
+        // Importing a photo never grants Save permission to overwrite it.
+        let location = if t.photo { None } else { location };
         let Payload::Open { candidate, .. } = &mut t.payload else {
             return Err("Not an open request".into());
         };
@@ -388,6 +412,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             revision,
             request: id as u32,
             recovered: false,
+            photo: false,
             gpu_generation: a.gpu_generation,
             payload: Payload::Export(Some(readback)),
         })) as jlong)
@@ -432,6 +457,9 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                     viewport: session.state().camera.viewport,
                     brush: session.engine().configured_brush().clone(),
                     cache: a.cache_directory.clone(),
+                    new_options: session.state().settings.new_document.defaults,
+                    photo_policy: session.state().settings.photo_open,
+                    source_name: "Recovered drawing".into(),
                 }),
                 candidate: None,
             }
@@ -443,6 +471,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             revision: session.engine().document().revision,
             request: 0,
             recovered: true,
+            photo: false,
             gpu_generation: a.gpu_generation,
             payload,
         })) as jlong)

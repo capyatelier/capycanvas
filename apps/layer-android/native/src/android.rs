@@ -115,7 +115,9 @@ impl App {
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("Capy Canvas Android"),
                     required_features: adapter.features()
-                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
+                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE
+                            | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
+                            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
                     required_limits: limits,
                     ..Default::default()
                 }))
@@ -135,11 +137,12 @@ impl App {
             device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
                 errors.get_or_init(|| error.to_string());
             }));
-            let renderer = WgpuRasterizer::from_wgpu_staged_cached(
+            let renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
                 adapter,
                 device,
                 queue,
                 std::path::Path::new(cache_directory),
+                self.host.session.engine().document().color,
             )
             .map_err(error)?;
             let previous = self.host.session.state().revision;
@@ -229,6 +232,8 @@ impl App {
         }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
+        let _presentation = self.host.session.engine().backend().0.as_ref()
+            .map(WgpuRasterizer::prioritize_raster_presentation);
         self.host
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = self.host.session.state().camera.view();
@@ -849,6 +854,18 @@ fn color_shape(env: &mut JNIEnv, shape: &JString) -> Result<layer_ui::ColorShape
         "triangle" => Ok(layer_ui::ColorShape::Triangle),
         _ => Err("Invalid color wheel shape".into()),
     }
+}
+
+/// Stateless color conversion/drafts; no render-owner handle is accessed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorUi(
+    mut env: JNIEnv, _: JClass, request: JString,
+) -> jstring {
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str(&s).map_err(error))
+        .and_then(layer_ui::color_ui)
+        .and_then(|value| serde_json::to_string(&value).map_err(error));
+    string(&mut env, result)
 }
 
 #[unsafe(no_mangle)]

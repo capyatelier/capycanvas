@@ -21,7 +21,7 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorEditor, ColorInputModel,
+    ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui,
     ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor,
     ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide,

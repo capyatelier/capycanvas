@@ -12,6 +12,18 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn document_color(&self) -> layer_core::color::DocumentColor {
+        self.0.as_ref().map(CanvasRenderer::document_color).unwrap_or_default()
+    }
+    fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
+        self.gpu()?.adopt_prepared_color(color)
+    }
+    fn supports_tiled_sources(&self) -> bool {
+        self.0.as_ref().is_some_and(CanvasRenderer::supports_tiled_sources)
+    }
+    fn supports_raster_damage(&self) -> bool {
+        self.0.as_ref().is_some_and(CanvasRenderer::supports_raster_damage)
+    }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.0
             .as_ref()

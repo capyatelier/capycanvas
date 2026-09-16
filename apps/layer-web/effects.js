@@ -1,3 +1,4 @@
+import {colorButton, colorCss} from './color-controls.js';
 let previewRequest=0n;
 const previewJobs=new Map();
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
@@ -144,7 +145,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
         else if(c.kind.kind==="curve"){field=curveEditor(view.layer,c.key);field.node.dataset.key=c.key;field.node.toggleAttribute("hidden",c!==curves[0]);curveBox.append(field.node);}
         else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(c.label,n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",label);o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(c.label,n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
-        else if(c.kind.kind==="color"){const n=element("input");n.type="color";n.oninput=()=>change([1,3,5].map(i=>parseInt(n.value.slice(i,i+2),16)/255).concat(1));field={node:row(c.label,n),update:c=>n.value="#"+c.value.value.slice(0,3).map(x=>Math.round(x*255).toString(16).padStart(2,"0")).join(""),disable:x=>n.disabled=x};}
+        else if(c.kind.kind==="color"){const n=colorButton({app,label:c.label,element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});field={node:row(c.label,n.node),update:c=>n.update(c.value.value),disable:n.disable};}
         else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
         if(field){if(c.kind.kind!=="curve")body.append(field.node);fields.set(c.key,field);}
       }
@@ -156,25 +157,29 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   return {refresh,dispose(){clearInterval(previewTimer);clearInterval(statsTimer);if(pending)previewJobs.delete(pending.id);pending=null;}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
-    let stops=[],selected=0;
+    let stops=[],selected=0,rampKey;
     const change=(index,position,color=null,remove=false)=>send({op:"gradient_stop",layer,key,index,position,color,remove});
-    const color=element("input");color.type="color";color.setAttribute("aria-label","Color stop");
-    color.oninput=()=>change(selected,stops[selected].position,[1,3,5].map(i=>parseInt(color.value.slice(i,i+2),16)/255).concat(stops[selected].color[3]));
+    const color=colorButton({app,label:"Color stop",element,button,change:value=>change(selected,stops[selected].position,value),current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}:${selected}`});
     const position=numberField(catalog.opacity,"Position",value=>change(selected,value));
-    const opacity=numberField(catalog.opacity,"Opacity",value=>change(selected,stops[selected].position,[...stops[selected].color.slice(0,3),value]));
+    const opacity=numberField(catalog.opacity,"Opacity",value=>change(selected,stops[selected].position,{...stops[selected].color,rgba:[...stops[selected].color.rgba.slice(0,3),value]}));
     const remove=button("",()=>{const i=selected;selected=Math.max(0,i-1);change(i,0,null,true);});remove.append(icon("minus"));remove.title="Remove color stop";
     const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));reset.title="Reset gradient";
-    const controls=element("div","property-row");controls.append(element("span","","Color"),color,remove,reset);
+    const controls=element("div","property-row");controls.append(element("span","","Color"),color.node,remove,reset);
     node.append(bar,stopsRow,position,controls,opacity);
     bar.onclick=e=>{const b=bar.getBoundingClientRect(),p=Math.max(0,Math.min(1,(e.clientX-b.left)/b.width));selected=stops.filter(s=>s.position<p).length;change(null,p);};
-    const rgba=c=>`rgba(${c.slice(0,3).map(v=>v*255).join(",")},${c[3]})`;
     function update(c) {
       stops=c.value.value;selected=Math.min(selected,stops.length-1);
-      bar.style.background=`linear-gradient(to right,${stops.map(s=>`${rgba(s.color)} ${s.position*100}%`).join(",")})`;
-      stopsRow.replaceChildren(...stops.map((s,i)=>{const b=button("",()=>{selected=i;update(c);});b.style.left=`${s.position*100}%`;b.style.background=rgba(s.color);b.classList.toggle("selected",selected===i);b.title=`Color stop ${i+1}`;return b;}));
-      const s=stops[selected];color.value="#"+s.color.slice(0,3).map(x=>Math.round(x*255).toString(16).padStart(2,"0")).join("");
+      const nextRamp=JSON.stringify([state().colors.rgb_space,stops]);
+      if(nextRamp!==rampKey){
+        rampKey=nextRamp;
+        const samples=app.color_ui({type:"gradient",stops,document_space:state().colors.rgb_space});
+        bar.style.background=`linear-gradient(to right,${samples.map((p,i)=>`${colorCss(p)} ${i*100/(samples.length-1)}%`).join(",")})`;
+      }
+      const previews=app.color_ui({type:"preview",colors:stops.map(s=>s.color)});
+      stopsRow.replaceChildren(...stops.map((s,i)=>{const b=button("",()=>{selected=i;update(c);});b.style.left=`${s.position*100}%`;b.style.background=colorCss(previews[i]);b.classList.toggle("selected",selected===i);b.title=`Color stop ${i+1}`;return b;}));
+      const s=stops[selected];color.update(s.color);
       position.update(s.position);position.setDisabled(selected===0||selected===stops.length-1);remove.disabled=selected===0||selected===stops.length-1;
-      opacity.update(s.color[3]);
+      opacity.update(s.color.rgba[3]);
     }
     return {node,update};
   }

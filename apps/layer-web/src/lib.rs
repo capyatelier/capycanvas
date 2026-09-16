@@ -76,6 +76,18 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn document_color(&self) -> layer_core::color::DocumentColor {
+        self.0.as_ref().map(|gpu| gpu.renderer.document_color()).unwrap_or_default()
+    }
+    fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
+        self.renderer()?.adopt_prepared_color(color)
+    }
+    fn supports_tiled_sources(&self) -> bool {
+        self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_tiled_sources())
+    }
+    fn supports_raster_damage(&self) -> bool {
+        self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_raster_damage())
+    }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.0
             .as_ref()
@@ -617,6 +629,10 @@ impl WebApp {
 impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
+    }
+    pub fn color_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
+        serialize(&layer_ui::color_ui(request).map_err(js)?)
     }
     /// Retain UI models by model_revision; ordinary workspace motion only
     /// publishes absolute native geometry, tab presentation and drop feedback.

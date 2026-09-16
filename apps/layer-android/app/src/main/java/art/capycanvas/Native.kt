@@ -24,6 +24,8 @@ internal object Native {
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
     @JvmStatic external fun query(handle: Long, query: String): String
+    /** Stateless shared color forms/previews; safe without a session handle. */
+    @JvmStatic external fun colorUi(request: String): String
     @JvmStatic external fun workspace(handle: Long, request: String): String
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?

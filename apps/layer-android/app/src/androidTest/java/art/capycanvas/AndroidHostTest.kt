@@ -87,6 +87,34 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun nativeSdrTaggedColorsAndGradientEditor() {
+        val color = obj("space" to "DisplayP3", "rgba" to JSONArray(listOf(1.0, .01, .23, 1.0)))
+        action(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to "foreground", "color" to color)))
+        assertEquals("DisplayP3", state().getJSONObject("colors").getJSONObject("foreground").getString("space"))
+        action(obj("type" to "set_brush_size", "value" to 64))
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(.4f,.4f)), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_MOVE, listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)), MotionEvent.TOOL_TYPE_STYLUS)
+        action(obj("type" to "invoke", "command" to "undo"))
+        action(obj("type" to "invoke", "command" to "redo"))
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gradient_map")))
+        val view = state().getJSONObject("layer_properties")
+        action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
+            "key" to "gradient", "index" to 1, "position" to 1.0, "color" to color, "remove" to false)))
+        compose.onNodeWithTag("effect-gradient").assertIsDisplayed()
+        compose.onNodeWithTag("effect-gradient").performTouchInput { click(androidx.compose.ui.geometry.Offset(width - 8f, height - 4f)) }
+        val before = state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").toString()
+        compose.onNodeWithTag("property-color-Color").performClick()
+        compose.onNodeWithText("Edit Color").assertIsDisplayed()
+        compose.onNodeWithTag("color-input-model").performClick()
+        compose.onNodeWithText("sRGB hex").performClick()
+        compose.onNodeWithText("Use Color").performClick()
+        assertEquals(before, state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").toString())
+        assertNull(host.failure)
+        assertNull(host.actionError)
+        capture("native-sdr-tagged-gradient")
+    }
+
     @Test fun completedDropFeedbackSurvivesNewerMotion() {
         val dock = DockInteraction(host)
         val source = group("brushes").getJSONObject("bounds")

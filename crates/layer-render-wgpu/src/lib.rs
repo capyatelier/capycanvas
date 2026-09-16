@@ -3888,6 +3888,12 @@ impl WgpuRasterizer {
 
 impl CanvasRenderer for WgpuRasterizer {
     fn document_color(&self) -> layer_core::color::DocumentColor { self.document_color }
+    fn supports_tiled_sources(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.native_edit.is_some() }
+        #[cfg(target_arch = "wasm32")]
+        { false }
+    }
     fn supports_raster_damage(&self) -> bool { true }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.raster_restore_ready(packet)

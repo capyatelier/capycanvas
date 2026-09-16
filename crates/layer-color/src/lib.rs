@@ -3,6 +3,8 @@
 mod icc;
 pub use icc::*;
 pub mod photo;
+mod photo_project;
+pub use photo_project::photo_project;
 mod resize;
 pub use resize::RowResampler;
 

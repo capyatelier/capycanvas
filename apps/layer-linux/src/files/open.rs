@@ -2,7 +2,7 @@
 //! grants authority to overwrite that path with a native master.
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::{Document, Project, ProjectLimits, color::RgbSpace};
+use layer_core::{Project, ProjectLimits};
 use layer_ui::DocumentLocation;
 use std::{
     io::{BufRead, BufReader},
@@ -143,42 +143,16 @@ pub(crate) fn read(
         return Project::read(reader, ProjectLimits::default()).map(|p| (p, Some(location)));
     }
     let source = layer_color::photo::read_photo(reader, Default::default())?;
-    let space = layer_color::suggested_working_space(&source.interpretation.profile)?
-        .unwrap_or(RgbSpace::ProPhoto);
-    let mut document = Document::new("untitled", source.extent[0], source.extent[1]);
-    document.resolution = source.resolution;
-    document.color = layer_core::color::DocumentColor {
-        space,
-        depth: policy.editing_depth(source.interpretation.depth),
-    };
-    document.layers[0].name = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(128)
-        .collect::<String>()
-        .into();
-    if document.layers[0].name.is_empty() {
-        document.layers[0].name = "Photo".into();
-    }
-    document.layers[0].source = Some(Arc::new(source));
-    // Retained photo alpha remains visible. A separate Paper layer is available
-    // to the user, but does not silently flatten an opened transparent image.
-    document.layers[1].visible = false;
-    let project = Project {
-        document,
-        assets: Default::default(),
-    };
-    project.validate(ProjectLimits::default())?;
+    let depth = policy.editing_depth(source.interpretation.depth);
+    let name = path.file_stem().unwrap_or_default().to_string_lossy();
+    let project = layer_color::photo_project(source, &name, depth)?;
     Ok((project, None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{ColorProfile, IntegerDepth, source::*};
+    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
     #[test]
     fn photo_open_preserves_source_depth_profile_and_master_separation() {
         let directory =
