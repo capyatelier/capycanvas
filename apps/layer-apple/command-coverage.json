@@ -30,8 +30,8 @@
     {
       "name": "Object transforms",
       "commands": ["move", "scale_rotate", "apply_transform", "cancel_transform", "transform_aspect"],
-      "checks": ["native/src/tests.rs", "Shared/Tests/SelectionTransformChecks.swift"],
-      "ios": "partial: numeric scale/rotation and linked/unlinked mask/content transforms, validation, Apply/Cancel/history, Move controls and tool-change/background cancellation with sampled artwork and stable window bounds; Pencil/pointer handles and mask/group Move, modifiers and interrupted contacts remain",
+      "checks": ["native/src/tests.rs", "Shared/Tests/SelectionTransformChecks.swift", "tests/canvas-modifiers.swift"],
+      "ios": "partial: numeric scale/rotation and linked/unlinked mask/content transforms, validation, Apply/Cancel/history, Move controls and tool-change/background cancellation with sampled artwork and stable window bounds; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover edge/corner scaling, Shift proportions/movement/rotation, Alt centered scaling, contact cancellation, Apply/Cancel and exact decoded PNG history; physical sensor/key delivery, visible editor handle hit targets and mask/group Move remain",
       "mac": "partial: numeric scale/rotation and validation, linked/unlinked mask/content numeric transforms and actual mouse Move with Apply/Cancel/history, layer/group Move release/history and edge scaling, Shift proportions/movement/rotation snapping, Option centered scaling, Escape/tool-change/background cancellation and sampled artwork; remaining corners, tablet and interrupted contacts remain"
     },
     {
@@ -46,13 +46,13 @@
       "commands": ["ruler", "show_rulers", "snap_rulers", "delete_ruler"],
       "checks": ["native/src/tests.rs", "tests/canvas-native-input.swift", "tests/canvas-modifiers.swift", "Shared/Tests/CanvasToolChecks.swift"],
       "ios": "partial: native choice/selected state for all three rulers and Show/Snap controls; supplied UIKit mouse/Pencil contacts on simulator and physical iPad GPU verify straight-ruler Shift at start/movement/release, stale modifiers from other controls, interruption/identity reuse, exact saved geometry and one-step Undo/Redo; all three ruler types constrain actual artwork and disabling snapping restores free painting, with exact decoded PNG history; palm rejection passes in either arrival order; physical sensor/key delivery, native handle editing and visible editor hit targets remain",
-      "mac": "partial: real mouse creation/handle editing, visibility, deletion and sampled-overlay Undo/Redo for all three rulers; assembled AppKit editor creation/edit cancellation by Escape/focus/tool, next-contact recovery, straight/parallel Shift press/release, exact saved geometry history and constrained/free painting with exact PNG history; external OS constrained-painting delivery, tablet and live stationary Shift preview pixels remain"
+      "mac": "partial: real mouse creation/handle editing, visibility, deletion and sampled-overlay Undo/Redo for all three rulers; assembled AppKit editor creation/edit cancellation by Escape/focus/tool, next-contact recovery, straight/parallel Shift press/release, stale control-modifier recovery on new mouse and supplied standalone tablet contacts, exact saved geometry history and constrained/free painting with exact PNG history; external OS constrained-painting delivery, physical tablet and live stationary Shift preview pixels remain"
     },
     {
       "name": "Artwork history",
       "commands": ["undo", "redo"],
       "checks": ["native/src/tests.rs", "native/src/input_tests.rs", "Shared/Tests/NumericControlChecks.swift", "Shared/Tests/MenuSettingsChecks.swift", "tests/canvas-modifiers.swift"],
-      "ios": "partial: exact pixel restoration and physical Pencil smoke check; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU verify cancellation and exact decoded PNG Undo/Redo for all figure/gradient variants and constrained/free ruler painting, plus saved ruler geometry; full history across all edit types and physical event delivery remain",
+      "ios": "partial: exact pixel restoration and physical Pencil smoke check; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU verify cancellation and exact decoded PNG Undo/Redo for all figure/gradient variants, constrained/free ruler painting and transform handle scaling/movement/rotation with Shift/Alt constraints, plus saved ruler geometry; full history across all edit types and physical event delivery remain",
       "mac": "partial: exact pixel restoration, focused editor actions and native numeric text Undo/Redo preserving artwork before returning to artwork history; full history across all edit types remains"
     },
     {

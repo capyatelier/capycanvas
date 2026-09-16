@@ -10,7 +10,52 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
-## Current UIKit canvas-input milestone
+## Current input-state milestone
+
+This batch fixes stale Mac modifiers from other editor
+controls. A plain mouse or standalone tablet contact now refreshes every modifier
+through the existing shared key route. The assembled Mac fixture reproduces
+unwanted Shift-constrained ruler editing before the fix and passes afterward:
+twenty-two workflow groups across both Apple policies, including supplied tablet
+callbacks. UIKit coverage now passes eighty groups on simulator and physical
+iPad GPU, adding edge/corner scaling, Shift proportions/movement/rotation, Alt
+centered scaling, cancellation, Apply and exact decoded PNG Undo/Redo. These are
+supplied contacts, not physical sensor/key or visible UIKit hit-target acceptance.
+
+Evidence is under `artifacts/apple-transform-input-v1/`: `mac-before.log`,
+`mac-final.log`, `transforms-v1` and `device-run-final`. The first physical run
+exited cleanly but lost its console output and remains unverified. The fixture
+now writes a result bound to a unique launch ID; the final physical run verifies
+all eighty groups directly from that report. The simulator pass precedes only
+this reporting change. Both disposable fixtures are removed, the original stopped iPad runner
+is restored, and both artist app descriptors are unchanged. The published base
+is `f3214d6`; the contact and color fixes form one milestone.
+
+The shared color-control fix rejects an unfinished foreground RGB
+entry after the background paint slot is selected. The existing mounted-control
+fixture reproduces a changed background before the fix. RGB fields now take the
+paint slot as their existing SwiftUI identity and reject callbacks from another
+slot, matching the established brush-field pattern. The focused `brush-color`
+case in `tests/property-slider-input.swift` passes on both Apple policies:
+retired-field rejection, unchanged foreground/background, fresh background edits
+and preservation of an active draft during ordinary same-slot value updates.
+Evidence is under `artifacts/apple-color-draft-v1/` (`before.log`, `after.log`).
+These are AppKit-hosted shared-control checks, not UIKit input acceptance. No
+simulator/device workflow is repeated. Both final production Release builds pass
+with zero compiler warnings; current metadata is under
+`artifacts/apple-input-state-milestone-v1/release/`. These builds include both
+fixes. Main was fetched and already matched the published base. Full feature/
+visual, physical input/provider/lifecycle and sustained Mac 90 Hz/iPad 120 Hz
+acceptance remain open; the overall goal is incomplete.
+
+The latest status review identifies excessive dependence on simulator/device
+setup and inconclusive input automation as a slowdown. Return to specific
+remaining feature and perceptible UI gaps, using focused local checks during
+implementation and grouped native acceptance. Do not extend callback coverage
+as a substitute for closing the remaining physical-input, provider/lifecycle
+and sustained-performance gates.
+
+## Previous UIKit canvas-input milestone
 
 UIKit canvas contacts omitted event modifier flags. A supplied Shift-mouse
 contact reproduces an unconstrained saved ruler before the fix. Contacts and

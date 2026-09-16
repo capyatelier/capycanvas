@@ -64,11 +64,13 @@ struct PanelControls: View {
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes
         case "brush_color":
+            let slot = store.state["colors"]["paint_slot"].string
             BrushColorButton(store: store, label: item["label"].string)
             ForEach(0..<3, id: \.self) { component in
                 NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value, completion in
+                    guard slot == store.state["colors"]["paint_slot"].string else { completion(nil); return }
                     store.edit(["type": "color", "action": ["op": "rgba_component", "index": component, "value": value]], completion: completion)
-                }
+                }.id(slot)
             }
         default: Text(item["label"].string).fontWeight(.bold)
         }

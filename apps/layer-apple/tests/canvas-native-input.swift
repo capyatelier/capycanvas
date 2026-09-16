@@ -18,6 +18,23 @@ private final class NavigationEvent: NSEvent {
     override var rotation: Float { 30 }
 }
 
+/// Standalone tablet values exercise the driver path that has no mouseDown.
+private final class TabletEvent: NSEvent {
+    var point = CGPoint.zero
+    var force: Float = 1
+    var time = ProcessInfo.processInfo.systemUptime
+    override var type: NSEvent.EventType { .tabletPoint }
+    override var subtype: NSEvent.EventSubtype { .tabletPoint }
+    override var locationInWindow: CGPoint { point }
+    override var modifierFlags: NSEvent.ModifierFlags { [] }
+    override var pressure: Float { force }
+    override var timestamp: TimeInterval { time }
+    override var deviceID: Int { 1 }
+    override var buttonMask: NSEvent.ButtonMask { force > 0 ? .penTip : [] }
+    override var tilt: NSPoint { .zero }
+    override var rotation: Float { 0 }
+}
+
 /// The assembled editor, AppKit event queue, serial owner and Metal renderer.
 /// Actions choose tools; pointer/key/focus events use the native window through
 /// the visible editor's actual hit targets. Not physical Pencil/OS menu delivery.
@@ -391,6 +408,31 @@ private final class NavigationEvent: NSEvent {
                 let undone = try await rulers(); try require(undone.stableKey == created.stableKey, "Shift edit is one Undo step")
                 try await invoke("redo")
                 let redone = try await rulers(); try require(redone.stableKey == constrained.stableKey, "Shift edit Redo restores exact geometry")
+                try await invoke("undo")
+                // A control can forward a captured chord without updating the
+                // canvas adapter's modifier cache. The next contact is decisive.
+                store.input(["type":"key", "key":"F1", "pressed":false,
+                    "modifiers":["command":false, "alt":false, "shift":true]])
+                try await path([end, moved])
+                let freeAfterControl = try await rulers(), freePoint = freeAfterControl[0]["geometry"]["end"]
+                try require(abs(freePoint["x"].number - 80) < 0.01 && abs(freePoint["y"].number - 100) < 0.01,
+                    "A new Mac contact must clear stale Shift from another control")
+                try await invoke("undo")
+                store.input(["type":"key", "key":"F1", "pressed":false,
+                    "modifiers":["command":false, "alt":false, "shift":true]])
+                let tablet = TabletEvent(), camera = store.state["camera"], scale = window.backingScaleFactor
+                for (point, force): (CGPoint, Float) in [(end,1),(moved,1),(moved,0)] {
+                    let local = CGPoint(x:(camera["translation"][0].number + point.x * camera["zoom"].number) / scale,
+                        y:(camera["translation"][1].number + point.y * camera["zoom"].number) / scale)
+                    try require(host.hitTest(canvas.convert(local, to: host.superview)) === canvas,
+                        "Standalone tablet samples target the visible canvas")
+                    tablet.point = canvas.convert(local, to:nil); tablet.force = force
+                    tablet.time = ProcessInfo.processInfo.systemUptime
+                    canvas.tabletPoint(with:tablet); try await drain(0.025)
+                }
+                let freeAfterTablet = try await rulers(), tabletPoint = freeAfterTablet[0]["geometry"]["end"]
+                try require(abs(tabletPoint["x"].number - 80) < 0.01 && abs(tabletPoint["y"].number - 100) < 0.01,
+                    "A standalone tablet contact must clear stale Shift from another control")
                 try await invoke("undo")
                 try await send(.leftMouseDown, end); try await shift(true)
                 try await send(.leftMouseDragged, moved, flags: .shift); try await shift(false)

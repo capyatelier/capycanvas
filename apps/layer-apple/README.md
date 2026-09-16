@@ -217,7 +217,9 @@ The region checks exercise the Apple pointer/action bridge with Metal. The
 canvas fixture mounts the assembled editor with its visible panels and overlays.
 It sends local AppKit mouse, key and focus events through verified canvas hit
 targets for lasso/fill and ruler workflows, checking exact exported pixels and
-saved ruler geometry through cancellation and Undo/Redo. New Drawing uses the
+saved ruler geometry through cancellation and Undo/Redo. New mouse and supplied
+standalone tablet contacts also clear stale modifier flags from other controls.
+New Drawing uses the
 native Discard button and waits for its alert to close. The application's
 suspend/resume entry points and actual renderer restart also cancel unfinished
 contacts without a mouse-up, ignore stale movement and allow the next lasso,
@@ -230,14 +232,24 @@ Both shared Apple configurations run on Mac; these checks do not establish
 external OS event posting, OS menu navigation or UIKit/Pencil/tablet delivery.
 Group full-application UI runs at milestone boundaries.
 
+For RGB draft ownership, run `tests/property-slider-input.swift` with
+`CAPY_PROPERTY_CASE=brush-color` through the same local script. Switching between
+foreground and background replaces the old numeric fields and rejects their late
+callbacks; ordinary updates within one paint slot preserve an unfinished draft.
+The fixture checks both shared Apple policies without simulator startup.
+
 `tests/canvas-modifiers.swift` is a standalone UIKit scene application built
 with the production Shared/iOS sources, Rust bridge and bundled filters. Its
-sixty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
+eighty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
 touch identity reuse and palm rejection; saved ruler geometry; all figure and
-gradient variants; and constrained/free painting with all three ruler types.
+gradient variants; constrained/free painting with all three ruler types; and
+transform edge/corner scaling, movement, rotation, Shift/Alt constraints and
+Apply/Cancel.
 Cancellation and Undo/Redo compare every decoded PNG pixel. The same suite passes
 on simulator and the physical iPad GPU without XCTest, using temporary storage
-and supplied event values. Physical sensors/key delivery, visible editor hit
+and supplied event values. `CAPY_INPUT_RUN` identifies the launch in the fixture's
+`Documents/canvas-input-result.json`, allowing verification when device console
+output is missing. Physical sensors/key delivery, visible editor hit
 targets and OS interruption delivery remain separate acceptance checks.
 
 Numeric labels truncate within compact panels, leaving values readable. Spin

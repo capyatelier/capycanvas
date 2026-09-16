@@ -28,6 +28,8 @@ private final class ContactEvent: UIEvent {
 
 @MainActor private final class ModifierChecks: NSObject, UIApplicationDelegate, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var completedGroups = 0
+    private let runID = ProcessInfo.processInfo.environment["CAPY_INPUT_RUN"] ?? UUID().uuidString
     func application(_ application: UIApplication, configurationForConnecting session: UISceneSession,
         options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(name: "Input Checks", sessionRole: session.role)
@@ -40,9 +42,24 @@ private final class ContactEvent: UIEvent {
         window.rootViewController = UIViewController()
         window.makeKeyAndVisible(); self.window = window
         Task { @MainActor in
-            do { try await run(); print("PASS: UIKit contact modifiers and ruler history"); exit(0) }
-            catch { print("FAIL: \(error.localizedDescription)"); exit(1) }
+            do {
+                try await run(); try report(nil)
+                print("PASS: UIKit contact modifiers and ruler history"); exit(0)
+            } catch {
+                try? report(error.localizedDescription)
+                print("FAIL: \(error.localizedDescription)"); exit(1)
+            }
         }
+    }
+    private func passed(_ message: String) { completedGroups += 1; print(message) }
+    private func report(_ failure: String?) throws {
+        // Device console delivery is optional; bind the durable result to this
+        // launch so an earlier successful run cannot satisfy a later check.
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: ["run_id":runID,
+            "passed":failure == nil, "groups":completedGroups, "failure":failure as Any? ?? NSNull()])
+        try data.write(to: folder.appendingPathComponent("canvas-input-result.json"), options:.atomic)
     }
     private func require(_ value: Bool, _ message: String) throws {
         guard value else { throw HostFailure(message: message) }
@@ -152,7 +169,7 @@ private final class ContactEvent: UIEvent {
                 try await action(["type":"invoke", "command":"redo"])
                 try require(try await rulers().stableKey == saved.stableKey, "Redo restores exact ruler geometry")
                 try await action(["type":"invoke", "command":"undo"])
-                print("PASS: \(device) \(name), saved geometry and one-step Undo/Redo")
+                passed("PASS: \(device) \(name), saved geometry and one-step Undo/Redo")
             }
         }
         for fingerFirst in [false, true] {
@@ -176,7 +193,7 @@ private final class ContactEvent: UIEvent {
             finger.time += 0.01; canvas.touchesEnded([finger], with: event)
             try require(canvas.contacts.isEmpty && canvas.ignoredContacts.isEmpty, "All cancelled/ignored contacts must retire")
             try require(try await rulers().array.isEmpty, "Palm exclusion and cancellation must not commit a ruler")
-            print("PASS: palm exclusion, \(fingerFirst ? "finger" : "Pencil") first, identity reuse and cancellation")
+            passed("PASS: palm exclusion, \(fingerFirst ? "finger" : "Pencil") first, identity reuse and cancellation")
         }
         try await artwork(store: store, canvas: canvas, root: root)
     }
@@ -190,8 +207,14 @@ private final class ContactEvent: UIEvent {
                 catch { store.failure = error.localizedDescription; done(nil) }
             }))
         func flush() async throws {
-            let prepared = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared && store.failure == nil, store.failure ?? "Prepare canvas work")
+            // Live transform previews are intentionally not recoverable yet.
+            // Drive the ordinary renderer frame rather than requesting a save.
+            let now = FrameTrace.now()
+            await withCheckedContinuation { done in
+                native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
+            }
+            await withCheckedContinuation { done in native.submit(2, JSON(["type":"catalog"])) { _ in done.resume() } }
+            try require(store.failure == nil, store.failure ?? "Prepare canvas work")
         }
         func wait(_ description: String, _ ready: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(30)
@@ -229,9 +252,9 @@ private final class ContactEvent: UIEvent {
             try await invoke("fit_canvas")
             try await wait("Prepare replacement drawing") { store.snapshot["brush_ready"].bool }
         }
-        func path(_ points: [CGPoint], device: UITouch.TouchType, shift: Bool = false, cancel: Bool = false) async throws {
+        func path(_ points: [CGPoint], device: UITouch.TouchType, modifiers: UIKeyModifierFlags = [], cancel: Bool = false) async throws {
             let touch = Contact(), event = ContactEvent(); touch.device = device
-            event.flags = shift ? .shift : []
+            event.flags = modifiers
             let camera = store.state["camera"]
             func position(_ p: CGPoint) -> CGPoint {
                 CGPoint(x: camera["translation"][0].number + p.x * camera["zoom"].number,
@@ -239,10 +262,10 @@ private final class ContactEvent: UIEvent {
             }
             touch.point = position(points[0]); canvas.touchesBegan([touch], with: event)
             for point in points.dropFirst() {
-                touch.point = position(point); touch.time += 0.01
+                touch.point = position(point); touch.time = max(touch.time.nextUp, ProcessInfo.processInfo.systemUptime)
                 canvas.touchesMoved([touch], with: event)
             }
-            touch.time += 0.01
+            touch.time = max(touch.time.nextUp, ProcessInfo.processInfo.systemUptime)
             if cancel { canvas.touchesCancelled([touch], with: event) }
             else { canvas.touchesEnded([touch], with: event) }
             try await flush()
@@ -289,9 +312,9 @@ private final class ContactEvent: UIEvent {
                     for shift in [false, true] {
                         try await tool(["figure":["shape":shape, "paint":paint]])
                         let points = [CGPoint(x:24,y:24), CGPoint(x:60,y:46), CGPoint(x:96,y:68)]
-                        try await path(points, device: device, shift: shift, cancel: true)
+                        try await path(points, device: device, modifiers: shift ? .shift : [], cancel: true)
                         try require(try await pixels() == paper, "Cancelled figure must preserve every pixel")
-                        try await path(points, device: device, shift: shift)
+                        try await path(points, device: device, modifiers: shift ? .shift : [])
                         let painted = try await pixels()
                         let center = shift ? 60 : 46
                         if shape == "line" {
@@ -307,7 +330,7 @@ private final class ContactEvent: UIEvent {
                         }
                         try require(sample(painted, 115, 115) == sample(paper, 115, 115), "Figures preserve outside pixels")
                         try await history(paper, painted)
-                        print("PASS: \(device) \(shape) \(paint), Shift=\(shift), cancellation and exact PNG history")
+                        passed("PASS: \(device) \(shape) \(paint), Shift=\(shift), cancellation and exact PNG history")
                     }
                 }
             }
@@ -322,7 +345,7 @@ private final class ContactEvent: UIEvent {
                     try require(colored(painted, 32, 64) && sample(painted, 32, 64) != sample(painted, 64, 64), "Gradient begins in foreground and varies across the drawing")
                     try require(transparent ? sample(painted, 116, 64) == sample(paper, 116, 64) : colored(painted, 116, 64, red: true), "Gradient reaches its transparent/background endpoint")
                     try await history(paper, painted)
-                    print("PASS: \(device) gradient radial=\(radial), transparent=\(transparent), cancellation and exact PNG history")
+                    passed("PASS: \(device) gradient radial=\(radial), transparent=\(transparent), cancellation and exact PNG history")
                 }
             }
             for kind in ["straight", "parallel", "radial"] {
@@ -345,10 +368,90 @@ private final class ContactEvent: UIEvent {
                 try require((72..<96).contains { y in (32..<104).contains { x in colored(free,x,y) } }, "Disabling snapping restores free painting")
                 try await history(paper, free)
                 try await invoke("snap_rulers")
-                print("PASS: \(device) \(kind) ruler, constrained/free painting and exact PNG history")
+                passed("PASS: \(device) \(kind) ruler, constrained/free painting and exact PNG history")
             }
             try await newDocument()
             try await action(["type":"set_brush_size", "value":4])
+            try await tool(["figure":["shape":"rectangle", "paint":"fill"]])
+            try await path([CGPoint(x:32,y:32), CGPoint(x:96,y:96)], device: device)
+            let original = try await pixels()
+            try require(colored(original, 64, 64) && !colored(original, 20, 20), "Transform fixture contains finite artwork")
+            // Values are shared document units: X/Y pixels, scale fractions,
+            // and radians. Handles surround the finite 128px raster canvas.
+            struct TransformCase {
+                let name: String
+                let start: CGPoint
+                let end: CGPoint
+                let flags: UIKeyModifierFlags
+                let pose: [Double]
+                var rotation = false
+            }
+            var cases: [TransformCase] = [
+                .init(name:"edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:[], pose:[-16,0,0.75,1,0]),
+                .init(name:"Shift edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:.shift, pose:[-16,0,0.75,0.75,0]),
+                .init(name:"Alt edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:.alternate, pose:[0,0,0.5,1,0]),
+                .init(name:"corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:[], pose:[-16,-8,0.75,0.875,0]),
+                .init(name:"Shift corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:.shift, pose:[-16,-16,0.75,0.75,0]),
+                .init(name:"Alt corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:.alternate, pose:[0,0,0.5,0.75,0]),
+                .init(name:"move", start:CGPoint(x:64,y:64), end:CGPoint(x:80,y:72), flags:[], pose:[16,8,1,1,0]),
+                .init(name:"Shift move", start:CGPoint(x:64,y:64), end:CGPoint(x:80,y:72), flags:.shift, pose:[16,0,1,1,0])
+            ]
+            let radius = 16 + 30 / store.state["camera"]["zoom"].number
+            let angle = 71.0 * Double.pi / 180
+            for shift in [false, true] {
+                cases.append(.init(name:shift ? "Shift rotation" : "rotation",
+                    start:CGPoint(x:64,y:64-radius), end:CGPoint(x:64+sin(angle)*radius,y:64-cos(angle)*radius),
+                    flags:shift ? .shift : [], pose:[0,0,0.5,0.25,(shift ? 75 : 71) * Double.pi / 180], rotation:true))
+            }
+            for test in cases {
+                func begin() async throws {
+                    try await invoke("scale_rotate")
+                    if test.rotation {
+                        try await action(["type":"set_tool_setting", "id":"transform_width", "value":0.5])
+                        try await action(["type":"set_tool_setting", "id":"transform_height", "value":0.25])
+                    }
+                    try await wait("Prepare transform preview") { store.snapshot["brush_ready"].bool }
+                }
+                func expectPose() throws {
+                    for (id, expected) in zip(["x", "y", "width", "height", "angle"], test.pose) {
+                        let control = store.state["tool_settings"].array.first { $0["id"].string == "transform_" + id }
+                        try require(control != nil && abs(control!["value"].number - expected) < 0.002,
+                            "\(device) \(test.name) \(id): expected \(expected), got \(control?["value"].number ?? -999)")
+                    }
+                }
+                try await begin()
+                try await path([test.start,test.end], device:device, modifiers:test.flags, cancel:true)
+                try require(store.state["tool_settings"].array.isEmpty, "Cancelled contact retires the transform preview")
+                try require(try await pixels() == original, "Cancelled transform contact preserves every pixel")
+                for apply in [false, true] {
+                    try await begin()
+                    try await path([test.start,test.end], device:device, modifiers:test.flags)
+                    try expectPose()
+                    try await invoke(apply ? "apply_transform" : "cancel_transform")
+                    let changed = try await pixels()
+                    if apply {
+                        try require(colored(changed,64,64), "Transformed artwork retains its expected center")
+                        if test.rotation {
+                            try require(colored(changed,64,48) && !colored(changed,48,64), "Rotation changes actual artwork orientation")
+                        } else if test.name.contains("move") {
+                            try require(!colored(changed,40,64) && colored(changed,104,64), "Moving artwork updates both old and new positions")
+                        } else {
+                            try require(!colored(changed,88,64), "Scaling moves the original right edge inward")
+                            if test.flags.contains(.alternate) { try require(!colored(changed,40,64), "Alt scaling keeps the center fixed") }
+                            else { try require(colored(changed,26,64), "Ordinary scaling keeps the opposite edge fixed") }
+                        }
+                        try await history(original, changed)
+                    } else {
+                        try require(changed == original, "Cancel restores every original pixel")
+                        try await invoke("undo")
+                        try require(try await pixels() == paper, "Cancelled transforms must not add artwork history")
+                        try await invoke("redo")
+                        try require(try await pixels() == original, "Original artwork Redo survives cancelled transforms")
+                    }
+                }
+                passed("PASS: \(device) transform \(test.name), native handle pose, contact/command cancellation, Apply and exact PNG history")
+            }
+            try await newDocument()
         }
     }
 }

@@ -45,7 +45,7 @@ import QuartzCore
     }
     func mouse(_ event: NSEvent, phase: Double) {
         if event.subtype == .tabletProximity { proximity(event); return }
-        updateModifiers(event.modifierFlags)
+        updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
             guard contact == nil else { return }
             view?.window?.makeFirstResponder(view)
@@ -66,8 +66,8 @@ import QuartzCore
         }
     }
     func tabletPoint(_ event: NSEvent) {
-        updateModifiers(event.modifierFlags)
         let touching = event.pressure > 0 || event.buttonMask.contains(.penTip)
+        updateModifiers(event.modifierFlags, force: contact == nil && touching)
         if var value = contact {
             guard value.device == event.deviceID else { return }
             if !touching { finishAtLastSample(timestamp: event.timestamp); return }
@@ -152,11 +152,14 @@ import QuartzCore
     func key(_ event: NSEvent, pressed: Bool) {
         let key = AppleKeyName.name(event)
         guard !key.isEmpty else { return }
+        modifiers = event.modifierFlags
         sendKey(key, pressed: pressed, repeatKey: event.isARepeat, flags: event.modifierFlags)
     }
-    func updateModifiers(_ next: NSEvent.ModifierFlags) {
+    func updateModifiers(_ next: NSEvent.ModifierFlags, force: Bool = false) {
+        // Controls can forward keys without updating the canvas cache. A new
+        // mouse or standalone tablet contact carries the current complete flags.
         for (flag, name): (NSEvent.ModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.option, "Alt"), (.command, "Meta")] {
-            if next.contains(flag) != modifiers.contains(flag) {
+            if force || next.contains(flag) != modifiers.contains(flag) {
                 sendKey(name, pressed: next.contains(flag), repeatKey: false, flags: next)
             }
         }
