@@ -177,7 +177,7 @@ import SwiftUI
             ?? view["components"].array.first { $0["item"].stableKey == entry["item"].stableKey } ?? JSON(["label":"Add Tools…"])
     }
     private var overflowIcon: some View {
-        SharedIcon(name: "more", size: size["icon"].number)
+        SharedIcon(name: "menu", size: size["icon"].number)
             .frame(width: size["tile"].number, height: size["tile"].number)
             .contentShape(Rectangle())
     }
@@ -327,7 +327,7 @@ private struct HeaderPaintIcon: View {
         ZStack(alignment: .topLeading) {
             swatch("background", edge: 8.75).offset(x: 6.5 * size / 16, y: 6.5 * size / 16)
             swatch("foreground", edge: 9.5).offset(x: 0.75 * size / 16, y: 0.75 * size / 16)
-        }.frame(width: size, height: size).accessibilityHidden(true)
+        }.frame(width: size, height: size, alignment: .topLeading).accessibilityHidden(true)
     }
     private func swatch(_ slot: String, edge: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: size / 16)

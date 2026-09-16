@@ -28,8 +28,8 @@ behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 Use the [current release checklist](apple-release-checklist.md) for the remaining
 gates and feature closure map. The older milestone sections below retain their
 original evidence and limits; their remaining-work paragraphs are not separate
-new test plans. A fresh shared-model enumeration confirms the current 63-command
-scope with no command-list drift. The input-cleanup/native-acceptance milestone
+new test plans. The pre-SDR shared-model enumeration confirms its 63-command
+scope with no command-list drift; the new color/photo workflows extend that scope. The input-cleanup/native-acceptance milestone
 groups the context-handler removals and Mac refinement/transform checks below;
 its evidence and publication verification are under
 `artifacts/apple-context-cleanup-v1/`. The preceding milestone `7672213` groups
@@ -155,13 +155,54 @@ All final sheets pass normal-size review. The native search field retains minor
 palette/clipping differences; no per-platform rendering workaround is added.
 Evidence is `artifacts/apple-uikit-panels-v1/`. The initial standalone build's
 newer deployment-default warning is corrected in the fixture before launch.
-Artist review apps remain untouched. Full-editor/physical-device appearances,
-UIKit Tool actions and nonempty Diagnostics traces remain explicit release cases.
+Artist review apps remain untouched. Full-editor and physical-device appearances
+remain explicit release cases; the following checks close the remaining Tool
+actions and Diagnostics component states.
 
 These changes and the physical prediction confirmation form the grouped
 panel-parity milestone. Both final Release builds pass without compiler warnings.
 Publication verification is retained with the UIKit evidence; no individual-task
 commit is made. Installed artist review apps retain the preceding prediction fix.
+
+## Tool actions and populated Diagnostics
+
+UIKit Tool actions now passes all 96 native/Web bounds exactly and all four
+normal-size light/dark pairs at 120/226 points, reusing source-qualified Web
+captures. The fixture compiles only the production control dependencies and uses
+a disposable simulator app. No product change is required. Evidence is
+`artifacts/apple-uikit-actions-v1/`.
+
+Populated Diagnostics also passes six pairs on each native host at 140/184/242
+points in both themes. Each real owner renders 128 synthetic G-Pen strokes;
+its final 120 CPU samples and metric rows drive the production Web comparison.
+Mac GPU values are populated; simulator GPU timing is unavailable. All charts,
+narrow labels and values pass normal-size review without another code change.
+These short offscreen debug captures establish visual behavior, not performance
+or physical latency. Evidence is `artifacts/apple-active-stats-v1/`. Both artist
+review apps remain untouched. These records join the following grouped visual
+milestone; remaining window/transient and physical-input coverage stays open.
+
+## Preset editor baseline and shared SDR integration
+
+Full Sketch/Photo comparisons now pass in both themes: eight AppKit pairs at
+1200×870 and 700×650, plus four full-screen UIKit simulator pairs at 1376×1032.
+All shared layout and fitted-camera geometry matches Web. Real compositor
+captures include the Metal canvas; each host measures its own controls. Two
+shared SwiftUI lines align the overflow glyph and center the overlapping paint
+swatches. Normal-size review accepts remaining native chrome, live clock text
+and rasterization differences. Both pre-integration Release builds pass without
+warnings. Evidence is `artifacts/apple-preset-editor-v1/`; artist review apps and
+drawings remain untouched. iPad windowed and transient states remain open.
+
+These captures qualify the `9b7c4eb7` baseline plus the two appearance fixes.
+An occasional fetch then brought in 118 commits through `7d2511e5`, including
+the shared SDR color/photo work. Main fast-forwards without conflicts and keeps
+the pending visual changes. The integrated Apple Rust bridge compiles without
+warnings, but compilation does not qualify the new color/renderer contracts.
+Next, follow the phase 2 handoff above: repair existing tagged effect/gradient
+controls, adopt the native SDR renderer, then complete the new host workflows.
+Do not install this unqualified integration over the physical review drawings or
+count earlier visual/performance results as acceptance of the new contracts.
 
 ## Native provider acceptance
 

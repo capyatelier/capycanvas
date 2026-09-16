@@ -5,6 +5,13 @@ still applies in full to **both** hosts. Historical checkpoint lists in the
 [handoff](apple-handoff.md) are evidence references, not additional independent
 test plans. The goal is incomplete.
 
+Main now includes shared SDR color/photo work through `7d2511e5`. Its
+[Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate
+implementation priority: existing tagged color controls and renderer contracts,
+then the new workflows. Earlier passes remain scoped to their recorded sources;
+they do not qualify the new contracts. The integrated Rust bridge compiles, but
+native runtime integration and new feature acceptance remain open.
+
 ## Acceptance rules
 
 - Fix perceptible differences from Web/Android; preserve the intentional Mac OS
@@ -58,7 +65,7 @@ Do not replace a missing result with a catalog entry or build success.
 | R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. iPad expiration now ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion, with a clean iPad Release build. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; interrupted recovery and actual OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and window/display/surface transitions. Verify artwork, settings/workspace, continued input and independent history. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
 | R5 | **Perceptual visual parity.** Main editor/component comparisons and reported fixes exist. Benchmark document replacement exposed stranded layer-preview readbacks; central invalidation now passes both-policy AppKit/Metal regression and a final Mac Release capture. | Map retained normal-size light/dark, preset and narrow/windowed captures to the final feature inventory; inspect missing visible states on both native hosts against Web. Correct straightforward visible mismatches. Do not rerun every pixel comparison for an unrelated engine fix. |
 | R6 | **Sustained hardware performance and measurement.** The missing-callback startup stall is reproduced and fixed by removing the custom presentation counter/retry. Both physical fixed Releases complete ten minutes of 4K watercolor with correct thumbnails, nominal thermals and prompt canvas idle. Long active intervals are 0.959% Mac / 1.997% iPad, with no missing/zero measured callbacks, rejected input or renderer errors. Current and retained ink results remain separately scoped. Rare measured misses alone do not fail acceptance. | Preserve the startup regression and these completed runs. Finish only outstanding source-qualified platform/profile, recorder-off resource/storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. The retained footprint curves do not justify a memory workaround. Use [Performance](../../apps/layer-apple/PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16); its CPU/GPU/presentation proxies are not physical latency. Do not restart profiler experiments without a concrete unresolved requirement or visible regression. |
-| R7 | **Integration and delivery.** The grouped panel-parity milestone aligns Filters and Diagnostics, adds UIKit component acceptance for three panels, and records the user's passing native-prediction confirmation. Both final Releases build without compiler warnings. Existing physical review apps and drawings remain intact; no installation or new physical-input pass is inferred. Evidence/publication record: `artifacts/apple-uikit-panels-v1/`. The preceding prediction-adoption and sustained-performance results remain separately scoped. | Integrate later main changes and repeat only checks affected by subsequent fixes. Publish completed milestones and verify the remote revision. The final release and overall goal still require R2–R6. |
+| R7 | **Integration and delivery.** The grouped visual milestone adds UIKit Tool actions, populated Diagnostics on both hosts, and twelve full Sketch/Photo baseline pairs. Two shared title-bar lines correct the overflow glyph and paint-icon alignment. Both pre-SDR Release builds pass without warnings. Main through `7d2511e5` is integrated with a passing Apple Rust compile check; the incoming SDR runtime remains unqualified. Installed review apps and drawings are preserved. Evidence: `artifacts/apple-preset-editor-v1/`. | Publish and verify this grouped checkpoint. Implement and qualify the incoming Apple SDR contracts before claiming current Release acceptance. The final goal still requires R2–R6 and the new feature scope. |
 
 ## Feature closure map
 
@@ -69,25 +76,26 @@ review: six actions, four enabled/selected combinations, two themes and two
 widths give 96 exactly matching native/Web bounds. All four normal-size pairs
 pass. Eight newly captured images reproduce the retained decoded RGBA bytes
 exactly; current shared colors, font size and both platforms' action metadata
-also match. Raw zero-tolerance failures remain unchanged. UIKit appearance and
-full-editor coverage are separate. Evidence is
-`artifacts/apple-visual-closure-v1/`.
+also match. Raw zero-tolerance failures remain unchanged. The UIKit follow-up
+now also passes all 96 bounds exactly and all four normal-size pairs against the
+source-qualified Web captures, without a product change. Full-editor and physical
+input coverage stay separate. Evidence is `artifacts/apple-visual-closure-v1/`
+and `artifacts/apple-uikit-actions-v1/`.
 
 | Retained result | Reuse and boundary |
 | --- | --- |
 | Paint editor, both themes, fitted and zoomed canvas, both physical hosts | Retain layout/canvas and footer evidence from `apple-editor-parity-v1/native-v5`; use the later component evidence for subsequently changed controls. |
 | Color wheel matrix and accepted physical appearance | The Color panel, wheel drawing and both native input files are unchanged since `6c36d0a`. Later font-cache and Rust iteration changes preserve the exercised rendering paths. Reuse `apple-color-milestone-v1`. |
 | Tool Set, Pen/Figure, both themes, 168/226-point widths | The captured Tool Set layout, tile content and workspace-panel source are unchanged since `be1f27d`. Reuse all eight accepted pairs in `apple-toolset-parity-v1`; later Tool Settings heading/title-bar changes are outside this component result. |
-| Tool actions, both themes, 120/226-point widths | Current AppKit/Web recapture and normal-size acceptance above; no new rendering adjustment is needed. |
+| Tool actions, both themes, 120/226-point widths | AppKit and UIKit/Web component captures each pass 96 exact bounds and four normal-size pairs; no new rendering adjustment is needed. |
 
 Brush size presets now pass six mounted AppKit/Web pairs at 140/184/242 points
 in both themes, covering the two/three/four-column layouts and selected value.
 Six inactive Diagnostics pairs also pass after matching the centered 200×46
 chart, dashed budget line and narrow-label truncation. These captures use actual
 production components and identical row models; GPU is unavailable and samples
-are empty in the native fixture. Nonempty traces and full-editor content remain
-separate; the subsequent UIKit component check below closes these three panel
-appearances. The full Mac capture attempt hit the system iCloud dialog; its
+are empty in this earlier native fixture. The subsequent UIKit and populated-
+trace checks below extend that result; full-editor content remains separate. The full Mac capture attempt hit the system iCloud dialog; its
 unfinished helper is removed rather than counted as a pass. Evidence is
 `artifacts/apple-panel-contents-v1/`.
 
@@ -105,26 +113,44 @@ the existing iPad simulator. The capture exposed cumulative Diagnostics row-heig
 drift; one shared fixed line height aligns it with Web, with six final recaptures
 on each Apple host. All final normal-size sheets are reviewed. These checks use
 memory-only storage and disposable apps; artist review apps are untouched.
-Diagnostics models remain empty/unavailable, so this adds no timing or nonempty-
-trace acceptance. Evidence is `artifacts/apple-uikit-panels-v1/`.
+These Diagnostics models remain empty/unavailable; this batch adds no timing
+acceptance. Evidence is `artifacts/apple-uikit-panels-v1/`.
 
-The grouped panel-parity milestone combines these small visual fixes and records
-the user's passing physical iPad native-prediction confirmation. Remaining visual
-work includes UIKit Tool actions, nonempty Diagnostics traces, full Sketch/Photo,
-narrow/windowed and transient-state coverage. Keep the full-editor and physical-
-device limits explicit; component captures do not close those cases. Do not
-repeat unchanged Color or Tool Set matrices while completing these missing states.
+The populated Diagnostics follow-up now passes six AppKit and six UIKit/Web pairs
+at the same widths and themes. Each owner renders 128 actual synthetic strokes;
+its final 120 CPU samples and metric values drive the matching production Web
+component. Charts, timing labels and narrow truncation pass normal-size review.
+Mac GPU values are populated; simulator GPU timing reports unavailable. No product
+change is needed. This is component visual acceptance, not sustained performance
+or physical latency. Evidence is `artifacts/apple-active-stats-v1/`.
+
+The next grouped visual milestone adds twelve full Sketch/Photo pairs, both
+themes: AppKit at 1200×870 and 700×650, UIKit Simulator full-screen at 1376×1032.
+Shared layout and fitted-camera geometry matches Web exactly. Normal-size review
+passes after two shared title-bar fixes: the canonical overflow menu glyph and
+the overlapping paint icon's alignment. Actual compositor captures include the
+Metal canvas and use isolated managed workspaces. Native chrome and live clock
+text remain host-owned. Both pre-integration Release builds pass without warnings.
+Evidence is `artifacts/apple-preset-editor-v1/`.
+
+This establishes the initial-document baseline at `9b7c4eb7` plus the two fixes;
+the subsequently integrated SDR contracts need separate qualification. Remaining
+visual cases include native iPad windowed/narrow layouts, transient states and
+new color/photo UI. Keep physical-device limits explicit and reuse unaffected
+evidence instead of repeating whole component matrices.
 
 ### Commands and controls
 
 The source catalog is [command-coverage.json](../../apps/layer-apple/command-coverage.json).
-The current shared-model enumeration has **63 commands in 15 groups**, **90 tool
+The pre-SDR shared-model enumeration has **63 commands in 15 groups**, **90 tool
 choices**, **11 panels**, **five Settings pages** and **43 layer/filter property
-scenarios** per Apple policy. There is no command-list drift from the retained GPU
-inventory. Current panel/workspace schemas also match. Settings models differ
+scenarios** per Apple policy. It has no command-list drift from the retained GPU
+inventory at that baseline. Panel/workspace schemas also match. Settings models differ
 and require the newer evidence. These counts establish scope, not acceptance.
 
-Fresh model evidence: `artifacts/apple-release-closure-v1/`. The fresh GPU
+Baseline model evidence: `artifacts/apple-release-closure-v1/`. Add the new SDR
+host workflows when integrating them; these counts no longer establish the full
+current feature scope. The fresh GPU
 enumeration did not execute: the sandbox lacks a Metal adapter and both requests
 for approval outside it timed out. Retained GPU results remain separately scoped.
 
