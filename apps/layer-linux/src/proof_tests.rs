@@ -161,10 +161,16 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
     let path = std::env::var_os("LAYER_BENCH_PROOF")?;
     let bytes = std::fs::read(&path).unwrap();
     let digest = glib::compute_checksum_for_data(glib::ChecksumType::Sha256, &bytes).unwrap();
-    let recipe = layer_core::color::ProofRecipe::new(
+    let mut recipe = layer_core::color::ProofRecipe::new(
         "Benchmark print target".into(),
         ColorProfile::Icc(bytes.into()),
     );
+    let shadow_grid = std::env::var("LAYER_BENCH_PROOF_SHADOW").as_deref() == Ok("1");
+    if shadow_grid {
+        recipe.conversion.intent = layer_core::color::RenderingIntent::Saturation;
+        recipe.conversion.black_point_compensation = false;
+        recipe.simulate_black_ink = false;
+    }
     let memory = || {
         std::fs::read_to_string("/proc/self/status")
             .unwrap()
@@ -186,6 +192,12 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
     wait_proof(w, "Proof:");
     let cold_ms = start.elapsed().as_secs_f64() * 1000.;
     let cache = w.proof.cache_info().unwrap();
+    if shadow_grid {
+        assert_eq!(
+            cache.1, 129,
+            "shadow workload must exercise the larger cache"
+        );
+    }
     let after = memory();
     invoke(w, CommandId::SoftProof);
     wait_proof(w, "Normal");
@@ -204,7 +216,8 @@ pub(super) fn benchmark_proof(w: &Rc<Workspace>) -> Option<serde_json::Value> {
     Some(
         serde_json::json!({"profile": path, "sha256": digest.as_str(), "cold_ready_ms": cold_ms,
         "warm_ready_ms": warm_ms, "poll_ms": 20, "edge": cache.1, "lut_bytes": cache.2,
-        "memory_before": before, "memory_ready": after, "simulation": "relative, BPC, black ink"}),
+        "memory_before": before, "memory_ready": after,
+        "simulation": if shadow_grid { "saturation, no BPC, no ink simulation" } else { "relative, BPC, black ink" }}),
     )
 }
 fn keyboard(w: &Rc<Workspace>, key: gdk::Key, modifiers: gdk::ModifierType) {

@@ -1,9 +1,9 @@
 # GTK print proofing implementation record
 
-2026-09-16. **In progress; not ready for manual acceptance.** The original
+2026-09-16. **Implementation complete; ready for manual review. Acceptance pending.** The original
 [handoff](../development/color-management-m3-gtk-handoff.md) and the pre-implementation
 [design/tolerances](../development/color-management-m3-gtk-design.md) define the
-remaining work. Other hosts, HDR and the deferred regeneration redesign are outside
+scope. Other hosts, HDR and the deferred regeneration redesign are outside
 this task. No calibrated display or physical print comparison has been performed.
 
 ## Baseline before rendering changes
@@ -176,5 +176,35 @@ LAYER_BENCH_PROOF=/usr/share/color/icc/krita/cmyk.icm GSK_RENDERER=vulkan \
 
 ## Final performance and delivery
 
-Native navigation, drawing, concurrent save/export measurements and the standalone
-review build are being completed. Manual acceptance remains pending.
+The [performance record](color-management-gtk-m3-performance.md) preserves raw
+distributions, repeated baseline comparisons, first-use latency and memory.
+Proof-enabled 24/45/60/61 MP navigation presents 3,840/3,840 poses with zero missed
+refresh slots at 4K/120 Hz; three 61 MP repeats also present every pose. The largest
+129³ shadow cache sustains 120 Hz with zero missed slots and one initial fit pose
+omitted. Cold readiness is 345–360 ms for the ordinary target, 3.70 s for the
+refined shadow case. Warm cached completion is observed within 22 ms at 20 ms
+polling. Drawing CPU/GPU changes stay within the baseline regression trigger.
+
+Limits remain explicit: the latency investigation retains normal-view outliers
+and does not claim their cause is resolved. Concurrent native save/reopen and
+full-resolution TIFF export miss two/four refresh slots over eight seconds with
+proof off/on. Physical print matching, calibrated-display accuracy, constrained
+hardware and other hosts have not been qualified here.
+
+Production source: **`53daf782ed36e1edb4c6a476af6dcf5eaf9f869a`**. Standalone
+release executable: `artifacts/color-m3/review/capycanvas-gtk-m3`; SHA-256
+**`8f7d0ac7de54937ec9325ee15039c01f655d059e50b3b8b9765fbc241980c4f6`**.
+`review/build.json` records Cargo command, toolchain and test identities.
+The final subsequent source changes are the optional larger-cache benchmark
+policy and these handoff documents; they do not change production behavior.
+
+Run `bash artifacts/color-m3/review/launch.sh`. The build has been launched and
+verified running on the user's desktop with a managed P3 Vulkan canvas; the
+original app process remains running. The launcher isolates D-Bus, settings,
+workspace, profile library and recovery state. Private-session accessibility and
+portal startup warnings are retained in `review/app.log`; canvas startup succeeds
+and file dialogs use the native in-process chooser. No open drawing was discarded.
+
+Follow the [manual review guide](../development/color-management-m3-gtk-review.md).
+The handoff stops for the user's app review and confirmation. Automated checks
+and a running build do **not** imply that the user has accepted phase 3.

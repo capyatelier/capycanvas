@@ -1,6 +1,7 @@
 # GTK milestone 3 implementation and qualification contract
 
-2026-09-16, before production implementation. Status: **in progress**.
+2026-09-16, contract established before production implementation and amended with
+the measurements below. Status: **implemented on GTK; manual review pending**.
 Scope is the [GTK handoff](color-management-m3-gtk-handoff.md); phase 2 platform
 gaps remain in the [integration record](../history/color-management-m2-port-handoff.md).
 Delivery ends with a runnable GTK build and the user's manual review, not inferred
