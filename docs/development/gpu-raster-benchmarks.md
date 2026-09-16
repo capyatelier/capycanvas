@@ -103,6 +103,24 @@ artwork revision, and the run verifies unchanged native paint/mask roots. The
 first navigation frame and cache misses stay in the results. `multiple` uses the
 existing `--photo` worker fixture instead.
 
+The native counterpart is the ignored GTK test
+`workspace::tests::native_navigation::native_large_photo_navigation`. Build the
+release test executable first, then run it alone with `gtk-raster.sh` and
+`LAYER_NAVIGATION_PHOTO=24mp`, `45mp` or `60mp`. It maximizes the editor on the
+private 1600×1000@120 display and records the actual canvas viewport. It generates
+960 camera requests on an absolute 120 Hz schedule through the shared gesture
+API and GTK change/wake path, without waiting for each render. This measures
+software camera-request-to-presentation, not physical input delivery. The native
+source has five pointwise adjustments and 32 paint layers; unlike the offscreen
+fixture it has no painted stroke or adjustment mask.
+
+`tools/performance/photo-navigation-report.py REPORT.json` matches exact camera
+matrices and frame IDs to Wayland presentation feedback. It reports unmatched
+requests, discarded feedback, refresh-slot gaps, phase-specific p95/p99/max,
+worker CPU/GPU time and GTK frame-handler time. Do not infer request latency from
+frame cadence alone, or ignore a failed phase in the whole-run aggregate. Keep
+builds and other performance workloads out of the measurement interval.
+
 | Scenario | Workload |
 | --- | --- |
 | G‑Pen inking | Two long pressure-varying analytic strokes |

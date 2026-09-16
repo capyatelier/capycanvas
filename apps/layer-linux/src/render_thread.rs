@@ -1169,6 +1169,10 @@ impl Worker {
     ) -> Result<(), String> {
         let _presentation = self.renderer.prioritize_raster_presentation();
         let (camera, surround) = self.last_view.expect("rendered document");
+        #[cfg(test)]
+        if let Some(timing) = &timing {
+            timing.camera_view(camera, &self.renderer);
+        }
         let view = target.texture.create_view(&Default::default());
         let mut encoder = self
             .renderer

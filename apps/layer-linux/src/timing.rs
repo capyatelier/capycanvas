@@ -23,6 +23,9 @@ pub struct Stats {
     pub gpu: Vec<[f64; 2]>,
     /// Frame id, presentation ns, refresh ns, presented=1/discarded=0.
     pub presented: Vec<[u64; 4]>,
+    /// Frame id, document-to-surface matrix, artwork preview revision. Allows
+    /// camera requests to be matched to actual presentation without timing guesses.
+    pub camera_views: Vec<(u64, [f32; 6], u64)>,
     /// Frame id and enqueue timestamp for a native raster publication.
     pub raster_commits: Vec<[u64; 2]>,
     pub overview_revisions: Vec<u64>,
@@ -60,6 +63,13 @@ pub fn thread_cpu_ms() -> f64 {
     time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
 }
 impl Timing {
+    pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {
+        self.stats.lock().unwrap().camera_views.push((
+            self.id,
+            view.document_to_surface,
+            renderer.canvas_preview_revision(),
+        ));
+    }
     pub fn raster_commit(&self) {
         self.stats.lock().unwrap().raster_commits.push([self.id, self.queued_ns]);
     }

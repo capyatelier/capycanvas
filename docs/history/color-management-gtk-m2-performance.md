@@ -22,10 +22,11 @@ responsive/cancellable long operations. Other host integration still requires
 approval after GTK validation.
 
 Navigation reuses completed composition through bounded retained Float32 display
-mips and native detail. The checkpoint below removes repeated zoomed-out scene
-evaluation and seeds native detail during existing composition. Native detail
-misses can still request full-resolution scene tiles; the 60 MP cold-zoom tail
-and native GTK presentation remain unqualified. Filters always execute at their
+mips and native detail. The checkpoints below remove repeated zoomed-out scene
+evaluation, seed native detail during existing composition and skip redundant
+mip work on camera-only detail misses. The measured offscreen pointwise-adjustment
+workload now fits 8.333 ms at all three photo sizes; native GTK request-to-present
+latency and navigation with costly physical filters remain unqualified. Filters always execute at their
 original resolution before display reduction. Broad final resource/correctness
 checks remain necessary; repeated optimization of deferred regeneration workloads
 is not the next step.
@@ -1869,3 +1870,121 @@ captured binary, telemetry and timeout invocation used here. Final GTK
 presentation, remaining 60 MP cold detail, aggregate resource qualification and
 post-migration color regression checks remain open. No other platform host is
 approved by this checkpoint.
+
+## Navigation-only detail misses no longer rebuild completed mip levels
+
+Follow-up to `1adf1afa`. A native detail miss was repeating every mip reduction
+and retained-level copy, even when the artwork revision had not changed. The
+renderer now distinguishes artwork damage from camera-only missing detail before
+combining their tile requests. With a complete retained pyramid, camera-only
+native detail copies directly from the full-resolution composition output into
+the bounded detail texture. Already-current display levels are left alone.
+Edits, animation, startup and constrained-cache fallback retain their existing
+reduction/invalidation path. Filter evaluation, storage precision and cache
+ceilings are unchanged; this does not optimize dirty-image regeneration.
+
+The retained-mip regression test now explicitly evicts native detail, navigates
+to central and partial bottom/right tiles, and compares reconstructed detail to
+full composition. All completed mip levels must remain bit-identical. All ten
+live-display tests pass (14.57 s). Separate native GTK processes pass managed
+canvas/artwork agreement, bounded-canvas painting and wide-color GPU recovery
+with the final manual allocator policy. Those correctness runs overlapped a CPU
+build; their durations are not performance evidence.
+
+The additional native fixture submits 960 requests on an absolute 120 Hz schedule
+through `UiSession::gesture` and GTK's ordinary change/wake path, without waiting
+for the previous render. It records exact requested/queued camera matrices and
+Wayland frame IDs; the analysis joins matching requests to actual presentation
+feedback. It preserves the entire document and artwork preview revision. This
+is software request-to-presentation, not physical pointer/pen/touch latency. The
+source has five pointwise adjustments and 32 paint layers, but no painted stroke
+or adjustment mask; the offscreen fixture retains those separately.
+
+These builds use a frozen source checkout of `1adf1afa` plus the recorded navigation
+changes while another agent replaces JPEG/CMM dependencies in the shared worktree.
+They deliberately retain the pre-migration color dependencies. Post-migration
+color/workflow qualification is still required. An existing editor process was
+left running on the measured GPU (515 MiB attributed allocation; 3% device load
+at the pre-run sample); the paired follow-up captures retain background activity.
+Our builds and GPU correctness tests finished before these timing runs.
+Background application activity was recorded but not controlled.
+
+### Offscreen work and native presentation are different gates
+
+The first follow-up offscreen run has zero completed-work misses across all
+2,880 frames. Per-photo worst phase p99 / maximum are 0.840 / 2.137 ms (24 MP),
+5.462 / 6.923 ms (45 MP), and 6.534 / 7.628 ms (60 MP). GPU reserved memory remains
+832 / 880 / 936 MiB. Process high-water is 647.34 / 918.39 / 1092.66 MiB. The
+60 MP native-phase p99 is 2.804 ms, below the original 2.990 ms baseline; the
+extra-mip-work change addresses the preceding checkpoint's native-phase regression.
+The two 60 MP cold-zoom misses also disappear in this run.
+
+The initial native fixture used an ordinary 1200×900 window: request-to-present
+p99 was 8.226 ms, maximum 10.578 ms, four over-budget requests and one unpresented
+request. The final fixture maximizes the editor and records a 1600×1000 canvas:
+
+| Photo | Render-worker CPU p99 / max ms | GPU p99 / max ms | Request-to-present p99 / max ms | Presented requests / 960 | Rounded missed refresh slots |
+| --- | --- | --- | --- | --- | --- |
+| 24 MP | 0.694 / 1.252 | 0.395 / 0.704 | 12.183 / 61.906 | 952 | 8 |
+| 45 MP | 2.081 / 7.190 | 2.334 / 7.510 | 13.827 / 137.946 | 937 | 23 |
+| 60 MP | 2.534 / 7.020 | 2.863 / 7.572 | 13.962 / 21.406 | 956 | 6 |
+
+No native render-worker frame exceeds 8.333 ms, but the request-to-presentation
+gate is **not passed**. Normal presentation cadence is approximately 120 Hz;
+cadence alone cannot waive the latency or gap observations. GTK frame-handler
+p99 is 0.052 ms in the 60 MP run. Current `FrameClock::deadline` schedules work
+three quarters of a refresh interval before presentation; fixed-phase synthetic
+requests can wait for the next such deadline. That explains a potential source
+of the persistent delay, but does not establish the cause of the 61/138 ms tails.
+Those tails need isolation from compositor/background load before attributing
+them to the editor. Physical-input, unlike-monitor and modal device-fallback
+qualification remain outstanding; unchanged-photo navigation with costly physical
+or document-wide filters is also not covered by this pointwise-adjustment fixture.
+
+Artifacts: `navigation-native-frozen-*` records the initial native fixture;
+`navigation-native-reuse-*` records maximized GTK and correctness runs;
+`photo-expanded-navigation-reuse-*` records offscreen measurements. Exact
+production example SHA-256:
+`5d108d68f0a7ec8aeb26d0af8ad815e7f561dd51727cda18d22347af66f4cf90`;
+GPU test executable:
+`bf33ab013284d2dfc96caa11d4d95f7b554054f93103b64011264f3e450093f9`;
+GTK test executable:
+`9fb6d37111c98b0213499c470628f9c015a5c69e296ce740e3eea4ad009be848`.
+The source/provenance JSON identifies the frozen base and every override.
+`tools/performance/photo-navigation-report.py REPORT.json` reproduces the native
+summary; the benchmark guide gives the test name, environment and harness.
+
+A second matched pair (`navigation-balanced-control` and
+`navigation-reuse-repeat`, identical respective executable hashes) confirms the
+camera-miss improvement under the current background load. At 60 MP the varying-
+zoom p99/max falls from 10.225/11.236 ms (three misses) to 6.710/7.245 ms (zero).
+The native-phase p99 falls from 3.980 to 3.334 ms. At 45 MP those phase p99s fall
+from 8.204 to 5.939 ms and 3.549 to 2.464 ms. Both 24 MP arms have zero misses;
+their already-cached native-phase p99s are 0.306/0.295 ms. The earlier 24 MP warm
+increase relative to the original quiet run repeats in the unchanged control,
+so it is not attributable to this code change. The repeat's worst overall frame
+is 2.183/6.556/7.245 ms for 24/45/60 MP, with zero misses across all 2,880 frames.
+These pairs qualify the targeted work reduction; the native presentation gaps
+and post-migration checks remain open.
+
+### Three-document resource and preservation check
+
+`navigation-resource` aliases the same production executable and runs the full
+`--photo multiple` fixture: retained 24+45+60 MP ProPhoto16 documents, adjustment
+history, simultaneous native save/profiled PNG export and editing, repeated full
+histograms, undo/redo and Gaussian blur. It completes successfully in 54.83 s,
+including exact retained native source/paint/mask comparisons and the fixture's
+export/histogram consistency assertions. Regeneration timings remain deferred
+observations and were not optimized or treated as passing interaction gates.
+
+Process RSS high-water is 2,904,612 KiB (2.770 GiB), final RSS 2,765,780 KiB
+(2.638 GiB). The conservative combined GPU reservation bound is 2,977,955,840
+bytes (2.773 GiB), within the declared 3/4 GiB multi-document envelope. This sums
+each retained document's peak and the active device's maximum including its
+shared capture workers, without double-counting the shared device. The active
+60 MP device peaks at 1128 MiB reserved and ends at 1064 MiB after blur; its live
+allocation is 894.01 MiB. The combined gate fits, but that final device reservation
+is 40 MiB over the single-document 1 GiB steady gate and requires a focused check.
+The exact CPU sample cache stays at its 512 MiB ceiling; upload scratch/staging
+peaks at 8 MiB. Logs, environment, GPU samples, command/executable provenance and
+`/usr/bin/time` output use `photo-expanded-navigation-resource-multiple*`.

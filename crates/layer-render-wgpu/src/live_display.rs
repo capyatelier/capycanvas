@@ -150,6 +150,7 @@ pub(super) struct Cache {
     retained_level: Option<u32>,
     fine: Option<Fine>,
     window: Option<Window>,
+    artwork_changed: bool,
     pub geometry: wgpu::Buffer,
     limit: u64,
 }
@@ -169,6 +170,7 @@ impl Cache {
             retained_level: None,
             fine: None,
             window: None,
+            artwork_changed: true,
             limit,
             geometry: r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("live display cache geometry"),
@@ -205,6 +207,9 @@ impl Cache {
         }
         self.fine.as_ref().map_or(&self.coarse.view, |f| &f.view)
     }
+    pub fn note_artwork_change(&mut self, changed: bool) {
+        self.artwork_changed = changed;
+    }
     /// Plan missing display pixels before painting. A limit failure does not
     /// lower the chosen mip or begin an edit that cannot be presented.
     pub fn prepare(
@@ -213,6 +218,7 @@ impl Cache {
         view: ViewState,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<std::collections::BTreeSet<[u32; 2]>, GpuRasterError> {
+        self.artwork_changed = true;
         let requested = Window::new(view, self.coarse.plan)?;
         let retained_level = requested
             .filter(|window| self.retained.iter().any(|r| r.level == window.level))
@@ -356,34 +362,40 @@ impl Cache {
         source_origin: [u32; 2],
         coordinate: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        self.coarse.write_tile(
-            &r.device,
-            pipelines,
-            encoder,
-            source,
-            source_origin,
-            coordinate,
-        )?;
-        for retained in &self.retained {
-            let span = PAGE_SIZE >> retained.level;
-            self.coarse.copy_mip(
+        let native_detail = self.retained.first().is_some_and(|level| level.level == 1);
+        // Camera-only misses need native detail, but the completed coarse and
+        // retained levels already contain these exact pixels. Do not reduce
+        // them again. Edits and constrained caches retain full mip generation.
+        if self.artwork_changed || !native_detail {
+            self.coarse.write_tile(
+                &r.device,
+                pipelines,
                 encoder,
-                retained.level,
+                source,
+                source_origin,
                 coordinate,
-                &retained.texture,
-                coordinate.map(|v| v * span),
-            );
-        }
-        // An edit while zoomed out or outside the current detail window must
-        // invalidate old detail too. A later camera move cannot reuse it.
-        if let Some(fine) = &mut self.fine {
-            for key in &mut fine.keys {
-                if key.is_some_and(|(level, tile)| coordinate.map(|v| v >> level) == tile) {
-                    *key = None;
+            )?;
+            for retained in &self.retained {
+                let span = PAGE_SIZE >> retained.level;
+                self.coarse.copy_mip(
+                    encoder,
+                    retained.level,
+                    coordinate,
+                    &retained.texture,
+                    coordinate.map(|v| v * span),
+                );
+            }
+            // An edit while zoomed out or outside the current detail window must
+            // invalidate old detail too. A later camera move cannot reuse it.
+            if let Some(fine) = &mut self.fine {
+                for key in &mut fine.keys {
+                    if key.is_some_and(|(level, tile)| coordinate.map(|v| v >> level) == tile) {
+                        *key = None;
+                    }
                 }
             }
         }
-        if self.retained.first().is_some_and(|level| level.level == 1) {
+        if native_detail {
             if let Some(fine) = &mut self.fine {
                 let visible = |tile: [u32; 2]| {
                     self.window.is_some_and(|window| {
@@ -401,12 +413,32 @@ impl Cache {
                 // times. Offscreen seeding must never overwrite visible detail.
                 if visible(coordinate) || !occupant_visible {
                     fine.keys[index] = None;
-                    self.coarse.copy_mip(
-                        encoder,
-                        0,
-                        coordinate,
-                        &fine.texture,
-                        fine.origin(coordinate),
+                    let origin = fine.origin(coordinate);
+                    let valid: [u32; 2] = std::array::from_fn(|i| {
+                        (self.coarse.plan.extent[i] - coordinate[i] * PAGE_SIZE).min(PAGE_SIZE)
+                    });
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            origin: wgpu::Origin3d {
+                                x: source_origin[0],
+                                y: source_origin[1],
+                                z: 0,
+                            },
+                            ..source.as_image_copy()
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            origin: wgpu::Origin3d {
+                                x: origin[0],
+                                y: origin[1],
+                                z: 0,
+                            },
+                            ..fine.texture.as_image_copy()
+                        },
+                        wgpu::Extent3d {
+                            width: valid[0],
+                            height: valid[1],
+                            depth_or_array_layers: 1,
+                        },
                     );
                     fine.pending[index] = Some((0, coordinate));
                 }

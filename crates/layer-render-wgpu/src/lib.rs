@@ -4948,6 +4948,9 @@ impl CanvasRenderer for WgpuRasterizer {
             .layers
             .iter()
             .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated()));
+        if let Some(cache) = &mut self.live_display {
+            cache.note_artwork_change(!dirty.is_empty() || animated);
+        }
         if !dirty.is_empty() || animated {
             self.composite_revision = self.composite_revision.wrapping_add(1);
         }

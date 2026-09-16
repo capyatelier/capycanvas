@@ -74,6 +74,26 @@ fn retained_mips_match_windowed_pixels_and_zoomed_out_edits_invalidate_native_de
     let expected = present(&dense, &mut c, native);
     close(&expected, &present(&retained, &mut a, native));
     close(&expected, &present(&windowed, &mut b, native));
+    // Force native cache misses without an artwork edit, including the partial
+    // bottom/right source page. Native detail must match full composition while
+    // already-completed coarse and retained levels remain bit-identical.
+    let levels = |r: &WgpuRasterizer| {
+        let cache = r.live_display.as_ref().unwrap();
+        std::iter::once(&cache.coarse.texture)
+            .chain(cache.retained.iter().map(|level| &level.texture))
+            .map(|texture| pixels(r, texture))
+            .collect::<Vec<_>>()
+    };
+    let before = levels(&retained);
+    for v in [native, view([1., 0., 0., 1., -1350., -650.])] {
+        retained.live_display.as_mut().unwrap().fine.as_mut().unwrap().keys.fill(None);
+        let work = retained.metrics.composited_pixels;
+        submit(&mut retained, &doc, v, false);
+        submit(&mut dense, &doc, v, false);
+        assert!(retained.metrics.composited_pixels > work);
+        close(&present(&dense, &mut c, v), &present(&retained, &mut a, v));
+        assert_eq!(before, levels(&retained));
+    }
 }
 
 fn document(extent: [u32; 2]) -> layer_core::Document {
