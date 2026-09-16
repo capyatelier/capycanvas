@@ -493,3 +493,44 @@ Validation:
 Remaining: broader correction/effect/display qualification, followed by fresh
 matching tablet navigation/memory measurements and final deployment for user
 confirmation. No tablet 120 Hz performance claim is made at this checkpoint.
+
+## Correction and recovery qualification — 2026-09-16
+
+The six SDR photo controls were checked through ProPhoto U16 source import,
+retained masks, native save/reopen and repeated edits/reset. The full-resolution
+histogram changes with each correction and returns exactly to its prior result
+when the control is restored; original source/profile bytes remain intact.
+
+- `tablet-web-photo-corrections-retry2.log`: all six corrections and mask
+  inversion/undo passed. Earlier attempts found test-expression mistakes and an
+  identity-export harness assumption about remembered resize settings; the
+  harness now explicitly selects Original size and no dither.
+- `tablet-native-final-workflows.log`: diagnostics and wide-U16 GPU replacement
+  passed; broader recovery and correction reopening found two real host defects.
+  Embedded effects were waiting for validation while the native shader compiler
+  was still unstarted. Startup now precedes the combined validation/readiness
+  wait. An action rejected while the GPU was failed could also leave a stale
+  error after successful restart. Errors associated with that failure now retire
+  when the canvas is restored; unrelated action errors remain visible.
+- `tablet-native-final-workflows-retry.log`: both affected workflows pass
+  (25.636 s combined), including exact snapshots, active-contact save,
+  undo/redo, GPU replacement, corrupt-file retention, stale-candidate rejection,
+  Activity recreation and production recovery offer/adoption.
+- `shared-final-photo-effects.log`: nine shared GPU correction tests pass
+  (104.59 s), covering both integer depths/all four spaces, low-alpha and extended
+  RGB, long fused/physical chains, analytic curves, gradients, masks and exact
+  save/reopen. `shared-final-display-color.log`: four GPU display tests pass
+  (44.24 s), including canvas/export/navigator/thumbnail/sample color coordinates
+  and explicit SDR surface conversions without changing stored pixels.
+- `shared-final-color-codecs.log`: 60 shared color/codec tests pass, four optional
+  external-fixture tests skipped in that invocation. The separate external run
+  passes installed working profiles and RGB/gray/CMYK/YCCK/progressive/oriented
+  JPEG references. The first CMYK reference invocation selected raw ink bytes
+  instead of the ICC fixture; `shared-final-cmyk-reference.log` passes with the
+  recorded `/usr/share/color/icc/krita/cmyk.icm` profile and independent LittleCMS
+  reference from `artifacts/color-m2/final-performance/portable-icc-reference`.
+
+Web and Android currently use the explicit sRGB SDR viewing fallback. Their
+native U8/U16 master and profiled delivery retain wide-gamut data. These checks
+do not claim a measured physical panel color match or native wide-gamut surface
+presentation on either host.

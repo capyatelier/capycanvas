@@ -239,6 +239,37 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun photoCorrectionsAndMasksRemainRevisableAfterReopen() {
+        val task=native { h -> val(id,f)=request(h,"new_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+        try {
+            Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(513,257)),"color" to obj("space" to "ProPhoto","depth" to "U16"),"background" to "White").toString())
+            Native.projectWork(task,-1,513,257);native {Native.projectAdopt(it,task,"null")}
+        }finally{Native.projectFree(task)}
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick();stroke(0.0)
+        val recipe=native {JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(2).getJSONObject(1)}
+        png("correction-source.png",recipe);open(File(files,"correction-source.png"))
+        val source=manifest(save("correction-source.capy")).getJSONObject("tiled_sources").toString()
+        val controls=listOf(Triple("exposure","exposure",.75),Triple("white_balance","temperature",25.0),Triple("levels","gamma",.9),Triple("curves","curve_0",0.0),Triple("hue_saturation","hue",10.0),Triple("color_balance","midtones_red",12.0))
+        val ids=mutableListOf<Long>()
+        fun send(value:JSONObject){native {Native.dispatch(it,value.toString())};tick()}
+        fun value(index:Int,changed:Boolean)=if(index==3)obj("kind" to "curve","value" to org.json.JSONArray(if(changed)"[[0,0],[1,1]]" else "[[0,0],[0.213,0.13],[0.79,0.9],[1,1]]")) else obj("kind" to "number","value" to (if(!changed)controls[index].third else if(index==2)1.2 else -controls[index].third))
+        fun set(index:Int,changed:Boolean)=send(obj("type" to "effect","action" to obj("op" to "set","layer" to ids[index],"key" to controls[index].second,"value" to value(index,changed))))
+        for((index,control)in controls.withIndex()){
+            send(obj("type" to "effect","action" to obj("op" to "insert","effect" to control.first)))
+            ids.add(native {state(it).getJSONObject("layer_properties").getLong("layer")})
+            set(index,false);send(obj("type" to "layer","action" to obj("op" to "add_mask","id" to ids.last(),"replace" to false)))
+        }
+        val edited=manifest(save("corrections.capy"));assertEquals(source,edited.getJSONObject("tiled_sources").toString())
+        assertEquals(6,edited.getJSONObject("document").getJSONArray("layers").objects().count {it.objectOrNull("effect")!=null && it.objectOrNull("mask")!=null})
+        fun histogram():String {val flag=Native.captureControl();try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,flag)})).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        val before=histogram();open(File(files,"corrections.capy"))
+        val reopened=manifest(save("corrections-reopened.capy"));assertEquals(edited.getJSONObject("document").getJSONArray("layers").toString(),reopened.getJSONObject("document").getJSONArray("layers").toString());assertEquals(before,histogram())
+        for(index in controls.indices){set(index,true);assertNotEquals(controls[index].first,before,histogram());set(index,false);assertEquals(controls[index].first,before,histogram())}
+        send(obj("type" to "layer","action" to obj("op" to "invert_mask","id" to ids[0])));assertNotEquals(before,histogram())
+        send(obj("type" to "invoke","command" to "undo"));assertEquals(before,histogram())
+        assertEquals(source,manifest(save("corrections-final.capy")).getJSONObject("tiled_sources").toString());assertNull(host.failure)
+    }
+
     @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
         val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
         png("profile-library.png",wide);open(File(files,"profile-library.png"))

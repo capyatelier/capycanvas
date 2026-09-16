@@ -271,31 +271,28 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             programs.push(effect.program.clone());
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(60);
-    if !programs.is_empty() {
+    let mut validating = !programs.is_empty();
+    if validating {
         gpu.request_effect_validation(EffectValidationRequest {
             request_id: 1,
             namespace: programs.clone(),
             programs,
         })
         .map_err(error)?;
-        loop {
-            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-            if let Some(result) = gpu.take_effect_validation() {
-                result.result?;
-                break;
-            }
-            if Instant::now() > deadline {
-                return Err("Project shader preparation timed out".into());
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
     }
+    // Preparing startup starts the native compiler. Waiting for validation
+    // before this call leaves all embedded shader jobs permanently queued.
     gpu.prepare_startup(&project.document, &e.brush, false)
         .map_err(error)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
+        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
+        if validating && let Some(result) = gpu.take_effect_validation() {
+            result.result?;
+            validating = false;
+        }
         let ready = gpu.poll_startup().map_err(error)?;
-        if ready.canvas_ready && ready.brush_ready {
+        if !validating && ready.canvas_ready && ready.brush_ready {
             break;
         }
         if Instant::now() > deadline {

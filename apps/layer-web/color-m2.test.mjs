@@ -40,7 +40,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const exported = async(format,profile,depth='U16',resize=false)=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
     await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));};
-      set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});
+      set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});set('Pixel size','Original');set('Dither','None');
       if(${resize}){set('Pixel size','Fit');d.querySelector('input[aria-label="Maximum width"]').value='257';d.querySelector('input[aria-label="Maximum height"]').value='257';set('Resolution metadata','Ppi');d.querySelector('input[aria-label="Pixels per inch"]').value='300';}})()`);
     if(resize){await click('Preview Output');await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')`);
       assert.deepEqual(await evaluate(`(()=>{const canvas=document.querySelector('canvas[aria-label="Output preview"]');return[canvas.width,canvas.height]})()`),[257,129]);
@@ -329,4 +329,36 @@ export async function checkFlattenedCopy({evaluate}) {
   await invoke('open_document');await idle();await invoke('save_document_as');await idle();
   const reopened=await evaluate('sdrManifest(sdrFiles.get("converted.capy"))');assert.deepEqual(reopened.tiled_sources,copied.tiled_sources);assert.deepEqual(reopened.blobs,copied.blobs);
   console.log('Flattened full-composition conversion, preview/copy-picker cancellation, native copy reopen, preserved extent/precision and unchanged master checkpoints passed');
+}
+
+
+export async function checkPhotoCorrections({evaluate,settle}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
+  await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
+  const source=(await save()).tiled_sources;
+  const controls=[['exposure','exposure',.75],['white_balance','temperature',25],['levels','gamma',.9],['curves','curve_0',[[0,0],[.213,.13],[.79,.9],[1,1]]],['hue_saturation','hue',10],['color_balance','midtones_red',12]];
+  const ids=[];
+  for(const [name,key,value] of controls){
+    const id=await evaluate(`(()=>{layerApp.dispatch({type:'effect',action:{op:'insert',effect:${JSON.stringify(name)}}});const layer=Number(layerApp.state().layer_properties.layer);layerApp.dispatch({type:'effect',action:{op:'set',layer,key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}});layerApp.dispatch({type:'layer',action:{op:'add_mask',id:layer,replace:false}});return layer})()`);ids.push(id);await settle();
+  }
+  const edited=await save();assert.deepEqual(edited.tiled_sources,source);assert.equal(edited.document.layers.filter(l=>l.effect&&l.mask).length,6);
+  const histogram=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const before=await histogram();
+  await evaluate(`window.sdrAdjusted=sdrFiles.get('photo-master.capy');window.showOpenFilePicker=async()=>[{name:'adjusted.capy',async getFile(){return new File([sdrAdjusted],'adjusted.capy')}}]`);await invoke('open_document');await idle();
+  const reopened=await save();assert.deepEqual(reopened.document.layers,edited.document.layers);assert.deepEqual(reopened.tiled_sources,source);assert.deepEqual(await histogram(),before);
+  for(const [i,[name,key,value]]of controls.entries()) {
+    const alternate=Array.isArray(value)?[[0,0],[1,1]]:name==='levels'?1.2:-value;
+    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${ids[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(alternate)}}}})`);
+    await settle();assert.notDeepEqual(await histogram(),before,name+' changes the full composition after reopening');
+    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${ids[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}})`);
+    await settle();assert.deepEqual(await histogram(),before,name+' reevaluates retained input exactly');
+  }
+  await evaluate(`layerApp.dispatch({type:'layer',action:{op:'invert_mask',id:${ids[0]}}})`);await settle();assert.notDeepEqual(await histogram(),before);
+  await invoke('undo');await idle();assert.deepEqual(await histogram(),before);
+  const final=await save();assert.deepEqual(final.tiled_sources,source);
+  assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  console.log('All six ProPhoto U16 correction layers and masks remain revisable after reopen; full-resolution histograms change and restore exactly; original source bytes/profile retained');
 }

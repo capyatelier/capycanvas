@@ -112,6 +112,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     var failure by mutableStateOf<String?>(null)
         private set
+    private var actionErrorFromCanvasFailure = false
     var actionError by mutableStateOf<String?>(null)
         private set
     // Native focus, not application state; prevents typing from invoking tools.
@@ -219,7 +220,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
             main.post {
                 if (canvas) failure = e.message ?: "Could not initialize canvas"
-                else actionError = e.message ?: "Could not complete this action"
+                else { actionError = e.message ?: "Could not complete this action"; actionErrorFromCanvasFailure = failure != null }
             }
         }
     }
@@ -235,8 +236,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal fun documentChanged(complete: () -> Unit = {}) = post {
         refreshChrome(); publish(true); wake(); main.post(complete)
     }
-    internal fun reportActionError(message: String) { actionError = message }
-    fun clearActionError() { actionError = null }
+    internal fun reportActionError(message: String) { actionError = message; actionErrorFromCanvasFailure = false }
+    fun clearActionError() { actionError = null; actionErrorFromCanvasFailure = false }
     fun dispatch(action: JSONObject) = post {
         Native.dispatch(handle, action.toString())
         refreshChrome()
@@ -348,7 +349,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
             attached = true
             awaitingSurfaceFrame = true
-            main.post { failure = null }
+            main.post { failure = null; if (actionErrorFromCanvasFailure) clearActionError() }
             publish(true)
             wake()
         }
@@ -361,7 +362,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             check(surface.isValid) { "The canvas surface is unavailable" }
             Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
             attached = true; awaitingSurfaceFrame = true; startupCacheFinished = false
-            main.post { failure = null }
+            main.post { failure = null; if (actionErrorFromCanvasFailure) clearActionError() }
             publish(true); wake()
         }
     }
