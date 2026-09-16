@@ -97,7 +97,8 @@ and physical iPad Settings dependency controls work. Separate iPad windows keep
 independent drawings and Undo history and continue drawing. Selecting an occupied
 workspace correctly brings its owning window forward. A newly reported native-
 prediction error after opening/recovery is tracked separately in the current
-release checklist; these confirmations do not close that runtime regression.
+release checklist; the user subsequently confirms the fixed iPad uses the
+correct native prediction after restoring the drawing.
 
 Provide reproducible build/install/test commands and evidence for functionality,
 visuals, persistence, lifecycle and performance. Pull other ports' changes,

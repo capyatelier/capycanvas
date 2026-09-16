@@ -81,7 +81,7 @@ struct RendererStatsPanel: View {
                     Spacer(minLength: 6)
                     Text(row["value"].string).monospacedDigit().fixedSize()
                         .accessibilityIdentifier("stats-value-\(index)")
-                }.help(row["description"].string)
+                }.frame(height: 17).help(row["description"].string)
                 if index + 1 == Int(stats.view["chart_after_rows"].number) {
                     chart
                 }

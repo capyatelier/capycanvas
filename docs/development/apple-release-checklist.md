@@ -32,6 +32,7 @@ test plans. The goal is incomplete.
 | GPU milliseconds in Diagnostics | Hardware timer/native checks and direct confirmation on both devices. This measures GPU work, not physical pen-to-screen latency. |
 | Severe iPad prediction stall | Actual Pencil capture proves unresolved estimates kept the entire stroke in preview. The bounded-tail fix has regression/pixel/history checks and direct smooth-drawing confirmation with iPadOS prediction both off and on. |
 | R1: Manual prediction and Settings implementation | The engine and native Metal checks cover selected lookahead, preview removal and exact history. Both Release builds pass. On 2026-09-16 the user confirms a clear lead at 64 ms versus 0 ms with the XP-Pen in the fixed Mac review app. Prediction Settings implementation is qualified; physical iPad switch interaction also passes. The later document-adoption prediction regression is tracked under R2. |
+| iPad prediction after document opening/recovery | The generic preparation policy incorrectly selected the saved manual amount. Two shared assignments preserve the receiving platform/capability; focused engine/Metal regressions and direct fixed-iPad confirmation pass. Published in `23de9b5`. |
 | Physical iPad prediction controls and independent windows | The user confirms dependent Settings controls, independent drawings/Undo history and continued input. Selecting an occupied workspace focuses its owning window. Prediction runtime after document adoption is separately tracked below. |
 | iPad full-screen capability | On 2026-09-16 the user accepts the native iPadOS window control. Keep the unavailable in-app command disabled; no substitute app API is required. Physical scene/lifecycle checks remain under R4. |
 
@@ -52,12 +53,12 @@ Do not replace a missing result with a catalog entry or build success.
 
 | ID | Requirement and current limit | Next action / proof needed |
 | --- | --- | --- |
-| R2 | **Complete native feature behavior.** The table below assigns all command groups and dynamic controls to specific remaining cases. Most implementation and many workflows already pass. The reported iPad native-prediction error after document adoption is reproduced and fixed in shared policy; physical fixed-build review is pending. | Reconcile each case against its existing test result, then group genuinely missing native interactions. Fix reproduced failures with focused local regressions. |
+| R2 | **Complete native feature behavior.** The table below assigns all command groups and dynamic controls to specific remaining cases. Most implementation and many workflows already pass. The reported iPad native-prediction error after document adoption is reproduced and fixed in shared policy; the user confirms the fixed iPad now uses the correct native prediction. | Reconcile each case against its existing test result, then group genuinely missing native interactions. Fix reproduced failures with focused local regressions. |
 | R3 | **Physical input and drag contract.** Basic drawing/navigation passes. Supplied AppKit/UIKit callbacks and shared history/pixel checks cover many constraints and cancellations. | Verify supported tilt/rotation/hover/proximity, interrupted contacts and recovery, physical trackpad/button navigation, Pencil eyedropper, and representative tool handles. Finish the device-specific tile/row/grip cases in the [drag inventory](../ui/drag-inventory.md#apple-macos-and-ipados). Physical iPad shortcut checks require a hardware keyboard, which is currently absent. Retained injected-key failures are unresolved evidence, not a proven application cause. |
 | R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. iPad expiration now ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion, with a clean iPad Release build. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; interrupted recovery and actual OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and window/display/surface transitions. Verify artwork, settings/workspace, continued input and independent history. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
 | R5 | **Perceptual visual parity.** Main editor/component comparisons and reported fixes exist. Benchmark document replacement exposed stranded layer-preview readbacks; central invalidation now passes both-policy AppKit/Metal regression and a final Mac Release capture. | Map retained normal-size light/dark, preset and narrow/windowed captures to the final feature inventory; inspect missing visible states on both native hosts against Web. Correct straightforward visible mismatches. Do not rerun every pixel comparison for an unrelated engine fix. |
 | R6 | **Sustained hardware performance and measurement.** The missing-callback startup stall is reproduced and fixed by removing the custom presentation counter/retry. Both physical fixed Releases complete ten minutes of 4K watercolor with correct thumbnails, nominal thermals and prompt canvas idle. Long active intervals are 0.959% Mac / 1.997% iPad, with no missing/zero measured callbacks, rejected input or renderer errors. Current and retained ink results remain separately scoped. Rare measured misses alone do not fail acceptance. | Preserve the startup regression and these completed runs. Finish only outstanding source-qualified platform/profile, recorder-off resource/storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. The retained footprint curves do not justify a memory workaround. Use [Performance](../../apps/layer-apple/PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16); its CPU/GPU/presentation proxies are not physical latency. Do not restart profiler experiments without a concrete unresolved requirement or visible regression. |
-| R7 | **Integration and delivery.** The grouped follow-up to `53c560a` fixes document-adoption prediction, aligns Diagnostics, removes the ColorSwatch dependency and records native refinement/modifier and perceptual checks. Both Releases build cleanly; the fixed iPad review retains eight drawings. Main was fetched with no new commits. Evidence/publication record: `artifacts/apple-prediction-adoption-v1/`. The earlier sustained startup-fix results remain separately scoped. | Integrate later main changes and repeat only checks affected by subsequent fixes. Publish completed milestones and verify the remote revision. The final release and overall goal still require R2–R6. |
+| R7 | **Integration and delivery.** The grouped panel-parity milestone aligns Filters and Diagnostics, adds UIKit component acceptance for three panels, and records the user's passing native-prediction confirmation. Both final Releases build without compiler warnings. Existing physical review apps and drawings remain intact; no installation or new physical-input pass is inferred. Evidence/publication record: `artifacts/apple-uikit-panels-v1/`. The preceding prediction-adoption and sustained-performance results remain separately scoped. | Integrate later main changes and repeat only checks affected by subsequent fixes. Publish completed milestones and verify the remote revision. The final release and overall goal still require R2–R6. |
 
 ## Feature closure map
 
@@ -84,14 +85,35 @@ in both themes, covering the two/three/four-column layouts and selected value.
 Six inactive Diagnostics pairs also pass after matching the centered 200×46
 chart, dashed budget line and narrow-label truncation. These captures use actual
 production components and identical row models; GPU is unavailable and samples
-are empty in the native fixture. Nonempty traces, UIKit and full-editor content
-remain separate. The full Mac capture attempt hit the system iCloud dialog; its
+are empty in the native fixture. Nonempty traces and full-editor content remain
+separate; the subsequent UIKit component check below closes these three panel
+appearances. The full Mac capture attempt hit the system iCloud dialog; its
 unfinished helper is removed rather than counted as a pass. Evidence is
-`artifacts/apple-panel-contents-v1/`. Filters still need matched content review.
-Also resolve the remaining Sketch/Photo, narrow/windowed and transient-state
-coverage on both native hosts. Keep UIKit component limits explicit rather than
-counting an AppKit capture twice. Do not repeat unchanged Color or Tool Set
-matrices while completing these missing states.
+`artifacts/apple-panel-contents-v1/`.
+
+Filters now passes sixteen AppKit/Web component pairs: both themes, 168/226-point
+widths, All/Tone categories, Blur search and empty results, with actual GPU
+previews. Small SwiftUI changes match spacing, label heights, search-button state
+and empty-message alignment. Matching-size raw preview silhouettes are identical;
+no renderer workaround is needed. The native search field retains the shared
+input/text palette, with minor system-field shading and glyph rasterization
+differences. Evidence is `artifacts/apple-filter-panel-parity-v1/`.
+
+The UIKit follow-up now passes the same sixteen Filters cases plus six Brush
+size and six inactive Diagnostics pairs, using real production components on
+the existing iPad simulator. The capture exposed cumulative Diagnostics row-height
+drift; one shared fixed line height aligns it with Web, with six final recaptures
+on each Apple host. All final normal-size sheets are reviewed. These checks use
+memory-only storage and disposable apps; artist review apps are untouched.
+Diagnostics models remain empty/unavailable, so this adds no timing or nonempty-
+trace acceptance. Evidence is `artifacts/apple-uikit-panels-v1/`.
+
+The grouped panel-parity milestone combines these small visual fixes and records
+the user's passing physical iPad native-prediction confirmation. Remaining visual
+work includes UIKit Tool actions, nonempty Diagnostics traces, full Sketch/Photo,
+narrow/windowed and transient-state coverage. Keep the full-editor and physical-
+device limits explicit; component captures do not close those cases. Do not
+repeat unchanged Color or Tool Set matrices while completing these missing states.
 
 ### Commands and controls
 
@@ -288,8 +310,8 @@ and recovery. All 401 shared UI tests pass, including 64 regression combinations
 Actual Metal tests on both Apple policies verify preview pixels, prediction
 source, pen-up removal and exact Undo/Redo. Both Releases build without warnings;
 the fixed iPad app is installed with all eight recovery drawings preserved.
-Fixed-iPad physical review is pending; Settings-control acceptance does not
-replace that check.
+The user confirms native prediction now looks correct on the fixed iPad Release.
+This closes the reported document-adoption regression.
 
 ## Execution order
 

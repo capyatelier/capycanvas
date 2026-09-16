@@ -84,7 +84,8 @@ removal and exact Undo/Redo on both Apple policies. Both Release builds pass
 without warnings. The fixed iPad Release is installed in place with all eight
 recovery drawings preserved and saved files byte-identical across installation.
 The Mac review remains untouched. Evidence is
-`artifacts/apple-prediction-adoption-v1/`; physical fixed-iPad review is pending.
+`artifacts/apple-prediction-adoption-v1/`. The user confirms native prediction
+now looks correct in the updated iPad app; this reported regression is closed.
 
 ## Native control and modifier closure
 
@@ -129,6 +130,33 @@ This does not qualify nonempty traces, UIKit appearance or full-editor state.
 The unfinished full-editor capture fixture hit the system iCloud prompt and is
 removed; its logs and captures remain private. Evidence is
 `artifacts/apple-panel-contents-v1/`.
+
+## Panel spacing and UIKit appearance
+
+The AppKit/Web Filters comparison covers both themes, 168/226-point widths,
+All/Tone categories, Blur search and empty results. Small shared SwiftUI changes
+remove the extra list gaps and search-button selection background, align label
+and category heights, outline the search field and align the empty message.
+Panel measurements follow the new spacing; no renderer or prediction path changes.
+Matching-size raw preview silhouettes are identical, so no GPU workaround is
+needed. Evidence is `artifacts/apple-filter-panel-parity-v1/`.
+
+The UIKit follow-up passes all sixteen Filters pairs plus six Brush size and six
+inactive Diagnostics pairs. It uses production components, real filter GPU
+previews and the existing simulator, with memory-only storage and disposable
+capture apps. Diagnostics has a small accumulating line-height mismatch; one
+shared fixed row height corrects it, with six final captures on each Apple host.
+All final sheets pass normal-size review. The native search field retains minor
+palette/clipping differences; no per-platform rendering workaround is added.
+Evidence is `artifacts/apple-uikit-panels-v1/`. The initial standalone build's
+newer deployment-default warning is corrected in the fixture before launch.
+Artist review apps remain untouched. Full-editor/physical-device appearances,
+UIKit Tool actions and nonempty Diagnostics traces remain explicit release cases.
+
+These changes and the physical prediction confirmation form the grouped
+panel-parity milestone. Both final Release builds pass without compiler warnings.
+Publication verification is retained with the UIKit evidence; no individual-task
+commit is made. Installed artist review apps retain the preceding prediction fix.
 
 ## Native provider acceptance
 
