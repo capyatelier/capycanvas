@@ -144,6 +144,22 @@ paths are in `test-executables.json`.
   cases also pass. Subsequent project/GTK checks use the corrected release test
   binaries recorded in `final-test-executables.json` and `coverage-fix-runs.json`.
 
+The corrected merge (`00d5a85b`) passes both material tests, all four native
+material tests and all four working-precision tests, plus all three contact and
+six project GPU integration cases. Native GTK contact brushes, managed artwork,
+effect colors/gradients, diagnostics and both ordinary/wide-color GPU recovery
+also pass. These runs use the fixed release binaries, before Web/Android changes.
+
+A fresh fullscreen 61 MP ProPhoto16 navigation check at 3840×2160, actual 200%
+scale and 120 Hz passes: 958/960 total requests presented (two initial requests
+unmatched), **768/768 later-phase requests**, no missed refresh slots. CPU/GPU
+maxima are 1.455/1.263 ms. First response is 25.170 ms, whole-run input-to-present
+p99 is 8.375 ms. The accepted gate is smooth navigation with latency documented.
+`merged-navigation.json`, `merged-navigation-summary.json` and
+`coverage-fix-runs.json` record the capture, summary and exact environment.
+Reproduce the summary with
+`python3 tools/performance/photo-navigation-report.py artifacts/color-m2/main-integration/merged-navigation.json`.
+
 Apple and Windows native SDK builds were not run in this Linux environment.
 Android's Rust target check does not compile or exercise its Kotlin controls.
 WASM compilation does not exercise browser UI, WebGPU or persistence. Upstream's
