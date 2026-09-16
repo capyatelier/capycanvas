@@ -719,3 +719,50 @@ manifest and service worker. `android-final-package-build.log` builds the final
 ARM64 APK after the unsupported TIFF feature removal; it is installed as
 `art.capycanvas.colorm2`, label **Capy Canvas Color M2**, alongside the normal app.
 The Downloads JPEG's SHA-256 was rechecked after deployment and remains unchanged.
+
+### Final installed-build measurements
+
+`native-final-package-navigation-{0,1,2}.json` retains every run from the final
+APK (no memory sampler running). Actual drawing submissions number 346 / 345 /
+345 for 361 input ticks each; two additional callbacks per run do no paint work.
+CPU render/present p95 is 2.05 / 2.68 / 2.31 ms; p99 5.12 / 5.91 / 6.34 ms.
+Submission cadence median and p95 are approximately 8.334 ms, p99 16.667 ms.
+Each run contains 16–18 intervals over 12 ms (about 5%); do not describe this as
+zero missed frames. These gaps still need the user's smoothness assessment.
+`web-final-package-navigation.json` uses the committed CLI against the actual
+packaged app: all three runs submit 361 frames, CPU p95 2.4–2.5 ms, p99 2.6–2.8 ms;
+RAF median 16.7 ms and p99 16.8 ms. The Chrome 120 Hz question remains pending.
+
+`web-memory-samples.json` samples all Chrome processes associated with its
+package; other user tabs remain open and contribute to these totals. Browser PSS
+rises from 1674 MiB before the 61 MP import to an observed 2692 MiB peak, then
+settles at 1991 MiB after the idle worker releases about 600 MiB. Total reported
+RSS peaks at 3032 MiB. System available RAM starts at 4070 MiB, bottoms at 1725 MiB
+and settles at 2371 MiB. Driver/unmapped GPU allocations are not fully included in
+process PSS. The figures are whole-browser observations, not exact per-tab
+allocation attribution. The separate final navigation run follows this memory
+sampling and has no dumpsys polling overhead.
+
+Installed APK SHA-256:
+`eef27f502a9efa11fad6de18c8980ba8e285a5876494f0b3a173f30aa80ed5da`.
+Packaged service worker SHA-256:
+`aa5cdc5ddb95bd3656c2cd75f4847634f544705f42b52eed59bc7f7262f3c8da`.
+
+`web-final-origin-unavailable.log` proves a new PWA navigation reaches full GPU
+startup while its own ADB port is removed and an uncached URL fails to fetch.
+The app's connection is restored afterward; other tabs' connections are untouched.
+Chrome's `navigator.onLine` still reflects the tablet's general connectivity, so
+it was not used as proof that this origin was unavailable. The earlier emulated
+network attempt alone was insufficient evidence. Temporary served test images
+were removed from the distribution after testing; the original remains in the
+tablet's Downloads folder.
+
+Handoff status: both installed/deployed builds are ready for the user's test.
+Native label: **Capy Canvas Color M2**. Web: the tablet Chrome tab at
+`http://127.0.0.1:8128/` (cached PWA). Test image:
+`/sdcard/Download/sony_a7r_v_29.jpg`. Test hosts were measured separately; retaining
+both large-photo instances competes for the same system RAM and may select the
+bounded fallback. Chrome flag changes require the pending user choice because
+they affect the whole browser and require restarting other tabs. No 120 Hz Web
+pass or actual input-to-photon claim is made. User confirmation is still required;
+this checkpoint does not declare the entire cross-platform milestone complete.
