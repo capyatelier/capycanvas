@@ -118,11 +118,16 @@ For the high-DPI large-photo case, set `LAYER_TEST_MONITOR=3840x2160@120` and
 `LAYER_TEST_SCALE=2`. The harness applies and verifies the private Mutter monitor's
 scale; `GDK_SCALE` alone is insufficient on Wayland. Set
 `LAYER_NAVIGATION_MAXIMIZE=0` for a 1200×900 logical window (2400×1800 physical at
-scale 2). `LAYER_NAVIGATION_COMPLETE=1` additionally requires zero recomposited
-pixels and zero source-tile misses throughout navigation, qualifying the complete
+scale 2). `LAYER_NAVIGATION_PHYSICAL=1` adds a Gaussian blur evaluated at native
+photo resolution before display reduction. `LAYER_NAVIGATION_COMPLETE=1`
+additionally requires zero recomposited pixels and zero source-tile misses in
+camera frames, qualifying the complete
 display-pyramid path on devices with sufficient reported memory headroom. The
 fixture fails if any gesture is rejected or the GPU worker stops. Reports include
 actual monitor scale, viewport, per-frame composition counters and display bytes.
+The fifth `camera_work` column counts source misses within the timed canvas frame;
+the fourth retains cumulative misses, including separately scheduled thumbnail
+work. Presentation timing includes any interference from those background jobs.
 
 `tools/performance/photo-navigation-report.py REPORT.json` matches exact camera
 matrices and frame IDs to Wayland presentation feedback. It reports unmatched

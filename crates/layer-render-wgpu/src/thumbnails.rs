@@ -60,6 +60,32 @@ impl WgpuRasterizer {
     pub fn thumbnails_pending(&self) -> bool {
         self.thumbnails.pending > 0
     }
+    /// Give a cold photo thumbnail bounded background time before requesting
+    /// its readback. Hosts can service camera/paint commands between batches.
+    /// Existing completed originals are reused; document pixels are unchanged.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepare_thumbnail_batch(&mut self, target: LayerId) -> Result<bool, GpuRasterError> {
+        if !self.tiled_sources.contains_key(&target) {
+            return Ok(true);
+        }
+        let mut gpu = self
+            .thumbnails
+            .sources
+            .take()
+            .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("background photo thumbnail batch"),
+            },
+        );
+        let result = gpu.prepare(self, target, &mut encoder, 4);
+        self.thumbnails.sources = Some(gpu);
+        let ready = result?;
+        self.uploads.finish(&encoder);
+        encoder.submit(&self.queue);
+        Ok(ready)
+    }
     pub(super) fn start_thumbnail(
         &mut self,
         id: u64,

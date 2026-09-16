@@ -2185,3 +2185,85 @@ not regenerate. Batching that background scan remains a focused follow-up.
 Reports are `navigation-final-61mp-window*`; executable hashes are retained in
 `navigation-final-executables.json`. The final texture-dimension guard passes
 all 15 display tests (`navigation-final-display-tests.log`, 24.65 s).
+
+
+## Background thumbnails yield to interactive canvas work
+
+The cold original-photo thumbnail used to scan all 950 source tiles in one
+`Command::Thumbnail` call on GTK's canvas worker. Its source-cache counters
+exposed the work between timed canvas frames; it explained the reproducible
+~170–193 ms queue stalls despite sub-2-ms rendering. The first batching trial
+removed that large pause but still competed with navigation: the windowed trial
+presented 859/960 requests. A small background batch alone was insufficient.
+
+GTK now prepares at most four original tiles per batch, checks queued canvas
+work first, and waits for 50 ms without a canvas frame before doing thumbnail
+work. Thus a new gesture can interrupt idle preparation between small batches,
+and continuous motion receives the worker. No full-resolution preview pipeline,
+extra full-image copy, filter-resolution change or precision reduction is added.
+Prepared thumbnail pixels remain private until the original is complete. The
+existing exact area-integration and edited-tile correction algorithm is retained;
+completed thumbnails remain cached. Other hosts keep their current entry point.
+
+Nine focused thumbnail GPU tests pass; one optional timing test is ignored
+(`navigation-thumbnail-batch-gpu-tests.log`, 45.28 s). The new check covers bounded
+progress, discarded batches, restart, exact repeated output, no warm source
+decoding, and the existing Float64 area-integral tolerance of 0.00002.
+GPU executable SHA-256:
+`fa72cfe7b23db1316723011f8504267945aac418d5c7be5b934f06295ebe2765`.
+
+The native fixture now separates a camera frame's own source misses from the
+cumulative source counter, which also includes background jobs. It still asserts
+zero camera source misses and zero recomposition, and measures native presentation
+across all background interference. `LAYER_NAVIGATION_PHYSICAL=1` adds the actual
+Gaussian blur (sigma 4) at full photo resolution. This checks navigation of a
+physical filter's completed output, not its deferred regeneration speed.
+
+Final serial 61 MP, actual scale-2 native runs, 960 requests each:
+
+| Case | Presented / missed refresh slots | CPU maximum | GPU maximum | Request-to-present p99 |
+| --- | ---: | ---: | ---: | ---: |
+| 2400×1800 window, first | 957 / 3 | 1.923 ms | 2.203 ms | 9.694 ms |
+| 2400×1800 window, repeat | 941 / 19 | 1.847 ms | 1.831 ms | 10.668 ms |
+| 3840×2160 maximized | 933 / 27 | 1.792 ms | 2.088 ms | 10.108 ms |
+| 3840×2160, physical Gaussian blur | 956 / 4 | 1.950 ms | 1.897 ms | 12.106 ms |
+
+Every run has zero camera recomposition/source misses, no thumbnail source work
+during navigation, and no timed CPU/GPU frame above 8.33 ms. The full-image
+thumbnail pause is absent. These results do **not** pass a zero-missed-refresh or
+8.33-ms input-to-present gate: synthetic request delivery itself has 16–33 ms
+maximum lateness, and native pacing still has gaps. The rendering/storage cause
+has been removed; further memory is not supported as the remedy for the remaining
+presentation/scheduling behavior. Shared-workstation load and native scheduling
+must be distinguished before attributing the residual gaps.
+
+GTK executable SHA-256:
+`fcce334366ea50f841f0499e8e9615561d1829f4ef95e152fbf073989257a449`.
+Artifacts are `navigation-idle-thumbnail-{window1,window2,fullscreen,fullscreen-blur}*`,
+`navigation-idle-thumbnail-native-runs.json`, and the build/executable records.
+The unsuccessful first batching measurements are retained under
+`navigation-thumbnail-{window1,window2,fullscreen,fullscreen-blur}*`.
+Reproduce with the existing native navigation command above, the final executable,
+`LAYER_NAVIGATION_COMPLETE=1`, the chosen `LAYER_NAVIGATION_MAXIMIZE`, and optional
+`LAYER_NAVIGATION_PHYSICAL=1`. Do not overlap these timings with compilation.
+
+
+Final native correctness checks pass idle photo-thumbnail publication, Clear,
+exact thumbnail/artwork restoration on Undo, wide-color GPU failure/recovery,
+and managed canvas/GTK artwork agreement. Results and exact commands are in
+`navigation-thumbnail-qualified-functional-runs.json` (2.71/6.86/2.81 s).
+The focused native thumbnail test deliberately excludes the document's monotonic
+publication revision from artwork equality; its initial failure was revision 2
+versus 0, with all image and layer values equal. No pixel tolerance changed.
+Final correctness executable SHA-256:
+`8ef55404fb8d91401e884afabb530ed5bb8f7d995e458e060c594e68eb909757`.
+Its production source is unchanged from the timing executable above; only the
+focused test and its revision assertion were added afterward.
+
+The broader `native_layer_panel_review` stops earlier at its nested-row column
+alignment assertion (x=6 versus x=0), identically on the pre-thumbnail-change
+binary and current build. Both failed logs are retained as
+`navigation-thumbnail-parent-layers*` and `navigation-idle-thumbnail-layers*`.
+This unrelated existing fixture failure is not counted as a pass or changed in
+this patch; the dedicated test validates actual thumbnail publication/history
+without traversing that unrelated layout assertion. No drag behavior changed.

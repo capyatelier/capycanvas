@@ -686,6 +686,8 @@ impl Worker {
         let mut startup_progress = layer_render_wgpu::StartupProgress::default();
         let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
         let mut deferred = VecDeque::new();
+        let mut pending_thumbnails = VecDeque::new();
+        let mut last_canvas_frame = std::time::Instant::now();
         let mut document_drawn = false;
         #[cfg(test)]
         let mut fail_next_frame = false;
@@ -733,6 +735,7 @@ impl Worker {
                         &mut timing,
                     )?;
                     document_drawn = true;
+                    last_canvas_frame = std::time::Instant::now();
                     count.fetch_sub(1, Ordering::Release);
                 }
                 if progress.complete {
@@ -772,6 +775,11 @@ impl Worker {
             if let Some(result) = self.renderer.take_effect_validation() {
                 reply.send(Reply::EffectValidation(result)).map_err(error)?;
             }
+            // A small preview can wait through continuous drawing/navigation.
+            // Batching bounds interruption when input resumes during idle work;
+            // the quiet period keeps those batches from competing every frame.
+            let thumbnail_ready = !pending_thumbnails.is_empty()
+                && last_canvas_frame.elapsed() >= Duration::from_millis(50);
             let next = if document_drawn && !deferred.is_empty() {
                 Ok(deferred.pop_front().unwrap())
             } else if cfg!(test)
@@ -780,11 +788,12 @@ impl Worker {
                 || self.renderer.filter_previews_pending()
                 || self.pending_present
                 || self.renderer.thumbnails_pending()
+                || !pending_thumbnails.is_empty()
                 || self.renderer.color_sample_pending()
                 || self.renderer.region_pending()
                 || self.child.feedback_pending()
             {
-                receiver.recv_timeout(Duration::from_millis(8))
+                receiver.recv_timeout(Duration::from_millis(if thumbnail_ready { 1 } else { 8 }))
             } else {
                 receiver
                     .recv()
@@ -801,6 +810,16 @@ impl Worker {
                             #[cfg(test)]
                             None,
                         )?;
+                    }
+                    // Visible canvas work wins over background layer artwork.
+                    // A whole-photo thumbnail scan used to block this owner for
+                    // ~200 ms even though every camera frame rendered in <2 ms.
+                    if thumbnail_ready && count.load(Ordering::Acquire) == 0
+                        && let Some(&(id, target)) = pending_thumbnails.front()
+                        && self.renderer.prepare_thumbnail_batch(target).map_err(error)?
+                    {
+                        self.renderer.request_thumbnail(id, target).map_err(error)?;
+                        pending_thumbnails.pop_front();
                     }
                     continue;
                 }
@@ -890,7 +909,7 @@ impl Worker {
                     }
                 }
                 Command::Thumbnail(id, target) => {
-                    self.renderer.request_thumbnail(id, target).map_err(error)?
+                    pending_thumbnails.push_back((id, target));
                 }
                 Command::ColorSample(request) => {
                     let result = self.renderer.request_color_sample(request);
@@ -924,6 +943,7 @@ impl Worker {
                         #[cfg(test)]
                         &mut timing,
                     )?;
+                    last_canvas_frame = std::time::Instant::now();
                     if paper {
                         pending_frames.push_back(frame);
                     } else {

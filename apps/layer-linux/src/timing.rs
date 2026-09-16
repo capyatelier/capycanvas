@@ -26,8 +26,9 @@ pub struct Stats {
     /// Frame id, document-to-surface matrix, artwork preview revision. Allows
     /// camera requests to be matched to actual presentation without timing guesses.
     pub camera_views: Vec<(u64, [f32; 6], u64)>,
-    /// Frame id, cumulative recomposited pixels, display bytes, source tile misses.
-    pub camera_work: Vec<[u64; 4]>,
+    /// Frame id, cumulative recomposited pixels, display bytes, source tile misses,
+    /// and this canvas frame's source misses (excludes background thumbnail work).
+    pub camera_work: Vec<[u64; 5]>,
     /// Frame id and enqueue timestamp for a native raster publication.
     pub raster_commits: Vec<[u64; 2]>,
     pub overview_revisions: Vec<u64>,
@@ -49,6 +50,7 @@ pub struct Timing {
     start_cpu: f64,
     acquired_cpu: f64,
     queued_ns: u64,
+    source_misses_before: u64,
     stages: std::cell::Cell<[[f64; 2]; 4]>,
 }
 
@@ -74,7 +76,8 @@ impl Timing {
         ));
         let metrics = renderer.metrics();
         stats.camera_work.push([self.id, metrics.composited_pixels,
-            metrics.composite_storage_bytes, metrics.source_tile_misses]);
+            metrics.composite_storage_bytes, metrics.source_tile_misses,
+            metrics.source_tile_misses.saturating_sub(self.source_misses_before)]);
     }
     pub fn raster_commit(&self) {
         self.stats.lock().unwrap().raster_commits.push([self.id, self.queued_ns]);
@@ -125,6 +128,7 @@ impl Timing {
             start_cpu: 0.,
             acquired_cpu: 0.,
             queued_ns: 0,
+            source_misses_before: 0,
             stages: Default::default(),
         }
     }
@@ -147,6 +151,7 @@ impl Timing {
         self.stages.set(stages);
     }
     pub fn acquired(&mut self, renderer: &WgpuRasterizer) {
+        self.source_misses_before = renderer.metrics().source_tile_misses;
         self.acquired = Instant::now();
         self.acquired_cpu = thread_cpu_ms();
         self.active = self

@@ -14,31 +14,35 @@ with preview, resizing, reusable recipes and physical resolution. Display mips,
 bounded composite/filter windows and losslessly backed paint caches are present.
 The later checkpoint sections record implementation and reproducible evidence.
 
-**GTK is not yet qualified as complete.** The affected correctness matrix and
-focused recovery/native checks pass at the checkpoints below. Vulkan/GL wide-color
-and Cairo sRGB snapshot checks pass; physical-display limits remain explicit.
-Closing work is fresh fixed/parent/current frame-creation comparisons, combined
-peak/steady CPU/GPU budgets and large-document interaction latency. Active edit
-pins and simultaneous workers are not covered by the
-individual cache ceilings alone. Earlier measured failures remain open until
-new measurements resolve them. Coarse-first work or additional scheduling is
-required where those measured gates fail, rather than as an independent feature
-checklist. The toolbar/workspace fixture failures are resolved in the final
-display checkpoint. Other platform hosts still require approval after GTK qualification.
+**GTK is not yet qualified as complete.** Functional color/photo workflows and
+the portable JPEG/CMM integration are implemented; the sections below preserve
+numerical, native, recovery and external-decoder evidence. The 4K/61 MP GPU-worker
+failure is fixed, and completed-display retention makes unchanged camera frames
+sampling-only when the driver reports sufficient headroom. The latest renderer
+suite passes 249 tests, followed by 15 display checks and nine thumbnail checks
+for the subsequent focused fixes. See the [current performance record](color-management-gtk-m2-performance.md).
 
-The [final performance qualification](color-management-gtk-m2-performance.md)
-now records declared budgets and fresh fixed/parent/native measurements. The
-native benchmark factory replacement exposed a 4K display-cache overhead error
-and material move/pen-up latency failures. The cache-sizing failure is corrected;
-the latency failures remain open. Native 24/45/60 MP and three-document drawing
-with saving now have initial measurements; the complete GTK adjustment/export/
-worker-pressure and presentation matrix still needs qualification.
+The current user scope requires 120 Hz unchanged-photo pan/zoom/rotation and
+defers dirty-pixel/filter/histogram regeneration optimization and the proposed
+resolution-aware preview pipeline. Fixed memory ceilings are superseded by using
+available memory where it helps reach 120 Hz, with less important work yielding
+to interaction. The complete 61 MP Float32 display occupies about 1.2 GiB; the
+allowance itself is never allocated. Complete display admission remains a driver
+headroom snapshot, not a global pressure manager or inactive-tab disk hierarchy.
 
-**Current work order (user instruction, 2026-09-14):** finish functional milestone 2
-implementation and correctness/recovery validation first. Further benchmarking,
-regression investigation and optimization are deferred to the final qualification
-phase. The earlier measured failures remain open and must be resolved before GTK
-release qualification; this sequencing does not waive any performance or memory gate.
+Current camera CPU/GPU work fits 8.33 ms, including native-resolution Gaussian
+blur followed by display reduction. Strict native presentation qualification is
+still open: the first complete-display run presents 960/960 requests, but later
+runs retain scheduling/input-delivery gaps and request-to-present p99 above
+8.33 ms. These are reported separately from renderer time. Physical calibrated
+displays, unlike-monitor movement/spanning and other host/device qualification
+remain explicit gaps. Other platform host integration still requires approval.
+
+The user's work order was correctness first, measurements/optimization last.
+The present work is that final qualification phase. Deferred regeneration
+latency is recorded as deferred, not passed. Initial milestone-1 deficiencies
+below are the audit at implementation start; later checkpoints record their
+replacement and tests.
 
 **Filter accuracy (user instruction, 2026-09-14):** edited filters need perceptually
 equivalent results, not exact historical pixel parity. Use practical numerical

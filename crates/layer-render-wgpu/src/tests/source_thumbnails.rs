@@ -232,6 +232,53 @@ fn photo_overview_matches_float64_area_integrals_and_reuses_unchanged_originals(
 }
 
 #[test]
+fn incremental_photo_thumbnails_bound_work_and_restart_discarded_batches() {
+    let source = photo([1025, 513]);
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut layer = Layer::paint(LayerId(1), "background photo thumbnail");
+    layer.source = Some(source.clone());
+    r.ensure_document(source.extent, &[layer]).unwrap();
+    let mut gpu = SourceThumbnails::new(&r);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    assert!(!gpu.prepare(&mut r, LayerId(1), &mut encoder, 4).unwrap());
+    assert_eq!(gpu.builds, 0);
+    r.uploads.finish(&encoder);
+    drop(encoder);
+    r.thumbnails.sources = Some(gpu);
+    let mut previous = 0;
+    let mut batches = 0;
+    loop {
+        let before = r.scene.as_ref().unwrap().source_cache_work()[1];
+        let ready = r.prepare_thumbnail_batch(LayerId(1)).unwrap();
+        let cache = r.thumbnails.sources.as_ref().unwrap();
+        let completed = source.tiles.len() - cache.cache.back().unwrap().remaining.len();
+        assert!(completed - previous <= 4);
+        assert!(r.scene.as_ref().unwrap().source_cache_work()[1] - before <= 4);
+        assert_eq!(cache.builds, usize::from(ready));
+        previous = completed;
+        batches += 1;
+        if ready {
+            break;
+        }
+        assert!(batches < source.tiles.len());
+    }
+    assert_eq!(batches, source.tiles.len().div_ceil(4));
+    let before = r.scene.as_ref().unwrap().source_cache_work();
+    let first = thumbnail(&mut r, LayerId(1));
+    assert_eq!(thumbnail(&mut r, LayerId(1)), first);
+    assert_eq!(r.scene.as_ref().unwrap().source_cache_work()[1], before[1]);
+    let actual = read_sums(&r);
+    let expected = reference(source.extent, source.extent, None);
+    let error = actual
+        .iter()
+        .flatten()
+        .zip(expected.iter().flatten())
+        .map(|(a, b)| (f64::from(*a) - b).abs())
+        .fold(0., f64::max);
+    assert!(error < 0.00002, "incremental overview linear error {error}");
+}
+
+#[test]
 fn discarded_overview_commands_never_publish_source_or_overview_cache_hits() {
     let source = photo([513, 257]);
     let mut r = WgpuRasterizer::new_headless().unwrap();

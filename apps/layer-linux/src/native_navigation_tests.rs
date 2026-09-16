@@ -58,7 +58,10 @@ fn photo(extent: [u32; 2]) -> layer_core::Project {
         ("levels", "gamma", 1.08),
         ("hue_saturation", "saturation", 5.),
         ("color_balance", "midtones_red", 2.),
-    ] {
+    ].into_iter().chain(
+        (std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"))
+            .then_some(("gaussian_blur", "sigma", 4.)),
+    ) {
         let id = project.document.allocate_layer_id();
         let mut layer = layer_core::Layer::paint(id, name);
         layer.kind = layer_core::LayerKind::Effect;
@@ -196,7 +199,7 @@ fn native_large_photo_navigation() {
     );
     let stats = stats.lock().unwrap();
     let unchanged_work = stats.camera_work.first().is_some_and(|work|
-        stats.camera_work.iter().all(|frame| frame[1] == work[1] && frame[3] == work[3]));
+        stats.camera_work.iter().all(|frame| frame[1] == work[1] && frame[4] == 0));
     assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
     assert!(
         stats
@@ -211,6 +214,7 @@ fn native_large_photo_navigation() {
         "requests": requests, "camera_views": stats.camera_views,
         "camera_work": stats.camera_work,
         "monitor_scale": w.area.scale_factor(),
+        "physical_filter": std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"),
         "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
         "worker_thread_cpu": stats.thread_cpu, "worker_gpu": stats.gpu,
         "frame_handler_cpu": stats.frame_handler_cpu,
@@ -227,6 +231,56 @@ fn native_large_photo_navigation() {
         assert!(unchanged_work,
             "complete display navigation must not recompose or decode source tiles");
     }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display; real GTK thumbnail publication and history"]
+fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
+    let app = native_test_app("art.capycanvas.PhotoThumbnailIdle");
+    let mut project = photo([2049, 1537]);
+    project.document.layers.retain(|layer| layer.source.is_some());
+    let original = project.document.clone();
+    let target = original.layers[0].id.0;
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.present();
+    fn picture(root: &gtk::Widget) -> Option<gtk::Picture> {
+        if let Ok(picture) = root.clone().downcast() { return Some(picture); }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Some(picture) = picture(&widget) { return Some(picture); }
+        }
+        None
+    }
+    let pixels = || -> Option<Vec<u8>> {
+        let button = find_css(w.layer_panel.root.upcast_ref(), "layer-thumbnail")?;
+        let texture: gdk::Texture = picture(&button)?.paintable()?.downcast().ok()?;
+        let mut bytes = vec![0; (texture.width() * texture.height() * 4) as usize];
+        texture.download(&mut bytes, texture.width() as usize * 4);
+        Some(bytes)
+    };
+    let wait = |predicate: &dyn Fn(&[u8]) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            pump(5);
+            assert!(!w.gpu.borrow().as_ref().is_some_and(|g| g.session.rendering_suspended()));
+            if let Some(bytes) = pixels().filter(|bytes| predicate(bytes)) { break bytes; }
+            assert!(Instant::now() < deadline, "idle thumbnail must finish and publish");
+        }
+    };
+    let before = wait(&|_| true);
+    w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Clear { id: target } });
+    let cleared = wait(&|bytes| bytes != before);
+    assert_ne!(before, cleared);
+    click(&command(&w, CommandId::Undo));
+    assert_eq!(wait(&|bytes| bytes == before), before);
+    let mut restored = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+    // Undo publishes a new document revision while restoring exact artwork.
+    assert!(restored.revision > original.revision);
+    restored.revision = original.revision;
+    assert_eq!(restored, original);
     w.window.destroy();
     pump(100);
 }
