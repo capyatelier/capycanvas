@@ -10,7 +10,7 @@ struct SourceProfilePicker: View {
     var onImport: () -> Void = {}
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Interpret as", selection: $selection) {
+            FormPicker("Interpret as", selection: $selection) {
                 ForEach(spaces, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                 if !imported["profile"].isNull { Text(imported["name"].string).tag("imported") }
             }.accessibilityIdentifier("photo-profile-space")

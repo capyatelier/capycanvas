@@ -56,12 +56,12 @@ struct ExportForm: View {
     }
     private var choices: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Destination", selection: Binding(get: { editor.destination }, set: {
+            FormPicker("Destination", selection: Binding(get: { editor.destination }, set: {
                 editor.preference(JSON(["type": "get", "index": $0]))
             })) {
                 ForEach(editor.names.indices, id: \.self) { Text(editor.names[$0]).tag($0) }
             }.accessibilityIdentifier("export-destination")
-            Picker("Format", selection: Binding(get: { editor.recipe["format"].string }, set: { format in
+            FormPicker("Format", selection: Binding(get: { editor.recipe["format"].string }, set: { format in
                 editor.change("format", JSON(format))
                 if format == "Jpeg" {
                     editor.change("depth", JSON("U8"))
@@ -69,16 +69,16 @@ struct ExportForm: View {
                 }
             })) { Text("PNG").tag("Png"); Text("TIFF").tag("Tiff"); Text("JPEG").tag("Jpeg") }
                 .accessibilityIdentifier("export-format")
-            Picker("Output profile", selection: Binding(get: { editor.profileIndex }, set: editor.selectProfile)) {
+            FormPicker("Output profile", selection: Binding(get: { editor.profileIndex }, set: editor.selectProfile)) {
                 ForEach(editor.profiles.indices, id: \.self) { Text(editor.profiles[$0]["name"].string).tag($0) }
             }.accessibilityIdentifier("export-profile")
             ProfileChooserButtons(preferences: editor.preferences, busy: $readingProfile, onProfile: editor.imported)
-            Picker("Bit depth", selection: Binding(get: { editor.recipe["depth"].string }, set: { depth in
+            FormPicker("Bit depth", selection: Binding(get: { editor.recipe["depth"].string }, set: { depth in
                 editor.change("depth", JSON(depth))
                 if depth == "U16" { encoding("dither", "None") }
             })) { Text("8-bit").tag("U8"); Text("16-bit").tag("U16") }
                 .disabled(editor.recipe["format"].string == "Jpeg").accessibilityIdentifier("export-depth")
-            Picker("Transparency", selection: choice("background")) {
+            FormPicker("Transparency", selection: choice("background")) {
                 if editor.recipe["format"].string != "Jpeg" { Text("Preserve").tag("Preserve") }
                 Text("White background").tag("White"); Text("Black background").tag("Black")
             }.accessibilityIdentifier("export-background")
@@ -91,17 +91,17 @@ struct ExportForm: View {
             }
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Picker("Rendering intent", selection: Binding(get: { editor.recipe["encoding"]["conversion"]["intent"].string }, set: { intent in
+                    FormPicker("Rendering intent", selection: Binding(get: { editor.recipe["encoding"]["conversion"]["intent"].string }, set: { intent in
                         let conversion = editor.recipe["encoding"]["conversion"].replacing("intent", with: JSON(intent))
                         editor.change("encoding", editor.recipe["encoding"].replacing("conversion", with: conversion))
                     })) {
                         Text("Relative colorimetric").tag("RelativeColorimetric"); Text("Perceptual").tag("Perceptual")
                         Text("Saturation").tag("Saturation"); Text("Absolute colorimetric").tag("AbsoluteColorimetric")
                     }
-                    Picker("Dither", selection: Binding(get: { editor.recipe["encoding"]["dither"].string }, set: { encoding("dither", $0) })) {
+                    FormPicker("Dither", selection: Binding(get: { editor.recipe["encoding"]["dither"].string }, set: { encoding("dither", $0) })) {
                         Text("None").tag("None"); Text("Stochastic (8-bit output)").tag("Stochastic8")
                     }.disabled(editor.recipe["depth"].string != "U8")
-                    Picker("Resolution metadata", selection: $resolution) {
+                    FormPicker("Resolution metadata", selection: $resolution) {
                         Text("Keep original").tag("Master"); Text("Pixels per inch").tag("Ppi"); Text("Omit").tag("Omit")
                     }
                     if resolution == "Ppi" { number("Pixels per inch", $ppi, id: "export-ppi") }

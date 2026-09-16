@@ -27,7 +27,7 @@ struct ColorLibraryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Palettes").font(.headline)
-            Picker("Palette", selection: $selected) {
+            FormPicker("Palette", selection: $selected) {
                 ForEach(palettes, id: \.paletteID) { Text($0["name"].string).tag($0["id"].uint) }
             }.accessibilityIdentifier("color-library-palette")
             TextField("Palette or swatch name", text: $name).textFieldStyle(.roundedBorder)

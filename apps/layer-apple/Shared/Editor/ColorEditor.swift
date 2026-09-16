@@ -43,7 +43,7 @@ struct ColorEditor: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(form["description"].string)
                     let models = form["models"].array
-                    Picker("Color model", selection: Binding(get: { form["draft"]["model"].string }, set: {
+                    FormPicker("Color model", selection: Binding(get: { form["draft"]["model"].string }, set: {
                         update(form["draft"].replacing("change_model", with: JSON($0)))
                     })) {
                         ForEach(models.indices, id: \.self) { i in Text(models[i][1].string).tag(models[i][0].string) }

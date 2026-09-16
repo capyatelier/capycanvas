@@ -638,6 +638,35 @@ Save As/reopen confirmation is pending. Evidence is
 `artifacts/apple-sdr-lifecycle-v1/`; local recovery checks do not establish actual
 iPad background expiration, file-provider delivery or sustained performance.
 
+## SDR form fit and feature inventory
+
+The current inventory covers 72 commands in 18 groups, 11 panels, six Settings
+pages with 21 rows, and 43 property scenarios per Apple policy. Nine color/photo
+commands and the dynamic SDR controls now have explicit workflow references.
+The CPU generator's obsolete RGBA-array assumptions are replaced with shared
+`RgbColor` and `GradientStop` values. Both policies pass 162 property edit/history/
+reset routes and all ten corruption probes. This is model coverage; renderer-
+dependent scale/rotate enumeration remains unresolved in the no-GPU audit.
+Evidence: `artifacts/apple-sdr-inventory-v1/`.
+
+Thirty-six UIKit component captures cover New Drawing, numeric color, palettes,
+missing-photo-profile choice, the empty ICC library, Assign Profile, Convert Color
+Space, Change Bit Depth and Document Properties, in both themes at 340×480 and
+600×720 points. Initial captures exposed hidden menu-picker labels. One shared
+`FormPicker` keeps the native control and adds its visible label on iPad; Mac
+retains its existing picker. Creation, color, source/profile and export forms
+reuse it. Final captures pass visual review and horizontal text-field bounds;
+both Release builds pass without compiler warnings.
+
+The fixtures use real shared models with memory-only storage and no attached
+Metal surface. New Drawing deliberately contains invalid dimensions and a preset
+error; this is layout evidence, not creation acceptance. Export previews, open
+menus, scrolled content, physical touch/provider delivery and managed canvas
+appearance are outside these captures. The disposable simulator apps are removed;
+the physical review apps and drawings remain untouched. Evidence:
+`artifacts/apple-sdr-form-fit-v1/`. Continue the pending physical SDR check and
+the remaining release gates; this checkpoint does not close full visual parity.
+
 ## Native provider acceptance
 
 The first Mac iCloud run reaches real native panels with disposable generated

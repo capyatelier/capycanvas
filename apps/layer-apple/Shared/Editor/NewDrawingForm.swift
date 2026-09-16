@@ -49,7 +49,7 @@ struct NewDrawingForm: View {
             Text(spec["title"].string).font(.headline)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Picker("Preset", selection: preset) {
+                    FormPicker("Preset", selection: preset) {
                         Text("Custom").tag(-1)
                         ForEach(presets.indices, id: \.self) { Text(presets[$0]["name"].string).tag($0) }
                     }.accessibilityIdentifier("new-document-preset")
@@ -63,15 +63,15 @@ struct NewDrawingForm: View {
                             dimension($height, label: spec["labels"][1].string, id: "new-document-height")
                         }
                     }
-                    Picker("Background", selection: Binding(get: { options["background"].string }, set: {
+                    FormPicker("Background", selection: Binding(get: { options["background"].string }, set: {
                         options = options.replacing("background", with: JSON($0))
                     })) {
                         Text("White").tag("White"); Text("Transparent").tag("Transparent")
                     }.accessibilityIdentifier("new-document-background")
-                    Picker("Color space", selection: color("space")) {
+                    FormPicker("Color space", selection: color("space")) {
                         ForEach(spec["creation"]["spaces"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-space")
-                    Picker("Bit depth", selection: color("depth")) {
+                    FormPicker("Bit depth", selection: color("depth")) {
                         Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16")
                     }.accessibilityIdentifier("new-document-depth")
                     if options["color"]["space"].string == "ProPhoto" && options["color"]["depth"].string == "U8" {

@@ -106,20 +106,20 @@ struct DocumentColorForm: View {
         if editor.operation == "repair_source_profile" {
             SourceProfilePicker(preferences: editor.preferences, spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile, onImport: editor.invalidate)
         } else if editor.operation != "depth" && editor.operation != "rasterize_source" {
-            Picker("Color space", selection: $space) {
+            FormPicker("Color space", selection: $space) {
                 ForEach(spaces, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
             }.accessibilityIdentifier("document-color-space")
         }
         if editor.operation == "depth" {
-            Picker("Bit depth", selection: $depth) { Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16") }
+            FormPicker("Bit depth", selection: $depth) { Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16") }
                 .accessibilityIdentifier("document-color-depth")
             if depth == "U8" {
-                Picker("Dither", selection: $dither) { Text("None").tag("None"); Text("Stochastic").tag("Stochastic8") }
+                FormPicker("Dither", selection: $dither) { Text("None").tag("None"); Text("Stochastic").tag("Stochastic8") }
             }
         }
         if editor.operation == "convert" {
-            Picker("Result", selection: $copy) { Text("Editable layers").tag(false); Text("Save flattened copy").tag(true) }
-            Picker("Rendering intent", selection: $intent) {
+            FormPicker("Result", selection: $copy) { Text("Editable layers").tag(false); Text("Save flattened copy").tag(true) }
+            FormPicker("Rendering intent", selection: $intent) {
                 Text("Relative colorimetric").tag("RelativeColorimetric"); Text("Perceptual").tag("Perceptual")
                 Text("Saturation").tag("Saturation"); Text("Absolute colorimetric").tag("AbsoluteColorimetric")
             }

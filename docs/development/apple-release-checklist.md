@@ -167,28 +167,51 @@ visual cases include native iPad windowed/narrow layouts, transient states and
 new color/photo UI. Keep physical-device limits explicit and reuse unaffected
 evidence instead of repeating whole component matrices.
 
+The SDR follow-up adds 36 UIKit form captures in both themes at 340×480 and
+600×720 points: creation, numeric color, populated palettes, missing-profile
+choice, empty ICC library, document profile/depth choices and properties. The
+captures reproduced hidden picker labels; one native-picker wrapper now keeps
+those labels visible on iPad, including the corresponding export choices.
+Final captured layouts and horizontal text-field bounds pass, with both Release
+builds clean. These are actual shared models without Metal; export previews,
+open menus, scrolled content and physical interactions are outside this batch.
+The New Drawing fixture deliberately uses invalid dimensions and an error state.
+Evidence: `artifacts/apple-sdr-form-fit-v1/`. Full editor/window and managed SDR
+appearance acceptance remain separate.
+
 ### Commands and controls
 
 The source catalog is [command-coverage.json](../../apps/layer-apple/command-coverage.json).
-The pre-SDR shared-model enumeration has **63 commands in 15 groups**, **90 tool
-choices**, **11 panels**, **five Settings pages** and **43 layer/filter property
-scenarios** per Apple policy. It has no command-list drift from the retained GPU
-inventory at that baseline. Panel/workspace schemas also match. Settings models differ
-and require the newer evidence. These counts establish scope, not acceptance.
+The current SDR CPU enumeration has **72 commands in 18 groups**, **11 panels**,
+**six Settings pages with 21 rows**, and **43 layer/filter property scenarios**
+per Apple policy. Nine color/photo commands now have explicit workflow/test
+references. Both policies retain their expected unavailable commands and accept
+every initially enabled command at the shared-model boundary. The catalog also
+records non-command creation/export options, tagged paint/palettes, corrections
+and masks, color policies, display details and the ICC library.
 
-Baseline model evidence: `artifacts/apple-release-closure-v1/`. Add the new SDR
-host workflows when integrating them; these counts no longer establish the full
-current feature scope. The fresh GPU
-enumeration did not execute: the sandbox lacks a Metal adapter and both requests
-for approval outside it timed out. Retained GPU results remain separately scoped.
+The inventory generator had still treated tagged effect colors and gradient
+stops as RGBA arrays. It now uses the shared typed values; 162 edit/Undo/Redo/Reset
+routes pass per policy, and the existing verifier rejects all ten corrupted-
+evidence probes per policy. No application runtime path changes. Evidence is
+`artifacts/apple-sdr-inventory-v1/`.
+
+These are CPU model results, not native-widget or pixel acceptance. Scale/rotate
+tool enumeration needs actual renderer content, so the full no-GPU audit remains
+incomplete at that case. Retain the separately scoped pre-SDR 90-tool GPU evidence
+under `artifacts/apple-release-closure-v1/`; do not claim a fresh complete tool
+enumeration from this CPU run.
 
 | Catalog group | Existing evidence to retain | Remaining behavior, excluding shared R3–R6 checks |
 | --- | --- | --- |
 | Document transport | Local native save/open/export/cancel; painted recovery; OS URL delivery; native Mac invalid-Open preservation/retry and both-policy owner checks below | Provider/destination/interruption cases are owned by R4. |
+| Retained photo input | Shared/native-owner profile/depth/source retention through Open/Place/Paste, missing-profile choice, cancellation and stale adoption; 61 MP class synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | Physical UIKit picker/clipboard delivery and large-photo execution; provider/lifecycle cases are shared with R4. |
+| Document color and properties | Shared/native-owner profile/depth operations, complete comparisons, atomic adoption, exact history and flattened master preservation; native Mac forms | Physical UIKit property/color forms and SDR appearance; lifecycle cases remain under R4. |
+| Retained source editing | Source-profile repair, ICC import, full-extent rasterization, exact history/save/reopen and native Mac controls | Physical UIKit source/ICC workflows and provider delivery. |
 | Drawing tools | All 34 current presets mapped to retained native control passes: 30 painting/erasing and four Blend/Liquify; Mac artwork/history and catalog-wide numeric bridge edits | No unaccounted catalog brush/group or setting-dispatch route remains. Physical sensors, hover/proximity and interruption belong to R3; perceptual coverage belongs to R5. |
 | Selection, fill and shapes | Native menus/settings; Mac figure/gradient/fill artwork; Mac native expansion/contraction, smoothing and gap-closing artwork/history; UIKit refinement controls and retention; AppKit shape modifier geometry/history; Apple Metal region refinement; supplied UIKit shape/gradient pixel/history checks | Physical/iPad canvas hit targets for freehand selection and shapes; applicable shape modifier delivery is tracked below and in R3. |
 | Object transforms | Numeric validation, linked/unlinked content/mask transforms; Mac mouse Move, edge scaling and all four corner handles with artwork/history; UIKit callback corner/modifier checks | Physical tablet/Pencil handle delivery, iPad mask/group Move and interrupted transforms. |
-| Hand and eyedropper | Native Hand/Fit; Mac visible/layer sampling including transparency; physical iPad two-finger navigation | Pencil sampling and physical trackpad/button navigation (R3). |
+| Hand, eyedropper and histogram | Native Hand/Fit; Mac visible/layer sampling including transparency; physical iPad two-finger navigation; full-resolution document-space histogram and Point/3×3/5×5 sampling pass Metal checks on both policies and native Mac controls | Pencil sampling and physical trackpad/button navigation (R3); physical UIKit histogram/sampling controls. |
 | Rulers | All three choices; Mac mouse creation/handle editing; constrained/free pixel/history and UIKit modifier callback checks | Physical constrained painting/handles and stationary modifier-preview behavior. |
 | Artwork history | Exact pixel/history checks in each edit family and physical drawing Undo/Redo | Reconcile all remaining edit families in this table with history evidence; do not create a duplicate standalone matrix. |
 | Layer operations | Mask/link/group artwork/history, scrolling/reorder, Layers configuration and previews; coordinated image decode/ownership | Native image-provider delivery, remaining hierarchy/interruption interactions and physical row continuation. |
@@ -196,7 +219,7 @@ for approval outside it timed out. Retained GPU results remain separately scoped
 | Workspace and Zen | Shared topology/history, native drawers/styles/configuration; complete local manager workflows; mounted floating size/preview checks | Retained tile/drawer/column presentations with real devices, cancellation, Zen and persisted layout across native window transitions. |
 | Title-bar customization | Shared geometry/history/persistence, native mouse/pen fixtures and direct physical iPad item removal; duplicate-handler removal passes mounted header secondary click, holds, dragging and history | Remaining actual window/overflow/state combinations and Pencil delivery. |
 | Camera | Native Hand/Fit/flip; direct Navigator and camera checks; supplied scroll/pinch/rotate; physical iPad touch navigation | Physical indirect input and interruption (R3). |
-| Preferences and shortcuts | All 16 Settings rows reconciled; every editable row passes native-owner edit, fresh-owner restore and exact durable Reset on both policies. Retained native numeric/text/image-choice editing, Reset/Done/reopen, search and shortcut forms/conflicts pass. Native theme/cursor choices and Done/reopen pass on both hosts; Mac prediction dependencies and amount editing also pass. | Physical iPad prediction dependencies pass by user confirmation; broader native text/menu traversal and hardware key combinations. UIKit compact-menu Command-Z and text Command-A remain unresolved. |
+| Preferences and shortcuts | All 16 pre-SDR Settings rows reconciled; every editable row passes native-owner edit, fresh-owner restore and exact durable Reset on both policies. The five added SDR policy rows have the scoped checks referenced in the color workflow milestones. Retained native numeric/text/image-choice editing, Reset/Done/reopen, search and shortcut forms/conflicts pass. Native theme/cursor choices and Done/reopen pass on both hosts; Mac prediction dependencies and amount editing also pass. | Physical iPad prediction dependencies pass by user confirmation; broader native text/menu traversal and hardware key combinations. UIKit compact-menu Command-Z and text Command-A remain unresolved. |
 | Native windows | Mac/simulator independent windows; Mac last-window reopen and full-screen artwork/history; native iPadOS full-screen control accepted by the user | Physical iPad independent drawing/history and continued input pass; remaining scene/display/lifecycle checks (R4). Keep the unsupported UIKit in-app toggle unavailable; the accepted native control satisfies the capability requirement. |
 | Application information and links | Mac/simulator About and actual browser handoff; mounted editor rejection/retry check below | Settings-link rejection/retry UI acceptance (callback handling is implemented), alternate-handler OS delivery and physical iPad link delivery. |
 
