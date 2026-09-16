@@ -579,6 +579,8 @@ impl NativeHost {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            ExportForm,
+            ExportValidate { recipe: layer_ui::ExportRecipe },
             Header { request: header::HeaderRequest },
             FilterPackageModules {
                 manifest: String,
@@ -695,6 +697,8 @@ impl NativeHost {
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
+            Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
+            Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
                 request,

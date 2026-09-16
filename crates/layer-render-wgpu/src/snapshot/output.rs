@@ -58,38 +58,6 @@ impl SnapshotRenderer {
             layer_color::photo::write_jpeg_rows(output, extent, target, resolution, quality, row)
         })
     }
-    fn identity_source(
-        &self,
-        target: &SourceInterpretation,
-    ) -> Option<Arc<layer_core::color::source::SourceImage>> {
-        if self.background[3] != 0. {
-            return None;
-        }
-        let mut visible = self
-            .layers
-            .iter()
-            .filter(|l| l.visible && l.opacity > 0. && l.kind != LayerKind::Background);
-        let layer = visible.next()?;
-        if visible.next().is_some()
-            || layer.kind != LayerKind::Paint
-            || layer.opacity != 1.
-            || layer.properties.parent.is_some()
-            || layer.properties.offset != layer_core::Point::default()
-            || layer.properties.blend != layer_core::LayerBlend::Normal
-            || layer.properties.clipped
-            || layer.mask.as_ref().is_some_and(|m| m.enabled)
-            || layer.effect.is_some()
-            || !self.backing[&layer.id].tiles.is_empty()
-        {
-            return None;
-        }
-        let source = layer.source.as_ref()?;
-        (source.extent == self.extent
-            && source.interpretation.channels == target.channels
-            && source.interpretation.depth == target.depth
-            && source.interpretation.profile == target.profile)
-            .then(|| source.clone())
-    }
     pub(super) fn write_rows(
         &mut self,
         target: &SourceInterpretation,
@@ -121,35 +89,31 @@ impl SnapshotRenderer {
             })?;
             return Ok(Default::default());
         }
-        let mut resampler = (extent != self.extent)
-            .then(|| layer_color::RowResampler::new(self.extent, extent))
-            .transpose()?;
-        let mut resized = if resampler.is_some() {
-            vec![[0.; 4]; extent[0] as usize]
-        } else {
-            Vec::new()
-        };
+        let source_extent = self.extent;
+        let working = self.color().space;
         let control = self.control.clone();
         let mut source = Rows::new(self);
-        let mut stats = layer_color::OutputStatistics::default();
-        write(extent, encoder.interpretation(), &mut |y, row| {
-            control.check().map_err(|e| e.to_string())?;
-            let pixels = if let Some(resampler) = &mut resampler {
-                resampler.read_row(y, &mut resized, |sy, target| {
-                    target.copy_from_slice(source.read(sy)?);
+        layer_color::encode_working_rows(
+            working,
+            source_extent,
+            extent,
+            target,
+            options,
+            matte,
+            |y, row| {
+                control.check().map_err(|e| e.to_string())?;
+                row.copy_from_slice(source.read(y)?);
+                Ok(())
+            },
+            |extent, target, read| {
+                write(extent, target, &mut |y, row| {
+                    control.check().map_err(|e| e.to_string())?;
+                    read(y, row)?;
+                    control.output_rows.store(y + 1, Ordering::Relaxed);
                     Ok(())
-                })?;
-                &resized
-            } else {
-                source.read(y)?
-            };
-            stats.clipped_channels += encoder
-                .encode_premultiplied(pixels, row, matte, [0, y])?
-                .clipped_channels;
-            control.output_rows.store(y + 1, Ordering::Relaxed);
-            Ok(())
-        })?;
-        Ok(stats)
+                })
+            },
+        )
     }
 }
 

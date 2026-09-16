@@ -35,12 +35,16 @@ internal object Native {
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
     /** File worker only; consumes the detached descriptor, retains the task. */
+    @JvmStatic external fun inspectProfile(bytes: ByteArray): String
+    @JvmStatic external fun projectProfilePrompt(task: Long): String
+    @JvmStatic external fun projectAssumeProfile(task: Long, profile: String)
     @JvmStatic external fun projectOptions(task: Long, options: String)
     @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)
     @JvmStatic external fun projectAdopt(handle: Long, task: Long, location: String)
     @JvmStatic external fun projectFree(task: Long)
     @JvmStatic external fun documentComplete(handle: Long, request: Int, success: Boolean, error: String)
     @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
+    @JvmStatic external fun projectExportOptions(task: Long, recipe: String)
     @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long): Long
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String

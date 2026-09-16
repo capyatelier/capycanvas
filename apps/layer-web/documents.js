@@ -1,3 +1,4 @@
+import {chooseExport,chooseSourceProfile} from './export-controls.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
 export function createDocuments({app,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
@@ -63,15 +64,18 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
       });
     } finally {URL.revokeObjectURL(url);}
   }
-  async function destination(request) {
+  async function destination(request,recipe) {
     const old=request.location && handles.get(request.location.uri);
     if(old)return{location:request.location,handle:old};
     if(window.showSaveFilePicker) {
-      const png=request.type==="export",handle=await window.showSaveFilePicker({
-        suggestedName:request.name,types:[{description:png?"PNG image":"Capy Canvas drawing",accept:{[png?"image/png":"application/octet-stream"]:[png?".png":".capy"]}}]});
+      const formats={Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"]};
+      const [extension,mime,description]=recipe?formats[recipe.format]:["capy","application/octet-stream","Capy Canvas drawing"];
+      const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
+      const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
     }
-    return {location:location(request.name)};
+    const extension=recipe?{Png:"png",Tiff:"tif",Jpeg:"jpg"}[recipe.format]:null;
+    return {location:location(extension?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name)};
   }
   async function handle(request) {
     if(active.has(request.id))return;active.add(request.id);
@@ -93,31 +97,33 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         else {const chosen=await chooseFile();if(!chosen){applyChange(app.finish_document(id,false));return;}
           bytes=new Uint8Array(await chosen.file.arrayBuffer());target=location(chosen.file.name,chosen.handle);}
         message("Preparing drawing…");
-        candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options));
+        candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button})));
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
         await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
-        // Invoke the picker before awaiting work to retain browser user activation.
-        const target=await destination(r);
-        if(r.type==="export"){
-          const started=performance.now();wake();
-          await new Promise(requestAnimationFrame);
-          while(!app.export_ready()){
-            if(performance.now()-started>60000)throw new Error("Export shader preparation timed out");
-            wake();await new Promise(resolve=>setTimeout(resolve,16));
+        const recipe=r.type==="export"?await chooseExport({app,dialog,element,button}):null;
+        if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
+        const target=await destination(r,recipe);
+        if(recipe){
+          const extensions={Png:['png'],Tiff:['tif','tiff'],Jpeg:['jpg','jpeg']}[recipe.format];
+          if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(`Use a .${extensions[0]} filename for this image format.`);
+          const master=handles.get(app.state().document_file.location?.uri);
+          if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
+        }
+        let output;
+        const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe))).blob;
+        try {
+          let success;
+          if(target.handle) {
+            const stream=await target.handle.createWritable();
+            try {await stream.write(bytes);await stream.close();success=true;}
+            catch(error){try{await stream.abort();}catch{}throw error;}
+          } else success=!!await download(bytes,target.location.name,recipe?{Png:"image/png",Tiff:"image/tiff",Jpeg:"image/jpeg"}[recipe.format]:"application/octet-stream");
+          applyChange(app.finish_document(id,success));
+          if(success && r.type==="save" && !app.state().document_file.modified) {
+            await retireRecovery();
           }
-        }
-        const bytes=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_png(id));
-        let success;
-        if(target.handle) {
-          const stream=await target.handle.createWritable();
-          try {await stream.write(bytes);await stream.close();success=true;}
-          catch(error){try{await stream.abort();}catch{}throw error;}
-        } else success=!!await download(bytes,target.location.name,r.type==="export"?"image/png":"application/octet-stream");
-        applyChange(app.finish_document(id,success));
-        if(success && r.type==="save" && !app.state().document_file.modified) {
-          await retireRecovery();
-        }
+        } finally { if(output)await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]}); }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
       if(request.kind.type==="document") {

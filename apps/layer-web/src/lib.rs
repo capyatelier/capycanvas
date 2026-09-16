@@ -1,6 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod documents;
+mod output;
 mod editor;
 mod header;
 mod raster_project;

@@ -121,7 +121,9 @@ pub struct SnapshotRenderer {
     backing: HashMap<LayerId, Arc<RasterData>>,
     resident: HashMap<LayerId, RasterData>,
     extent: [u32; 2],
+    #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
+    #[cfg(not(target_arch = "wasm32"))]
     output_resolution: Option<layer_core::ImageResolution>,
     background: [f32; 4],
     time: f32,
@@ -239,7 +241,11 @@ impl SnapshotRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             None => WgpuRasterizer::new_native_capture(project.document.color)?,
             #[cfg(target_arch = "wasm32")]
-            None => return Err(GpuRasterError::Color("Browser capture requires the canvas device".into())),
+            None => {
+                return Err(GpuRasterError::Color(
+                    "Browser capture requires the canvas device".into(),
+                ));
+            }
         };
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
@@ -252,13 +258,48 @@ impl SnapshotRenderer {
             backing,
             resident: HashMap::new(),
             extent,
+            #[cfg(not(target_arch = "wasm32"))]
             output_extent: extent,
+            #[cfg(not(target_arch = "wasm32"))]
             output_resolution: project.document.resolution,
             background,
             time,
             limits,
             control,
         })
+    }
+
+    pub fn identity_source(
+        &self,
+        target: &SourceInterpretation,
+    ) -> Option<Arc<layer_core::color::source::SourceImage>> {
+        if self.background[3] != 0. {
+            return None;
+        }
+        let mut visible = self
+            .layers
+            .iter()
+            .filter(|l| l.visible && l.opacity > 0. && l.kind != LayerKind::Background);
+        let layer = visible.next()?;
+        if visible.next().is_some()
+            || layer.kind != LayerKind::Paint
+            || layer.opacity != 1.
+            || layer.properties.parent.is_some()
+            || layer.properties.offset != layer_core::Point::default()
+            || layer.properties.blend != layer_core::LayerBlend::Normal
+            || layer.properties.clipped
+            || layer.mask.as_ref().is_some_and(|m| m.enabled)
+            || layer.effect.is_some()
+            || !self.backing[&layer.id].tiles.is_empty()
+        {
+            return None;
+        }
+        let source = layer.source.as_ref()?;
+        (source.extent == self.extent
+            && source.interpretation.channels == target.channels
+            && source.interpretation.depth == target.depth
+            && source.interpretation.profile == target.profile)
+            .then(|| source.clone())
     }
 
     pub fn extent(&self) -> [u32; 2] {
@@ -508,17 +549,26 @@ impl SnapshotRenderer {
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
-        Ok(RegionReadback { buffer, stride, width, height })
+        Ok(RegionReadback {
+            buffer,
+            stride,
+            width,
+            height,
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_region(&mut self, region: [u32; 4]) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         let readback = self.prepare_region(region)?;
         let (tx, rx) = mpsc::channel();
-        readback.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result.map_err(|e| e.to_string()));
-        });
-        crate::raster::wait_mapping(&self.renderer.device, &rx).map_err(GpuRasterError::MapFailed)?;
+        readback
+            .buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result.map_err(|e| e.to_string()));
+            });
+        crate::raster::wait_mapping(&self.renderer.device, &rx)
+            .map_err(GpuRasterError::MapFailed)?;
         self.finish_region(readback)
     }
 
@@ -526,21 +576,33 @@ impl SnapshotRenderer {
     /// raster backing before creating the immutable capture, and await each
     /// region before submitting the next; no blocking browser device poll.
     #[cfg(target_arch = "wasm32")]
-    pub async fn read_region_async(&mut self, region: [u32; 4]) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+    pub async fn read_region_async(
+        &mut self,
+        region: [u32; 4],
+    ) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         let readback = self.prepare_region(region)?;
         let (tx, rx) = futures_channel::oneshot::channel();
-        readback.buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result.map_err(|e| e.to_string()));
-        });
-        rx.await.map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
+        readback
+            .buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result.map_err(|e| e.to_string()));
+            });
+        rx.await
+            .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
             .map_err(GpuRasterError::MapFailed)?;
         self.finish_region(readback)
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub async fn read_band_async(&mut self, y: u32) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
+    pub async fn read_band_async(
+        &mut self,
+        y: u32,
+    ) -> Result<(u32, Vec<[f32; 4]>), GpuRasterError> {
         let [width, height] = self.extent;
-        if y >= height { return Err(GpuRasterError::InvalidExtent); }
+        if y >= height {
+            return Err(GpuRasterError::InvalidExtent);
+        }
         let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
         let mut rows = maximum.min(height - y);
         loop {
@@ -553,8 +615,15 @@ impl SnapshotRenderer {
     }
 
     fn finish_region(&mut self, readback: RegionReadback) -> Result<Vec<[f32; 4]>, GpuRasterError> {
-        let RegionReadback { buffer, stride, width, height } = readback;
-        let bytes = buffer.slice(..).get_mapped_range()
+        let RegionReadback {
+            buffer,
+            stride,
+            width,
+            height,
+        } = readback;
+        let bytes = buffer
+            .slice(..)
+            .get_mapped_range()
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
         let mut pixels = Vec::with_capacity(width as usize * height as usize);
         for row in bytes.chunks_exact(stride as usize) {

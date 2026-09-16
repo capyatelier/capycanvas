@@ -6,6 +6,23 @@ use layer_core::{
 };
 use std::sync::Arc;
 
+/// An explicit source assumption changes its interpretation, never its samples.
+/// Validate the transform before publishing this choice into a live document.
+pub fn assume_source_profile(
+    mut source: SourceImage,
+    profile: layer_core::color::ColorProfile,
+) -> Result<SourceImage, String> {
+    source.interpretation.profile = profile;
+    source.interpretation.profile_assumed = false;
+    crate::WorkingDecoder::new(
+        &source.interpretation,
+        RgbSpace::ProPhoto,
+        Default::default(),
+    )?;
+    source.validate()?;
+    Ok(source)
+}
+
 pub fn photo_project(
     source: SourceImage,
     name: &str,

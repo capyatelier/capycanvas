@@ -99,3 +99,62 @@ scaled tablet. Tests now recognize the actual version-4 raster archive header.
 Profile-assumption prompts, profiled output, inspection, document color edits,
 source repair/placement, color preferences and final large-photo navigation
 qualification remain pending. This is an intermediate integration checkpoint.
+
+## Streaming profiled delivery and input policy checkpoint — 2026-09-15
+
+The obsolete browser PNG readback/worker path and Android PNG-only export job
+are replaced. Both ports offer PNG/TIFF/JPEG, builtin or imported ICC output
+profiles, independent integer depth, alpha/matte choices, supported rendering
+intents, optional 8-bit dither, proportional resizing and resolution metadata.
+The editable project location is protected against accidental export overwrite.
+BPC remains unavailable in the current shared CMM, as recorded in the main
+integration assessment; the new dialogs do not expose an ineffective toggle.
+
+Native export captures an immutable project on the owner and streams bounded
+Float32 bands through the file worker. WebGPU maps one bounded band at a time,
+then sends it to a worker-owned temporary OPFS file. The browser file worker
+feeds synchronous bounded rows into the same shared CMM/resampler/codecs and
+writes encoded output directly to OPFS. It does not retain a full Float32 frame
+or encoded output in Wasm memory. Temporary output lifetimes are explicit; Web
+Locks protect active jobs from cleanup after another worker/tab crashed. Exact
+identity delivery bypasses composition and preserves original hidden RGB, sample
+codes and embedded profile bytes. The 4 GiB temporary-file ceiling is a failure
+bound, not a qualified memory or performance claim.
+
+Preferences → Color now configures new-document defaults, photo editing depth
+and untagged-image policy on both ports. Ask pauses preparation before adoption;
+Cancel retains the live master. Builtin or custom ICC assumptions retain source
+sample tiles and validate the decoder before adoption. Tagged inputs do not ask.
+
+Validation:
+
+- `tablet-web-profiled-export.log`: actual tablet WebGPU/DOM flow passed. PNG and
+  TIFF output/reopen retain every original 16-bit source tile and ICC profile;
+  P3 8-bit resized PNG reopens at 257×129 with resolution metadata; sRGB JPEG is
+  produced from a ProPhoto16 master without altering it. The actual Ask dialog's
+  Cancel retains the epoch; Adobe RGB assumption retains all original samples.
+- `tablet-native-profiled-export.log`: all three Android raster integration tests
+  passed with the new streaming exporter, including 16-bit PNG/TIFF identity and
+  the existing save, undo, device/surface replacement and recovery checks.
+- `tablet-native-profile-assumption.log`: the expanded 16-bit Android test passed,
+  including a private preparation pause and explicit Adobe RGB assumption with
+  identical original sample tiles.
+- `shared-output-streaming-regressions.log`: all 13 hardware snapshot tests passed,
+  including full-resolution composition, masked regions, exact hidden-RGB/gray
+  identity, profile/matte/resize, dither, output preview and cancellation.
+- `color-settings-policy.log`: future-document policy round-trip/validation passed.
+- `web-delivery-final-check.log`, `android-profile-prompt-build.log`,
+  `android-profile-prompt-tests-build.log`, `package-profiled-export.log`: Wasm
+  checks, ARM64 app/test builds and browser asset packaging checks passed.
+
+A test-only reload was blocked by Chrome's native confirmation. The task tab was
+replaced; the user's existing tabs were retained. Subsequent qualification
+suppresses that test tab's `beforeunload` handlers before an explicit uncached
+reload. This was test transport/UI handling, not an observed renderer deadlock.
+
+Still pending: host delivery comparison previews, user export presets and active
+job cancellation/progress; profile-library persistence; Assign/Convert/depth and
+source repair/rasterization/placement; document properties and full-resolution
+histogram controls; final display, correctness and large-photo 120 Hz navigation
+qualification. The apps are installed for integration testing, but are not yet
+handed over as completed milestone-2 builds.

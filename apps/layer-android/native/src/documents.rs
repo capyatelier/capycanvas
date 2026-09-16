@@ -28,10 +28,15 @@ struct Environment {
     new_options: layer_ui::NewDocumentOptions,
     photo_policy: layer_ui::PhotoOpenPolicy,
     source_name: String,
+    pending_photo: Option<layer_core::color::source::SourceImage>,
 }
 enum Payload {
     Save(Option<Project>),
-    Export(Option<layer_render_wgpu::ExportReadback>),
+    Export {
+        gpu: layer_render_wgpu::snapshot::SnapshotGpu,
+        snapshot: Option<layer_ui::DocumentExport>,
+        recipe: layer_ui::ExportRecipe,
+    },
     Open {
         environment: Option<Environment>,
         candidate: Option<Box<UiSession<Renderer>>>,
@@ -104,8 +109,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                         cache: a.cache_directory.clone(),
                         new_options: session.state().settings.new_document.defaults,
                         photo_policy: session.state().settings.photo_open,
-                        source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(&mut env, &location)?).map_err(error)?
-                            .map(|location| location.name).unwrap_or_else(|| "Photo".into()),
+                        pending_photo: None,
+                        source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(
+                            &mut env, &location,
+                        )?)
+                        .map_err(error)?
+                        .map(|location| location.name)
+                        .unwrap_or_else(|| "Photo".into()),
                     }),
                     candidate: None,
                 }
@@ -139,7 +149,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     else {
         return Err("Not an open request".into());
     };
-    let e = environment.take().ok_or("Project worker already ran")?;
+    let mut e = environment.take().ok_or("Project worker already ran")?;
     let limits = ProjectLimits {
         dimension: e
             .device
@@ -154,15 +164,42 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             if input.fill_buf().map_err(error)?.starts_with(b"CAPY") {
                 Project::read(input, limits)?
             } else {
-                if t.recovered { return Err("Recovery file is not a native drawing".into()); }
+                if t.recovered {
+                    return Err("Recovery file is not a native drawing".into());
+                }
                 let source = layer_color::photo::read_photo(input, Default::default())?;
-                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
                 t.photo = true;
-                let name = e.source_name.rsplit_once('.').map_or(e.source_name.as_str(), |(stem, _)| stem);
+                if source.interpretation.profile_assumed
+                    && e.photo_policy.missing_profile == layer_ui::MissingProfilePolicy::Ask
+                {
+                    e.pending_photo = Some(source);
+                    *environment = Some(e);
+                    return Ok(());
+                }
+                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
+                let name = e
+                    .source_name
+                    .rsplit_once('.')
+                    .map_or(e.source_name.as_str(), |(stem, _)| stem);
                 layer_color::photo_project(source, name, depth)?
             }
-        },
-        None => layer_ui::NewDocumentOptions { extent: [width, height], ..e.new_options }.project()?,
+        }
+        None => {
+            if let Some(source) = e.pending_photo.take() {
+                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
+                let name = e
+                    .source_name
+                    .rsplit_once('.')
+                    .map_or(e.source_name.as_str(), |(stem, _)| stem);
+                layer_color::photo_project(source, name, depth)?
+            } else {
+                layer_ui::NewDocumentOptions {
+                    extent: [width, height],
+                    ..e.new_options
+                }
+                .project()?
+            }
+        }
     };
     let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
         e.adapter,
@@ -222,16 +259,66 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     Ok(())
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectProfilePrompt(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jni::sys::jstring {
+    let source = match &unsafe { task(handle) }.payload {
+        Payload::Open {
+            environment: Some(e),
+            ..
+        } => e.pending_photo.as_ref().map(|s| &s.interpretation),
+        _ => None,
+    };
+    crate::android::string(&mut env, serde_json::to_string(&source).map_err(error))
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectAssumeProfile(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    value: JString,
+) {
+    let result = (|| {
+        let profile = serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
+        let Payload::Open {
+            environment: Some(e),
+            ..
+        } = &mut unsafe { task(handle) }.payload
+        else {
+            return Err("Image interpretation is no longer pending".into());
+        };
+        let source = e
+            .pending_photo
+            .as_ref()
+            .ok_or("Image interpretation is no longer pending")?;
+        e.pending_photo = Some(layer_color::assume_source_profile(source.clone(), profile)?);
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+
 /// Configure a private New task before its worker runs. No live state changes.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_projectOptions(
-    mut env: JNIEnv, _: JClass, handle: jlong, options: JString,
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    options: JString,
 ) {
     let result = (|| {
-        let options: layer_ui::NewDocumentOptions = serde_json::from_str(&read(&mut env, &options)?).map_err(error)?;
+        let options: layer_ui::NewDocumentOptions =
+            serde_json::from_str(&read(&mut env, &options)?).map_err(error)?;
         options.validate()?;
-        let Payload::Open { environment: Some(environment), .. } = &mut unsafe { task(handle) }.payload
-            else { return Err("New drawing task is no longer configurable".into()) };
+        let Payload::Open {
+            environment: Some(environment),
+            ..
+        } = &mut unsafe { task(handle) }.payload
+        else {
+            return Err("New drawing task is no longer configurable".into());
+        };
         environment.new_options = options;
         Ok(())
     })();
@@ -263,14 +350,56 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     out.flush().map_err(error)?;
                     out.get_ref().sync_all().map_err(error)
                 }
-                Payload::Export(readback) => {
-                    let image = readback
-                        .take()
-                        .ok_or("Export already encoded")?
-                        .finish()
+                Payload::Export {
+                    gpu,
+                    snapshot,
+                    recipe,
+                } => {
+                    recipe.validate()?;
+                    let snapshot = snapshot.take().ok_or("Export already encoded")?;
+                    let extent = recipe.size.extent([
+                        snapshot.project.document.width,
+                        snapshot.project.document.height,
+                    ])?;
+                    let resolution =
+                        recipe.output_resolution(snapshot.project.document.resolution)?;
+                    let mut renderer = gpu
+                        .capture(
+                            snapshot.project,
+                            snapshot.background,
+                            snapshot.time,
+                            Default::default(),
+                            Default::default(),
+                        )
                         .map_err(error)?;
+                    renderer.set_output_extent(extent)?;
+                    renderer.set_output_resolution(resolution)?;
+                    let target = recipe.interpretation();
                     let mut out = BufWriter::new(input.ok_or("Missing export output")?);
-                    image.write_png(&mut out)?;
+                    match recipe.format {
+                        layer_ui::ExportFormat::Png => renderer.write_png(
+                            &mut out,
+                            &target,
+                            recipe.encoding,
+                            recipe.background.matte(),
+                        ),
+                        layer_ui::ExportFormat::Tiff => renderer.write_tiff(
+                            &mut out,
+                            &target,
+                            recipe.encoding,
+                            recipe.background.matte(),
+                        ),
+                        layer_ui::ExportFormat::Jpeg => renderer.write_jpeg(
+                            &mut out,
+                            &target,
+                            recipe.encoding,
+                            recipe
+                                .background
+                                .matte()
+                                .ok_or("Choose a JPEG background")?,
+                            recipe.jpeg_quality,
+                        ),
+                    }?;
                     out.flush().map_err(error)?;
                     out.get_ref().sync_all().map_err(error)
                 }
@@ -410,19 +539,16 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
         }
         let epoch = a.host.session.state().document_file.epoch;
         let revision = a.host.session.engine().document().revision;
+        let snapshot = a.host.session.capture_project_export(id as u32)?;
         let gpu = a
             .host
             .session
-            .renderer_mut()
+            .engine()
+            .backend()
             .0
-            .as_mut()
-            .ok_or("Canvas is unavailable")?;
-        if !gpu.export_ready() {
-            return Ok(0);
-        }
-        // Only submit a snapshot here. GPU wait, row packing and PNG encoding
-        // belong to projectWork; no document-sized byte arrays cross JNI.
-        let readback = gpu.begin_export_readback(id as u64).map_err(error)?;
+            .as_ref()
+            .ok_or("Canvas is unavailable")?
+            .snapshot_gpu();
         Ok(Box::into_raw(Box::new(Task {
             epoch,
             revision,
@@ -430,7 +556,11 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             recovered: false,
             photo: false,
             gpu_generation: a.gpu_generation,
-            payload: Payload::Export(Some(readback)),
+            payload: Payload::Export {
+                gpu,
+                snapshot: Some(snapshot),
+                recipe: layer_ui::ExportRecipe::web_share(),
+            },
         })) as jlong)
     })();
     match result {
@@ -440,6 +570,37 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             0
         }
     }
+}
+
+/// Configure the private output copy before the worker starts.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    value: JString,
+) {
+    let result = (|| {
+        let selected: layer_ui::ExportRecipe =
+            serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
+        selected.validate()?;
+        let Payload::Export {
+            recipe,
+            snapshot: Some(snapshot),
+            ..
+        } = &mut unsafe { task(handle) }.payload
+        else {
+            return Err("Export task is no longer configurable".into());
+        };
+        layer_color::WorkingEncoder::new(
+            snapshot.project.document.color.space,
+            &selected.interpretation(),
+            selected.encoding,
+        )?;
+        *recipe = selected;
+        Ok(())
+    })();
+    fail(&mut env, result);
 }
 
 /// Capture on the render owner; recovery reads/writes and candidate preparation
@@ -476,6 +637,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                     new_options: session.state().settings.new_document.defaults,
                     photo_policy: session.state().settings.photo_open,
                     source_name: "Recovered drawing".into(),
+                    pending_photo: None,
                 }),
                 candidate: None,
             }

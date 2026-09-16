@@ -140,7 +140,7 @@ class AndroidRasterTest {
         } finally {Native.projectFree(job.first)}
         tick()
     }
-    private fun png(name: String): ByteArray {
+    private fun png(name: String, recipe: JSONObject? = null): ByteArray {
         val id=native {request(it,"export_document").first}
         var task=0L
         val deadline=SystemClock.uptimeMillis()+60_000
@@ -151,6 +151,7 @@ class AndroidRasterTest {
         assertNotEquals("Export became ready",0L,task)
         val file=File(files,name)
         try {
+            if (recipe != null) Native.projectExportOptions(task, recipe.toString())
             Native.projectWork(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
             native {Native.documentComplete(it,id,true,"null")}
             return file.readBytes()
@@ -190,6 +191,51 @@ class AndroidRasterTest {
         val after = manifest(save("wide16-reopened.capy"))
         assertEquals(before.getJSONObject("document").getJSONObject("color").toString(), after.getJSONObject("document").getJSONObject("color").toString())
         assertEquals(before.getJSONArray("blobs").toString(), after.getJSONArray("blobs").toString())
+        val form = native { JSONObject(Native.query(it, obj("type" to "export_form").toString())) }
+        val recipe = JSONObject(form.getJSONArray("recipes").getJSONArray(2).getJSONObject(1).toString()).put("format", "Png")
+        val output = png("wide16.png", recipe)
+        assertEquals("PNG uses 16-bit samples", 16, output[24].toInt())
+        open(File(files, "wide16.png"))
+        val imported = manifest(save("wide16-image.capy"))
+        val original = imported.getJSONObject("tiled_sources")
+        assertEquals("U16", original.getJSONArray("images").getJSONObject(0).getString("depth"))
+        val profiles = native { JSONObject(Native.query(it, obj("type" to "export_form").toString())).getJSONArray("profiles") }
+        recipe.put("profile", profiles.getJSONObject(profiles.length()-1))
+        for ((format, extension) in listOf("Png" to "png", "Tiff" to "tif")) {
+            png("identity.$extension", JSONObject(recipe.toString()).put("format", format))
+            open(File(files, "identity.$extension"))
+            val restored = manifest(save("identity-$extension.capy")).getJSONObject("tiled_sources")
+            assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), restored.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
+            assertEquals(original.getJSONArray("profiles").toString(), restored.getJSONArray("profiles").toString())
+        }
+        // Remove only interpretation chunks; the unchanged IDAT and its CRC
+        // exercise Ask without introducing a second decoder or image codec.
+        val untagged = java.io.ByteArrayOutputStream().apply {
+            write(output, 0, 8); var offset = 8
+            while (offset < output.size) {
+                val size = ByteBuffer.wrap(output, offset, 4).order(ByteOrder.BIG_ENDIAN).int
+                val type = output.copyOfRange(offset+4, offset+8).decodeToString()
+                if (type !in listOf("iCCP", "sRGB", "gAMA", "cHRM", "cICP")) write(output, offset, size+12)
+                offset += size+12
+            }
+        }.toByteArray()
+        val untaggedFile = File(files, "untagged16.png").apply { writeBytes(untagged) }
+        native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 1)).toString()) }
+        val epoch = native { state(it).getJSONObject("document_file").getLong("epoch") }
+        val pending = native { handle -> val (id, state) = request(handle, "open_document")
+            Native.projectTask(handle, id, "null", state.getLong("epoch"), state.getLong("revision")) }
+        try {
+            Native.projectWork(pending, ParcelFileDescriptor.open(untaggedFile, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
+            assertNotEquals("null", Native.projectProfilePrompt(pending))
+            assertEquals(epoch, native { state(it).getJSONObject("document_file").getLong("epoch") })
+            Native.projectAssumeProfile(pending, obj("Builtin" to "AdobeRgb").toString())
+            Native.projectWork(pending, -1, 0, 0)
+            native { Native.projectAdopt(it, pending, "null") }
+        } finally { Native.projectFree(pending) }
+        val assumed = manifest(save("assumed16.capy"))
+        assertEquals("AdobeRgb", assumed.getJSONObject("document").getJSONObject("color").getString("space"))
+        assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
+        native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
     @Test fun exactSnapshotsSurviveFilesGpuReplacementAndRecovery() {
         stroke(0.0)

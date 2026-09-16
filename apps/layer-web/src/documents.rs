@@ -29,6 +29,28 @@ pub struct WebProject {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn inspect_profile(&self, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
+        if bytes.length() as usize > layer_color::MAX_ICC_BYTES {
+            return Err(js("ICC profile exceeds 16 MiB"));
+        }
+        let profile = layer_core::color::ColorProfile::Icc(bytes.to_vec().into());
+        let channels = layer_color::profile_channels(&profile).map_err(js)?;
+        let name = layer_color::profile_description(&profile).map_err(js)?;
+        serialize(&layer_ui::ExportProfile {
+            profile,
+            channels,
+            name,
+        })
+    }
+    pub fn export_form(&self) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::ExportForm::new(self.session.engine().document()))
+    }
+    pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
+        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
+        recipe.validate().map_err(js)?;
+        serialize(&recipe)
+    }
+
     pub fn finish_document(
         &mut self,
         id: u32,
@@ -71,48 +93,6 @@ impl WebApp {
             raster_project::save_recovery(project, key).await
         }))
     }
-    pub fn export_ready(&self) -> bool {
-        self.session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .is_some_and(|gpu| gpu.renderer.export_ready())
-    }
-    pub fn export_png(&mut self, id: u32) -> Result<js_sys::Promise, JsValue> {
-        self.session.require_document_idle().map_err(js)?;
-        if !self.session.state().requests.iter().any(|r| {
-            r.id == id
-                && matches!(
-                    r.kind,
-                    HostRequestKind::Document {
-                        request: DocumentRequest::Export { .. }
-                    }
-                )
-        }) {
-            return Err(js("The export request is no longer active"));
-        }
-        let gpu = &mut self
-            .session
-            .renderer_mut()
-            .0
-            .as_mut()
-            .ok_or_else(|| js("Wait for the canvas"))?
-            .renderer;
-        let mut ticket = gpu.begin_export_readback(id as u64).map_err(js)?;
-        Ok(future_to_promise(async move {
-            let start = js_sys::Date::now();
-            loop {
-                if let Some(image) = ticket.try_finish().map_err(js)? {
-                    return raster_worker::png(image).await;
-                }
-                if js_sys::Date::now() - start > 60_000. {
-                    return Err(js("PNG readback timed out"));
-                }
-                yield_browser().await?;
-            }
-        }))
-    }
     pub fn prepare_document(
         &self,
         id: u32,
@@ -124,6 +104,7 @@ impl WebApp {
         recovered: Option<bool>,
         source_name: Option<String>,
         options: JsValue,
+        interpret: Option<js_sys::Function>,
     ) -> Result<js_sys::Promise, JsValue> {
         self.session.require_document_idle().map_err(js)?;
         if self.session.state().document_file.epoch != epoch
@@ -185,9 +166,15 @@ impl WebApp {
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
-        let new_options: layer_ui::NewDocumentOptions = if options.is_undefined() || options.is_null() {
-            layer_ui::NewDocumentOptions { extent: [width, height], ..self.session.state().settings.new_document.defaults }
-        } else { serde_wasm_bindgen::from_value(options).map_err(js)? };
+        let new_options: layer_ui::NewDocumentOptions =
+            if options.is_undefined() || options.is_null() {
+                layer_ui::NewDocumentOptions {
+                    extent: [width, height],
+                    ..self.session.state().settings.new_document.defaults
+                }
+            } else {
+                serde_wasm_bindgen::from_value(options).map_err(js)?
+            };
         Ok(future_to_promise(async move {
             // Yield before decoding so the file-progress UI is painted first.
             yield_browser().await?;
@@ -198,15 +185,59 @@ impl WebApp {
                     .min(ProjectLimits::default().dimension),
                 ..Default::default()
             };
-            let photo = bytes.as_ref().is_some_and(|bytes| bytes.subarray(0, 4).to_vec() != b"CAPY");
-            let project = match bytes {
-                Some(bytes) => raster_project::open(bytes, raster_project::OpenOptions {
-                    dimension: limits.dimension, photo_policy, name: source_name.unwrap_or_else(|| "Photo".into()), recovered,
-                }).await?,
+            let photo = bytes
+                .as_ref()
+                .is_some_and(|bytes| bytes.subarray(0, 4).to_vec() != b"CAPY");
+            let mut project = match bytes {
+                Some(bytes) => {
+                    raster_project::open(
+                        bytes,
+                        raster_project::OpenOptions {
+                            dimension: limits.dimension,
+                            photo_policy,
+                            name: source_name.unwrap_or_else(|| "Photo".into()),
+                            recovered,
+                        },
+                    )
+                    .await?
+                }
                 None => new_options.project().map_err(js)?,
             };
-            let mut renderer =
-                WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, project.document.color).map_err(js)?;
+            if photo && photo_policy.missing_profile == layer_ui::MissingProfilePolicy::Ask {
+                if let Some(source) = project
+                    .document
+                    .layers
+                    .iter()
+                    .find_map(|l| l.source.as_ref())
+                    .filter(|s| s.interpretation.profile_assumed)
+                {
+                    let callback = interpret
+                        .as_ref()
+                        .ok_or_else(|| js("Choose how to interpret this untagged image"))?;
+                    let result =
+                        callback.call1(&JsValue::NULL, &serialize(&source.interpretation)?)?;
+                    let choice = JsFuture::from(js_sys::Promise::resolve(&result)).await?;
+                    if choice.is_null() || choice.is_undefined() {
+                        let error = js_sys::Error::new("Image opening cancelled");
+                        error.set_name("AbortError");
+                        return Err(error.into());
+                    }
+                    let profile = serde_wasm_bindgen::from_value(choice).map_err(js)?;
+                    let source = layer_color::assume_source_profile((**source).clone(), profile)
+                        .map_err(js)?;
+                    let name = project.document.layers[0].name.to_string();
+                    project =
+                        layer_color::photo_project(source, &name, project.document.color.depth)
+                            .map_err(js)?;
+                }
+            }
+            let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
+                adapter,
+                device,
+                queue,
+                project.document.color,
+            )
+            .map_err(js)?;
             raster_worker::install(&mut renderer);
             let mut programs = Vec::new();
             for effect in project

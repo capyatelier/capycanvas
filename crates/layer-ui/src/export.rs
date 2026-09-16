@@ -245,6 +245,51 @@ impl ExportRecipe {
     }
 }
 
+#[derive(Serialize)]
+pub struct ExportForm {
+    pub profiles: Vec<ExportProfile>,
+    pub recipes: Vec<(&'static str, ExportRecipe)>,
+    pub extent: [u32; 2],
+}
+impl ExportForm {
+    pub fn new(document: &layer_core::Document) -> Self {
+        let mut profiles: Vec<_> = RgbSpace::ALL
+            .into_iter()
+            .map(ExportProfile::builtin)
+            .collect();
+        for layer in &document.layers {
+            if let Some(source) = &layer.source {
+                let profile = &source.interpretation.profile;
+                if profiles.iter().any(|p| p.profile == *profile) {
+                    continue;
+                }
+                let channels = match source.interpretation.channels {
+                    SourceChannels::Rgb | SourceChannels::Rgba => ProfileChannels::Rgb,
+                    SourceChannels::Gray | SourceChannels::GrayAlpha => ProfileChannels::Gray,
+                    SourceChannels::Cmyk => ProfileChannels::Cmyk,
+                };
+                profiles.push(ExportProfile {
+                    profile: profile.clone(),
+                    channels,
+                    name: format!("Original: {}", layer.name),
+                });
+            }
+        }
+        Self {
+            profiles,
+            recipes: vec![
+                ("Web / Share", ExportRecipe::web_share()),
+                ("Wide-color image", ExportRecipe::wide_color()),
+                (
+                    "Further editing",
+                    ExportRecipe::further_editing(document.color),
+                ),
+            ],
+            extent: [document.width, document.height],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

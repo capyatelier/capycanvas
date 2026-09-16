@@ -178,7 +178,7 @@ mod tests {
                 .edit(
                     PreferenceId::PhotoDepth,
                     PreferenceValue::Choice(0),
-                    Platform::Web
+                    Platform::Mac
                 )
                 .is_err()
         );

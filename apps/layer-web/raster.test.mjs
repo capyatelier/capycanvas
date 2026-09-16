@@ -7,8 +7,11 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   console.log('Raster startup',await evaluate('JSON.parse(JSON.stringify({startup:layerApp.startupTimes,stats:layerApp.app.renderer_stats(),camera:layerApp.app.camera(),file:layerApp.state().document_file,status:document.querySelector("#status").textContent},(key,value)=>typeof value==="bigint"?Number(value):value))'));
   console.log('Presented pixels',await canvasPixels());
   const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile('artifacts/color-m1/web-raster.png',Buffer.from(shot.data,'base64'));
-  await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
-  const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();};
+  await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
+  const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();if(command==='export_document'){
+    await wait('!!document.querySelector("dialog[open] select[aria-label=Format]")');
+    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').click()`);
+  }};
   await invoke('fit_canvas');
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');
   console.log('Initial export',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length,header:Array.from(bytes.slice(0,16))}))'));
@@ -66,7 +69,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   await evaluate('[...document.querySelectorAll(".document-dialog button")].find(n=>n.textContent==="Recover").click()');
   await wait('layerApp.state().document_file.modified && layerApp.app.brush_ready()');
   assert.equal(await evaluate('layerApp.state().document_file.location??null'),null,'Recovery has no durable user save location');
-  await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
+  await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');
   const recovered=await evaluate(`(async()=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',[...rasterFiles.values()][0]))).join(','))()`);
   assert.equal(recovered,expected,'An abandoned tab recovers exactly the same pixels');

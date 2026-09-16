@@ -66,7 +66,7 @@ struct Part {
     range: Range<usize>,
 }
 
-async fn wait_backing(project: &Project) -> Result<(), JsValue> {
+pub(super) async fn wait_backing(project: &Project) -> Result<(), JsValue> {
     let start = js_sys::Date::now();
     loop {
         let mut ready = true;
@@ -175,7 +175,7 @@ fn push_blob(blob: &Arc<TileBlob>, blobs: &mut Vec<Blob>, parts: &mut Vec<Part>,
     })
 }
 
-async fn pack(project: Project) -> Result<JsValue, JsValue> {
+pub(super) async fn pack(project: Project) -> Result<JsValue, JsValue> {
     wait_backing(&project).await?;
     let (metadata, parts) = describe(project).map_err(js)?;
     let buffers = js_sys::Array::new();
@@ -210,7 +210,7 @@ fn part(buffers: &js_sys::Array, index: usize) -> Result<Vec<u8>, JsValue> {
     Ok(bytes.to_vec())
 }
 
-async fn unpack(
+pub(super) async fn unpack(
     metadata: &str,
     buffers: js_sys::Array,
     verified: bool,

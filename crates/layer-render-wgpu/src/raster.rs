@@ -331,12 +331,12 @@ impl PreparedCapture {
     }
     fn submitted_device(
         mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         submission: wgpu::SubmissionIndex,
     ) -> RasterCapture {
         RasterCapture {
             #[cfg(not(target_arch = "wasm32"))]
-            device: device.clone(),
+            device: _device.clone(),
             submission,
             chunks: self
                 .chunks

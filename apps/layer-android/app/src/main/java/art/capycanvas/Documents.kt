@@ -36,6 +36,13 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         private set
     var working by mutableStateOf(false)
         private set
+    var exportRequest by mutableStateOf<JSONObject?>(null)
+        private set
+    private var exportRecipe: JSONObject? = null
+    var profilePrompt by mutableStateOf<JSONObject?>(null)
+        private set
+    private var profileDecision: CompletableDeferred<JSONObject?>? = null
+    fun chooseProfile(value: JSONObject?) { profileDecision?.complete(value); profilePrompt = null }
     private var activeId: Int? = null
     private var approval = 0L to 0L
     fun observe(request: JSONObject?, file: JSONObject) {
@@ -47,7 +54,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (request == null) return
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
-            "open", "export" -> picker = DocumentPicker(request, approval.first, approval.second)
+            "open" -> picker = DocumentPicker(request, approval.first, approval.second)
+            "export" -> { exportRecipe = null; exportRequest = request }
             "save" -> document.objectOrNull("location")?.let { transfer(request, Uri.parse(it.getString("uri")), approval) }
                 ?: run { picker = DocumentPicker(request, approval.first, approval.second) }
         }
@@ -65,7 +73,16 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         picker = null; complete(id, false, error.message ?: "Could not open the file picker")
     }
     fun create(request: JSONObject, options: JSONObject) = transfer(request, null, approval, options.getJSONArray("extent").getInt(0), options.getJSONArray("extent").getInt(1), options)
-    fun cancel(id: Int) = complete(id, false)
+    fun chooseExport(recipe: JSONObject) {
+        val request = exportRequest ?: return
+        exportRecipe = recipe; exportRequest = null
+        val document = request.getJSONObject("kind").getJSONObject("request")
+        val extension = when (recipe.getString("format")) { "Jpeg" -> "jpg"; "Tiff" -> "tif"; else -> "png" }
+        document.put("name", document.getString("name").substringBeforeLast('.') + "." + extension)
+        picker = DocumentPicker(request, approval.first, approval.second)
+    }
+    fun exportMime() = when (exportRecipe?.getString("format")) { "Jpeg" -> "image/jpeg"; "Tiff" -> "image/tiff"; else -> "image/png" }
+    fun cancel(id: Int) { exportRequest = null; complete(id, false) }
     fun close(id: Int, decision: String) {
         host.viewModelScope.launch {
             try { host.withNative { Native.documentClose(it, id, JSONObject.quote(decision)) }; host.documentChanged() }
@@ -95,6 +112,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     } ?: uri.lastPathSegment ?: document.optString("name", "Drawing.capy")
                     obj("uri" to uri.toString(), "name" to name)
                 }
+                if (kind == "export") {
+                    val master = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.objectOrNull("location")?.optString("uri")
+                    check(uri.toString() != master) { "Choose a different file to keep the editable drawing." }
+                    val extensions = when (exportRecipe?.getString("format")) { "Tiff" -> listOf("tif", "tiff"); "Jpeg" -> listOf("jpg", "jpeg"); else -> listOf("png") }
+                    check(location!!.getString("name").substringAfterLast('.').lowercase() in extensions) { "Use a .${extensions.first()} filename for this image format." }
+                }
                 if (kind == "export") withTimeout(30_000) {
                     while (task == 0L) {
                         task = host.withNative { Native.projectExportTask(it, id, System.nanoTime()) }
@@ -106,6 +129,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", if (kind == "export") ".png" else ".capy", application.cacheDir) }
                     withContext(Dispatchers.IO) {
                         val fd = ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd()
+                        if (kind == "export") exportRecipe?.let { Native.projectExportOptions(task, it.toString()) }
                         Native.projectWork(task, fd, 0, 0)
                         application.contentResolver.openOutputStream(uri!!, "wt")?.use { output ->
                             temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
@@ -120,6 +144,13 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
                         if (options != null) Native.projectOptions(task, options.toString())
                         Native.projectWork(task, fd, width, height)
+                    }
+                    val prompt = withContext(Dispatchers.IO) { Native.projectProfilePrompt(task) }
+                    if (prompt != "null") {
+                        val decision = CompletableDeferred<JSONObject?>(); profileDecision = decision; profilePrompt = JSONObject(prompt)
+                        val profile = try { decision.await() } finally { profileDecision = null; profilePrompt = null }
+                        if (profile == null) { finish(id, false); return@launch }
+                        withContext(Dispatchers.IO) { Native.projectAssumeProfile(task, profile.toString()); Native.projectWork(task, -1, 0, 0) }
                     }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
                     host.documentChanged()
@@ -158,6 +189,10 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         } }
     )
     val controller = host.documents
+    controller.profilePrompt?.let { SourceProfileDialog(it, controller::chooseProfile) }
+    controller.exportRequest?.let { pending ->
+        key(pending.getInt("id")) { ExportDialog(host, { controller.cancel(pending.getInt("id")) }, controller::chooseExport) }
+    }
     val activity = LocalActivity.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         controller.picked(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, result.data?.flags ?: 0)
@@ -181,7 +216,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             val opening = document.getString("type") == "open"
             val intent = Intent(if (opening) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = if (opening) "*/*" else if (document.getString("type") == "export") "image/png" else "application/octet-stream"
+                type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/octet-stream"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 if (!opening) putExtra(Intent.EXTRA_TITLE, document.getString("name"))
             }

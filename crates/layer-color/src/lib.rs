@@ -4,9 +4,11 @@ mod icc;
 pub use icc::*;
 pub mod photo;
 mod photo_project;
-pub use photo_project::photo_project;
+pub use photo_project::{photo_project, assume_source_profile};
 mod resize;
 pub use resize::RowResampler;
+mod output_rows;
+pub use output_rows::encode_working_rows;
 
 mod rasterize;
 pub use rasterize::rasterize_source;
