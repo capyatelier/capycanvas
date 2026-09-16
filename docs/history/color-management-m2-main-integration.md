@@ -1,5 +1,10 @@
 # Milestone 2: main integration and platform decision
 
+**Historical assessment.** The [2026-09-16 platform handoff](color-management-m2-port-handoff.md)
+supersedes current-status statements below: Web/Android are now ported and tested;
+Apple/Windows still require phase 2 integration. Retain this record for its
+original merge findings and measurements.
+
 ## Decision
 
 Port and qualify SDR milestone 2 on the remaining hosts before starting GTK

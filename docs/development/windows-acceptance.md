@@ -1,5 +1,9 @@
 # Windows acceptance status
 
+The [phase 2 color-management handoff](color-management-m2-windows-handoff.md)
+records new shared color/control and native-project integration requirements.
+The earlier Windows acceptance below does not qualify those new contracts.
+
 Checkpoint: 2026-09-14. The native Windows app and reproducible portable ZIP and
 unsigned MSIX are available. The full Windows goal remains open: physical input,
 complete visual/accessibility review, deployment lifecycle and actual 120 Hz

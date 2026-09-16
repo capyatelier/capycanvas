@@ -1,5 +1,10 @@
 # Apple port handoff
 
+For the next color-management work, start with the short
+[phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
+SDR changes require native renderer and color-control integration; earlier
+acceptance below does not qualify those new contracts.
+
 ## Goal
 
 Ship complete, visually consistent native iPadOS and macOS apps with fast,
