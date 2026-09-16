@@ -4,7 +4,8 @@ For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
 paint/palette workflows, retained photo Open/Place/Paste and document profile/depth
-editing, retained-source editing, ICC file import and histogram/sampling are integrated; the remaining host workflows and device
+editing, retained-source editing, ICC file import, histogram/sampling and retained
+photo corrections are integrated; the remaining host workflows and device
 acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
@@ -481,6 +482,34 @@ controls and sustained inspection performance remain unqualified. The installed
 artist review apps and drawings are preserved. Remaining phase 2 work starts with photo
 corrections/masks, ICC library/profiled export and managed displays; provider,
 61 MP and sustained performance acceptance remain open.
+
+## Retained photo corrections and masks
+
+The existing shared Filters/Properties path already exposes Exposure, White
+Balance, Levels, Curves, Hue / Saturation and Color Balance. No additional Apple
+editing path is needed. A new native Metal workflow passes on both Apple
+policies with P3/U8 and ProPhoto/U16 drawings and a larger retained U16 photo.
+It verifies visible edits, reset, bypass, exact Undo/Redo, local selection masks,
+unaffected pixels outside those masks, worker save/reopen and later re-editing
+of all six corrections and masks. Metadata, mask backing and original source
+samples remain exact, including off-canvas pixels; no source is baked.
+
+The native Mac workflow also passes all six controls, representative numeric
+and curve reset/history/bypass, mask creation/inversion, local Save As/Open and
+re-editing every reopened correction (one test, no failures or skips). Its final
+captures are reviewed. This checkpoint changes only tests/docs; the previously
+qualified Release runtime is unchanged. Evidence is
+`artifacts/apple-photo-corrections-v1/` (`native-v3.log`, `mac-ui-v3.xcresult`).
+The initial native fixtures redundantly
+deselected an already-consumed mask selection and required bit equality for a
+neutral White Balance conversion differing by about 7e-8. Neutral comparison now
+allows 1e-6 Float32 error; exact history, persistence and backing checks remain.
+The initial UI attempts used the wrong Hue / Saturation search spelling and
+required extra scroll space around an edge-aligned row. The fixture now reveals
+the inset thumbnail target. Original failures remain recorded; no runtime
+workaround is added.
+Artist apps and drawings remain untouched. Physical SDR workflows, profiled
+export/ICC library, managed display and final performance acceptance stay open.
 
 ## Native provider acceptance
 

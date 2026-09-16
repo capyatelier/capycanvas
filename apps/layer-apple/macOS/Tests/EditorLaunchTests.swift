@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNativePhotoCorrections() throws {
+        try checkNativePhotoCorrections(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeHistogram() throws {
         try checkNativeHistogram(in: editorCaptureApplication())
     }

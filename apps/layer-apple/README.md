@@ -1004,6 +1004,23 @@ is open, manual/automatic refresh, channels/log scale, close/reopen and sample
 controls. Physical Pencil sampling and sustained inspection performance remain
 part of final device acceptance.
 
+## Retained photo corrections
+
+Exposure, White Balance, Levels, Curves, Hue / Saturation and Color Balance use
+the shared Filters catalog and Properties controls. Corrections and masks stay
+separate from the retained photo; reset, bypass and history use shared actions.
+
+```sh
+cargo test -p layer-apple tests::correction -- --test-threads=1
+```
+
+This Metal check covers both Apple policies with P3/U8 and ProPhoto/U16 drawings:
+local selection masks, exact save/reopen/history and later re-editing preserve
+original U16 photo samples, including off-canvas pixels. The native Mac
+`testNativePhotoCorrections` workflow exercises actual controls, mask actions,
+local file panels and re-editing after reopen. Physical SDR device qualification
+remains part of final acceptance.
+
 ## Implementation status
 
 Workspace customization shares its presentation and gesture ownership across

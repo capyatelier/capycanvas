@@ -35,7 +35,10 @@ repair and missing-profile prompts; see the
 [source workflow record](apple-handoff.md#retained-source-editing-and-icc-import).
 Histogram and Point/3×3/5×5 sampling now reuse shared inspection and eyedropper
 paths; see the [inspection record](apple-handoff.md#histogram-and-sample-area-workflows).
-**Continue with photo corrections and the remaining host workflows in step 3**, then
+The six retained photo corrections and local masks pass exact worker save/reopen
+and re-editing checks on both Apple policies, using existing shared controls; see
+the [correction record](apple-handoff.md#retained-photo-corrections-and-masks).
+**Continue with the ICC library and profiled export/presets in step 3**, then
 display integration and physical acceptance. Profiled export and device
 performance are not closed.
 
