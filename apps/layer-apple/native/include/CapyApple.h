@@ -25,7 +25,7 @@ void capy_workspace_library_destroy(CapyWorkspaceLibrary *library);
 typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
-/* kind: 0 save, 1 open, 2 recovery capture, 3 Place/Paste, 4 color/history, 5 properties. */
+/* kind: 0 save, 1 open, 2 recovery, 3 Place/Paste, 4 color/history, 5 properties, 6 source. */
 CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t kind);
 int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
@@ -36,7 +36,10 @@ int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *n
 int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);
 char *capy_project_profile(const CapyProjectTask *task); /* owned JSON interpretation or null */
 int32_t capy_project_assume_profile(const CapyProjectTask *task, const char *profile_json);
-int32_t capy_project_color_work(const CapyProjectTask *task, const char *choice_json, bool copy);
+int32_t capy_project_edit_work(const CapyProjectTask *task, const char *choice_json, bool copy);
+int32_t capy_apple_project_candidate(CapyApple *app, const CapyProjectTask *task); /* owner after edit_work */
+int32_t capy_project_compare(const CapyProjectTask *task); /* worker after candidate */
+char *capy_color_profile_read(int32_t fd); /* worker; borrows fd, owned profile/error JSON */
 char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker only */
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
 /* Worker only; borrowed straight sRGB RGBA8 until the next mutation/free. */

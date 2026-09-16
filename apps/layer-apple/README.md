@@ -755,6 +755,26 @@ copy protection and failure/retry. `testNativeDocumentColor` separately checks
 native forms, complete previews, Apply/Cancel, history and Properties. Physical
 iPad folder/provider delivery remains a device acceptance case.
 
+Repair Source Profile and Rasterize Source share this coordinator and comparison
+form. Shared source rules preserve original samples when changing interpretation,
+add a corrected original when a layer already has pixel edits, and rasterize the
+full image extent without replacing existing paint/masks. The native owner only
+validates and publishes shared edits; conversion, ICC inspection and GPU previews
+remain on the file worker. Both repair and missing-profile forms can import an
+ICC file using coordinated access, bounded input and shared CMM validation.
+Imported bytes remain exact. Saved profile-library management is still pending.
+
+```sh
+cargo test -p layer-apple tests::source -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/source-edit-owner.swift
+```
+
+The focused Metal checks cover U16 original tiles, painted edits, masks,
+off-canvas extent, exact history/save/reopen, continued painting and cancelled or
+stale publication. Swift owner checks cover both policies and ICC read/retry;
+`testNativeSourceEditing` separately exercises Mac controls and the ICC picker.
+Physical UIKit interaction and provider delivery remain separate acceptance cases.
+
 The shared JSON transport uses direct Foundation container lookup to avoid
 bridging a complete dictionary for each field read by the editor. Check native
 and decoded containers, scalar fidelity, bounds, immutable edits and round trips

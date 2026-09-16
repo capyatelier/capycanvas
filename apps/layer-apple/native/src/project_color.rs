@@ -21,7 +21,14 @@ pub(super) struct Task {
     clipped: u64,
     copy: bool,
 }
-struct Preview { extent: [u32; 2], pixels: Vec<u8> }
+pub(super) struct Preview { pub extent: [u32; 2], pub pixels: Vec<u8> }
+pub(super) fn compare(gpu: &SnapshotGpu, projects: [(&Project, [f32; 4]); 2], time: f32, control: CaptureControl) -> Result<Vec<Preview>, String> {
+    projects.into_iter().map(|(project, background)| {
+        let mut snapshot = gpu.capture(project.clone(), background, time, Default::default(), control.clone()).map_err(|e| e.to_string())?;
+        let preview = snapshot.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
+        Ok(Preview { extent: preview.extent, pixels: preview.srgb_bytes()? })
+    }).collect()
+}
 impl Task {
     pub(super) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
         session.require_document_idle()?;
@@ -75,11 +82,7 @@ impl Task {
         let mut brush = self.brush.clone(); transform(&mut brush.color_rgba_linear);
         transform(&mut brush.color_dynamics.secondary_color_rgba_linear);
         if self.operation.is_some() {
-            for (source, background) in [(&self.original, self.view.background_rgba_linear), (project, view.background_rgba_linear)] {
-                let mut snapshot = self.gpu.capture(source.clone(), background, self.time, Default::default(), control.clone()).map_err(|e| e.to_string())?;
-                let preview = snapshot.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
-                self.previews.push(Preview { extent: preview.extent, pixels: preview.srgb_bytes()? });
-            }
+            self.previews = compare(&self.gpu, [(&self.original, self.view.background_rgba_linear), (project, view.background_rgba_linear)], self.time, control.clone())?;
         }
         if !copy {
             let mut canvas = self.gpu.color_canvas(project.clone(), &brush, view, self.time, control).map_err(|e| e.to_string())?;
@@ -129,14 +132,45 @@ impl Task {
 }
 
 /// # Safety
-/// File worker only. Choice is optional DocumentColorChange JSON, task stays alive.
+/// File worker only. Choice is optional DocumentColorChange/ColorProfile JSON.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_project_color_work(task: *const CapyProjectTask, choice: *const c_char, copy: bool) -> i32 {
+pub unsafe extern "C" fn capy_project_edit_work(task: *const CapyProjectTask, choice: *const c_char, copy: bool) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
-    let choice = unsafe { read_title(choice) }.and_then(|v| serde_json::from_str(v).map_err(|e| e.to_string()));
+    let choice = unsafe { read_title(choice) }.map(str::to_owned);
     task.perform(|payload| {
-        let Payload::Color(color) = payload else { return Err("Not a color task".into()); };
-        color.work(choice?, copy, task.control.clone())
+        let choice = choice?;
+        match payload {
+            Payload::Color(color) => color.work(serde_json::from_str(&choice).map_err(|e| e.to_string())?, copy, task.control.clone()),
+            Payload::Source(source) if !copy => source.work(serde_json::from_str(&choice).map_err(|e| e.to_string())?, task.control.clone()),
+            _ => Err("Not an editable color/source task".into()),
+        }
+    })
+}
+/// # Safety
+/// Owner only, after edit_work. Shared validation constructs the source candidate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_project_candidate(app: *mut CapyApple, task: *const CapyProjectTask) -> i32 {
+    let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else { return -1; };
+    app.perform(|app| {
+        task.check_cancelled()?;
+        let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(error) = &state.error { return Err(error.clone()); }
+        match &mut state.payload {
+            Payload::Source(source) => source.prepare(app, task),
+            Payload::Color(_) => Ok(()),
+            _ => Err("Not an editable color/source task".into()),
+        }
+    }).map_or(-1, |_| 0)
+}
+/// # Safety
+/// Worker only, after project_candidate; renders complete source comparisons.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_compare(task: *const CapyProjectTask) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
+    task.perform(|payload| match payload {
+        Payload::Source(source) => source.compare(task.control.clone()),
+        Payload::Color(_) => Ok(()),
+        _ => Err("Not an editable color/source task".into()),
     })
 }
 /// # Safety
@@ -148,6 +182,7 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
     let result = task.perform(|payload| {
         json = match payload {
             Payload::Info(info) => serde_json::to_string(&info.describe()?),
+            Payload::Source(source) => serde_json::to_string(&source.details()?),
             Payload::Color(t) => serde_json::to_string(&serde_json::json!({
                 "color":t.original.document.color, "result":t.candidate.as_ref().map(|p| p.document.color),
                 "clipped_channels":t.clipped, "copy":t.copy,
@@ -169,8 +204,8 @@ pub struct CapyProjectPreview {
 pub unsafe extern "C" fn capy_project_preview(task: *const CapyProjectTask, after: bool, output: *mut CapyProjectPreview) -> i32 {
     let (Some(task), Some(output)) = (unsafe { task.as_ref() }, unsafe { output.as_mut() }) else { return -1; };
     let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
-    let Payload::Color(color) = &state.payload else { return -1; };
-    let Some(preview) = color.previews.get(usize::from(after)) else { return -1; };
+    let previews = match &state.payload { Payload::Color(c) => &c.previews, Payload::Source(s) => &s.previews, _ => return -1 };
+    let Some(preview) = previews.get(usize::from(after)) else { return -1; };
     *output = CapyProjectPreview { width: preview.extent[0], height: preview.extent[1], pixels: preview.pixels.as_ptr(), count: preview.pixels.len() };
     0
 }

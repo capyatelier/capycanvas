@@ -29,7 +29,11 @@ Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 now use the same worker, with complete before/after previews, source-safe flattened
 copies and exact shared history; see the
 [document color record](apple-handoff.md#document-profile-and-bit-depth-workflows).
-**Continue with source repair/rasterization and the remaining host workflows in step 3**, then
+Source-profile repair and full-extent rasterization now reuse shared source edits,
+the document worker and comparison form. Native ICC import is available in both
+repair and missing-profile prompts; see the
+[source workflow record](apple-handoff.md#retained-source-editing-and-icc-import).
+**Continue with histogram/sampling, photo corrections and the remaining host workflows in step 3**, then
 display integration and physical acceptance. Profiled export and device
 performance are not closed.
 

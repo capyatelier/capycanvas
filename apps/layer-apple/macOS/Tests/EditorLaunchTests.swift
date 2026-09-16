@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNativeSourceEditing() throws {
+        try checkNativeSourceEditing(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeDocumentColor() throws {
         try checkNativeDocumentColor(in: editorCaptureApplication())
     }

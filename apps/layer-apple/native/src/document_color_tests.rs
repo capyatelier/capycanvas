@@ -16,7 +16,7 @@ fn initialized(platform: u32) -> App {
     assert!(app.pixels()!=blank,"Fixture must paint before color preparation");
     app
 }
-fn stroke_inside(app: &App) {
+pub(super) fn stroke_inside(app: &App) {
     // Color selection can invalidate a deferred brush pipeline. Like a live
     // owner, prepare it before starting the next admitted contact.
     app.draw_until_idle();
@@ -42,7 +42,7 @@ fn job(app: &App, command: &str) -> ProjectJob {
 }
 fn work(job: &ProjectJob, choice: Value, copy: bool) {
     let json = CString::new(choice.to_string()).unwrap();
-    assert_eq!(unsafe { capy_project_color_work(job.0, json.as_ptr(), copy) }, 0, "{:?}", job.error());
+    assert_eq!(unsafe { capy_project_edit_work(job.0, json.as_ptr(), copy) }, 0, "{:?}", job.error());
 }
 fn adopt(app: &App, job: &ProjectJob) {
     assert_eq!(unsafe { capy_apple_project_adopt(app.0, job.0, c"Color".as_ptr(), c"".as_ptr()) }, 0,

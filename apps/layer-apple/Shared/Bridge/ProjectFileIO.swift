@@ -11,7 +11,7 @@ extension UTType {
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
 /// Its final release can destroy a large retired document, so use the I/O queue.
 final class NativeProjectTask: @unchecked Sendable {
-    enum Kind: UInt32 { case save, open, recovery, place, color, properties }
+    enum Kind: UInt32 { case save, open, recovery, place, color, properties, source }
     static let io = DispatchQueue(label: "art.capycanvas.project-files", qos: .userInitiated)
     let handle: OpaquePointer
     init(_ handle: OpaquePointer) { self.handle = handle }
@@ -46,9 +46,10 @@ final class NativeProjectTask: @unchecked Sendable {
         try image.withUnsafeBytes { try check(capy_project_read_bytes(handle,
             $0.bindMemory(to: UInt8.self).baseAddress, $0.count, "Pasted image")) }
     }
-    func prepareColor(_ choice: JSON?, copy: Bool) throws {
-        try check(try (choice ?? JSON()).encoded().withCString { capy_project_color_work(handle, $0, copy) })
+    func prepareEdit(_ choice: JSON?, copy: Bool) throws {
+        try check(try (choice ?? JSON()).encoded().withCString { capy_project_edit_work(handle, $0, copy) })
     }
+    func compare() throws { try check(capy_project_compare(handle)) }
     func details() throws -> JSON {
         guard let text = capy_project_details(handle) else { try check(-1); return JSON() }
         defer { capy_apple_string_free(text) }

@@ -518,7 +518,7 @@ impl CommandId {
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac),
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
-            Self::RasterizeSource | Self::RepairSourceProfile => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::RasterizeSource | Self::RepairSourceProfile => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
                 Platform::Gtk

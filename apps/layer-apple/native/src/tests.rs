@@ -8,6 +8,8 @@ struct App(*mut CapyApple);
 mod color;
 #[path = "document_color_tests.rs"]
 mod document_color;
+#[path = "source_tests.rs"]
+mod source;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {

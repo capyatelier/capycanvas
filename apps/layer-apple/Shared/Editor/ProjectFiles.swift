@@ -107,7 +107,7 @@ import UIKit
                 }
             }
             if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
-        case "change_color", "color_history", "properties":
+        case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
             guard let store else { fail("The canvas session is unavailable"); return }
             let editor = DocumentColorController(store: store, request: document, expected: approved) { [weak self] result in
                 self?.colorEditor = nil; self?.finish(result)

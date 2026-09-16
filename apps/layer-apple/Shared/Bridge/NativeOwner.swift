@@ -230,6 +230,25 @@ final class NativeOwner: @unchecked Sendable {
         }
         queue.async(execute: poll)
     }
+    /// Source conversion and GPU previews stay on the worker. Only shared edit
+    /// validation/candidate construction enters the serial document owner.
+    func prepareEdit(_ task: NativeProjectTask, choice: JSON?, copy: Bool,
+        completion: @escaping @Sendable (String?) -> Void) {
+        NativeProjectTask.io.async { [self] in
+            do {
+                try task.prepareEdit(choice, copy: copy)
+                queue.async { [self] in
+                    do {
+                        try check(capy_apple_project_candidate(handle, task.handle))
+                        NativeProjectTask.io.async {
+                            do { try task.compare(); completion(nil) }
+                            catch { completion(error.localizedDescription) }
+                        }
+                    } catch { completion(error.localizedDescription) }
+                }
+            } catch { completion(error.localizedDescription) }
+        }
+    }
     /// Capture only a committed raster boundary. Active ink may continue; its
     /// preceding committed pixels remain recoverable until the next pen-up.
     func recoveryTask(expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {

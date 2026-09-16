@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
     @Published private(set) var ready = false
     @Published private(set) var loaded = false
     @Published private(set) var color = JSON()
+    @Published private(set) var sourceInfo = JSON()
     @Published private(set) var rows: [JSON] = []
     @Published private(set) var previews: [CGImage] = []
     @Published private(set) var clipped: UInt64 = 0
@@ -17,6 +18,7 @@ import UniformTypeIdentifiers
     let operation: String
     let history: Bool
     let properties: Bool
+    let source: Bool
     let title: String
     private weak var store: EditorStore?
     private let expected: (UInt64, UInt64)?
@@ -26,21 +28,25 @@ import UniformTypeIdentifiers
     private var finished = false
     init(store: EditorStore, request: JSON, expected: (UInt64, UInt64)?, completion: @escaping (Bool) -> Void) {
         self.store = store; self.expected = expected; self.completion = completion
-        operation = request["operation"].string
+        source = ["repair_source_profile", "rasterize_source"].contains(request["type"].string)
+        operation = source ? request["type"].string : request["operation"].string
         history = request["type"].string == "color_history"
         properties = request["type"].string == "properties"
         title = properties ? "Document Properties" : history ? (request["redo"].bool ? "Redo Color Change" : "Undo Color Change")
+            : operation == "repair_source_profile" ? "Repair Source Profile" : operation == "rasterize_source" ? "Rasterize Retained Source"
             : operation == "assign" ? "Assign Profile" : operation == "depth" ? "Change Bit Depth" : "Convert Color Space"
     }
     func load() {
-        if properties {
-            capture(.properties) { [weak self] task in
+        if properties || source {
+            capture(source ? .source : .properties) { [weak self] task in
                 NativeProjectTask.io.async {
                     do {
                         let details = try task.details()
                         DispatchQueue.main.async {
                             guard let self else { return }
-                            self.rows = details.array; self.loaded = true; self.busy = false; self.task = nil
+                            if self.source { self.sourceInfo = details; self.color = details["color"] }
+                            else { self.rows = details.array }
+                            self.loaded = true; self.busy = false; self.task = nil
                             if self.closing { self.finish(false) }
                         }
                     } catch { let message = error.localizedDescription
@@ -77,22 +83,27 @@ import UniformTypeIdentifiers
     func prepare(_ choice: JSON?, copy: Bool = false) {
         guard !busy, !closing, !finished else { return }
         invalidate(); self.copy = copy
-        capture(.color) { [weak self] task in
-            NativeProjectTask.io.async {
+        capture(source ? .source : .color) { [weak self] task in
+            guard let self, let native = store?.native else { task.cancel(); return }
+            let history = self.history
+            native.prepareEdit(task, choice: choice, copy: copy) { [weak self] error in
+              NativeProjectTask.io.async {
                 do {
-                    try task.prepareColor(choice, copy: copy)
+                    if let error { throw HostFailure(message: error) }
                     let details = try task.details()
-                    let images = choice == nil ? [] : try [task.comparison(after: false), task.comparison(after: true)]
+                    let images = history ? [] : try [task.comparison(after: false), task.comparison(after: true)]
                     DispatchQueue.main.async {
                         guard let self else { return }
                         self.busy = false
                         if self.closing { self.finish(false); return }
+                        if self.source { self.sourceInfo = details }
                         self.clipped = details["clipped_channels"].uint; self.previews = images; self.ready = true
                         if self.history { self.apply() }
                     }
                 } catch { let message = error.localizedDescription
                     DispatchQueue.main.async { self?.failed(message) }
                 }
+              }
             }
         }
     }
@@ -106,7 +117,7 @@ import UniformTypeIdentifiers
                 if let error { self.failed(error); return }
                 // Color/history swaps the renderer without changing document
                 // identity. Retire pending readbacks from its previous caches.
-                self.store?.layerThumbnails.reset(); self.store?.filterPreviews.reset()
+                if !self.source { self.store?.layerThumbnails.reset(); self.store?.filterPreviews.reset() }
                 self.finish(true)
             }
         }

@@ -129,7 +129,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
 
 #[test]
 fn source_profile_repair_preserves_samples_and_baked_edits() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         source_profile_repair_preserves_samples_and_baked_edits_on(platform);
     }
 }
@@ -331,7 +331,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
 
 #[test]
 fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         rasterizing_an_image_preserves_full_extent_edits_masks_and_history_on(platform);
     }
 }

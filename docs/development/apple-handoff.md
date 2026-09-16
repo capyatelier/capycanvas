@@ -4,7 +4,7 @@ For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
 paint/palette workflows, retained photo Open/Place/Paste and document profile/depth
-editing are integrated; the remaining host workflows and device
+editing, retained-source editing and ICC file import are integrated; the remaining host workflows and device
 acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
@@ -392,6 +392,54 @@ Next are source repair/rasterization, histogram/sampling, retained photo
 corrections/masks, ICC library and profiled export, managed displays and the
 remaining device/performance gates. This checkpoint does not close the overall
 Apple goal or qualify the 61 MP workflow.
+
+## Retained-source editing and ICC import
+
+Repair Source Profile and Rasterize Source now use the shared source-edit rules
+on both Apple policies. Untouched source repair keeps exact sample tiles and
+changes interpretation. A repaired photo with committed pixel edits receives a
+separate corrected-original layer; the existing paint, masks and adjustments
+stay intact. Rasterization converts the complete retained extent, including
+off-canvas pixels, to document space/depth while preserving layer edits and masks.
+Both operations use complete Before/After, Cancel and one-step Undo/Redo.
+
+The existing color controller, form, worker and preview packing also serve
+source edits. Source conversion and GPU comparisons run off the render owner;
+shared candidate validation/publication stay on it. Jobs reject cancelled or
+stale document/device results. Native ICC file import is shared by repair and
+missing-profile interpretation. Coordinated reads are bounded to the shared
+16 MiB limit; shared CMM validation runs on the worker and retains imported
+bytes exactly. Current-source metadata does not copy embedded ICC payloads into
+the UI, and selection/import notifications avoid serializing imported profiles
+during SwiftUI layout. Saved profile-library management remains a later workflow.
+
+Both complete Swift host source sets typecheck. All 63 Apple bridge tests and
+456 active shared UI/host tests pass, with one pre-existing ignored case. The focused Metal source cases
+pass full-extent U16 retention, original sample identity, masks, painted source
+repair, exact artwork/history, rasterization/save/reopen, continued painting,
+invalid ICC data and stale/cancel rejection on both Apple policies. The Swift
+source owner workflow and existing document-color owner workflow pass on both
+policies. The final native Mac workflow passes the actual ICC picker and its
+cancellation, comparisons, repair, painted-source disclosure/new layer,
+rasterization, exact sampled history and unchanged input files. Replacing an
+imported ICC also correctly invalidates the preceding preview. The final run has
+one passing test, no failures or skips; three dialog captures are reviewed. An
+unrelated iCloud prompt covers a corner; no permission is changed. Both final
+Release builds pass without compiler warnings. Evidence is
+`artifacts/apple-source-edit-v1/`.
+
+Initial failures were a missing Rust import, a Swift fixture array-construction
+error and a history assertion that expected layer-ID reuse. The corrected test
+preserves the shared monotonic-ID contract while comparing exact artwork; no
+runtime history workaround is added. Physical UIKit forms/picker delivery,
+managed display appearance, 61 MP and sustained SDR performance remain open.
+Artist review apps and drawings are preserved. The isolated Mac test app is
+closed after testing. Main was fetched with no incoming changes before this
+grouped milestone.
+
+Next are histogram/sampling, retained photo corrections/masks, ICC library and
+profiled export, managed displays and remaining device/performance acceptance.
+The overall Apple goal remains incomplete.
 
 ## Native provider acceptance
 

@@ -21,6 +21,9 @@ use std::{
 #[path = "project_color.rs"]
 mod color;
 pub use color::*;
+#[path = "project_source.rs"]
+mod source;
+pub use source::*;
 
 struct Environment {
     adapter: wgpu::Adapter,
@@ -35,6 +38,7 @@ struct Environment {
 }
 enum Payload {
     Color(Box<color::Task>),
+    Source(Box<source::Task>),
     Info(layer_color::DocumentInfo),
     Save {
         snapshot: Option<Project>,
@@ -178,6 +182,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Color(Box::new(color::Task::capture(session)?))
         } else if opening == 5 {
             Payload::Info(layer_color::DocumentInfo::capture(session.engine().document()))
+        } else if opening == 6 {
+            Payload::Source(Box::new(source::Task::capture(session)?))
         } else if opening == 1 || opening == 3 {
             session.require_document_idle()?;
             let place = if opening == 3 {
@@ -572,6 +578,10 @@ unsafe fn adopt_project(
         if let Payload::Color(color) = &mut state.payload {
             if recovered { return Err("A color change is not a recovery drawing".into()); }
             return color.adopt(app, task);
+        }
+        if let Payload::Source(source) = &mut state.payload {
+            if recovered { return Err("A source edit is not a recovery drawing".into()); }
+            return source.adopt(app, task);
         }
         if let Payload::Placed { source, name, target, request, device } = &mut state.payload {
             if recovered { return Err("An image import is not a recovery drawing".into()); }
