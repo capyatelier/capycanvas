@@ -104,3 +104,11 @@ Commands and complete environments are in the adjacent
 and use `bash tools/performance/gtk-raster.sh` as documented in the performance
 record. The runnable application is built separately with
 `cargo build -p layer-linux --release --offline`.
+
+Release application built successfully from `d6a17466c290ce7e3991674256e9fe1ff0a43057`:
+`target/release/layer-linux`, SHA-256
+`7ebad559346d1b76b9df7c6828771cda126f1d656446939be30dc87d6df519de`.
+Build/toolchain/source hashes are in
+`artifacts/color-m2/final-performance/gtk-m2-qualified-provenance.json`.
+The running user application was not restarted. Other platform integration awaits
+the user's approval, as required by the original scope.
