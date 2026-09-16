@@ -38,6 +38,21 @@ When no measurement is available, the fallback assumes 512 MiB of headroom:
 unmeasurable host, rather than categorizing all mobile devices as small.
 Reported device RAM or a JS heap limit must not be passed as free WASM memory.
 
+The Web host supplies a separate **capacity-based admission policy** when the
+browser exposes `navigator.deviceMemory`. This is an approximate, capped physical
+RAM hint, not free memory. With a hint capped at 8 GiB, source/decode/JPEG-encode
+allowances are respectively capacity / 32, / 8, and 3 / 16 (maximum 256 MiB,
+1 GiB, and 1.5 GiB). One file worker serializes these jobs. These are ceilings,
+not upfront allocations, and are kept distinct from `from_available_memory`.
+Browsers without that hint retain the fallback above. Allocation/device losses
+still need recovery; this policy cannot reserve RAM against other tabs/apps.
+The 61 MP Sony fixture opens at full size on the attached 12 GB MovinkPad's
+Chrome (which reports the capped 8 GiB hint). Other device/workload pairs require
+qualification. See [Device Memory](https://www.w3.org/TR/device-memory/) and the
+[page-memory proposal](https://wicg.github.io/performance-measure-memory/): neither
+provides remaining system RAM to this host.
+
+
 Hosts can provide a current budget without changing the codec:
 
 ```rust

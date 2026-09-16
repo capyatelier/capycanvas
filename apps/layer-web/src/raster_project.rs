@@ -386,7 +386,7 @@ pub async fn raster_worker_read(options: &str, bytes: Vec<u8>) -> Result<JsValue
         Project::read(bytes.as_slice(), limits(options.dimension)).map_err(js)?
     } else {
         if options.recovered { return Err(js("Recovery file is not a native drawing")); }
-        let source = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).map_err(js)?;
+        let source = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), layer_color::photo::DecodeLimits::from_memory_budget(photo_memory_budget())).map_err(js)?;
         let depth = options.photo_policy.editing_depth(source.interpretation.depth);
         let name = options.name.rsplit_once('.').map_or(options.name.as_str(), |(stem, _)| stem);
         layer_color::photo_project(source, name, depth).map_err(js)?
@@ -415,4 +415,24 @@ pub(super) async fn save_recovery(project: Project, key: String) -> Result<JsVal
     let metadata =
         serde_json::to_string(&serde_json::json!({"key":key,"project":metadata})).map_err(js)?;
     JsFuture::from(raster_worker::call("recover-write", &metadata, &buffers)?).await
+}
+
+
+/// Browser admission allowance, not a measurement of free RAM. The capacity
+/// hint only selects a bounded file-worker policy; absent hints retain the
+/// codec's conservative fallback. A worker runs one file job at a time.
+pub(super) fn photo_memory_budget() -> layer_color::photo::PhotoMemoryBudget {
+    use layer_color::photo::PhotoMemoryBudget;
+    let capacity = js_sys::Reflect::get(&js_sys::global(), &js("navigator"))
+        .ok()
+        .and_then(|navigator| js_sys::Reflect::get(&navigator, &js("deviceMemory")).ok())
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value > 0.);
+    let Some(gib) = capacity else { return PhotoMemoryBudget::current(); };
+    let capacity = (gib.min(8.) * (1024_u64.pow(3) as f64)) as u64;
+    PhotoMemoryBudget {
+        source_bytes: (capacity / 32) as usize,
+        decode_bytes: (capacity / 8) as usize,
+        encode_bytes: (capacity / 16 * 3) as usize,
+    }
 }

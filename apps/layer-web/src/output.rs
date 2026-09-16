@@ -346,12 +346,12 @@ pub async fn raster_worker_output(
                 metadata.resolution,
                 rows,
             ),
-            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
+            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows_with_options(
                 output,
                 extent,
                 target,
                 metadata.resolution,
-                recipe.jpeg_quality,
+                layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, raster_project::photo_memory_budget()),
                 rows,
             ),
         }

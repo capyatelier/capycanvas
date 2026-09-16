@@ -23,7 +23,9 @@ export function createRasterWorker() {
   }
   return request => new Promise((resolve,reject) => {
     const state = owner(request.operation === "encode" ? "codec" : "files"), id = ++next;
-    const timer = setTimeout(() => state.fail(new Error("Raster worker timed out")), 30000);
+    // Full-resolution file codecs can outlast an interactive compression block.
+    const timeout=request.operation === "encode" ? 30000 : 180000;
+    const timer = setTimeout(() => state.fail(new Error("Raster worker timed out")), timeout);
     state.pending.set(id,{resolve,reject,timer});
     const transfers = (request.buffers || []).map(bytes => bytes.buffer);
     try { state.worker.postMessage({id,request},transfers); }

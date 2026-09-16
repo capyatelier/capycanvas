@@ -534,3 +534,24 @@ Web and Android currently use the explicit sRGB SDR viewing fallback. Their
 native U8/U16 master and profiled delivery retain wide-gamut data. These checks
 do not claim a measured physical panel color match or native wide-gamut surface
 presentation on either host.
+
+
+## Full-size browser photo admission — 2026-09-16
+
+`tablet-web-large-open-before.log` confirms that the 9504×6336 Sony JPEG was
+rejected by the codec's unmeasured-host fallback, before rendering. The Web file
+worker now uses the bounded, capacity-based allowance documented in
+[portable-color.md](../development/portable-color.md), preserving the smaller
+fallback when the browser supplies no capacity hint. This deliberately does not
+claim device capacity is free memory. Codec work remains serialized; compression
+uses its independent worker. File jobs have a 180 s watchdog, while interactive
+compression retains 30 s. Only needed buffers are allocated.
+
+The first trial exposed 32-bit Wasm saturation when converting an 8 GiB hint to
+`usize` before division; the policy now divides in `u64`. In
+`tablet-web-large-open-after2.log`, the original 61 MP file opens as native SDR8
+in 5.51 s with the exact full extent and no import error. The file's hash and
+copied tablet path remain those recorded above. This is import qualification;
+frame cadence, memory residency and navigation still need the final benchmark.
+`web-large-photo-admission-build2.log` and `package-final-workflows.log` record
+the Wasm build and 13 passing package tests.
