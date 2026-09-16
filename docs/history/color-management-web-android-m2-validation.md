@@ -555,3 +555,107 @@ copied tablet path remain those recorded above. This is import qualification;
 frame cadence, memory residency and navigation still need the final benchmark.
 `web-large-photo-admission-build2.log` and `package-final-workflows.log` record
 the Wasm build and 13 passing package tests.
+
+## Tablet navigation and resource checkpoint — 2026-09-16
+
+Feature workflows above are complete; the performance/user-acceptance gate is
+still open. Tests use the isolated `art.capycanvas.colorm2` package and a separate
+browser origin. The source JPEG remains `/sdcard/Download/sony_a7r_v_29.jpg`.
+No browser flags, user tabs, density or global refresh preferences were changed.
+The tablet currently reports physical density 280, 2880×1800 landscape, 120 Hz;
+Chrome 152.0.7977.82 uses DPR 1.75. Thermal status was 0, with battery/GPU about
+28/34 °C (`tablet-performance-{battery,thermal}.txt`).
+
+The 61 MP native import initially failed admission. The shared policy incorrectly
+applied an unlimited root cgroup's free pages over `MemAvailable`, discarding
+reclaimable headroom. Only an actual smaller cgroup limit now caps availability.
+The decoder gets one third of remaining memory, with source + decode still below
+one half. Unknown-host fallback follows the same fractions. The full Sony photo
+then opened in 5.27 s; zero headroom remains zero and restricted cgroups are tested.
+
+The first navigation measurements identified two independent costs:
+
+- Android's Adreno driver does not expose `VK_EXT_memory_budget`. Requiring that
+  extension left it in the 691 MiB bounded display path even with available RAM.
+  Android now admits a complete display pyramid from half the smaller driver/system
+  headroom, or measured system headroom alone for a Vulkan **integrated** device
+  that exposes host-visible device-local memory. This follows the
+  [Vulkan UMA memory model](https://docs.vulkan.org/guide/latest/memory_allocation.html).
+  Unknown/discrete devices keep the bounded fallback. GTK's quarter-driver-budget
+  policy is unchanged. A ceiling allocates only this document's actual pyramid.
+- Minified display used sixteen bilinear samples per screen pixel. On Chrome,
+  submission plus a queue-completion wait took about 30–54 ms at minified zooms,
+  versus about 10–13 ms when magnified (`web-photo-gpu-wait.json`; this includes
+  browser/IPC wakeup latency, not GPU timestamp duration). Contiguous display
+  levels now use hardware filtering and adjacent completed mips use trilinear
+  display sampling. The tiled fallback retains cross-page gathers. Pixels outside
+  the document skip artwork sampling. Editing/filter inputs/export remain full
+  resolution and native integer/Float32; display reductions never feed them.
+
+The Web file worker retires an idle Wasm heap over 256 MiB after five seconds,
+only with no pending jobs or open output lease. Another file action recreates it;
+interactive capture compression uses a separate worker. Browser complete-cache
+admission uses the documented capacity-based ceiling, not a fabricated free-RAM
+measurement. This is not a whole-editor reservation manager or automatic tab offload.
+
+Measured 9504×6336 navigation, full 2880×1800 viewport, synthetic zoom/pan/rotation:
+
+| Path | CPU frame median / p95 / p99 | Callback cadence median / p95 / p99 |
+| --- | --- | --- |
+| Android bounded, before fixes (warm run 1) | 1.24 / 42.96 / 80.95 ms | frequent missed refreshes; 190 frames / 361 input ticks |
+| Android complete + adjacent mips (warm run 1) | 1.21 / 2.30 / 5.18 ms | 8.334 / 8.334 / 16.667 ms; 348 frames / 361 input ticks |
+| Web complete, before adjacent mips (warm) | about 1.8 / 2.5 / 2.8 ms | p95 about 66.7 ms, p99 83–100 ms |
+| Web complete + adjacent mips (three runs) | 1.4–1.8 / 2.4–2.5 / 2.6–2.8 ms | 16.7 / 16.7–16.8 / 16.8 ms |
+
+Raw evidence is `native-photo-navigation-{refined,trilinear}-*.json` and
+`web-photo-navigation-{complete,filter,trilinear}.json` under
+`artifacts/color-m2/web-android`. Native tracked canvas storage is 1309.2 MiB;
+Web 1265.0 MiB. These exclude source/CPU/driver/process overhead and are **not**
+whole-device peak memory. Input is injected through the ordinary native owner
+queue or Web camera/frame scheduler; these are not hardware input-to-photon
+measurements. First runs are retained separately. Chrome's idle RAF is also
+16.7 ms: the remaining Web ceiling is separate from the resolved GPU stalls.
+Its `throttle-main-thread-to-60hz` flag exists and is set to Default. Disabling
+it/restarting the whole browser awaits user approval; its causal role is not
+proven merely by the flag's existence. Web 120 Hz is not yet qualified.
+
+Fresh frame-creation baselines were rebuilt locally, on this tablet:
+
+- Android: merged pre-port `00d5a85b`, same three-run 24 MP concurrent-save harness.
+  Baseline paint p95 2.71–2.84 ms and p99 3.21–3.86 ms; current 5.19–6.06 ms
+  and 8.54–9.53 ms. This exceeds the proposed regression trigger. The baseline
+  constructs the legacy renderer; current constructs native integer backing with
+  Float32 processing. The comparison includes that precision/commit-work change;
+  the exact share of the added cost has not been isolated. Dirty-frame/commit
+  optimization is explicitly deferred by the user. Do not call this an unchanged
+  hot-path pass or confuse it with the qualified unchanged-photo navigation.
+- Web: `00d5a85b` cannot start its unported UI (`rgba.slice is not a function`).
+  The clean `origin/main` commit `dff06311` is the runnable fresh baseline, without
+  patching its app. On the same 6000×4000 SDR8 canvas and 2880×1800 viewport,
+  warm baseline p95/p99 are 1.0 / 1.2–1.3 ms; current 1.2 / 1.4–1.6 ms.
+  A 0.3 ms p99 increase appears in one run; others are at the 0.2 ms noise trigger.
+  Initial contact/save values remain in the raw reports rather than being omitted.
+  Current native SDR8 was explicitly queried after the benchmark.
+
+`native-{fresh-baseline,current}-frames.json` and
+`web-{main-baseline,current}-frames.json` contain three independent runs each.
+Both use existing frame-creation harnesses; Web's dimension selector now targets
+only the two numeric extent fields so new preset/name controls do not corrupt setup.
+This is not an equal-processing FP16-versus-U16 microbenchmark.
+
+Validation after the display changes: all 15 shared display-cache GPU tests pass
+serially (`shared-display-trilinear-tests.log`), covering bounded storage, missing
+mips, edits, native stroke undo/redo, device replacement and source effects/masks.
+Contiguous-vs-atlas interpolation permits at most one encoded SDR display code;
+exact backing/export tests retain their original tolerances. The two memory policy
+tests pass (`shared-memory-final.log`). Wasm and ARM64 builds pass. The real Node
+packaging invocation reports **13 tests** (`package-final-real.log`). Earlier
+sandboxed packaging invocations that reported only one file-level pass did not
+execute those individual cases; this final unrestricted run supersedes their
+incorrectly summarized test counts above.
+
+Still required before final handoff: resolve/document the Chrome 120 Hz ceiling,
+finish whole-process memory and latency evidence, verify file-worker retirement
+followed by delivery, deploy the final named Android/PWA builds, and receive the
+user's hands-on confirmation. Apple/Windows ports and print proofing remain out
+of scope; the main-integration platform warnings still apply.

@@ -3,8 +3,10 @@ const ready = init();
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { pending = pending.then(() => execute(data)); };
 async function execute({id,request}) {
+  let instance;
+  const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
   try {
-    await ready;
+    instance=await ready;
     let result;
     switch(request.operation) {
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
@@ -59,8 +61,8 @@ async function execute({id,request}) {
       case "write": result = await wasm.raster_worker_write(request.metadata,request.buffers); break;
       default: throw new Error("Unknown raster worker operation");
     }
-    self.postMessage({id,result},result instanceof Uint8Array ? [result.buffer] : (result?.buffers || []).map(bytes=>bytes.buffer));
-  } catch(error) { self.postMessage({id,error:String(error)}); }
+    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.buffers || []).map(bytes=>bytes.buffer));
+  } catch(error) { self.postMessage({id,error:String(error),retire:retire()}); }
 }
 
 const outputs=new Map();

@@ -142,7 +142,18 @@ fn complete_display_matches_bounded_pixels_and_never_recomposes_for_navigation()
             for angle in [0., 0.7, 2., -1.] {
                 let v = centered_view([doc.width, doc.height], [320, 240], scale, angle);
                 for r in [&mut full, &mut bounded] { submit(r, &doc, v, false); }
-                close(&present(&full, &mut a, v), &present(&bounded, &mut b, v));
+                let direct = present(&full, &mut a, v);
+                let atlas = present(&bounded, &mut b, v);
+                // Display filtering uses quantized hardware interpolation weights
+                // for contiguous textures. Bound the visible SDR difference to one
+                // output code; native backing and composite values remain exact.
+                let srgb = |v: f32| if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1. / 2.4) - 0.055 };
+                let mut largest = 0_f32;
+                for (a, b) in direct.iter().zip(&atlas) {
+                    for c in 0..3 { largest = largest.max((srgb(a[c]) - srgb(b[c])).abs()); }
+                    assert_eq!(a[3], b[3]);
+                }
+                assert!(largest <= 1. / 255., "display interpolation error {largest} at scale {scale}, angle {angle}");
                 assert_eq!(full.metrics.composited_pixels, work);
                 assert_eq!(full.metrics.source_tile_misses, misses);
             }

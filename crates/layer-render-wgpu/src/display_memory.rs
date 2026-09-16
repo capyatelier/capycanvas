@@ -1,16 +1,34 @@
-//! Linux admission for a complete Float32 display pyramid. Query the Vulkan
-//! driver's current process budget; installed VRAM is not free GPU memory.
+//! Vulkan admission for a complete Float32 display pyramid. Query the Vulkan
+//! driver's current process budget, or measured system headroom on Android
+//! integrated GPUs. Installed VRAM is not free GPU memory.
 //! This is an admission snapshot, not a reservation against other applications.
 
-fn allowance(headroom: Option<u64>) -> u64 {
+fn allowance(headroom: Option<u64>, divisor: u64) -> u64 {
     // Leave room for editable layers, scratch, GTK and other documents. This
     // is an admission ceiling: the cache allocates only the actual document's
     // completed pixels and mip levels, never the whole allowance.
-    headroom.map_or(0, |bytes| bytes / 4)
+    headroom.map_or(0, |bytes| bytes / divisor)
 }
 
 pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
-    allowance(vulkan_headroom(device))
+    let headroom = vulkan_headroom(device);
+    #[cfg(target_os = "android")]
+    {
+        // Unified memory also serves the process, compositor and other apps.
+        // Use the driver budget when available. An integrated device with a
+        // host-visible local heap can otherwise use measured system headroom.
+        let system = layer_color::photo::PhotoMemoryBudget::available_memory();
+        let headroom = match (headroom, system) {
+            (Some(gpu), Some(system)) => Some(gpu.min(system)),
+            (None, Some(system)) if unified_memory(device) => Some(system),
+            _ => None,
+        };
+        let bytes = allowance(headroom, 2);
+        android_admission_log(headroom, system, bytes);
+        bytes
+    }
+    #[cfg(not(target_os = "android"))]
+    allowance(headroom, 4)
 }
 
 fn vulkan_headroom(device: &wgpu::Device) -> Option<u64> {
@@ -54,12 +72,57 @@ mod tests {
     use super::*;
     #[test]
     fn complete_pyramid_admission_scales_with_remaining_headroom() {
-        assert_eq!(allowance(None), 0);
-        assert_eq!(allowance(Some(0)), 0);
-        assert_eq!(allowance(Some(1024 * 1024 * 1024)), 256 * 1024 * 1024);
+        assert_eq!(allowance(None, 4), 0);
+        assert_eq!(allowance(Some(1024), 2), 512);
+        assert_eq!(allowance(Some(0), 4), 0);
+        assert_eq!(allowance(Some(1024 * 1024 * 1024), 4), 256 * 1024 * 1024);
         assert_eq!(
-            allowance(Some(96 * 1024 * 1024 * 1024)),
+            allowance(Some(96 * 1024 * 1024 * 1024), 4),
             24 * 1024 * 1024 * 1024
         );
     }
+}
+
+#[cfg(target_os = "android")]
+fn android_admission_log(headroom: Option<u64>, system: Option<u64>, allowance: u64) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: i32,
+            tag: *const std::ffi::c_char,
+            text: *const std::ffi::c_char,
+        ) -> i32;
+    }
+    let message = std::ffi::CString::new(format!(
+        "display headroom={headroom:?} system={system:?} allowance={allowance}"
+    ))
+    .unwrap();
+    // SAFETY: both strings are NUL-terminated and live through this call.
+    unsafe {
+        __android_log_write(4, c"CapyDisplay".as_ptr(), message.as_ptr());
+    }
+}
+
+#[cfg(target_os = "android")]
+fn unified_memory(device: &wgpu::Device) -> bool {
+    use ash::vk;
+    // SAFETY: the guard owns the live instance; these queries only read properties.
+    let Some(hal) = (unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }) else {
+        return false;
+    };
+    let instance = hal.shared_instance().raw_instance();
+    let (properties, memory) = unsafe {
+        (
+            instance.get_physical_device_properties(hal.raw_physical_device()),
+            instance.get_physical_device_memory_properties(hal.raw_physical_device()),
+        )
+    };
+    properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU
+        && memory.memory_types[..memory.memory_type_count as usize]
+            .iter()
+            .any(|ty| {
+                ty.property_flags.contains(
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                )
+            })
 }

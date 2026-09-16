@@ -14,6 +14,7 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(4) var coarse: texture_2d<f32>;
 struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
+@group(0) @binding(6) var next_mip: texture_2d<f32>;
 
 // Coordinates of mip-cell centers. The final cell can represent less than a
 // full footprint; preserve its actual position instead of stretching the image.
@@ -51,6 +52,11 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
     let extent = camera.offset_document.zw;
     let scale = f32(cache.info.z);
     let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
+    // Retained levels are contiguous textures. The filtering unit can sample
+    // these directly; only the page atlas needs explicit cross-page gathers.
+    if cache.grid.z == 0u {
+        return textureSampleLevel(canvas, canvas_sampler, (q + .5) / vec2<f32>(textureDimensions(canvas)), 0.);
+    }
     let low = vec2<u32>(floor(q));
     let high = min(low+1u, vec2<u32>(ceil(extent / scale))-1u);
     if any(low < cache.window.xy) || any(high >= cache.window.zw) { return coarse_point(p); }
@@ -66,7 +72,18 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     if cache.info.x == 0u { return textureSampleLevel(canvas, canvas_sampler, p / camera.offset_document.zw, 0.); }
     let scale = f32(select(cache.info.z, cache.info.y, cache.info.z == 0u));
-    if max(length(dx), length(dy)) <= scale { return detail_point(p); }
+    let footprint = max(length(dx), length(dy));
+    if footprint <= scale { return detail_point(p); }
+    if cache.grid.w != 0u {
+        // Adjacent levels contain the completed full-resolution composition.
+        // Trilinear display sampling avoids supersampling every screen pixel;
+        // no source/filter input or editable pixel is reduced.
+        let next_scale = f32(cache.grid.w);
+        let extent = camera.offset_document.zw;
+        let q = vec2(mip_coordinate(p.x, extent.x, next_scale), mip_coordinate(p.y, extent.y, next_scale));
+        let reduced = textureSampleLevel(next_mip, canvas_sampler, (q + .5) / vec2<f32>(textureDimensions(next_mip)), 0.);
+        return mix(detail_point(p), reduced, clamp(log2(footprint / scale), 0., 1.));
+    }
     var color = vec4(0.);
     for (var y = 0u; y < 4u; y++) {
         for (var x = 0u; x < 4u; x++) {
@@ -144,11 +161,16 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     let surface = vertex.position.xy;
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
+    if any(p < vec2<f32>(0.)) || any(p >= extent) {
+        var rgb = view_ui_rgb(camera.surround.rgb);
+        if camera.viewport.z > .5 { rgb = display_color(rgb); }
+        let coverage = window_coverage(surface);
+        return view_store(vec4<f32>(rgb * coverage, coverage));
+    }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let paint = artwork_at(p, camera.inverse.xy, camera.inverse.zw);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
-    if any(p < vec2<f32>(0.0)) || any(p >= extent) {rgb = view_ui_rgb(camera.surround.rgb);}
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.

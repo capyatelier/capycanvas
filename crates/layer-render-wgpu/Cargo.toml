@@ -22,7 +22,7 @@ layer-engine = { path = "../layer-engine" }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libc = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 ash = { version = "0.38.0", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]

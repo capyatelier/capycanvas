@@ -19,9 +19,14 @@ impl PhotoMemoryBudget {
         let bytes = bytes.min(isize::MAX as u64) as usize;
         Self {
             source_bytes: bytes / 8,
-            decode_bytes: bytes / 4,
+            decode_bytes: bytes / 3,
             encode_bytes: bytes / 2,
         }
+    }
+
+    /// Current process/system headroom when the host can measure it.
+    pub fn available_memory() -> Option<u64> {
+        available_memory()
     }
 
     pub fn current() -> Self {
@@ -52,23 +57,45 @@ fn available_memory() -> Option<u64> {
     if system.total_memory() == 0 {
         return None;
     }
-    let mut available = system.available_memory();
-    if let Some(cgroup) = system.cgroup_limits() {
-        available = available.min(cgroup.free_memory);
-    }
+    let available = process_allowance(
+        system.available_memory(),
+        system.total_memory(),
+        system
+            .cgroup_limits()
+            .map(|c| (c.total_memory, c.free_memory)),
+    );
+    // sysinfo reports an unlimited root cgroup as physical total minus current
+    // usage, including reclaimable cache. That is not a process limit; applying
+    // it would incorrectly replace Linux/Android MemAvailable with free pages.
     Some(available)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+fn process_allowance(available: u64, total: u64, cgroup: Option<(u64, u64)>) -> u64 {
+    match cgroup {
+        Some((limit, free)) if limit < total => available.min(free),
+        _ => available,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    fn unlimited_cgroup_does_not_discard_reclaimable_headroom() {
+        assert_eq!(process_allowance(3000, 12000, Some((12000, 1800))), 3000);
+        assert_eq!(process_allowance(3000, 12000, Some((4000, 1800))), 1800);
+        assert_eq!(process_allowance(3000, 12000, Some((4000, 0))), 0);
+        assert_eq!(process_allowance(0, 12000, None), 0);
+    }
+    #[test]
     fn budgets_scale_with_headroom_and_never_invent_a_minimum() {
         for available in [0, 1, 1024, 128 << 20, 512 << 20, 4 << 30, 8 << 30, u64::MAX] {
             let b = PhotoMemoryBudget::from_available_memory(available);
             let usable = available.min(isize::MAX as u64) as usize;
             assert_eq!(b.source_bytes, usable / 8);
-            assert_eq!(b.decode_bytes, usable / 4);
+            assert_eq!(b.decode_bytes, usable / 3);
             assert_eq!(b.encode_bytes, usable / 2);
             assert!(b.source_bytes + b.decode_bytes <= usable / 2);
         }

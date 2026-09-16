@@ -60,7 +60,7 @@ mod layer_tests;
 mod present;
 mod artwork;
 mod display_mips;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod display_memory;
 mod live_display;
 mod region_requests;

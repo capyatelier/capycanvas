@@ -71,9 +71,9 @@ impl NativeEdit {
             display_dense_bytes: crate::live_display::DENSE_BYTES,
             display_cache_bytes: crate::live_display::CACHE_BYTES,
             display_complete_bytes: {
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "android"))]
                 { crate::display_memory::complete_budget(&r.device) }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(any(target_os = "linux", target_os = "android")))]
                 { 0 }
             },
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
@@ -128,6 +128,18 @@ impl Drop for NativeFrame {
 }
 
 impl WgpuRasterizer {
+    /// Host admission ceiling for an unchanged full-resolution display pyramid.
+    /// Only the actual document's pixels/mips are allocated. Zero selects the
+    /// bounded tile fallback. This display cache never feeds edits or export.
+    pub fn set_complete_display_allowance(&mut self, bytes: u64) {
+        if let Some(native) = &mut self.native_edit
+            && native.display_complete_bytes != bytes
+        {
+            native.display_complete_bytes = bytes;
+            self.live_display = None;
+        }
+    }
+
     /// Surface-compatible native SDR renderer. Configure the working format
     /// before creating any pipeline recipes, including deferred startup jobs.
     /// Construction belongs to the host's GPU owner, outside the input thread.

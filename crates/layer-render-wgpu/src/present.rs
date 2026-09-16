@@ -50,6 +50,7 @@ pub struct ViewportPresenter {
     selection_buffer: Option<wgpu::Buffer>,
     composite_view: Option<wgpu::TextureView>,
     coarse_view: Option<wgpu::TextureView>,
+    next_view: Option<wgpu::TextureView>,
     display_geometry: Option<wgpu::Buffer>,
     plain_display: wgpu::Buffer,
     document_extent: [u32; 2],
@@ -164,6 +165,16 @@ impl ViewportPresenter {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -258,6 +269,7 @@ impl ViewportPresenter {
             selection_buffer: None,
             composite_view: None,
             coarse_view: None,
+            next_view: None,
             display_geometry: None,
             plain_display: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("dense display geometry"),
@@ -477,6 +489,7 @@ impl ViewportPresenter {
             .live_display
             .as_ref()
             .map_or(composite, |cache| &cache.coarse.view);
+        let next = renderer.live_display.as_ref().and_then(|c| c.next_view()).unwrap_or(coarse);
         let geometry = renderer
             .live_display
             .as_ref()
@@ -489,6 +502,7 @@ impl ViewportPresenter {
             || self.selection_buffer.as_ref() != Some(coverage)
             || self.composite_view.as_ref() != Some(composite)
             || self.coarse_view.as_ref() != Some(coarse)
+            || self.next_view.as_ref() != Some(next)
             || self.display_geometry.as_ref() != Some(geometry)
         {
             self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -519,12 +533,17 @@ impl ViewportPresenter {
                         binding: 5,
                         resource: geometry.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(next),
+                    },
                 ],
             }));
             self.document_extent = renderer.document_extent;
             self.selection_buffer = Some(coverage.clone());
             self.composite_view = Some(composite.clone());
             self.coarse_view = Some(coarse.clone());
+            self.next_view = Some(next.clone());
             self.display_geometry = Some(geometry.clone());
         }
         let [a, b, c, d, tx, ty] = view.document_to_surface;

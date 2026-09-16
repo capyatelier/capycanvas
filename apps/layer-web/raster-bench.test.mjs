@@ -6,7 +6,7 @@ export async function benchRaster({evaluate,settle}) {
   if(process.argv.includes("--large-raster")) {
     await evaluate(`layerApp.dispatch({type:'invoke',command:'new_document'});`);
     await evaluate(`new Promise(resolve=>{function check(){if(document.querySelector('.document-dialog input'))resolve();else setTimeout(check,20);}check();})`);
-    await evaluate(`document.querySelectorAll('.document-dialog input').forEach((input,i)=>input.value=i?4000:6000);[...document.querySelectorAll('.document-dialog button')].find(button=>button.textContent==='Create').click();`);
+    await evaluate(`[...document.querySelectorAll('.document-dialog input[type=number]')].slice(0,2).forEach((input,i)=>input.value=i?4000:6000);[...document.querySelectorAll('.document-dialog button')].find(button=>button.textContent==='Create').click();`);
     await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(!layerApp.state().document_file.busy && layerApp.state().tabs[0].width===6000 && layerApp.app.brush_ready())resolve();else if(performance.now()-start>30000)reject(Error('Large canvas preparation failed'));else setTimeout(check,20);}check();})`);
   }
   // Native frame entry points and real WebGPU work; the only synthetic part is

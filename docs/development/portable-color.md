@@ -23,7 +23,7 @@ The shared policy uses **remaining memory**, not device model or OS categories:
 | Operation | Fraction of available memory |
 | --- | ---: |
 | Retained source data during import | 1/8 |
-| Decoder working set | 1/4 |
+| Decoder working set | 1/3 |
 | JPEG encoder working set | 1/2 |
 
 Native defaults refresh available memory for each operation. iOS queries
@@ -34,7 +34,7 @@ remaining allowance explicitly. Zero headroom stays zero.
 
 Browsers have no reliable cross-browser query for remaining process memory.
 When no measurement is available, the fallback assumes 512 MiB of headroom:
-64 MiB source, 128 MiB decode, 256 MiB encode. This fallback applies to any
+64 MiB source, approximately 171 MiB decode, 256 MiB encode. This fallback applies to any
 unmeasurable host, rather than categorizing all mobile devices as small.
 Reported device RAM or a JS heap limit must not be passed as free WASM memory.
 
@@ -136,3 +136,25 @@ by Pillow differ by at most one 8-bit ink code. Apple and Windows SDK builds and
 physical-device memory qualification were not run here. Strict Clippy has
 pre-existing core/TIFF warnings; the color crate passes with `--no-deps` and the
 existing TIFF `drop_non_drop`/`single_element_loop` warnings allowed.
+
+## Interactive display residency
+
+Large unchanged photos use completed Float32 display mips. Full-resolution
+filters run before reduction; these display textures never feed edits or exports.
+Contiguous mip levels use hardware bilinear/trilinear sampling, with a bounded
+page-atlas fallback when a complete pyramid is not admitted.
+
+GTK admits a complete pyramid within one quarter of measured Vulkan driver
+headroom. Android uses one half of the smaller driver/system headroom; without
+the driver budget extension, only a verified integrated GPU with host-visible
+local memory can use measured system headroom alone. This follows the
+[Vulkan shared-memory model](https://docs.vulkan.org/guide/latest/memory_allocation.html).
+Web uses its separate capacity-based admission ceiling (the same maximum 1.5 GiB
+as delivery). These are per-admission ceilings, not memory reservations or total
+process bounds. Only required textures are allocated; unsupported dimensions and
+unknown native headroom use the bounded path.
+
+After large file jobs, an idle Web file worker whose Wasm heap exceeds 256 MiB
+retires after five seconds, provided no output lease or pending job exists. The
+next operation recreates it. This releases an otherwise non-shrinking Wasm arena
+without interfering with the separate interactive tile-compression worker.

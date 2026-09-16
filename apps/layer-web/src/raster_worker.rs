@@ -35,6 +35,9 @@ pub(super) fn call(
 }
 
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
+    // Browser capacity-based admission is documented separately from native
+    // measured headroom. Retain only this document's completed display pixels.
+    renderer.set_complete_display_allowance(raster_project::photo_memory_budget().encode_bytes as u64);
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| {
         Box::pin(async move {
             let metadata = serde_json::to_string(&descriptors).map_err(|e| e.to_string())?;

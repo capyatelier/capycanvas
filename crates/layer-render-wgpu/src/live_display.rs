@@ -334,6 +334,14 @@ impl Cache {
         }
         self.fine.as_ref().map_or(&self.coarse.view, |f| &f.view)
     }
+    fn next_level(&self) -> Option<u32> {
+        self.retained_level.or(self.window.map(|w| w.level)).map(|level| level + 1)
+    }
+    pub fn next_view(&self) -> Option<&wgpu::TextureView> {
+        let level = self.next_level()?;
+        if level == self.coarse.plan.level { return Some(&self.coarse.view); }
+        self.retained.iter().find(|r| r.level == level).map(|r| &r.view)
+    }
     pub fn note_artwork_change(&mut self, changed: bool) {
         self.artwork_changed = changed;
     }
@@ -528,6 +536,7 @@ impl Cache {
                 data[12 + offset] = index as u32 + 1;
             }
         }
+        if self.next_view().is_some() { data[11] = 1 << self.next_level().unwrap(); }
         data.into_iter().flat_map(u32::to_le_bytes).collect()
     }
     pub fn write_tile(
