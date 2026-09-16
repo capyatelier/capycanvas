@@ -106,21 +106,19 @@ impl Task {
     }
 }
 
+fn inspect_profile(bytes: Vec<u8>, summary: bool) -> Result<Value, String> {
+    let profile = ColorProfile::Icc(bytes.into());
+    let channels = layer_color::profile_channels(&profile)?;
+    let name = layer_color::profile_description(&profile)?;
+    if summary { Ok(serde_json::json!({"name":name,"channels":channels})) }
+    else { serde_json::to_value(layer_ui::ExportProfile { profile, channels, name }).map_err(|e| e.to_string()) }
+}
 /// # Safety
-/// Worker only. Borrows a readable fd at offset zero; returns owned profile/error
-/// JSON. Bounded input and shared CMM validation preserve imported bytes exactly.
+/// Worker only. Borrows count bytes for this call; returns owned profile/error JSON.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_color_profile_read(fd: i32) -> *mut c_char {
-    let result = (|| -> Result<Value, String> {
-        if fd < 0 { return Err("No profile file is open".into()); }
-        let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
-        let mut bytes = Vec::new();
-        (&*file).take(layer_color::MAX_ICC_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        if bytes.len() > layer_color::MAX_ICC_BYTES { return Err("ICC profile exceeds 16 MiB".into()); }
-        let profile = ColorProfile::Icc(bytes.into());
-        let channels = layer_color::profile_channels(&profile)?;
-        let name = layer_color::profile_description(&profile)?;
-        serde_json::to_value(layer_ui::ExportProfile { profile, channels, name }).map_err(|e| e.to_string())
-    })();
-    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error": error})).to_string()).unwrap().into_raw()
+pub unsafe extern "C" fn capy_color_profile_inspect(bytes: *const u8, count: usize, summary: bool) -> *mut c_char {
+    let result = if bytes.is_null() || count == 0 || count > layer_color::MAX_ICC_BYTES {
+        Err("Choose an ICC profile of at most 16 MiB".into())
+    } else { inspect_profile(unsafe { std::slice::from_raw_parts(bytes, count) }.to_vec(), summary) };
+    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
 }

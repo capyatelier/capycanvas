@@ -205,7 +205,7 @@ private final class ContactEvent: UIEvent {
             export: { staging, done in
                 do { try FileManager.default.copyItem(at: staging, to: png); done(png) }
                 catch { store.failure = error.localizedDescription; done(nil) }
-            }))
+            }, exportOptions: { $0.choose($0.recipe) }))
         func flush() async throws {
             // Live transform previews are intentionally not recoverable yet.
             // Drive the ordinary renderer frame rather than requesting a save.

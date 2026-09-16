@@ -31,6 +31,7 @@ int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filter
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
+int32_t capy_project_export_options(const CapyProjectTask *task, const char *recipe_json); /* worker */
 int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *name); /* -1: new */
 int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);
@@ -39,7 +40,8 @@ int32_t capy_project_assume_profile(const CapyProjectTask *task, const char *pro
 int32_t capy_project_edit_work(const CapyProjectTask *task, const char *choice_json, bool copy);
 int32_t capy_apple_project_candidate(CapyApple *app, const CapyProjectTask *task); /* owner after edit_work */
 int32_t capy_project_compare(const CapyProjectTask *task); /* worker after candidate */
-char *capy_color_profile_read(int32_t fd); /* worker; borrows fd, owned profile/error JSON */
+char *capy_color_profile_inspect(const uint8_t *bytes, size_t count, bool summary); /* worker; bounded ICC, owned JSON */
+char *capy_export_presets(int32_t input_fd, int32_t output_fd, const char *request_json, const char *color_json); /* worker; host atomically publishes changed output */
 char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker only */
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
 /* Worker only; borrowed straight sRGB RGBA8 until the next mutation/free. */

@@ -70,7 +70,7 @@ import ImageIO
                         do { try FileManager.default.copyItem(at: staging, to: url); callback(url) }
                         catch { preconditionFailure("Provider copy failed: \(error)") }
                     } else { callback(nil) }
-                } : nil))
+                } : nil, exportOptions: { $0.choose($0.recipe) }))
             let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
             store.native!.attach(layer, width: 128, height: 128, scale: 1)
             let startupDeadline = Date().addingTimeInterval(45)

@@ -19,12 +19,13 @@ import UIKit
     @Published var creationError: String?
     @Published var creationSaving = false
     @Published var colorEditor: DocumentColorController?
+    @Published var exportEditor: ExportController?
     @Published var pendingProfile: JSON?
     @Published var profileError: String?
     @Published var interpreting = false
     private var profileCompletion: ((JSON?) -> Void)?
     private var creationCompletion: ((JSON?) -> Void)?
-    private var exportPreparing = false
+    private var exportDelivery: (() -> Void)?
     private weak var store: EditorStore?
     private var requestID: UInt64?
     private var approved: (UInt64, UInt64)?
@@ -46,14 +47,16 @@ import UIKit
         var create: ((JSON, @escaping (JSON?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
         var paste: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = nil
+        var exportOptions: ((ExportController) -> Void)? = nil
     }
     private let dialogs: Dialogs?
+    let preferences: ColorPreferencesStore
     struct Picker: Identifiable {
         let id = UUID()
         let export: URL?
         let types: [UTType]
     }
-    init(store: EditorStore, dialogs: Dialogs? = nil) { self.store = store; self.dialogs = dialogs }
+    init(store: EditorStore, dialogs: Dialogs? = nil) { self.store = store; self.dialogs = dialogs; self.preferences = store.colorPreferences }
     var title: String {
         let name = store?.state["document_file"]["location"]["name"].string ?? ""
         return name.isEmpty ? "Untitled" : name
@@ -85,7 +88,7 @@ import UIKit
             }
             if let create = dialogs?.create { create(newDocumentSpec, completed) }
             else { creationError = nil; creationCompletion = completed; creating = true }
-        case "export": exportPNG(name: document["name"].string)
+        case "export": beginExport(name: document["name"].string)
         case "open":
             if let url = externalOpen?.url { externalOpen = nil; open(url) }
             else { chooseOpen { [weak self] url in
@@ -186,8 +189,8 @@ import UIKit
     }
     func cancel() {
         if let colorEditor { colorEditor.cancel(); return }
+        if let exportEditor { exportEditor.cancel(); return }
         cancelled = true; cancelling = true; activeTask?.cancel()
-        if exportPreparing && activeTask == nil { finish() }
     }
     private func task(opening: Bool, placing: Bool = false, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
@@ -237,19 +240,46 @@ import UIKit
             }
         }
     }
-    private func exportPNG(name: String) {
+    private func beginExport(name: String) {
         guard let id = requestID, let native = store?.native else { fail("The canvas is unavailable"); return }
-        exportPreparing = true
-        native.exportTask(id: id) { [weak self] task, error in
-            DispatchQueue.main.async {
-                guard let self, self.requestID == id else { return }
-                self.exportPreparing = false
+        let editor = ExportController(native: native, request: id, preferences: preferences) { [weak self] task, recipe, destination, color in
+            guard let self, self.requestID == id else { task?.cancel(); return }
+            self.exportEditor = nil
+            guard let task else { self.finish(); return }
+            self.activeTask = task
+            let type: UTType = recipe["format"].string == "Tiff" ? .tiff : recipe["format"].string == "Jpeg" ? .jpeg : .png
+            let filename = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent + "." + (type.preferredFilenameExtension ?? "png")
+            self.exportDelivery = { [weak self] in
+                guard let self else { return }
                 if self.cancelled { self.finish(); return }
-                guard let task else { self.fail(error ?? "Export failed"); return }
-                self.activeTask = task; self.blocksEditor = false
-                self.deliver(task, name: name, type: .png) { [weak self] url in self?.finish(url != nil) }
+                self.blocksEditor = false
+                self.deliver(task, name: filename, type: type) { [weak self] url in
+                    guard let self else { return }
+                    guard url != nil else { self.finish(); return }
+                    guard self.preferences.canSave else { self.finish(true); return }
+                    let preferences = self.preferences
+                    NativeProjectTask.io.async { [weak self] in
+                        let result = Result { try preferences.presets(color: color, request:
+                            JSON(["type": "remember", "index": destination < 4 ? destination : 3, "recipe": recipe.raw])) }
+                        DispatchQueue.main.async {
+                            if case .failure(let error) = result {
+                                self?.report("Image exported, but its preferences could not be saved: \(error.localizedDescription)")
+                            }
+                            self?.finish(true)
+                        }
+                    }
+                }
             }
+            if self.dialogs?.exportOptions != nil { self.exportDismissed() }
         }
+        exportEditor = editor
+        editor.load { [weak self, weak editor] in
+            if let editor { self?.dialogs?.exportOptions?(editor) }
+        }
+    }
+    /// Present the native file picker after the export sheet has dismissed.
+    func exportDismissed() {
+        let delivery = exportDelivery; exportDelivery = nil; delivery?()
     }
     private var usesExportPicker: Bool {
         #if os(macOS)
@@ -258,7 +288,7 @@ import UIKit
         return true
         #endif
     }
-    /// Share destination and staging behavior for editable projects and PNGs.
+    /// Share destination and staging behavior for projects and profiled images.
     private func deliver(_ task: NativeProjectTask, name: String, type: UTType, completion: @escaping (URL?) -> Void) {
         if !usesExportPicker {
             chooseSave(name: name, type: type) { [weak self] url in
@@ -273,7 +303,7 @@ import UIKit
         } else {
             NativeProjectTask.io.async { [weak self] in
                 do {
-                    let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .png ? "png" : "capy")
+                    let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .capyProject ? "capy" : type.preferredFilenameExtension ?? "png")
                     do { try task.write(to: staging) }
                     catch { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()); throw error }
                     DispatchQueue.main.async {
@@ -389,7 +419,7 @@ import UIKit
     private func released() {
         requestID = nil; approved = nil; busy = false; blocksEditor = false; finishing = false
         profileCompletion = nil; pendingProfile = nil; profileError = nil; interpreting = false
-        activeTask = nil; cancelling = false; exportPreparing = false
+        activeTask = nil; cancelling = false; exportDelivery = nil; exportEditor = nil
         if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
@@ -412,7 +442,8 @@ import UIKit
         #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [type]; panel.canCreateDirectories = true
-        panel.nameFieldStringValue = name.contains(".") ? name : name + (type == .png ? ".png" : ".capy")
+        panel.nameFieldStringValue = URL(fileURLWithPath: name).pathExtension.isEmpty
+            ? name + "." + (type == .capyProject ? "capy" : type.preferredFilenameExtension ?? "png") : name
         panel.begin { response in completion(response == .OK ? panel.url : nil) }
         #else
         completion(nil) // iPad uses the export picker above.
@@ -455,7 +486,7 @@ struct ProjectFilesModifier: ViewModifier {
                 }.interactiveDismissDisabled(files.creationSaving).modifier(EditorPopupPresentation())
             }
             .sheet(isPresented: Binding(get: { files.pendingProfile != nil }, set: { if !$0 { files.chooseProfile(nil) } })) {
-                PhotoProfileForm(interpretation: files.pendingProfile ?? JSON(),
+                PhotoProfileForm(preferences: files.preferences, interpretation: files.pendingProfile ?? JSON(),
                     spaces: files.newDocumentSpec["creation"]["spaces"].array, error: files.profileError, busy: files.interpreting) {
                     files.chooseProfile($0)
                 }.interactiveDismissDisabled(files.interpreting).modifier(EditorPopupPresentation())
@@ -465,6 +496,10 @@ struct ProjectFilesModifier: ViewModifier {
                     DocumentColorForm(editor: editor, spaces: files.newDocumentSpec["creation"]["spaces"].array)
                         .interactiveDismissDisabled(editor.publishing).modifier(EditorPopupPresentation())
                 }
+            }
+            .sheet(isPresented: Binding(get: { files.exportEditor != nil }, set: { if !$0 { files.exportEditor?.cancel() } }),
+                onDismiss: files.exportDismissed) {
+                if let editor = files.exportEditor { ExportForm(editor: editor).modifier(EditorPopupPresentation()) }
             }
             #if os(iOS)
             // Files may deliver its URL after SwiftUI dismisses this sheet.
@@ -476,7 +511,7 @@ struct ProjectFilesModifier: ViewModifier {
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil }
+    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil && exportEditor == nil }
 }
 
 #if os(iOS)

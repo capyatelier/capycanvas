@@ -418,9 +418,11 @@ its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic wri
 failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
 project format. New Drawing supports shared presets, sRGB/Display P3/Adobe RGB/
 ProPhoto working spaces, independent 8/16-bit backing and white/transparent
-backgrounds. The existing PNG export path remains sRGB/8-bit until the profiled
-export workflow is integrated. GPU export
-readback and PNG encoding run on the file worker. Unsaved artwork also receives
+backgrounds. Export supports profiled PNG/TIFF at 8/16-bit and JPEG at 8-bit,
+output-size/background choices, comparisons and shared destination/named presets.
+Float32 snapshots, color conversion and encoding run on the file worker. Imported
+ICC profiles can be reused through the saved library in Export, source-profile
+choices and Settings → Color. Unsaved artwork also receives
 private recovery copies. Use **File → Recovered Drawings…** to open one; copies
 are offered after restart and retain unsaved status until you explicitly save.
 GPU failure preserves the editor's CPU session and offers **Restart Canvas** or
@@ -681,6 +683,15 @@ Run `testNewDrawingAndExportCancellation` when native picker acceptance or a
 picker presentation change needs device validation. If Files requires device
 authentication, batch necessary picker checks within the authenticated session
 to avoid repeated interruptions.
+
+For profiled output and preferences, run
+`cargo test -p layer-apple profiled_apple_export` and
+`bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/export-owner.swift`.
+They cover exact retained U16 PNG/TIFF samples, embedded profiles, previews,
+JPEG/resize, cancellation/retry, owner destruction, atomic ICC/preset storage and
+unchanged masters. The Mac `testNativeProfiledExport` workflow covers the actual
+options, ICC import/library, named preset and native destination panels. Physical
+iPad Files/provider delivery and sustained large-photo acceptance remain separate.
 
 Check editor behavior directly without driving system menus:
 

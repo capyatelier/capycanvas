@@ -15,6 +15,7 @@ import UniformTypeIdentifiers
     @Published private(set) var clipped: UInt64 = 0
     @Published private(set) var copy = false
     @Published var error: String?
+    let preferences: ColorPreferencesStore
     let operation: String
     let history: Bool
     let properties: Bool
@@ -27,6 +28,7 @@ import UniformTypeIdentifiers
     private var closing = false
     private var finished = false
     init(store: EditorStore, request: JSON, expected: (UInt64, UInt64)?, completion: @escaping (Bool) -> Void) {
+        self.preferences = store.colorPreferences
         self.store = store; self.expected = expected; self.completion = completion
         source = ["repair_source_profile", "rasterize_source"].contains(request["type"].string)
         operation = source ? request["type"].string : request["operation"].string

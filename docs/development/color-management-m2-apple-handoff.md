@@ -38,9 +38,11 @@ paths; see the [inspection record](apple-handoff.md#histogram-and-sample-area-wo
 The six retained photo corrections and local masks pass exact worker save/reopen
 and re-editing checks on both Apple policies, using existing shared controls; see
 the [correction record](apple-handoff.md#retained-photo-corrections-and-masks).
-**Continue with the ICC library and profiled export/presets in step 3**, then
-display integration and physical acceptance. Profiled export and device
-performance are not closed.
+Profiled export/presets and the ICC library now use the shared snapshot/CMM and
+file worker, with exact source output and both-policy owner checks; see the
+[export record](apple-handoff.md#profiled-export-and-icc-library) for native/device
+coverage. **Continue with managed display integration in step 4**, then grouped
+physical SDR acceptance. Device performance and provider delivery are not closed.
 
 The physical M4 startup check exposed and fixed a vendored wgpu Metal Float32
 capability mismatch; startup and short synthetic painting now pass. The simulator

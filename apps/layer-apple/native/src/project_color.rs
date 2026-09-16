@@ -169,6 +169,7 @@ pub unsafe extern "C" fn capy_project_compare(task: *const CapyProjectTask) -> i
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     task.perform(|payload| match payload {
         Payload::Source(source) => source.compare(task.control.clone()),
+        Payload::Export(export) => export.compare(task.control.clone()),
         Payload::Color(_) => Ok(()),
         _ => Err("Not an editable color/source task".into()),
     })
@@ -184,6 +185,7 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
             Payload::Info(info) => serde_json::to_string(&info.describe()?),
             Payload::Inspection(inspection) => serde_json::to_string(&inspection.histogram(task)?),
             Payload::Source(source) => serde_json::to_string(&source.details()?),
+            Payload::Export(export) => serde_json::to_string(&export.details()?),
             Payload::Color(t) => serde_json::to_string(&serde_json::json!({
                 "color":t.original.document.color, "result":t.candidate.as_ref().map(|p| p.document.color),
                 "clipped_channels":t.clipped, "copy":t.copy,
@@ -205,7 +207,7 @@ pub struct CapyProjectPreview {
 pub unsafe extern "C" fn capy_project_preview(task: *const CapyProjectTask, after: bool, output: *mut CapyProjectPreview) -> i32 {
     let (Some(task), Some(output)) = (unsafe { task.as_ref() }, unsafe { output.as_mut() }) else { return -1; };
     let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
-    let previews = match &state.payload { Payload::Color(c) => &c.previews, Payload::Source(s) => &s.previews, _ => return -1 };
+    let previews = match &state.payload { Payload::Color(c) => &c.previews, Payload::Source(s) => &s.previews, Payload::Export(e) => &e.previews, _ => return -1 };
     let Some(preview) = previews.get(usize::from(after)) else { return -1; };
     *output = CapyProjectPreview { width: preview.extent[0], height: preview.extent[1], pixels: preview.pixels.as_ptr(), count: preview.pixels.len() };
     0

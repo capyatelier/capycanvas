@@ -1,6 +1,5 @@
 use super::*;
 use layer_core::{Document, color::{ColorProfile, IntegerDepth, RgbSpace, source::*}};
-use std::{io::{Seek, Write}, os::fd::AsRawFd};
 
 fn document(app: &App) -> Document { unsafe { &*app.0 }.host.session.engine().document().clone() }
 fn adopt(app: &App, task: &ProjectJob) -> i32 {
@@ -119,17 +118,19 @@ fn source_edit_invalid_cancel_and_stale_results_never_publish_partial_work() {
 }
 
 #[test]
-fn icc_file_inspection_keeps_bytes_and_borrowed_descriptor_and_rejects_invalid_input() {
-    let path=std::env::temp_dir().join(format!("capy-source-profile-{}.icc",std::process::id()));
-    let mut file=std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
-    let bytes=layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
-    for valid in [true,false] {
-        file.set_len(0).unwrap();file.rewind().unwrap();file.write_all(if valid {&bytes} else {b"Invalid profile"}).unwrap();file.rewind().unwrap();
-        let text=unsafe{capy_color_profile_read(file.as_raw_fd())};assert!(!text.is_null());
-        let value:Value=serde_json::from_slice(unsafe{CStr::from_ptr(text)}.to_bytes()).unwrap();unsafe{capy_apple_string_free(text)};
-        if valid {assert_eq!(value["profile"]["Icc"],json!(bytes));assert_eq!(value["channels"],"Rgb");}
-        else {assert!(value["error"].is_string());}
-        file.rewind().unwrap(); // ABI borrowed, rather than closed, the descriptor.
+fn icc_inspection_keeps_exact_bytes_supports_summaries_and_rejects_invalid_input() {
+    let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+    for summary in [false, true] {
+        for input in [bytes.as_slice(), b"Invalid profile"] {
+            let text = unsafe { capy_color_profile_inspect(input.as_ptr(), input.len(), summary) };
+            assert!(!text.is_null());
+            let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
+            unsafe { capy_apple_string_free(text) };
+            if input == bytes.as_slice() {
+                assert_eq!(value["channels"], "Rgb");
+                if summary { assert!(value["profile"].is_null()); }
+                else { assert_eq!(value["profile"]["Icc"], json!(bytes)); }
+            } else { assert!(value["error"].is_string()); }
+        }
     }
-    std::fs::remove_file(path).unwrap();
 }

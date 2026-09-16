@@ -26,6 +26,12 @@ mod source;
 pub use source::*;
 #[path = "project_inspection.rs"]
 mod inspection;
+#[path = "project_export.rs"]
+mod export;
+pub use export::*;
+#[path = "project_preferences.rs"]
+mod preferences;
+pub use preferences::*;
 
 struct Environment {
     adapter: wgpu::Adapter,
@@ -60,10 +66,7 @@ enum Payload {
         request: u32,
         device: wgpu::Device,
     },
-    Export {
-        readback: Option<layer_render_wgpu::ExportReadback>,
-        image: Option<layer_render::ReadbackImage>,
-    },
+    Export(Box<export::Task>),
     Retired {
         _session: Box<UiSession<Renderer>>,
     },
@@ -347,16 +350,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                     .write(stream)
             }
             Payload::Color(color) => color.write_copy(stream),
-            Payload::Export { readback, image } => {
-                if let Some(readback) = readback.take() {
-                    *image = Some(readback.finish().map_err(|e| e.to_string())?);
-                }
-                task.check_cancelled()?;
-                image
-                    .as_ref()
-                    .ok_or("Missing export pixels")?
-                    .write_png(stream)
-            }
+            Payload::Export(export) => export.write(stream, task.control.clone()),
             _ => Err("Not a write task".into()),
         }
     })
@@ -827,7 +821,7 @@ pub unsafe extern "C" fn capy_apple_export_task(
                     }
                 )
         }) {
-            return Err("No PNG export request is pending".into());
+            return Err("No export request is pending".into());
         }
         app.host.prepare_canvas_frame(now, now, true)?;
         if !app.host.startup.canvas_ready || app.host.session.engine().has_pending_document_edits()
@@ -837,22 +831,9 @@ pub unsafe extern "C" fn capy_apple_export_task(
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
         let revision = session.engine().document().revision;
-        let gpu = session
-            .renderer_mut()
-            .0
-            .as_mut()
-            .ok_or("Canvas is unavailable")?;
-        if !gpu.export_ready() {
-            return Ok(0);
-        }
-        let readback = gpu
-            .begin_export_readback(id as u64)
-            .map_err(|e| e.to_string())?;
+        let export = export::Task::capture(session, id)?;
         *output = CapyProjectTask::new(
-            Payload::Export {
-                readback: Some(readback),
-                image: None,
-            },
+            Payload::Export(Box::new(export)),
             epoch,
             revision,
             None,

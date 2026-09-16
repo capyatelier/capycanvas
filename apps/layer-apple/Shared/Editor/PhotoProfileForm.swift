@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PhotoProfileForm: View {
+    let preferences: ColorPreferencesStore
     let interpretation: JSON
     let spaces: [JSON]
     let error: String?
@@ -13,7 +14,7 @@ struct PhotoProfileForm: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Choose image interpretation").font(.headline)
             Text("This image has no declared color profile. Choose how to interpret its stored values. The original numbers will be retained.")
-            SourceProfilePicker(spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile)
+            SourceProfilePicker(preferences: preferences, spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile)
             Text("Source: \(interpretation["channels"].string) · \(interpretation["depth"].string == "U16" ? "16" : "8")-bit")
                 .foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red) }

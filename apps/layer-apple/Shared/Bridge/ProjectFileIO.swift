@@ -50,6 +50,9 @@ final class NativeProjectTask: @unchecked Sendable {
         try check(try (choice ?? JSON()).encoded().withCString { capy_project_edit_work(handle, $0, copy) })
     }
     func compare() throws { try check(capy_project_compare(handle)) }
+    func configureExport(_ recipe: JSON) throws {
+        try check(try recipe.encoded().withCString { capy_project_export_options(handle, $0) })
+    }
     func details() throws -> JSON {
         guard let text = capy_project_details(handle) else { try check(-1); return JSON() }
         defer { capy_apple_string_free(text) }

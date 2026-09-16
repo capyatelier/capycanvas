@@ -6,6 +6,7 @@ import SwiftUI
 
 @MainActor final class EditorStore: ObservableObject {
     private let ui = EditorSnapshotState()
+    private(set) var colorPreferences = ColorPreferencesStore(root: nil)
     let camera = CameraReadout()
     @Published var catalog = JSON()
     @Published var failure: String?
@@ -51,6 +52,7 @@ import SwiftUI
             let storage = workload == nil ? persistence : EditorPersistence(root:
                 FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
+            colorPreferences = ColorPreferencesStore(root: storage.root)
             let usesWorkspaceLibrary = managedWorkspaces && storage.root != nil
             native = try NativeOwner(platform: platform, persistence: storage,
                 traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata,

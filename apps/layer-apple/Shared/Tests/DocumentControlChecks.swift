@@ -185,7 +185,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
         }
         func export(to url: URL) {
-            command("export_document", "Export PNG…"); savePanel(to: url)
+            command("export_document", "Export…"); chooseExportDestination(in: app); savePanel(to: url)
             XCTAssertTrue(titleText().hasPrefix("RoundTrip.capy · "), "PNG export must retain the editable project location")
         }
         func pixels(_ url: URL) throws -> Data {
@@ -295,6 +295,7 @@ extension XCTestCase {
         activate(app.descendants(matching: .any)["menu-File"].firstMatch)
         activate(app.buttons["command-export_document"])
         #endif
+        chooseExportDestination(in: app)
         // Files also exposes a non-button Cancel element with stale bounds.
         // Target the native close button shown by the unlocked picker.
         let cancel = app.buttons["Cancel"].firstMatch

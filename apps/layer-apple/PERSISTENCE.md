@@ -3,7 +3,7 @@
 Settings use the versioned Rust model and atomic JSON storage; workspaces use
 the shared SQLite library. Both native apps share storage and owner coordination.
 Both apps expose New, Open, Save and Save As using the shared editable
-[`Project` format](../../docs/reference/project-format.md), plus PNG export. Both protect
+[`Project` format](../../docs/reference/project-format.md), plus profiled image export. Both protect
 window close with the shared unsaved-change decision; macOS also protects app
 termination. Both also maintain private recovery copies of unsaved artwork.
 
@@ -129,14 +129,23 @@ reserved stack for recursive shader translation. Retired document/GPU resources
 are also released off the owner queue. Input revision and animation clocks reset
 when a prepared document enters the existing window.
 
-PNG export submits a document-sized sRGB conversion and GPU buffer copy in the
-owner queue, then transfers the readback ticket to the file worker. Shader
-compilation, GPU completion waits, pixel packing and PNG encoding run outside
-the input owner. The ticket retains its captured pixels after later drawing or
-renderer destruction. GTK and Apple use the same RGBA8/sRGB PNG encoder. Export
-excludes viewport inspection aids and does not rename the editable document or
-mark unsaved edits as saved. Mac chooses a destination first; iPad stages the
-PNG before presenting its export picker.
+Image export captures an immutable project and GPU reference, then uses the shared
+Float32 snapshot worker for previews and PNG/TIFF/JPEG encoding. It never narrows
+through the display cache. Output profile, depth, size, matte, intent, dithering
+and resolution use the shared export recipe; untouched matching retained sources
+preserve exact integer samples, including hidden RGB. The captured job survives
+later drawing or owner destruction. Export excludes viewport inspection aids and
+does not rename the editable document or mark unsaved edits as saved. The options
+sheet dismisses before native delivery: Mac chooses a destination first; iPad
+stages the chosen image format before presenting its export picker.
+
+The same serial file worker atomically saves shared export presets and exact ICC
+library copies in the editor's private persistence root. Destination choices are
+remembered only after successful delivery; named presets require explicit changes.
+ICC copies use content hashes, bounded reads and shared validation. Removing a
+library copy leaves original files and profiles embedded in projects/presets
+intact. Missing first-run preferences use shared defaults; invalid existing data
+reports an error rather than silently substituting a profile.
 
 Security-scoped access and NSFileCoordinator surround file operations. Regular
 writes stream into a private sibling temporary file, sync, rename and sync the

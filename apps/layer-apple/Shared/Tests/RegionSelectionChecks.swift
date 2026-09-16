@@ -50,7 +50,8 @@ extension XCTestCase {
         func pixels() throws -> Data {
             exportIndex += 1
             let url = root.appendingPathComponent("Result-\(exportIndex).png")
-            editorMenu(in: app, menu: "File", id: "export_document", label: "Export PNG…")
+            editorMenu(in: app, menu: "File", id: "export_document", label: "Export…")
+            chooseExportDestination(in: app)
             XCTAssertTrue(accept.waitForExistence(timeout: 15)); goTo(root)
             let name = app.textFields["saveAsNameTextField"]
             workspaceActivate(name); name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)

@@ -104,7 +104,7 @@ struct DocumentColorForm: View {
     }
     @ViewBuilder private var choices: some View {
         if editor.operation == "repair_source_profile" {
-            SourceProfilePicker(spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile, onImport: editor.invalidate)
+            SourceProfilePicker(preferences: editor.preferences, spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile, onImport: editor.invalidate)
         } else if editor.operation != "depth" && editor.operation != "rasterize_source" {
             Picker("Color space", selection: $space) {
                 ForEach(spaces, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }

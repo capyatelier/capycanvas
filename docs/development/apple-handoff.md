@@ -5,8 +5,8 @@ For the next color-management work, start with the short
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
 paint/palette workflows, retained photo Open/Place/Paste and document profile/depth
 editing, retained-source editing, ICC file import, histogram/sampling and retained
-photo corrections are integrated; the remaining host workflows and device
-acceptance stay open. Earlier acceptance below
+photo corrections, profiled export/presets and the ICC library are integrated;
+remaining host workflows and device acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
 ## Goal
@@ -510,6 +510,50 @@ the inset thumbnail target. Original failures remain recorded; no runtime
 workaround is added.
 Artist apps and drawings remain untouched. Physical SDR workflows, profiled
 export/ICC library, managed display and final performance acceptance stay open.
+
+## Profiled export and ICC library
+
+Export now uses the shared immutable Float32 snapshot worker for PNG/TIFF at
+8/16-bit and JPEG at 8-bit. The native form exposes destination/named presets,
+profile, depth, background, size and applicable advanced choices, with complete
+artwork/output previews. Native delivery starts after the form dismisses. The
+old display-readback PNG path is removed. Shared recipes and CMM validation own
+conversion; Apple retains its existing coordinated, atomic file publication.
+
+The saved ICC library serves Export, source-profile choices and Settings → Color.
+Bounded exact copies use content hashes; imports deduplicate, damaged copies
+report errors and reimport repairs them. Removing a library copy leaves source
+files and profiles embedded in projects/presets intact. Preferences share the
+existing serial file worker and isolated persistence root. Successful delivery
+remembers destination choices; named presets require explicit edits.
+
+The 67 native bridge checks pass across the full run and focused follow-ups.
+Both Apple policies retain exact U16 PNG/TIFF source samples, including hidden
+RGB and built-in/embedded ICC profiles, after owner destruction. Preview,
+resize, JPEG, cancellation and retry pass. The old PNG fixture required the
+obsolete perceptual metadata and display-buffer equality; shared output uses
+relative metadata and differs by one code value in one blue sample. Its display
+comparison permits one level, with exact alpha; retained source output remains
+bit-exact. The initial source fixture used New + Place, adding a second visible
+layer and requiring compositing. It now opens an untouched photo master; no
+rendering workaround was introduced.
+
+The Swift/Metal owner workflow passes complete output, ICC/preset persistence,
+cancel/error/retry and master preservation on both policies. It exposed a real
+first-run Foundation missing-file code difference, now handled as default
+preferences. Existing document-owner regressions also pass. Both final Release
+builds pass without compiler warnings. Native Mac acceptance also passes ICC
+import/library reuse, resized output previews, named presets, destination Cancel
+and TIFF save/reopen at 16-bit (one test, no failures or skips). The final captures
+are reviewed. Earlier UI fixtures assumed scroll-edge padding, read a Mac static
+text label instead of its value, or clicked a disclosure hit point outside the
+visible content. These fixture corrections add no product workaround. One native
+priority-inversion warning remains unattributed; this is not a performance pass.
+Evidence and initial failures are retained under
+`artifacts/apple-profiled-export-v1/` (`mac-ui-v5.xcresult`). Physical iPad delivery
+remains unqualified.
+Artist review apps and drawings remain untouched. Next are managed display
+integration and grouped physical SDR/provider/61 MP performance acceptance.
 
 ## Native provider acceptance
 

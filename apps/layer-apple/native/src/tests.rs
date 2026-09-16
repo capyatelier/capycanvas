@@ -14,6 +14,8 @@ mod source;
 mod inspection;
 #[path = "correction_tests.rs"]
 mod correction;
+#[path = "export_tests.rs"]
+mod export;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {
@@ -860,12 +862,18 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         let mut reader = png::Decoder::new(&file).read_info().unwrap();
         assert_eq!(
             reader.info().srgb,
-            Some(png::SrgbRenderingIntent::Perceptual)
+            Some(png::SrgbRenderingIntent::RelativeColorimetric)
         );
         let mut pixels = vec![0; reader.output_buffer_size()];
         let info = reader.next_frame(&mut pixels).unwrap();
         assert_eq!([info.width, info.height], [63, 47]);
-        assert_eq!(pixels, expected);
+        // Float32 output quantization and the display readback can differ by
+        // one code value (one blue sample in this fixture). Export no longer
+        // narrows through the display cache. Retained integer source samples
+        // are checked exactly in export_tests.rs.
+        assert_eq!(pixels.len(), expected.len());
+        assert!(pixels.iter().zip(&expected).all(|(&a, &b)| a.abs_diff(b) <= 1));
+        assert!(pixels.chunks_exact(4).zip(expected.chunks_exact(4)).all(|(a, b)| a[3] == b[3]));
         drop(reader);
         drop(file);
         std::fs::remove_file(path).unwrap();

@@ -970,7 +970,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::OpenDocument => "Open an editable drawing",
                 CommandId::SaveDocument => "Save the current drawing",
                 CommandId::SaveDocumentAs => "Save an editable copy",
-                CommandId::ExportDocument => "Export the canvas as a PNG image",
+                CommandId::ExportDocument => "Export the canvas as an image copy",
                 CommandId::CloseDocument => "Close the current drawing",
                 CommandId::KeyboardShortcuts => "Customize application shortcuts",
                 CommandId::About => "Application information and links",

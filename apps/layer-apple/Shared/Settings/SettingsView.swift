@@ -6,6 +6,7 @@ struct SettingsView: View {
     @FocusState private var searching: Bool
     @State private var numberResets: [String: UInt64] = [:]
     @State private var linkFailed = false
+    @State private var profiles = false
     private var model: JSON { store.snapshot["preferences"] }
     private var page: JSON { model["pages"].array.first { $0["id"].string == model["page"].string } ?? JSON() }
     var body: some View {
@@ -36,7 +37,8 @@ struct SettingsView: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) {
                     SettingsDoneButton(store: store)
                 } }
-        }.frame(minHeight: 420)
+        }.sheet(isPresented: $profiles) { ColorProfileLibrary(preferences: store.colorPreferences).modifier(EditorPopupPresentation()) }
+            .frame(minHeight: 420)
             #if os(macOS)
             .frame(minWidth: 560)
             #endif
@@ -72,6 +74,10 @@ struct SettingsView: View {
                                 if row["visible"].bool { preference(row).id(row["id"].string) }
                             }
                         }
+                    }
+                    if model["page"].string == "color" {
+                        Button("Manage Color Profiles…") { profiles = true }
+                            .accessibilityIdentifier("settings-color-profiles")
                     }
                     if !model["error"].isNull { Text(model["error"].string).foregroundStyle(.red) }
                     if linkFailed { Text("Could not open the link").foregroundStyle(.red) }
