@@ -2,8 +2,9 @@
 #[test]
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
     use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace}};
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
     let mut s = session();
-    s.set_platform(Platform::Gtk);
+    s.set_platform(platform);
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.8, 0.3, 0.1, 1.]).unwrap();
     s.dispatch(UiAction::Color { action: ColorAction::Definition { color: definition } }).unwrap();
     s.frame(1, 1).unwrap();
@@ -39,6 +40,7 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
         assert_eq!(s.state.colors.rgb_space(), expected.color.space);
         assert_eq!(s.state.colors.definition(), definition);
         assert!(!s.state.document_file.busy);
+    }
     }
 }
 

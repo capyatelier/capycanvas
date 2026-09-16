@@ -2,13 +2,14 @@
 //! originals and sRGB-defined effect parameters retain their own color meaning.
 use crate::{OutputStatistics, WorkingDecoder, WorkingEncoder};
 use layer_core::{Edit, Project, color::source::*, color::*, raster::*};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DocumentColorChange {
     Assign(RgbSpace),
     Convert {
@@ -93,16 +94,28 @@ impl Converter<'_> {
         &mut self,
         mut ready: impl FnMut() -> Option<Result<T, String>>,
     ) -> Result<T, String> {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
+        // Browser transport resolves backing before handing this synchronous
+        // worker a project. Never sleep or use native clocks in Wasm.
+        #[cfg(target_arch = "wasm32")]
+        {
             self.check()?;
-            if let Some(result) = ready() {
-                return result;
+            ready().unwrap_or_else(|| {
+                Err("Resolve raster backing before browser color conversion".into())
+            })
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                self.check()?;
+                if let Some(result) = ready() {
+                    return result;
+                }
+                if Instant::now() >= deadline {
+                    return Err("Raster backing did not complete for the color change".into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
             }
-            if Instant::now() >= deadline {
-                return Err("Raster backing did not complete for the color change".into());
-            }
-            std::thread::sleep(Duration::from_millis(5));
         }
     }
     fn blob(

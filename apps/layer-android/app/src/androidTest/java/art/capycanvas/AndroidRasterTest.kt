@@ -237,6 +237,70 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun documentColorChangesPreserveExactHistoryAndCancel() {
+        val fresh = native { handle -> val (id, f) = request(handle, "new_document")
+            Native.projectTask(handle, id, "null", f.getLong("epoch"), f.getLong("revision")) }
+        try {
+            Native.projectOptions(fresh, obj("extent" to org.json.JSONArray(listOf(513,257)), "color" to obj("space" to "DisplayP3", "depth" to "U16"), "background" to "White").toString())
+            Native.projectWork(fresh,-1,513,257); native { Native.projectAdopt(it,fresh,"null") }
+        } finally { Native.projectFree(fresh) }
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())
+            Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot", "slot" to "foreground", "color" to obj("space" to "DisplayP3","rgba" to org.json.JSONArray(listOf(.8,.2,.1,1.0))))).toString()) }
+        tick();stroke(0.0)
+        fun change(command:String, choice:JSONObject? = null, cancel:Boolean = false): JSONObject? {
+            val flag=Native.captureControl(); if(cancel)Native.captureCancel(flag)
+            val id=native {request(it,command).first};val task=native {Native.colorTask(it,id,flag)}
+            try {
+                if(cancel) {
+                    try {Native.colorWork(task,choice.toString());fail("Cancelled color change succeeded")}
+                    catch(e:Exception){assertTrue(e.message.orEmpty().contains("cancel",ignoreCase=true))}
+                    native {Native.documentComplete(it,id,false,"null")};return null
+                }
+                val result=JSONObject(Native.colorWork(task,choice?.toString() ?: "null"))
+                if(choice!=null) for(after in listOf(false,true)) {
+                    val preview=Native.colorPreview(task,after)
+                    val dimensions=ByteBuffer.wrap(preview).order(ByteOrder.LITTLE_ENDIAN)
+                    val width=dimensions.int;val height=dimensions.int
+                    assertEquals(8+width*height*4,preview.size);assertTrue(width<=512 && height<=384)
+                }
+                native {Native.colorAdopt(it,task)};tick();return result
+            } finally {Native.colorFree(task);Native.captureFree(flag)}
+        }
+        fun sameBacking(a:JSONObject,b:JSONObject) {
+            assertEquals(a.getJSONArray("blobs").toString(),b.getJSONArray("blobs").toString())
+            assertEquals(a.getJSONObject("document").getJSONObject("color").toString(),b.getJSONObject("document").getJSONObject("color").toString())
+        }
+        val before=manifest(save("color-before.capy"))
+        change("assign_profile",obj("Assign" to "AdobeRgb"),true)
+        sameBacking(before,manifest(save("color-cancel.capy")))
+        change("assign_profile",obj("Assign" to "AdobeRgb"))
+        val assigned=manifest(save("color-assigned.capy"))
+        assertEquals(before.getJSONArray("blobs").toString(),assigned.getJSONArray("blobs").toString())
+        assertEquals("AdobeRgb",assigned.getJSONObject("document").getJSONObject("color").getString("space"))
+        change("undo");sameBacking(before,manifest(save("color-undo.capy")))
+        change("redo");sameBacking(assigned,manifest(save("color-redo.capy")))
+        change("convert_color_space",obj("Convert" to obj("space" to "ProPhoto","options" to obj("intent" to "RelativeColorimetric","black_point_compensation" to false))))
+        val converted=manifest(save("color-converted.capy"))
+        assertEquals("ProPhoto",converted.getJSONObject("document").getJSONObject("color").getString("space"))
+        assertNotEquals(assigned.getJSONArray("blobs").toString(),converted.getJSONArray("blobs").toString())
+        change("change_bit_depth",obj("Depth" to obj("depth" to "U8","dither" to "None")))
+        val reduced=manifest(save("color-depth.capy"))
+        assertTrue(reduced.getJSONArray("blobs").objects().all {it.getJSONObject("descriptor").getInt("bits_per_channel")==8})
+        change("undo");sameBacking(converted,manifest(save("color-depth-undo.capy")))
+        change("redo");sameBacking(reduced,manifest(save("color-depth-redo.capy")))
+        open(File(files,"color-depth.capy"));sameBacking(reduced,manifest(save("color-reopened.capy")))
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("assign_profile")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Preview Complete Result").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Preview Complete Result").performClick()
+        compose.waitUntil(60_000) {compose.onAllNodesWithContentDescription("Prepared composition").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        DocumentController.nativeFileJobsForTest=true
+        sameBacking(reduced,manifest(save("color-ui-cancel.capy")))
+        assertNull(host.failure)
+    }
+
     @Test fun histogramCapturesCommittedDocumentAndCancelsIndependently() {
         val epoch = native { state(it).getJSONObject("document_file").getLong("epoch") }
         for (cancelled in listOf(true, false)) {

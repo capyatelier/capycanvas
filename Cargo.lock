@@ -1045,6 +1045,7 @@ dependencies = [
  "libjpeg-turbo-rs",
  "moxcms",
  "png 0.18.1",
+ "serde",
  "sysinfo",
  "tiff",
 ]

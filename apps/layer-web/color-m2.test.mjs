@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/prophoto16.png') {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Missing button '+${JSON.stringify(label)});b.click();})()`);
-  const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
+  await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
   await evaluate(`window.sdrFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){sdrFiles.set(options.suggestedName,bytes)},async abort(){}}}});
     window.sdrManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));`);
   await invoke('new_document');await wait('!!document.querySelector(\"dialog[open]\")');
@@ -102,4 +103,42 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   console.log('Untagged-photo cancellation retains the master; explicit Adobe RGB assumption preserves all original samples');
   console.log('Profiled PNG/TIFF retain every original U16 sample/profile; resized P3 PNG and sRGB JPEG export copies passed');
   console.log('P3 U16 creation/painting, exact numeric color/palette retention, ProPhoto16 open and native source save/reopen passed');
+}
+
+export async function checkColorEdits({call,evaluate,settle}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>120000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled button '+${JSON.stringify(label)});b.click()})()`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');};
+  const backing=value=>({blobs:value.blobs,sources:value.tiled_sources,color:value.document.color});
+  const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
+  await evaluate(`layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'DisplayP3',rgba:[.8,.2,.1,1]}}})`);
+  for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',45,1],['mouseReleased',45,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
+  await wait('layerApp.state().document_file.modified');const original=await save();
+  async function change(command,label,value,apply=true){
+    await invoke(command);await wait(`!!document.querySelector('dialog[open] select[aria-label=${JSON.stringify(label)}]')`);
+    await evaluate(`(()=>{const s=document.querySelector('dialog[open] select[aria-label=${JSON.stringify(label)}]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change'));})()`);
+    await click('Preview Complete Result');await wait(`document.querySelectorAll('.color-comparison canvas').length===2`);
+    assert.ok(await evaluate(`[...document.querySelectorAll('.color-comparison canvas')].every(c=>c.width<=512&&c.height<=384)`));
+    await click(apply?'Apply':'Cancel');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  }
+  await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
+  await click('Preview Complete Result');await click('Cancel');await wait('!layerApp.state().document_file.busy');assert.deepEqual(backing(await save()),backing(original));
+  const paintedHistogram=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify(await layerApp.app.histogram(c),(_,v)=>typeof v==="bigint"?Number(v):v))}finally{c.free()}})()`);
+  assert.equal(paintedHistogram.histogram.pixels+paintedHistogram.histogram.transparent,513*257);
+  await change('assign_profile','Color space','ProPhoto',false);assert.deepEqual(backing(await save()),backing(original));
+  await change('assign_profile','Color space','ProPhoto');const assigned=await save();
+  assert.equal(assigned.document.color.space,'ProPhoto');assert.deepEqual(assigned.blobs,original.blobs);assert.deepEqual(assigned.tiled_sources,original.tiled_sources);
+  async function history(command,expected){await invoke(command);await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(expected));}
+  await history('undo',original);await history('redo',assigned);
+  await change('convert_color_space','Color space','DisplayP3');const converted=await save();
+  assert.equal(converted.document.color.space,'DisplayP3');assert.notDeepEqual(converted.blobs,assigned.blobs);assert.deepEqual(converted.tiled_sources,original.tiled_sources);
+  await change('change_bit_depth','Bit depth','U8');const reduced=await save();
+  assert.equal(reduced.document.color.depth,'U8');assert.ok(reduced.blobs.some(b=>b.descriptor.bits_per_channel===8));assert.deepEqual(reduced.tiled_sources.images,original.tiled_sources.images);
+  await history('undo',converted);await history('redo',reduced);
+  await evaluate(`window.sdrColorMaster=sdrFiles.get('untagged.capy').slice();window.showOpenFilePicker=async()=>[{name:'untagged.capy',async getFile(){return new File([sdrColorMaster],'untagged.capy')}}];`);
+  await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(reduced));
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  assert.equal(await evaluate('layerApp.state().host_error??null'),null);assert.ok(await evaluate('sdrFiles.get("untagged.png")?.length>100'));
+  console.log('Full-image comparison, canceled/committed assignment, conversion, depth change, exact undo/redo and native reopen passed; retained source samples/profile unchanged');
 }

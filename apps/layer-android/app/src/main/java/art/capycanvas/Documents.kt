@@ -268,6 +268,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val id = request.getInt("id")
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
+            "change_color", "color_history" -> if (!DocumentController.nativeFileJobsForTest) key(id) { DocumentColorDialog(host, request) }
             "new" -> key(id) {
                 NewDrawingDialog(host, options, { controller.cancel(id) }) { choices -> controller.create(request, choices) }
             }

@@ -9,7 +9,7 @@ use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 #[wasm_bindgen]
 pub struct WebCaptureControl {
-    inner: CaptureControl,
+    pub(super) inner: CaptureControl,
 }
 #[wasm_bindgen]
 impl WebCaptureControl {
@@ -21,7 +21,7 @@ impl WebCaptureControl {
     }
 }
 
-fn cancelled(control: &CaptureControl) -> Result<(), JsValue> {
+pub(super) fn cancelled(control: &CaptureControl) -> Result<(), JsValue> {
     if control.is_cancelled() {
         let error = js_sys::Error::new("Image operation cancelled");
         error.set_name("AbortError");

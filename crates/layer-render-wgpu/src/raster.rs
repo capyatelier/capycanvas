@@ -585,6 +585,10 @@ impl WgpuRasterizer {
     /// Browser hosts supply a worker encoder; GPU mappings remain asynchronous
     /// on their owning event loop. All candidates must retain this transport.
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn browser_raster_encoder(&self) -> Option<BrowserRasterEncoder> {
+        self.raster.as_ref().and_then(|r| r.encoder.clone())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub fn set_browser_raster_encoder(&mut self, encoder: BrowserRasterEncoder) {
         self.raster.get_or_insert_with(Default::default).encoder = Some(encoder);
     }

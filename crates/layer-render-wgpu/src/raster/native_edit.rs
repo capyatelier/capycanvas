@@ -166,7 +166,7 @@ impl WgpuRasterizer {
         Self::native_staged_on_device(adapter, device.into(), queue, color)
     }
 
-    fn native_staged_on_device(
+    pub(crate) fn native_staged_on_device(
         adapter: wgpu::Adapter,
         device: PipelineDevice,
         queue: wgpu::Queue,

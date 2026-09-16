@@ -44,6 +44,11 @@ internal object Native {
     @JvmStatic external fun projectFree(task: Long)
     @JvmStatic external fun documentComplete(handle: Long, request: Int, success: Boolean, error: String)
     @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
+    @JvmStatic external fun colorTask(handle: Long, id: Int, cancel: Long): Long
+    @JvmStatic external fun colorWork(task: Long, choice: String): String
+    @JvmStatic external fun colorPreview(task: Long, after: Boolean): ByteArray
+    @JvmStatic external fun colorAdopt(handle: Long, task: Long)
+    @JvmStatic external fun colorFree(task: Long)
     @JvmStatic external fun captureControl(): Long
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)

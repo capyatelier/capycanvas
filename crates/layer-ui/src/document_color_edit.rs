@@ -1,4 +1,4 @@
-//! Shared preparation/publication policy for GTK's document color workflows.
+//! Shared preparation/publication policy for host document color workflows.
 use super::*;
 use layer_core::{ColorTransition, PreparedColorTransition, Project};
 
@@ -8,7 +8,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         transition: ColorTransition,
     ) -> Result<(PreparedColorTransition, Project), String> {
         self.require_document_idle()?;
-        if self.state.platform != Platform::Gtk {
+        if !matches!(
+            self.state.platform,
+            Platform::Gtk | Platform::Web | Platform::Android
+        ) {
             return Err("Document color changes are unavailable on this host".into());
         }
         let prepared = self
@@ -24,7 +27,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         prepared: PreparedColorTransition,
     ) -> Result<UiChange, String> {
         self.require_document_idle()?;
-        if self.state.platform != Platform::Gtk {
+        if !matches!(
+            self.state.platform,
+            Platform::Gtk | Platform::Web | Platform::Android
+        ) {
             return Err("Document color changes are unavailable on this host".into());
         }
         let mut colors = self.state.colors.clone();

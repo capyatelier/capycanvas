@@ -1,3 +1,4 @@
+import {chooseDocumentColor} from './document-color.js';
 import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
@@ -93,7 +94,11 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         });
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
-      if(r.type==="new"||r.type==="open") {
+      if(r.type==="change_color"||r.type==="color_history") {
+        candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
+        if(candidate){const prepared=candidate;candidate=null;applyChange(app.adopt_color(prepared));wake();}
+        else applyChange(app.finish_document(id,false));
+      } else if(r.type==="new"||r.type==="open") {
         const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;
         if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
         else {const chosen=await chooseFile();if(!chosen){applyChange(app.finish_document(id,false));return;}

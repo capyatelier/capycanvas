@@ -82,6 +82,8 @@ impl CaptureControl {
 /// pipeline cache, never its mutable paint pages, scene buffers or input state.
 #[derive(Clone)]
 pub struct SnapshotGpu {
+    #[cfg(target_arch = "wasm32")]
+    encoder: Option<raster::BrowserRasterEncoder>,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
@@ -94,6 +96,8 @@ impl WgpuRasterizer {
     }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
+            #[cfg(target_arch = "wasm32")]
+            encoder: self.browser_raster_encoder(),
             adapter: self.adapter.clone(),
             device: self.device.clone(),
             queue: self.queue.clone(),
@@ -247,6 +251,10 @@ impl SnapshotRenderer {
                 ));
             }
         };
+        #[cfg(target_arch = "wasm32")]
+        if let Some(encoder) = gpu.and_then(|gpu| gpu.encoder.clone()) {
+            renderer.set_browser_raster_encoder(encoder);
+        }
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
         if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {
@@ -344,6 +352,39 @@ impl SnapshotRenderer {
         }
         self.check_cancelled()?;
         Ok(result)
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub async fn preview_document_async(
+        &mut self,
+        bounds: [u32; 2],
+        space: layer_core::color::RgbSpace,
+    ) -> Result<SnapshotPreview, GpuRasterError> {
+        let mut preview =
+            layer_color::AreaPreview::new(self.extent, bounds).map_err(GpuRasterError::Color)?;
+        let mut y = 0;
+        while y < self.extent[1] {
+            self.check_cancelled()?;
+            let (height, pixels) = self.read_band_async(y).await?;
+            for row in pixels.chunks_exact(self.extent[0] as usize) {
+                preview.push(row).map_err(GpuRasterError::Color)?;
+            }
+            y += height;
+        }
+        let (extent, mut pixels) = preview.finish().map_err(GpuRasterError::Color)?;
+        let matrix = self.color().space.linear_transform(space);
+        for pixel in &mut pixels {
+            let rgb = layer_core::color::rgb::apply(
+                matrix,
+                [pixel[0], pixel[1], pixel[2]].map(f64::from),
+            );
+            pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
+        }
+        self.check_cancelled()?;
+        Ok(SnapshotPreview {
+            extent,
+            space,
+            pixels,
+        })
     }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
         self.control.check()
@@ -669,8 +710,33 @@ struct RegionReadback {
 mod output;
 #[cfg(not(target_arch = "wasm32"))]
 mod preview;
-#[cfg(not(target_arch = "wasm32"))]
-pub use preview::SnapshotPreview;
+/// Linear premultiplied viewing pixels. Hosts apply their view-only checkerboard
+/// and encode/tag the presentation texture in this explicitly declared space.
+pub struct SnapshotPreview {
+    pub extent: [u32; 2],
+    pub space: layer_core::color::RgbSpace,
+    pub pixels: Vec<[f32; 4]>,
+}
 
 #[cfg(test)]
 mod tests;
+
+mod color_candidate;
+pub use color_candidate::ColorCanvas;
+
+impl SnapshotPreview {
+    /// Bounded UI transport only; premultiplied extended working values never
+    /// pass through this 8-bit presentation conversion during editing or export.
+    pub fn srgb_bytes(&self) -> Result<Vec<u8>, String> {
+        let target = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: layer_core::color::IntegerDepth::U8,
+            profile: layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::Srgb),
+            profile_assumed: false,
+        };
+        let encoder = layer_color::WorkingEncoder::new(self.space, &target, Default::default())?;
+        let mut bytes = vec![0; self.pixels.len() * 4];
+        encoder.encode_premultiplied(&self.pixels, &mut bytes, None, [0, 0])?;
+        Ok(bytes)
+    }
+}

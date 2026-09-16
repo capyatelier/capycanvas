@@ -12,3 +12,6 @@ mod documents;
 
 #[cfg(target_os = "android")]
 mod inspection;
+
+#[cfg(target_os = "android")]
+mod color_edit;

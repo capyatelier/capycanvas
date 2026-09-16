@@ -6,6 +6,7 @@ license.workspace = true
 description = "Portable ICC transforms and profiled SDR image interchange"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../layer-core" }
 libjpeg-turbo-rs = "=0.8.0"
 moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }

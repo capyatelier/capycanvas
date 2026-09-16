@@ -196,3 +196,62 @@ memory/navigation qualification. No 120 Hz tablet claim is made yet.
 on the physical tablet (37.405 s), including exact native SDR save/reopen and GPU
 replacement, profiled PNG/TIFF identity, source interpretation, full histogram
 counts/UI and canceled histogram/export with the master unchanged.
+
+## Document color edits checkpoint — 2026-09-16
+
+Web and Android now offer Assign Profile, Convert Color Space, and Change Bit
+Depth, including full-composition Before/After comparisons. Preparation owns a
+private converted project and fully rendered candidate on the existing GPU.
+Apply checks the request, document revision/epoch and GPU generation before
+publishing the shared color/history transaction. Failed preparation and Cancel
+leave the master intact; undo/redo prepares the exact retained roots in the
+previous/next mode instead of reconstructing strokes. Tool colors retain their
+portable definitions across the change.
+
+The shared `ColorCanvas` preparation shares immutable source cache ownership.
+Browser conversion transfers only backing that can change: retained original
+photographs stay shared in the owner and are reattached to the worker result.
+Browser comparison consumes full-resolution Float32 bands into a bounded area
+preview, numerically checked against the existing full-row resampler. This is
+presentation reduction after composition; filters still receive native pixels.
+Private browser snapshots/candidates now inherit the raster worker connection,
+which is required when comparing/exporting an image with committed paint. The
+private project shader catalog is explicitly completed after submission.
+
+Validation:
+
+- `tablet-native-color-edits.log`: physical Android test passed (14.664 s).
+  Assignment retains every stored code; conversion changes coordinates; U16→U8
+  changes native descriptors; undo/redo restores exact backing; save/reopen,
+  canceled worker, and actual comparison UI/Cancel preserve the master.
+- `tablet-web-color-edits.log`: complete prior SDR/input-policy/export/inspection
+  suite plus actual Assign/Convert/depth dialogs, full-image comparisons,
+  cancellation during preparation and after comparison, exact undo/redo and
+  save/reopen passed. Retained source samples/profile remain unchanged. Includes
+  histogram and PNG export of a photo with committed paint, exercising the
+  private snapshot's browser raster-worker connection.
+- `shared-conversion-regressions.log`: all eight conversion tests passed,
+  including every SDR mode's lossless assignment, f64-reference conversion
+  within one code, exact alpha, masks/wetness, cancellation and memory admission.
+- `shared-color-transition-hosts.log`: exact shared color/history publication and
+  picker/brush coordinate behavior passed for GTK, Web and Android.
+- `color-preview-reduction.log`: asynchronous area preview matches the existing
+  full-row resampler, including nonintegral ratios, alpha and extended RGB.
+- `shared-color-preview-capture.log`: hardware-GPU profiled composite/preview,
+  budget and cancellation regression passed.
+- `web-color-edit-build.log`, `android-color-edit-tests-build.log`,
+  `gtk-color-edit-check.log`, `package-color-edit.log`: actual Wasm/ARM64 builds,
+  GTK check and browser packaging passed.
+
+The browser workflow must wait for both GPU startup and
+`JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy`.
+Workspace restoration temporarily blocks actions independently of GPU readiness.
+Old pre-migration test-origin workspaces with untagged color arrays are explicitly
+unavailable under the new schema; final deployment should use a fresh test origin.
+No backward-compatibility migration is promised.
+
+Still pending: flattened conversion copies, source Place/Paste/repair/rasterize,
+document source details, persistent named export presets/profile library, output
+comparison previews, broader adjustment/effect integration qualification, and the
+final tablet memory/120 Hz navigation measurements. This checkpoint is not final
+qualification or a user-test handoff.

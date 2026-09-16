@@ -170,3 +170,136 @@ impl RowResampler {
 
 #[cfg(test)]
 mod tests;
+
+/// Push-based area preview for asynchronous full-resolution capture bands. It
+/// retains only a small presentation image, never a reduced editing source.
+pub struct AreaPreview {
+    source: [u32; 2],
+    extent: [u32; 2],
+    horizontal: Vec<Taps>,
+    pixels: Vec<[f64; 4]>,
+    row: Vec<[f64; 4]>,
+    next: u32,
+}
+impl AreaPreview {
+    pub fn new(source: [u32; 2], bounds: [u32; 2]) -> Result<Self, String> {
+        if source.iter().any(|v| !(1..=32768).contains(v))
+            || bounds.iter().any(|v| !(1..=1024).contains(v))
+        {
+            return Err("Invalid preview dimensions".into());
+        }
+        let scale = (f64::from(bounds[0]) / f64::from(source[0]))
+            .min(f64::from(bounds[1]) / f64::from(source[1]))
+            .min(1.);
+        let extent = source.map(|v| (f64::from(v) * scale).round().max(1.) as u32);
+        Ok(Self {
+            source,
+            extent,
+            horizontal: (0..extent[0])
+                .map(|x| taps(source[0], extent[0], x))
+                .collect(),
+            pixels: vec![[0.; 4]; (extent[0] * extent[1]) as usize],
+            row: vec![[0.; 4]; extent[0] as usize],
+            next: 0,
+        })
+    }
+    pub fn push(&mut self, pixels: &[[f32; 4]]) -> Result<(), String> {
+        if pixels.len() != self.source[0] as usize
+            || self.next >= self.source[1]
+            || pixels.iter().flatten().any(|v| !v.is_finite())
+        {
+            return Err("Invalid preview row".into());
+        }
+        for (output, tap) in self.row.iter_mut().zip(&self.horizontal) {
+            *output = [0.; 4];
+            for (index, weight) in tap.weights().enumerate() {
+                for (out, value) in output.iter_mut().zip(pixels[tap.first + index]) {
+                    *out += f64::from(value) * weight;
+                }
+            }
+        }
+        let start = u64::from(self.next) * u64::from(self.extent[1]);
+        let end = u64::from(self.next + 1) * u64::from(self.extent[1]);
+        let unit = u64::from(self.source[1]);
+        for y in start / unit..=(end - 1) / unit {
+            let weight = (end.min((y + 1) * unit) - start.max(y * unit)) as f64 / unit as f64;
+            let offset = y as usize * self.extent[0] as usize;
+            for (out, row) in self.pixels[offset..offset + self.row.len()]
+                .iter_mut()
+                .zip(&self.row)
+            {
+                for c in 0..4 {
+                    out[c] += row[c] * weight;
+                }
+            }
+        }
+        self.next += 1;
+        Ok(())
+    }
+    pub fn finish(self) -> Result<([u32; 2], Vec<[f32; 4]>), String> {
+        if self.next != self.source[1] {
+            return Err("Incomplete preview capture".into());
+        }
+        Ok((
+            self.extent,
+            self.pixels
+                .into_iter()
+                .map(|p| {
+                    let alpha = p[3].clamp(0., 1.);
+                    if alpha == 0. {
+                        [0.; 4]
+                    } else {
+                        let scale = alpha / p[3];
+                        [
+                            (p[0] * scale) as f32,
+                            (p[1] * scale) as f32,
+                            (p[2] * scale) as f32,
+                            alpha as f32,
+                        ]
+                    }
+                })
+                .collect(),
+        ))
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn asynchronous_preview_matches_full_area_resampling() {
+    for (source, bounds) in [
+        ([513, 257], [127, 61]),
+        ([3, 3], [2, 2]),
+        ([3, 2], [512, 512]),
+        ([19, 801], [64, 64]),
+    ] {
+        let pixels: Vec<[f32; 4]> = (0..source[0] * source[1])
+            .map(|i| {
+                let a = (i % 257) as f32 / 256.;
+                [(i % 29) as f32 / 28. * a, -0.1 * a, 1.2 * a, a]
+            })
+            .collect();
+        let mut preview = AreaPreview::new(source, bounds).unwrap();
+        for row in pixels.chunks_exact(source[0] as usize) {
+            preview.push(row).unwrap();
+        }
+        let (extent, actual) = preview.finish().unwrap();
+        let mut reference = RowResampler::new(source, extent).unwrap();
+        let mut row = vec![[0.; 4]; extent[0] as usize];
+        for y in 0..extent[1] {
+            reference
+                .read_row(y, &mut row, |y, target| {
+                    let start = y as usize * source[0] as usize;
+                    target.copy_from_slice(&pixels[start..start + source[0] as usize]);
+                    Ok(())
+                })
+                .unwrap();
+            for (a, b) in actual[y as usize * extent[0] as usize..][..extent[0] as usize]
+                .iter()
+                .flatten()
+                .zip(row.iter().flatten())
+            {
+                assert!((a - b).abs() < 1e-6, "{source:?} → {extent:?}: {a} != {b}");
+            }
+        }
+    }
+}

@@ -3,13 +3,6 @@
 use super::{output::Rows, *};
 use layer_core::color::{OutputEncoding, RgbSpace};
 
-/// Linear premultiplied viewing pixels. Hosts apply their view-only checkerboard
-/// and encode/tag the presentation texture in this explicitly declared space.
-pub struct SnapshotPreview {
-    pub extent: [u32; 2],
-    pub space: RgbSpace,
-    pub pixels: Vec<[f32; 4]>,
-}
 
 fn reduce(
     source: [u32; 2],
