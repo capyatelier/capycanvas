@@ -98,6 +98,56 @@ macro_rules! swatches {
                 $theme,
                 ".png"
             )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/25-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/26-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/27-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/28-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/29-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/30-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/31-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/32-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/33-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
+            include_bytes!(concat!(
+                "../../layer-web/brush-previews/34-",
+                $theme,
+                ".png"
+            )) as &'static [u8],
         ]
     };
 }

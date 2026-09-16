@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub const PENCIL_TEXTURE_ASSET: &str = "builtin:brush-tip/pencil-grain-v1";
 pub const PAINTBRUSH_TEXTURE_ASSET: &str = "builtin:brush-tip/paint-bristles-v1";
 pub const PAPER_GRAIN_TEXTURE_ASSET: &str = "builtin:brush-grain/paper-v1";
+pub const CONTACT_PAPER_TEXTURE_ASSET: &str = "builtin:brush-grain/contact-paper-v1";
 pub const BRISTLE_GRAIN_TEXTURE_ASSET: &str = "builtin:brush-grain/bristle-v1";
 pub const WATERCOLOR_TIP_TEXTURE_ASSET: &str = "builtin:brush-tip/watercolor-ragged-v1";
 pub const WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET: &str = "builtin:brush-transport/long-narrow-v1";
@@ -44,35 +45,34 @@ pub enum DefaultBrushPreset {
     LoadedOil = 22,
     PaletteKnife = 23,
     NaturalBlender = 24,
+    PointyPencil = 25,
+    ShadingPencil = 26,
+    Charcoal = 27,
+    RoughGPen = 28,
+    CalligraphyPen = 29,
+    AntiquePen = 30,
+    RealisticPen = 31,
+    WetInk = 32,
+    BlottyInk = 33,
+    BrushedInk = 34,
 }
 
 /// Returns a complete immutable preset snapshot. Callers may override color,
 /// diameter, and opacity before beginning a stroke.
 pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     match preset {
-        DefaultBrushPreset::GPen => BrushSnapshot {
-            tip: BrushTip::AnalyticEllipse,
-            color_rgba_linear: [0.006, 0.006, 0.005, 1.0],
-            diameter: 18.0,
-            opacity: 1.0,
-            hardness: 0.94,
-            flow: 1.0,
-            spacing: 0.08,
-            mappings: Arc::from([BrushMapping::pressure_size()]),
-            ..BrushSnapshot::default()
-        },
-        DefaultBrushPreset::Pencil => BrushSnapshot {
-            tip: BrushTip::Mask(AssetId::from(PENCIL_TEXTURE_ASSET)),
-            color_rgba_linear: [0.018, 0.018, 0.016, 1.0],
-            diameter: 56.0,
-            opacity: 0.82,
-            hardness: 1.0,
-            flow: 0.22,
-            spacing: 0.075,
-            seed: 0x5045_4e43,
-            mappings: Arc::from([BrushMapping::pressure_size(), pressure_flow(0.12, 0.88)]),
-            ..BrushSnapshot::default()
-        },
+        DefaultBrushPreset::GPen
+        | DefaultBrushPreset::Pencil
+        | DefaultBrushPreset::PointyPencil
+        | DefaultBrushPreset::ShadingPencil
+        | DefaultBrushPreset::Charcoal
+        | DefaultBrushPreset::RoughGPen
+        | DefaultBrushPreset::CalligraphyPen
+        | DefaultBrushPreset::AntiquePen
+        | DefaultBrushPreset::RealisticPen
+        | DefaultBrushPreset::WetInk
+        | DefaultBrushPreset::BlottyInk
+        | DefaultBrushPreset::BrushedInk => crate::contact_presets::contact_brush(preset),
         DefaultBrushPreset::Eraser => BrushSnapshot {
             tip: BrushTip::AnalyticEllipse,
             color_rgba_linear: [0.0, 0.0, 0.0, 1.0],
@@ -597,6 +597,9 @@ mod tests {
 
     #[test]
     fn every_builtin_is_valid() {
+        for preset in crate::CONTACT_BRUSH_PRESETS {
+            default_brush(preset).validate().unwrap();
+        }
         for preset in [
             DefaultBrushPreset::GPen,
             DefaultBrushPreset::Pencil,

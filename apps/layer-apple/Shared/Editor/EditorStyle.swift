@@ -11,6 +11,7 @@ struct EditorPalette {
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
     var accent: Color { Self.sharedAccent }
     var active: Color { accent.opacity(0.22) }
+    func headerBackground(light: Bool) -> Color { self["bg"].opacity(light ? 0.5 : 1) }
 }
 extension Color {
     init(hex: String) {
@@ -28,10 +29,19 @@ extension View {
         return frame(width: max(0, r.width), height: max(0, r.height), alignment: .topLeading).offset(x: r.minX, y: r.minY)
     }
 }
+/// Shared grip orientation and inset for panel headers and column footers.
+struct PanelGrip: View {
+    var vertical = false
+    var body: some View {
+        SharedIcon(name: "grip").opacity(0.65)
+            .rotationEffect(.degrees(vertical ? 90 : 0))
+            .offset(x: vertical ? 0 : -1.6, y: vertical ? -1.6 : 0)
+    }
+}
+
 struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
-    var halo: Color?
     var body: some View {
         let key = Self.assetKey(name)
         Group {
@@ -44,7 +54,7 @@ struct SharedIcon: View {
             } else {
                 glyph("icon-" + key, template: true)
             }
-        }.modifier(EditorInkHalo(color: halo)).accessibilityHidden(true)
+        }.accessibilityHidden(true)
     }
     static func assetKey(_ name: String) -> String {
         var key = name
@@ -71,25 +81,18 @@ struct IconTile: View {
     var enabled = true
     var size: CGFloat = 16
     var active = false
-    var joinedBottom = false
-    var halo: Color?
+    var joinedEdge: String?
+    var background: Color?
+    var keepsBackground = false
+    var drawerBackground: Color?
     let action: () -> Void
     var body: some View {
-        Button(action: action) { SharedIcon(name: icon, size: size, halo: halo).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
-            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedBottom: joinedBottom))
+        Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+            .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
+                background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)
             .accessibilityLabel(label).help(label)
-    }
-}
-
-/// Contrasting ink stays legible over artwork without changing control fills.
-struct EditorInkHalo: ViewModifier {
-    let color: Color?
-    func body(content: Content) -> some View {
-        if let color {
-            content.shadow(color: color, radius: 0, x: 1).shadow(color: color, radius: 0, x: -1)
-                .shadow(color: color, radius: 0, y: 1).shadow(color: color, radius: 0, y: -1)
-        } else { content }
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -98,17 +101,29 @@ struct EditorInkHalo: ViewModifier {
 struct EditorControlButtonStyle: ButtonStyle {
     var selected = false
     var active = false
-    var joinedBottom = false
+    var joinedEdge: String?
+    var background: Color?
+    var keepsBackground = false
+    var drawerBackground: Color?
     private var shape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: joinedBottom ? 0 : 6,
-            bottomTrailingRadius: joinedBottom ? 0 : 6, topTrailingRadius: 6)
+        UnevenRoundedRectangle(topLeadingRadius: joinedEdge == "top" || joinedEdge == "left" ? 0 : 6,
+            bottomLeadingRadius: joinedEdge == "bottom" || joinedEdge == "left" ? 0 : 6,
+            bottomTrailingRadius: joinedEdge == "bottom" || joinedEdge == "right" ? 0 : 6,
+            topTrailingRadius: joinedEdge == "top" || joinedEdge == "right" ? 0 : 6)
     }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.background {
-            if selected {
-                shape.fill(EditorPalette.sharedAccent.opacity(0.22))
-            } else if configuration.isPressed || active {
-                shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+            ZStack {
+                if let background, keepsBackground || !(selected || configuration.isPressed || active) {
+                    shape.fill(background)
+                }
+                if selected {
+                    shape.fill(EditorPalette.sharedAccent.opacity(0.22))
+                } else if let drawerBackground {
+                    shape.fill(drawerBackground)
+                } else if configuration.isPressed || active {
+                    shape.fill(.foreground).opacity(configuration.isPressed ? 0.16 : 0.10)
+                }
             }
         }
     }
@@ -205,9 +220,22 @@ struct EditorTextField: View {
         _text = State(initialValue: value)
     }
     var body: some View {
-        TextField(label, text: Binding(get: { text }, set: { text = $0; pending = $0; edit($0) }))
+        TextField(label, text: Binding(get: { text }, set: { next in
+            // Native fields can resend their value when editing ends.
+            guard next != text else { return }
+            text = next; pending = next; edit(next)
+        }))
             .onChange(of: value) { _, next in
                 if pending == nil || pending == next { text = next; pending = nil }
             }
+    }
+}
+
+/// Submit the focused field before a containing dialog closes.
+private struct EditorTextCommit: FocusedValueKey { typealias Value = () -> Void }
+extension FocusedValues {
+    var editorTextCommit: (() -> Void)? {
+        get { self[EditorTextCommit.self] }
+        set { self[EditorTextCommit.self] = newValue }
     }
 }

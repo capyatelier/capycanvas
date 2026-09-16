@@ -2,11 +2,9 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
-        #if os(macOS)
+        // Child frames use screen coordinates in windowed iPad scenes, while
+        // the application frame can retain a zero origin. Use the editor window.
         return app.windows.firstMatch
-        #else
-        return app
-        #endif
     }
     @MainActor func workspaceActivate(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))
@@ -73,6 +71,7 @@ extension XCTestCase {
             workspaceText(app.textFields["tool-picker-search"], query)
             workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tool-choice-" + query)).firstMatch)
         }
+        attachWorkspaceScreen(app, name: "toolbar-tool-picker")
         workspaceActivate(app.buttons["tool-picker-confirm"])
         let created = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-options-", "Toolbar options for Toolbar 1")).firstMatch
         XCTAssertTrue(created.waitForExistence(timeout: 10))
@@ -85,6 +84,7 @@ extension XCTestCase {
         }
         menu("Rename ")
         workspaceText(app.textFields["toolbar-name"], "Quick tools")
+        attachWorkspaceScreen(app, name: "toolbar-rename-prompt")
         workspaceActivate(app.buttons["toolbar-prompt-confirm"])
         menu("Duplicate ")
         workspaceText(app.textFields["toolbar-name"], "Copy tools")
@@ -96,7 +96,9 @@ extension XCTestCase {
         // Exercise the actual command installed by the picker, without OS menus.
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "toolbar-tile-" + panel + "-", "Manage Toolbars")).firstMatch)
         workspaceActivate(app.buttons["managed-toolbar-" + copyPanel])
+        attachWorkspaceScreen(app, name: "toolbar-manager-selection")
         workspaceActivate(app.buttons["delete-managed-toolbar"])
+        attachWorkspaceScreen(app, name: "toolbar-delete-prompt")
         workspaceActivate(app.buttons["toolbar-prompt-cancel"])
         workspaceActivate(app.buttons["delete-managed-toolbar"])
         workspaceActivate(app.buttons["toolbar-prompt-confirm"])
@@ -116,6 +118,87 @@ extension XCTestCase {
         #endif
         attachWorkspaceScreen(app, name: "toolbar-customization")
     }
+    @MainActor func checkLayerConfiguration(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_LAYER_INPUT_PROBE"] = "1"
+        app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"customize","action":{"type":"show_all_controls","panel":"layers"}}]"#
+        app.launch()
+        let configuration = app.scrollViews.containing(.button, identifier: "configuration-layer").firstMatch
+        XCTAssertTrue(configuration.waitForExistence(timeout: 20))
+        let rows = app.scrollViews["layer-rows"]
+        XCTAssertTrue(rows.waitForExistence(timeout: 10))
+        waitForLayerPreviews(in: app)
+        func order() -> String { rows.value as? String ?? "" }
+        func expectOrder(_ value: String) {
+            expectation(for: NSPredicate { _, _ in order() == value }, evaluatedWith: rows)
+            waitForExpectations(timeout: 5)
+        }
+        func close() { workspaceActivate(app.buttons["close-panel-configuration"]) }
+        func reopen() {
+            let tab = app.buttons["panel-tab-layers"]
+            #if os(macOS)
+            tab.rightClick()
+            #else
+            tab.press(forDuration: 0.7)
+            #endif
+            workspaceActivate(app.buttons["menu-action-Configure Layers panel…"])
+            XCTAssertTrue(configuration.waitForExistence(timeout: 5))
+        }
+        func command(_ id: String) { workspaceActivate(configuration.buttons["configuration-command-" + id]) }
+        let original = order()
+        XCTAssertEqual(original.split(separator: ",").count, 3)
+        command("add_layer")
+        expectation(for: NSPredicate { _, _ in order().split(separator: ",").count == 4 }, evaluatedWith: rows)
+        waitForExpectations(timeout: 5)
+        let added = order()
+        XCTAssertFalse(configuration.buttons["configuration-command-raise_layer"].isEnabled)
+        command("lower_layer")
+        expectation(for: NSPredicate { _, _ in order() != added }, evaluatedWith: rows)
+        waitForExpectations(timeout: 5)
+        let lowered = order()
+        close()
+        editorHistory("Undo", in: app); expectOrder(added)
+        editorHistory("Redo", in: app); expectOrder(lowered)
+        reopen()
+        command("raise_layer"); expectOrder(added)
+        command("delete_layer"); expectOrder(original)
+        workspaceActivate(configuration.buttons["configuration-layer"])
+        workspaceActivate(app.buttons["configuration-layer-option-1"])
+        let value = configuration.buttons["number-value-layer-opacity"]
+        XCTAssertEqual(value.value as? String, "100.0 %")
+        workspaceActivate(configuration.buttons["number-decrease-layer-opacity"])
+        expectation(for: NSPredicate(format: "value != %@", "100.0 %"), evaluatedWith: value)
+        waitForExpectations(timeout: 5)
+        let decreased = value.value as? String ?? ""
+        XCTAssertEqual(decreased, "99.0 %")
+        close()
+        let liveValue = app.buttons["number-value-layer-opacity"]
+        editorHistory("Undo", in: app)
+        expectation(for: NSPredicate(format: "value == %@", "100"), evaluatedWith: liveValue)
+        waitForExpectations(timeout: 5)
+        editorHistory("Redo", in: app)
+        expectation(for: NSPredicate(format: "value == %@", "99"), evaluatedWith: liveValue)
+        waitForExpectations(timeout: 5)
+        reopen()
+        XCTAssertEqual(value.value as? String, decreased)
+        waitForLayerPreviews(in: app)
+        attachWorkspaceScreen(app, name: "layer-configuration")
+        let capture = XCTAttachment(screenshot: configuration.screenshot())
+        capture.name = "layer-configuration-controls"; capture.lifetime = .keepAlways; add(capture)
+        workspaceActivate(app.buttons["layer-Lock editing"])
+        XCTAssertFalse(value.isEnabled, "Locked opacity must retain the shared disabled state")
+        workspaceActivate(app.buttons["layer-Lock editing"])
+        XCTAssertTrue(value.isEnabled)
+        workspaceActivate(configuration.buttons["configuration-layer"])
+        workspaceActivate(app.buttons["configuration-layer-option-2"])
+        XCTAssertTrue(value.isEnabled, "Shared Paper opacity remains editable")
+        XCTAssertFalse(configuration.buttons["configuration-command-delete_layer"].isEnabled)
+        close()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: configuration)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkPanelConfigurationAndLiveDrag(in app: XCUIApplication) {
         let toggle = app.buttons["configure-visible-brush_size"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 20))
@@ -126,13 +209,19 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: value)
         }
         waitForExpectations(timeout: 5)
-        workspaceActivate(app.buttons["configuration-brush-color"])
+        let configuration = app.scrollViews.containing(.button, identifier: "configure-visible-brush_size").firstMatch
+        workspaceActivate(configuration.buttons["brush-color"])
         let popup = app.descendants(matching: .any)["toolbar-control-popup"].firstMatch
         XCTAssertTrue(popup.waitForExistence(timeout: 5))
         workspaceActivate(popup.buttons["color-background"])
-        XCTAssertTrue(popup.buttons["color-background"].isSelected)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-background"])
+        waitForExpectations(timeout: 5)
         workspaceActivate(popup.buttons["Done"])
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
+        waitForExpectations(timeout: 5)
+        let colorToggle = app.buttons["configure-visible-brush_color"]
+        if colorToggle.value as? String == "Off" { workspaceActivate(colorToggle) }
+        expectation(for: NSPredicate(format: "value == %@", "On"), evaluatedWith: colorToggle)
         waitForExpectations(timeout: 5)
         workspaceActivate(toggle)
         expectation(for: NSPredicate(format: "value == %@", "Off"), evaluatedWith: toggle)
@@ -141,6 +230,28 @@ extension XCTestCase {
         let size = app.buttons["number-value-Brush size"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
+        let liveColor = app.buttons["brush-color"]
+        let liveControls = app.scrollViews.containing(.button, identifier: "brush-color").firstMatch
+        revealEditorControl(liveColor, in: liveControls)
+        workspaceActivate(liveColor)
+        XCTAssertTrue(popup.waitForExistence(timeout: 5), "The live panel swatch must open the same color picker")
+        XCTAssertTrue(popup.buttons["color-background"].isSelected)
+        workspaceActivate(popup.buttons["color-foreground"])
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: popup.buttons["color-foreground"])
+        waitForExpectations(timeout: 5)
+        workspaceActivate(popup.buttons["Done"])
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
+        waitForExpectations(timeout: 5)
+        let red = app.buttons["number-value-Red"]
+        XCTAssertTrue(red.waitForExistence(timeout: 5), "The live swatch must retain precise RGB controls")
+        let originalRed = red.value as? String ?? ""
+        let increaseRed = app.buttons["number-increase-Red"]
+        let stepRed = increaseRed.isEnabled ? increaseRed : app.buttons["number-decrease-Red"]
+        revealEditorControl(stepRed, in: liveControls)
+        workspaceActivate(stepRed)
+        expectation(for: NSPredicate(format: "value != %@", originalRed), evaluatedWith: red)
+        waitForExpectations(timeout: 5)
+        attachWorkspaceScreen(app, name: "panel-brush-color")
         let group = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-group-"))
             .containing(.button, identifier: "panel-tab-sizes").firstMatch
@@ -156,7 +267,8 @@ extension XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: target)
         #endif
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(grip.frame.minX, original.maxX + 30, "The configured group must retain its drag contact while becoming floating")
+        expectation(for: NSPredicate { _, _ in grip.frame.minX > original.maxX + 30 }, evaluatedWith: grip)
+        waitForExpectations(timeout: 5)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachWorkspaceScreen(app, name: "panel-configuration-drag")
     }

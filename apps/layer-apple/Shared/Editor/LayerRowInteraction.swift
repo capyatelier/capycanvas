@@ -49,7 +49,6 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     var frames: [UInt64: LayerRowFrame] = [:]
     var viewport: CGRect = .zero
     @Published private(set) var drag: Drag?
-    @Published private(set) var nativeDragging = false
     @Published private(set) var menu = JSON()
     @Published private(set) var menuSource: LayerMenuSource?
     private var menuRequest = UUID()
@@ -60,7 +59,6 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         return value.uint
     }
     var enabled: Bool { store != nil && !layers.isEmpty }
-    func nativeDragChanged(_ active: Bool) { if nativeDragging != active { nativeDragging = active } }
     private func row(at point: CGPoint) -> JSON? {
         guard enabled, viewport.contains(point),
               let row = layers.first(where: { frames[$0["id"].uint]?.row.contains(point) == true }) else { return nil }
@@ -88,7 +86,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
                 if let completed, let target = completed.target {
                     store?.layer(["op": "drop", "id": id, "target": target, "fraction": completed.fraction])
                 }
-            }, cancel: { [weak self] in self?.drag = nil; self?.nativeDragChanged(false) })
+            }, cancel: { [weak self] in self?.drag = nil })
     }
     private func move(_ point: CGPoint) {
         guard var drag else { return }
@@ -108,32 +106,14 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         openMenu(id: id, mask: row["has_mask"].bool && frames[id]?.mask.contains(point) == true)
     }
     func openMenu(id: UInt64, mask: Bool, source: LayerMenuSource? = nil) {
+        guard let store, layers.contains(where: { $0["id"].uint == id }) else { return }
         menuSource = source ?? .row(id)
-        loadMenu(id: id, mask: mask) { [weak self] result in self?.menu = result }
-    }
-    func nativeMenu(at point: CGPoint) -> NativeReorderMenu? {
-        guard let row = row(at: point), let frame = frames[row["id"].uint] else { return nil }
-        let id = row["id"].uint, currentEpoch = epoch
-        let mask = row["has_mask"].bool && frame.mask.contains(point)
-        return NativeReorderMenu(id: identity(id), bounds: frame.row) { [weak self] completion in
-            guard let self, epoch == currentEpoch else { completion(nil); return }
-            loadMenu(id: id, mask: mask) { [weak self] result in
-                guard let self, !result.isNull else { completion(nil); return }
-                completion(AppleContextMenu(result) { [weak self] action in
-                    guard let self, epoch == currentEpoch, layers.contains(where: { $0["id"].uint == id }) else { return }
-                    closeMenu(); store?.dispatch(action)
-                })
-            }
-        }
-    }
-    private func loadMenu(id: UInt64, mask: Bool, completion: @escaping (JSON) -> Void) {
-        guard let store, layers.contains(where: { $0["id"].uint == id }) else { completion(JSON()); return }
         let request = UUID(), currentEpoch = epoch; menuRequest = request
         store.layer(["op": "context", "id": id, "mask": mask])
         store.query(["type": "layer_menu", "id": id, "mask": mask]) { [weak self] result in
             guard let self, menuRequest == request, epoch == currentEpoch,
-                  layers.contains(where: { $0["id"].uint == id }) else { completion(JSON()); return }
-            completion(result)
+                  layers.contains(where: { $0["id"].uint == id }) else { return }
+            menu = result
         }
     }
     func closeMenu() { menuRequest = UUID(); if menuSource != nil { menuSource = nil }; if !menu.isNull { menu = JSON() } }
@@ -143,6 +123,6 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         if contact.target != nil, !contact.validate() { cancel() }
     }
     func cancel() {
-        contact.cancel(); if drag != nil { drag = nil }; nativeDragChanged(false); closeMenu()
+        contact.cancel(); if drag != nil { drag = nil }; closeMenu()
     }
 }

@@ -6,6 +6,7 @@ struct LayerPanel: View {
     let panel: JSON
     @StateObject private var interaction = LayerRowInteraction()
     @State private var importing = false
+    @State private var importEpoch: UInt64 = 0
     @State private var popupID = UUID()
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var view: JSON { store.state["layer_tools"] }
@@ -22,13 +23,14 @@ struct LayerPanel: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(layers, id: \.id) { layer in
+                                let thumbnailToken = "\(popupID):\(layer["id"].uint)"
                                 LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .overlay { dropMark(layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
-                                    .onAppear { store.layerThumbnails.show(layer["id"].uint) }
+                                    .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: layer["id"].uint) }
                                     .onDisappear {
-                                        store.layerThumbnails.hide(layer["id"].uint)
+                                        store.layerThumbnails.hide(thumbnailToken)
                                         if interaction.menuSource == .row(layer["id"].uint) { closeMenu() }
                                     }
                             }
@@ -48,17 +50,19 @@ struct LayerPanel: View {
                 interaction.validate(); store.layerThumbnails.refresh()
             }
             .onChange(of: store.state["layer_tools"]["rename_layer"].uint) { _, _ in interaction.validate() }
-            .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in interaction.cancel() }
+            .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in
+                interaction.cancel(); importing = false
+            }
             .onDisappear { interaction.cancel(); store.workspace.popover(popupID, open: false) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.image]) { result in
                 switch result {
-                case .success(let url): store.importLayer(url)
+                case .success(let url): store.importLayer(url, epoch: importEpoch)
                 case .failure(let error): store.failure = error.localizedDescription
                 }
             }
     }
     @ViewBuilder private var dragPreview: some View {
-        if !interaction.nativeDragging, let drag = interaction.drag,
+        if let drag = interaction.drag,
            let layer = layers.first(where: { $0["id"].uint == drag.id }) {
             LayerRow(store: store, layer: layer, previews: store.layerThumbnails, preview: true)
                 .frame(width: drag.bounds.width)
@@ -99,7 +103,10 @@ struct LayerPanel: View {
             LayerButton(icon: "mask", label: "Add layer mask", enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
-            LayerButton(icon: "image", label: "Import image as layer", enabled: store.snapshot["canvas_ready"].bool) { importing = true }
+            LayerButton(icon: "image", label: "Import image as layer", enabled: store.snapshot["canvas_ready"].bool) {
+                importEpoch = store.state["document_file"]["epoch"].uint
+                importing = true
+            }
             LayerButton(icon: "delete", label: "Delete selected layers", enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
             Spacer(minLength: 0)
             LayerButton(icon: "more", label: "Layer actions", enabled: !current.isNull) {
@@ -157,13 +164,12 @@ private struct LayerButton: View {
     let label: String
     var enabled = true
     var selected = false
-    var width: CGFloat = 24
     var height: CGFloat = 24
     var size: CGFloat = 16
     let action: () -> Void
     var body: some View {
         IconTile(icon: icon, label: label, selected: selected, enabled: enabled, size: size, action: action)
-            .frame(width: width, height: height).accessibilityIdentifier("layer-" + label)
+            .frame(width: 24, height: height).accessibilityIdentifier("layer-" + label)
     }
 }
 
@@ -194,9 +200,9 @@ private struct LayerRow: View {
                     .frame(width: 3, height: 28).opacity(layer["clipped"].bool ? 1 : 0)
                 thumbnail(mask: false)
                 if layer["has_mask"].bool {
-                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", width: 12, size: 12) {
+                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? "Unlink mask from layer" : "Link mask to layer", size: 12) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
-                    }.opacity(layer["mask_linked"].bool ? 1 : 0.35)
+                    }.foregroundStyle(palette["text"].opacity(layer["mask_linked"].bool ? 1 : 0.35))
                     thumbnail(mask: true)
                 }
             }.padding(.leading, min(CGFloat(layer["depth"].uint) * 8, 24))
@@ -312,18 +318,18 @@ private struct LayerName: View {
 
 struct LayerOpacityField: View {
     @ObservedObject var store: EditorStore
+    var inline = true
     var body: some View {
         let layer = store.state["layer_tools"]["editing_layer"]
         let epoch = store.state["document_file"]["epoch"].uint
+        let change: (Double, String?, @escaping @MainActor (String?) -> Void) -> Void = { value, phase, completion in
+            store.effect(layer["id"].uint, epoch: epoch, key: "opacity",
+                action: ["op": "set", "value": ["kind": "number", "value": value]], phase: phase, completion: completion)
+        }
         NumberControl(store: store, label: "Layer opacity", value: layer["opacity"].number,
-            control: store.catalog["layer_opacity"], identifier: "layer-opacity", inline: true) { value, completion in
-            // A late focus callback from a removed field must not edit another
-            // layer or a new document whose IDs happen to match the old one.
-            guard store.state["document_file"]["epoch"].uint == epoch,
-                  store.state["layer_tools"]["editing_layer"]["id"].uint == layer["id"].uint else {
-                completion(nil); return
-            }
-            store.edit(["type": "set_layer_opacity", "id": layer["id"].raw, "opacity": value], completion: completion)
+            control: store.catalog[inline ? "layer_opacity" : "opacity"], identifier: "layer-opacity", inline: inline,
+            gestureChange: { change($1, $0, $2) }) { value, completion in
+            change(value, nil, completion)
         }.id("\(epoch):\(layer["id"].uint)")
     }
 }

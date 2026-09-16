@@ -145,6 +145,16 @@ at 1×/2×, compact Color, short Layers, long Filters, squashed and usable sideb
 heights, footer anchors, established floats, cancellation and undo/redo. It also
 checks retained native pixels and placement through model updates. Run
 `--workspace-motion` separately for sustained compositor mouse/touch timing.
+Its Color-overlap case verifies that moving a panel over the wheel reuses both
+the ring and field rasters.
+
+Run `bash tools/performance/workspace-motion.sh web --layout-drops` for menu-bar
+prepend targets, panel-body prepend/highlight, and the enlarged tab targets in
+first and lower groups. It covers panel/group/toolbar/column sources, mouse,
+touch and pen, both sides/themes and 1×/2×, cancellation and one-step history.
+Only top-level columns can collapse; new stacks open full columns by default.
+Compact-drawer fixtures explicitly enable Open individual panels. Run
+`--drawer-drag`, `--drawer-style` and `--column-stacks` for those retained views.
 
 ## Debug headless Chrome
 

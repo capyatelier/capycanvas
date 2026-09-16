@@ -112,7 +112,80 @@ function Capture([string]$Name){
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly *> (Join-Path $run ($Name+'.json'))
 }
 
+function Check-CurveGestures {
+    Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    function Curve-Json {ConvertTo-Json -InputObject ((Property 'curve_0').value.value) -Compress -Depth 10}
+    function Curve-At([double]$X,[double]$Y) {
+        $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
+        # The graph is square; UIA can report only its visible, clipped height.
+        $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*$r.Width))
+        if($at[0] -le $r.Left+6 -or $at[0] -ge $r.Right-6 -or $at[1] -le $r.Top+6 -or $at[1] -ge $r.Bottom-6){throw 'Curve contact is outside the visible graph'}
+        $at
+    }
+    function Move-Curve([string]$Device) {
+        $point=(Property 'curve_0').value.value[1]
+        $from=Curve-At $point[0] $point[1];$to=Curve-At .7 .92
+        [CapyRowPointer]::Down($Device,$from[0],$from[1])
+        for($i=1;$i -le 12;$i++){
+            [CapyRowPointer]::Move([int]($from[0]+($to[0]-$from[0])*$i/12),[int]($from[1]+($to[1]-$from[1])*$i/12))
+            Start-Sleep -Milliseconds 35
+        }
+        Wait-Until {$p=(Property 'curve_0').value.value[1];[Math]::Abs($p[0]-.7) -lt .01 -and [Math]::Abs($p[1]-.92) -lt .01} "$Device curve did not reach the drag target during contact"
+    }
+    function Check-Redo([string]$Reason) {
+        Invoke 'Redo' -Name;Wait-Until {(Curve-Json) -eq $edited} "$Reason consumed Redo"
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$Reason changed history"
+    }
+    try {
+        $endpoints=Curve-Json
+        # Seed a visible handle instead of resizing or scrolling the workspace.
+        $at=Curve-At .5 .85
+        [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
+        Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Pointer insertion did not add a curve point'
+        $original=Curve-Json
+        foreach($device in @('mouse','pen','touch')){
+            Move-Curve $device;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
+            $edited=Curve-Json
+            Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device drag needs more than one Undo"
+            Check-Redo "$device completed drag"
+            $point=(Property 'curve_0').value.value[1];$at=Curve-At $point[0] $point[1]
+            [CapyRowPointer]::Down($device,$at[0]+3,$at[1]+3);[CapyRowPointer]::Up()
+            Start-Sleep -Milliseconds 150
+            if((Curve-Json) -ne $original){throw "$device click moved the handle"}
+            Check-Redo "$device unchanged click"
+            Move-Curve $device;[CapyRowPointer]::Key(0x1B)
+            Wait-Until {(Curve-Json) -eq $original} "$device Escape kept the curve preview"
+            if(!(Find 'property-curve_0-curve')){throw "$device Escape dismissed the curve drawer"}
+            [CapyRowPointer]::Up();Check-Redo "$device Escape"
+            if($device -ne 'mouse'){
+                Move-Curve $device;[CapyRowPointer]::Cancel()
+                Wait-Until {(Curve-Json) -eq $original} "$device native cancellation kept the curve preview"
+                Check-Redo "$device native cancellation"
+            }
+            Move-Curve $device;Select-Panel 'adjustments'
+            Wait-Until {(Curve-Json) -eq $original} "$device hidden curve kept the preview"
+            [CapyRowPointer]::Up();Select-Panel 'properties'
+            Wait-Until {$null -ne (Find 'property-curve_0-curve')} 'Curve did not reopen'
+            Check-Redo "$device source hide"
+            # A canceled insertion must also remove its provisional handle.
+            $at=Curve-At .3 .9
+            [CapyRowPointer]::Down($device,$at[0],$at[1])
+            Wait-Until {(Property 'curve_0').value.value.Count -eq 4} "$device insertion did not preview"
+            [CapyRowPointer]::Key(0x1B)
+            Wait-Until {(Curve-Json) -eq $original} "$device canceled insertion kept its handle"
+            [CapyRowPointer]::Up();Check-Redo "$device canceled insertion"
+            Write-Host "$device curve: one-step history, unchanged click, Escape, source hide and insertion rollback passed"
+        }
+        Capture 'curve-gestures'
+        Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $endpoints} 'Seed insertion was not one Undo'
+        'mouse, pen and touch: passed'
+    } finally {[CapyRowPointer]::Dispose()}
+}
+
 try {
+    if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated effects review'}
     foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
@@ -149,6 +222,7 @@ try {
     Wait-Until {[Math]::Abs((Property 'opacity').value.value-.6) -lt .000001} 'Opacity not updated'
     Choose 'property-blend' 'Multiply';Wait-Until {(Property 'blend').value.value -eq 1} 'Blend not updated'
     Select-Filter 'curves' 'Curves'
+    $curveGestures=Check-CurveGestures
     $graph=(Control 'property-curve_0-curve').GetRuntimeId() -join ':'
     Invoke 'property-curve_0-add';Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Curve point not added'
     Invoke 'property-curve_0-values';Edit 'property-curve_0-y' '75';(Control 'property-curve_0-point').SetFocus()
@@ -183,16 +257,12 @@ try {
     if([Math]::Abs((Property 'shadows').value.value[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
     Capture 'color'
     $theme=(Model).state.theme
-    Invoke 'Preferences' -Name
+    Invoke 'settings-button'
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
-    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
-    $close=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
-    $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Invoke 'CloseButton'
     Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     Capture 'alternate-theme'
     Select-Panel 'adjustments'
@@ -214,6 +284,7 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{
+        curve_pointer_transactions=$curveGestures
         six_property_kinds='passed';reset_draft_guards_and_endpoints='passed'
         curve_control_retention_and_resize='passed';category_search_and_insertion='passed'
         gpu_preview_paint_and_exact_undo='passed';preview_theme_and_document_replacement='passed'

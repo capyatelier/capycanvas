@@ -27,17 +27,23 @@ final class MacCanvasView: NSView {
     init(store: EditorStore) {
         self.store = store
         super.init(frame: .zero)
-        wantsLayer = true
         let metal = ObservedMetalLayer()
         metal.isOpaque = true
         metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        // Assign first to host our Metal layer; AppKit must not draw its contents.
         layer = metal
+        wantsLayer = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityIdentifier("canvas")
         setAccessibilityLabel("Canvas")
         setAccessibilityValue("Initializing")
         store.wake = { [weak self] in self?.wake() }
+        store.interruptInput = { [weak self] in self?.input.interrupt() }
+        store.focusCanvas = { [weak self] in
+            guard let self, self.window?.isKeyWindow == true, self.window?.attachedSheet == nil else { return }
+            self.window?.makeFirstResponder(self)
+        }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
         frames.submittedViewport = { [weak self] in self?.setAccessibilityValue("Metal ready") }
     }
@@ -52,7 +58,7 @@ final class MacCanvasView: NSView {
             window.makeFirstResponder(self)
             for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
                 windowObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.input.blur() }
+                    MainActor.assumeIsolated { self?.store.input(["type": "blur"]) }
                 })
             }
             windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
@@ -102,7 +108,7 @@ final class MacCanvasView: NSView {
     func wake() { frames.wake() }
     func stop() {
         documentDelegate.attach(nil)
-        frames.deactivate(); input.blur()
+        frames.deactivate(); store.input(["type": "blur"])
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
         displayLink?.invalidate(); displayLink = nil

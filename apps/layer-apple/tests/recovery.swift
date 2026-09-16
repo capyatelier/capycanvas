@@ -24,16 +24,70 @@ import QuartzCore
     @MainActor static func attach(_ store: EditorStore) async throws -> CAMetalLayer {
         let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
         store.native!.attach(layer, width: 128, height: 128, scale: 1)
-        _ = await withCheckedContinuation { continuation in
-            store.native!.submit(2, JSON(["type":"catalog"])) { continuation.resume(returning: $0) }
+        // Complete offscreen startup. Recovery below still
+        // has no display link or frame after pen-up, preserving that regression.
+        let deadline = Date().addingTimeInterval(45)
+        while !store.snapshot["shaders_ready"].bool || store.workspaceLibrary?.ready != true {
+            precondition(Date() < deadline && store.failure == nil, store.failure ?? "Native startup timed out")
+            let ready = await withCheckedContinuation { continuation in
+                store.native!.flushPersistence { continuation.resume(returning: $0) }
+            }
+            precondition(ready, "Offscreen renderer preparation failed")
+            let now = FrameTrace.now()
+            await withCheckedContinuation { continuation in
+                store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in continuation.resume() }
+            }
+            try await Task.sleep(for: .milliseconds(10))
         }
         precondition(store.failure == nil, store.failure ?? "")
         return layer
+    }
+    @MainActor static func releaseDuringFlush(platform: UInt32, root: URL) async throws {
+        let persistence = EditorPersistence(root: root), files = RecoveryFiles(root: root)
+        var store: EditorStore? = EditorStore(platform: platform, persistence: persistence)
+        let layer = try await attach(store!)
+        store!.invoke("add_layer")
+        try await wait("Released-scene layer missing") { store!.state["layers"].array.count == 3 }
+        let id = store!.state["layer_tools"]["editing_layer"]["id"].uint
+        store!.layer(["op": "rename", "id": id, "name": "Released scene survivor"])
+        try await wait("Released-scene edit missing") {
+            store!.state["layers"].array.contains { $0["label"].string == "Released scene survivor" }
+        }
+        weak let released = store
+        var completed: Bool?
+        store!.flushPersistence { completed = $0 }
+        // Scene teardown can release its last owner before the native barrier's
+        // reply reaches MainActor. The full recovery write must still finish.
+        store = nil
+        try await wait("Released-scene flush did not reply") { completed != nil }
+        precondition(completed == true, "Scene release must not abandon an accepted recovery flush")
+        try await wait("Completed flush retained its editor") { released == nil }
+        let records = try await io { try files.list().records }
+        precondition(records.count == 1, "The released scene's committed drawing must remain recoverable")
+
+        let reopened = EditorStore(platform: platform, persistence: persistence)
+        let reopenedLayer = try await attach(reopened)
+        reopened.recovery.restore(records[0])
+        try await wait("Released-scene archive did not reopen") {
+            reopened.state["document_file"]["epoch"].uint == 1 && !reopened.projectFiles.busy
+        }
+        precondition(reopened.projectFiles.error == nil && reopened.failure == nil)
+        precondition(reopened.state["layers"].array.count == 3
+            && reopened.state["layers"].array.contains { $0["label"].string == "Released scene survivor" })
+        precondition(reopened.state["document_file"]["modified"].bool,
+            "Recovery must preserve the unsaved drawing instead of acknowledging Save")
+        let closed = await withCheckedContinuation { continuation in
+            reopened.recovery.close { continuation.resume(returning: $0) }
+        }
+        precondition(closed)
+        withExtendedLifetime((layer, reopenedLayer)) {}
+        print("Recovery survives released scene on Apple platform \(platform)"); fflush(stdout)
     }
     @MainActor static func main() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-recovery-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         for platform: UInt32 in [0, 1] {
+            try await releaseDuringFlush(platform: platform, root: directory.appendingPathComponent("released-\(platform)"))
             let root = directory.appendingPathComponent("platform-\(platform)")
             let persistence = EditorPersistence(root: root), files = RecoveryFiles(root: root)
             let scene = UUID().uuidString
@@ -44,7 +98,26 @@ import QuartzCore
             let id = store!.state["layer_tools"]["editing_layer"]["id"].uint
             store!.layer(["op":"rename", "id":id, "name":"Recovery survivor"])
             try await wait("Rename not applied") { store!.state["layers"].array.contains { $0["label"].string == "Recovery survivor" } }
+            let brushDeadline = Date().addingTimeInterval(20)
+            repeat {
+                let prepared = await withCheckedContinuation { continuation in
+                    store!.native!.flushPersistence { continuation.resume(returning: $0) }
+                }
+                precondition(prepared && Date() < brushDeadline, "Drawing preparation did not finish")
+                if store!.snapshot["brush_ready"].bool { break }
+                try await Task.sleep(for: .milliseconds(10))
+            } while true
+            let beforeInk = store!.state["document_file"]["revision"].uint
+            let now = FrameTrace.now()
+            store!.native!.pointer(id: 7, tool: 0, button: 0, records: [
+                50,60,1,0,0,0,0,Double(now),1,
+                70,80,1,0,0,0,0,Double(now + 10_000_000),2,
+                90,95,1,0,0,0,0,Double(now + 20_000_000),3,
+            ], predicted: false, revision: store!.cameraRevision)
+            // No display link/frame follows this pen-up. The full lifecycle
+            // barrier must submit it and await the published recovery archive.
             let firstFlush = await flush(store!); precondition(firstFlush)
+            precondition(store!.state["document_file"]["revision"].uint > beforeInk, "Queued pen-up must reach committed recovery")
             print("Recovery first flush \(platform)"); fflush(stdout)
             let first = try await io { try files.list().records.first! }
             let firstBytes = try await io { try Data(contentsOf: files.archive(first)!) }
@@ -143,13 +216,26 @@ import QuartzCore
                 } : nil))
             reopened.invoke("add_layer")
             try await wait("Current replacement fixture missing") { reopened.state["layers"].array.count == 3 }
-            reopened.recovery.restore(recovered)
-            try await wait("Recovery must ask about the current unsaved drawing") { reopened.projectFiles.confirming }
-            reopened.projectFiles.choose("cancel")
-            try await wait("Cancelled recovery did not settle") { !reopened.projectFiles.busy }
-            precondition(reopened.state["document_file"]["epoch"].uint == 0 && reopened.state["layers"].array.count == 3)
-            let cancelledReplacement = try await io { try files.current(recovered.scene) }
-            precondition(cancelledReplacement == recovered)
+            for recoveryFirst in [false, true] {
+                if recoveryFirst {
+                    reopened.recovery.restore(recovered)
+                    reopened.projectFiles.openURL(manual)
+                } else {
+                    reopened.projectFiles.openURL(manual)
+                    reopened.recovery.restore(recovered)
+                }
+                precondition(reopened.projectFiles.error == (recoveryFirst
+                    ? "Finish the current document operation first"
+                    : "Finish the current canvas operation before recovering a drawing"),
+                    "External Open and recovery must reserve their destination before shared busy state arrives")
+                reopened.projectFiles.error = nil
+                try await wait("Replacement must ask about the current unsaved drawing") { reopened.projectFiles.confirming }
+                reopened.projectFiles.choose("cancel")
+                try await wait("Cancelled replacement did not settle") { !reopened.projectFiles.busy }
+                precondition(reopened.state["document_file"]["epoch"].uint == 0 && reopened.state["layers"].array.count == 3)
+                let cancelledReplacement = try await io { try files.current(recovered.scene) }
+                precondition(cancelledReplacement == recovered)
+            }
             reopened.recovery.restore(recovered)
             try await wait("Save before recovery prompt missing") { reopened.projectFiles.confirming }
             reopened.projectFiles.choose("save")

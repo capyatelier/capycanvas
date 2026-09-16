@@ -1,0 +1,157 @@
+diff --git a/crates/layer-render-wgpu/src/lib.rs b/crates/layer-render-wgpu/src/lib.rs
+index d2d7ff4..a324a70 100644
+--- a/crates/layer-render-wgpu/src/lib.rs
++++ b/crates/layer-render-wgpu/src/lib.rs
+@@ -32 +32 @@ pub use present::ViewportPresenter;
+-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
++const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+@@ -3566 +3566 @@ impl CanvasRenderer for WgpuRasterizer {
+-                format: EXPORT_FORMAT,
++                format: wgpu::TextureFormat::Rgba8Unorm,
+diff --git a/crates/layer-render-wgpu/src/scene.wgsl b/crates/layer-render-wgpu/src/scene.wgsl
+index 2278d4f..a71147c 100644
+--- a/crates/layer-render-wgpu/src/scene.wgsl
++++ b/crates/layer-render-wgpu/src/scene.wgsl
+@@ -60,0 +61,6 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
++    if op == 8u {
++        let encoded = textureLoad(front, vec2<i32>(floor(v.uv * vec2<f32>(textureDimensions(front)))), 0);
++        let linear = select(pow((encoded.rgb + .055) / 1.055, vec3<f32>(2.4)), encoded.rgb / 12.92,
++            encoded.rgb <= vec3<f32>(.04045));
++        return vec4<f32>(linear * encoded.a, encoded.a);
++    }
+@@ -62 +67,0 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
+-    if op == 8u { return vec4<f32>(raw.rgb * raw.a, raw.a); }
+diff --git a/crates/layer-render-wgpu/src/tests/filter_library.rs b/crates/layer-render-wgpu/src/tests/filter_library.rs
+index 112b3a8..2b386ac 100644
+--- a/crates/layer-render-wgpu/src/tests/filter_library.rs
++++ b/crates/layer-render-wgpu/src/tests/filter_library.rs
+@@ -855,0 +856,129 @@ fn expensive_filter_chain_incremental_matches_full_at_document_and_tile_edges()
++
++// Independent algorithm capture; no checked-in reference is replaced.
++#[test]
++fn windows_independent_filter_capture() {
++    let mut r = WgpuRasterizer::new().unwrap();
++    let adapter = r.adapter.get_info();
++    eprintln!("Independent pre-migration adapter: {adapter:?}");
++    let expected = match std::env::var("CAPY_ORACLE_BACKEND").unwrap().as_str() {
++        "dx12" => wgpu::Backend::Dx12,
++        "vulkan" => wgpu::Backend::Vulkan,
++        "metal" => wgpu::Backend::Metal,
++        _ => panic!("expected explicit dx12, vulkan or metal backend"),
++    };
++    assert_eq!(adapter.backend, expected);
++    assert_ne!(adapter.device_type, wgpu::DeviceType::Cpu);
++    let directory =
++        std::env::var("CAPY_ORACLE_OUTPUT").expect("explicit isolated output directory");
++    std::fs::create_dir_all(&directory).unwrap();
++    std::fs::write(format!("{directory}/adapter.txt"), format!("{adapter:?}\n")).unwrap();
++    let base = setup(&mut r, EXTENT);
++    submit(
++        &mut r,
++        EXTENT,
++        std::slice::from_ref(&base),
++        0.,
++        true,
++        true,
++        None,
++    );
++    let input = image(&mut r);
++    png(&format!("{directory}/input.png"), EXTENT, &input);
++    png(&format!("{directory}/source.png"), EXTENT, &fixture(EXTENT));
++    let sample = [64usize, 48usize];
++    let columns = 8;
++    let rows = (BuiltinEffect::ALL.len() * 4).div_ceil(columns);
++    let extent = [(columns * sample[0]) as u32, (rows * sample[1]) as u32];
++    let mut pixels = vec![0; extent[0] as usize * extent[1] as usize * 4];
++    for (i, id) in BuiltinEffect::ALL.into_iter().enumerate() {
++        for scope in 0..4 {
++            let mut effect = filter(id);
++            effect.properties.clipped = scope == 1 || scope == 3;
++            if scope >= 2 {
++                effect.opacity = 0.63;
++                let mut mask = layer_core::LayerMask::reveal_all(LayerId(100), Point::default());
++                mask.default_coverage = 0.47;
++                effect.mask = Some(mask);
++            }
++            if scope == 3 && effect.effect.as_ref().unwrap().program.time {
++                Arc::make_mut(effect.effect.as_mut().unwrap())
++                    .set("animate", EffectValue::Toggle(true))
++                    .unwrap();
++            }
++            submit(
++                &mut r,
++                EXTENT,
++                &[effect, base.clone()],
++                2.5,
++                i == 0 && scope == 0,
++                true,
++                None,
++            );
++            let output = image(&mut r);
++            png(
++                &format!("{directory}/{}-{scope}.png", id.id()),
++                EXTENT,
++                &output,
++            );
++            let index = i * 4 + scope;
++            for y in 0..sample[1] {
++                for x in 0..sample[0] {
++                    let sx = (2 * x + 1) * EXTENT[0] as usize / (2 * sample[0]);
++                    let sy = (2 * y + 1) * EXTENT[1] as usize / (2 * sample[1]);
++                    let src = (sy * EXTENT[0] as usize + sx) * 4;
++                    let dst = ((index / columns * sample[1] + y) * extent[0] as usize
++                        + index % columns * sample[0]
++                        + x)
++                        * 4;
++                    pixels[dst..dst + 4].copy_from_slice(&output[src..src + 4]);
++                }
++            }
++        }
++    }
++    png(&format!("{directory}/sheet.png"), extent, &pixels);
++    let candidate =
++        std::env::var("CAPY_ORACLE_CANDIDATE").expect("explicit current capture directory");
++    let read = |name: &str, expected_extent: [u32; 2]| {
++        let mut reader =
++            png::Decoder::new(std::fs::File::open(format!("{candidate}/{name}.png")).unwrap())
++                .read_info()
++                .unwrap();
++        let mut bytes = vec![0; reader.output_buffer_size()];
++        let info = reader.next_frame(&mut bytes).unwrap();
++        assert_eq!([info.width, info.height], expected_extent);
++        assert_eq!(info.color_type, png::ColorType::Rgba);
++        assert_eq!(info.bit_depth, png::BitDepth::Eight);
++        bytes.truncate(info.buffer_size());
++        bytes
++    };
++    assert_eq!(input, read("input", EXTENT), "Imported inputs differ");
++    let current = read("actual", extent);
++    assert_eq!(current.len(), pixels.len());
++    let errors: Vec<_> = current
++        .iter()
++        .zip(&pixels)
++        .map(|(a, b)| a.abs_diff(*b))
++        .collect();
++    let maximum = *errors.iter().max().unwrap();
++    let changed = errors
++        .chunks_exact(4)
++        .filter(|p| p.iter().any(|e| *e != 0))
++        .count();
++    let above_one = errors
++        .chunks_exact(4)
++        .filter(|p| p.iter().any(|e| *e > 1))
++        .count();
++    let alpha_max = errors.iter().skip(3).step_by(4).max().unwrap();
++    eprintln!(
++        "Independent/current raw RGBA comparison: maximum={maximum}; changed_pixels={changed}; pixels_above_one={above_one}; maximum_alpha={alpha_max}"
++    );
++    assert!(
++        maximum <= 1,
++        "Current filters differ from the independent renderer"
++    );
++    std::fs::write(
++        format!("{directory}/filters.txt"),
++        BuiltinEffect::ALL.map(|id| id.id()).join("\n"),
++    )
++    .unwrap();
++}

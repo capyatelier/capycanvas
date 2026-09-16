@@ -89,10 +89,13 @@ void LayerRow::init(){
     name.DoubleTapped([weak](auto&&,DoubleTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);});
     name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(auto self=weak.lock()){
         if(e.Key()==Windows::System::VirtualKey::F2){self->action(O({{L"op",S(L"begin_rename")},{L"id",N(self->id)}}));e.Handled(true);}
-        else if(e.Key()==Windows::System::VirtualKey::Application||(e.Key()==Windows::System::VirtualKey::F10&&(GetKeyState(VK_SHIFT)&0x8000))){
-            self->context(false,self->name);e.Handled(true);
-        }
     }});
+    for(auto target:{name,content,mask})target.KeyDown([weak](auto&& sender,KeyRoutedEventArgs const& e){
+        if(e.Key()!=Windows::System::VirtualKey::Application&&!(e.Key()==Windows::System::VirtualKey::F10&&(GetKeyState(VK_SHIFT)&0x8000)))return;
+        if(auto self=weak.lock()){
+            auto anchor=sender.template as<Button>();self->context(anchor==self->mask,anchor);e.Handled(true);
+        }
+    });
     lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,8);body.Children().Append(lockImage);
     grip=pick(L"Drag layer",9,[]{});grip.Height(12);grip.Content(icon(L"grip",data->theme(),12));grip.Opacity(.6);
     for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},

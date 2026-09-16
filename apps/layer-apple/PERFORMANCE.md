@@ -17,6 +17,373 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Remaining short workload profiles — 2026-09-15
+
+The three smaller profiles now complete on both physical hosts with the full
+default editor, unchanged brushes and 240 Hz synthetic input. Each has 45 measured
+seconds after warm-up and a completed postlude. GPU timing is disabled; no builds,
+UI tests or profiler run during measurement. The two physical hosts run some
+profiles concurrently; device installation briefly overlaps the first Mac run.
+
+| Host / profile | Long intervals / total | Interval p99, ms | CPU owner p99, ms |
+| --- | ---: | ---: | ---: |
+| Mac ink | 70 / 3,728 | 22.222 | 3.303 |
+| Mac predicted ink | 40 / 3,779 | 22.222 | 3.198 |
+| Mac watercolor | 50 / 3,745 | 22.222 | 6.059 |
+| iPad ink | 38 / 5,061 | 8.334 | 7.230 |
+| iPad predicted ink | 3 / 5,031 | 8.334 | 2.305 |
+| iPad watercolor | 89 / 4,962 | 16.667 | 9.133 |
+
+All six have nominal thermal state and no renderer errors, rejected input,
+overflow, missing callbacks or zero-time measured presentations. Mac's retained
+cadence problem also occurs in single-layer ink; it is not confined to 4K
+multilayer rendering. iPad's ink p99 fits its refresh budget, while watercolor's
+does not. Every run retains some longer intervals. Short-run memory growth is
+2.6–21.2 MiB for ink and 143–169 MiB for watercolor; these observations do not
+establish sustained memory behavior or attribute its cause.
+
+These results fill short-profile coverage, not sustained acceptance or physical
+input latency. They include the unpublished Layers observation experiment below.
+Review found absent layer thumbnails in both Mac ink captures, while watercolor
+and a short published-build comparison show previews. The observation change is
+reverted to the established revision refresh rather than adding another refresh
+path. The six measured binaries, hashes, reports and captures remain in ignored
+`artifacts/performance/remaining-workloads-v1/`; the restoration and visual check
+are under `artifacts/apple-layer-thumbnail-followup-v1/`. Both restored Release
+builds pass without warnings, and the short Mac comparison shows the painted
+layer preview and white Paper thumbnail. No cadence improvement
+is claimed from the restoration, and the six measurements are not relabeled as
+results from the restored source.
+
+## Editor composition and update scope — 2026-09-15
+
+The existing 45-second eight-layer 4K workload is compared with the normal Mac
+editor and with Zen activated through its normal header button during warm-up.
+GPU timestamps, compilers and UI tests are inactive during measurement. Both
+conditions retain the 2400 × 1740 drawable and 90 Hz display. These are short
+synthetic comparisons, not physical-input or sustained acceptance.
+
+| Mac condition | Long continuous intervals / total | Continuous interval p99, ms |
+| --- | ---: | ---: |
+| Published app, normal editor | 61 / 3,764 | 22.222 |
+| Published app, Zen | 19 / 3,767 | 11.111 |
+| Layer-hosting correction, normal editor | 48 / 3,745 | 22.222 |
+| Layer-hosting correction, Zen | 21 / 3,793 | 11.111 |
+| Narrower Layers observation, normal editor | 49 / 3,743 | 22.222 |
+
+Mac now assigns its Metal layer before enabling `wantsLayer`, following
+[AppKit's layer-hosting contract](https://developer.apple.com/documentation/appkit/nsview/wantslayer).
+The first candidate also includes the small Tool Settings heading style change.
+Neither is established as a cadence fix. All sampled unpainted paper pixels
+agree across the four original/candidate captures; no paper-loss bug is proven.
+
+The subsequent experiment changes the Layers panel's observation from the
+global editor revision to layer state. Rename and document replacement retain
+their existing invalidation. The final normal-editor run does not demonstrate
+a cadence benefit, and the thumbnail follow-up above subsequently reverts this
+change. Both experimental Release builds have zero compiler warnings. The existing
+row suite passes both Apple policies, and the Mac layer setup passes all
+twenty-two existing assembled canvas workflow groups.
+
+All five intervals and postludes complete with nominal thermal state and no
+renderer errors, rejected input, recorder overflow or missing/zero-time measured
+presentations. The Zen results justify investigating native editor composition,
+but do not identify a particular panel or establish an optimization. The current
+normal editor still misses the 90 Hz cadence requirement. No new scheduler,
+iPad workload or ten-minute rerun follows these negative implementation results.
+Evidence, retained baseline/candidate apps, captures and Release metadata are
+under ignored `artifacts/performance/editor-composition-v1/`.
+
+One focused Animation Hitches trace of that current Mac Release app records
+no OS-classified hitches. The app recorder still reports 35 long continuous
+intervals over the full 45-second workload; profiling makes this a diagnostic
+run, not clean cadence acceptance. Six of the sixteen long intervals within
+the profile contain no intermediate screen presentation. Seven contain an
+intermediate screen presentation associated with an app UI update. These are
+clock-aligned associations, not proof of a particular cause. The largest recorded
+app update is 2.166 ms, and the CPU samples do not establish an expensive panel
+or a large main-thread stall. Thumbnail queries already suppress unchanged
+snapshots in the Rust publication path. No publication/scheduling workaround
+follows. Both owned processes exit, and the workload/postlude complete without
+renderer errors, rejected input or missing measured presentation callbacks.
+The retained trace, exports and reproducible correlation are under ignored
+`artifacts/performance/editor-hitches-v1/`. Resume other concrete blockers until
+new evidence supports a specific performance change.
+
+A bounded recovery-observation experiment also fails to improve cadence.
+Replacing its broad `ObservableObject` publication with property observation
+records 63 long intervals out of 3,747, with a 22.222 ms p99. The retained
+pre-change run has 49 out of 3,743 and the same p99; this single comparison does
+not establish a regression. Both Release builds and the complete local recovery
+suite pass, but the source change is rejected and reverted. The original Mac
+executable is restored and iPad Release rebuilt without compiler warnings.
+Evidence and rejected source remain under ignored
+`artifacts/performance/recovery-observation-v1/`. No native recovery workflow
+is repeated for this discarded change.
+
+## GPU endpoint correlation — 2026-09-15
+
+The optional recorder now retains the existing GPU marker endpoints and samples
+paired Metal clocks. This is an observation change only; rendering, admission
+and presentation scheduling are unchanged. Both Release builds pass without
+compiler warnings, as do the actual Metal timer test, native timing bridge
+check, Swift recorder fixture and seventeen analyzer tests. The analyzer keeps
+sampling uncertainty, missing observations and the existing cadence criteria.
+
+One 45-second `layered-4k` run with GPU timing enabled and one with it disabled
+complete on each physical host, serially after builds. All four measured
+intervals and postludes complete with nominal thermal state, no rejected input,
+renderer errors, recorder overflow or missing/zero-time measured presentations.
+The complete traces retain setup zero-time callbacks: one per run except two
+in the iPad timing-disabled run. Both Mac artwork/Navigator captures are reviewed.
+
+| Measurement | Mac timing on / off | iPad timing on / off |
+| --- | ---: | ---: |
+| Actual measured presentations | 3,798 / 3,752 | 5,029 / 5,041 |
+| CPU owner median, ms | 2.377 / 2.207 | 1.830 / 1.575 |
+| CPU owner p99, ms | 4.115 / 4.077 | 9.092 / 9.131 |
+| Long continuous intervals / total, timing on | 54 / 3,769 | 31 / 5,000 |
+| Long continuous intervals / total, timing off | 70 / 3,723 | 43 / 5,012 |
+| Calibrated measured GPU frames, timing on | 3,798 / 3,798 | 5,028 / 5,029 |
+
+All 54 Mac long intervals have a right-hand frame whose GPU end marker precedes
+its presentation target, by at least 1.85 ms. On iPad, 26 of 31 do; the other five
+end 0.080–0.918 ms after target and were admitted only 1.027–3.059 ms before it.
+Their CPU owner work is 1.393–1.990 ms. All long-interval endpoints are calibrated;
+the one skipped iPad GPU observation remains missing elsewhere in measurement.
+Recorded clocks are monotonic, and no calibrated GPU start precedes its frame's
+admission. Maximum measured sampling-window uncertainty is 0.011 ms on Mac and
+0.026 ms on iPad. Unknown clock drift is not included in those bounds.
+
+Late GPU completion does not explain most observed gaps in these instrumented
+runs. A presentation target is still not a Metal commit deadline, so this does
+not establish a compositor or scheduling root cause. The single on/off pair
+per host does not calibrate total recording overhead or prove a cadence benefit;
+both cadence gates still fail. No renderer/scheduler workaround or ten-minute
+rerun follows. Resume feature/state acceptance rather than repeating these
+measurements without a new, actionable hypothesis.
+
+A read-only follow-up reuses these four traces to check delayed main-thread
+completion as an explanation for owner-pending denials. Neither timing-disabled
+run has a denial after recorded owner completion. With timing enabled, Mac has
+two such denials, only one between the admissions of long-interval endpoints;
+iPad has none. The counts reproduce the analyzer's original cadence failures.
+This does not support adding another admission gate or completion workaround.
+The script and per-event results are under ignored
+`artifacts/performance/input-state-followup-v1/`; no new workload or runtime
+change accompanies this analysis, and the root cause remains unproven.
+
+Evidence, source hashes, comparison reports, reproduction scripts and that
+investigation's Release metadata are under ignored
+`artifacts/performance/gpu-clock-correlation-v1/`. All workload processes are
+closed. The disposable iPad app is removed, its original stopped test runner is
+restored, and both artist editor descriptors are unchanged.
+The subsequent OS file-launch startup fix rebuilt both apps; its Release
+metadata is under `artifacts/apple-os-file-launch-v1/after/`. That fix changes
+Open admission only, so no drawing workload is repeated and no new performance
+claim is made.
+The [handoff](../../docs/development/apple-handoff.md) identifies the latest
+on-disk Release builds; later feature/lifecycle builds do not add performance
+evidence unless a corresponding workload is recorded here.
+
+## Coverage preparation cleanup and physical validation — 2026-09-15
+
+Review of the retained command-encoding profile identifies redundant coverage
+work in the shared renderer. Single-batch destination prediction already reads
+committed coverage directly, but still allocated and initialized a private
+coverage pair. The existing prediction-mode decision now retires that unused
+pair. Multiple-batch and watercolor prediction retain their private coverage.
+New persistent coverage pages also no longer receive two preliminary clear
+passes: their stroke-owner transition clears the active surface, and the normal
+batch copy initializes the inactive surface before rendering. The duplicate
+initialization flags and loops are removed; no new rendering path is added.
+
+A focused Metal regression first reproduces two unused coverage pairs across a
+two-page prediction, then passes after the cleanup: prediction storage falls
+from 768 to 512 KiB. Full-image equality holds when returning from a multiple-batch
+preview, cancelling, recreating the preview and committing its ink. This is a
+resource reduction, not a timing or presentation-cadence measurement.
+
+All thirteen final Metal checks pass, including 120 material full-image
+comparisons with zero channel difference, stroke-coverage reset, watercolor
+prediction/pen-up, contact invariants and project/mask save/reopen/Undo/Redo.
+Evidence is under ignored `artifacts/performance/preview-coverage-retirement-v1/`.
+The cleanup accompanies the brush-draft milestone. Both final Release builds
+pass, and the rebuilt apps complete one existing 45-second eight-layer 4K G-Pen
+workload per physical host, with prediction and 240 Hz synthetic input. The runs
+are serial and follow all builds/UI automation, with GPU timestamps and CPU
+sampling disabled. Both measured intervals and postludes finish with nominal
+thermal state, no rejected input, renderer errors, overflow or missing/zero-time
+measured presentation callbacks. The Mac artwork/live Navigator is reviewed.
+
+| Measurement | Mac, 90 Hz | Physical iPad, 120 Hz |
+| --- | ---: | ---: |
+| Measured seconds | 45.009 | 45.000 |
+| Actual presentations | 3,777 | 5,075 |
+| CPU owner p99 / max, ms | 3.733 / 14.886 | 9.097 / 17.692 |
+| CPU frames over host budget | 28 | 67 |
+| Long continuous intervals / total | 49 / 3,748 | 41 / 5,046 |
+| Continuous interval p99 / max, ms | 22.222 / 22.222 | 8.334 / 25.000 |
+| Measured footprint growth / peak, MiB | 51.88 / 1,276.97 | 22.02 / 1,299.80 |
+
+Both cadence gates still fail. These current short runs are not a controlled
+before/after comparison and do not establish a timing or memory-growth benefit.
+No ten-minute run follows. Sustained cadence, physical-input latency, isolated
+GPU timing, recorder overhead and the complete performance matrix remain open.
+Grouped native evidence and that milestone's Release metadata are under
+`artifacts/apple-brush-state-milestone-v1/` (`physical/`, `release/`). Both owned
+processes are stopped; the physical diagnostic is removed and its prior test
+runner restored, with the artist's editor descriptors unchanged.
+The subsequent workspace-manager cleanup rebuilt both Release apps; its metadata is under
+`artifacts/apple-workspace-manager-cleanup-v1/release/`.
+That milestone did not affect the renderer or add a physical drawing run.
+The newer diagnostic builds and recordings are described above.
+
+## Hardware tile hashing, short physical comparison — 2026-09-15
+
+The retained valid CPU profile identifies software SHA-256 work inside
+`RasterCapture.finish` workers calling `TileBlob::encode`. The installed sha2
+0.10 dependency gates its runtime-detected AArch64 SHA instructions behind its
+`asm` feature. Enabling that existing feature only on AArch64 avoids another
+hash implementation, tile-format change or capture-scheduling change. Wasm and
+Intel dependency resolution retain their previous features.
+
+A local Release benchmark encodes real 256-square paint and mask tiles with
+solid, diagonal-stroke and deterministic-noise contents. Two runs per variant
+use baseline/accelerated/accelerated/baseline order, each with 16 warm-up and
+512 measured encodes per case. The six cases improve 4.5–5.6 times; every case
+retains identical digests and compressed bytes and passes decoding. This measures
+CPU tile encoding with output checks, not whole-app throughput or drawing cadence.
+
+The 48 default core/workspace checks, 86 native workspace checks, iOS core
+compilation and both Release app builds pass; the builds have no compiler
+warnings. A 45-second before/after pair on each physical host uses the existing
+eight-layer 4K G-Pen workload, 240 Hz synthetic input, prediction and ten-second
+warm-up/postlude. GPU timestamps, CPU sampling and UI automation are disabled.
+The Mac baseline precedes compilation and the changed run follows both builds.
+The physical iPad baseline overlaps compilation on the Mac.
+
+| Measurement | Mac before | Mac after | iPad before | iPad after |
+| --- | ---: | ---: | ---: | ---: |
+| CPU owner p99 / max, ms | 3.922 / 15.762 | 3.878 / 15.338 | 8.892 / 17.654 | 8.776 / 10.481 |
+| CPU frames over host budget | 28 | 28 | 57 | 56 |
+| Long continuous intervals / total | 57 / 3,734 | 49 / 3,772 | 28 / 5,017 | 18 / 5,008 |
+| Continuous interval p99 / max, ms | 22.222 / 22.222 | 22.222 / 22.222 | 8.334 / 25.001 | 8.334 / 25.000 |
+| Peak measured footprint, MiB | 1,262.58 | 1,324.11 | 1,299.03 | 1,310.92 |
+| Measured footprint growth, MiB | 5.95 | 9.81 | 10.86 | 8.70 |
+
+All four intervals and postludes complete, with nominal thermal state and no
+rejected input, renderer errors, recorder overflow, or missing/zero-time measured
+presentations. Mac captures show the expected artwork and live Navigator.
+The unchanged presentation p99 and these single short pairs do not establish
+reliable cadence or memory improvement. Both cadence gates still fail; no
+ten-minute rerun follows. Physical-input latency, isolated GPU execution,
+recorder overhead and sustained memory behavior remain unqualified.
+
+This optimization accompanies the Settings text milestone. Evidence,
+exact source/build hashes, original benchmark binaries and native trace summaries
+are ignored under `artifacts/performance/tile-sha-acceleration-v1/`. Rebuilding
+the benchmark's baseline against the changed core manifest would also enable
+acceleration; retain the original binaries/results for any future comparison.
+
+## Current contact renderer, eight-layer 4K ink — 2026-09-14
+
+A later 20-second CPU sample of the retained milestone Release app completes
+during the same 45-second workload. The main render-owner branch is command
+encoding/finish in wgpu; snapshot publication and history trimming contribute
+much less sampled work. The profile also identifies an unnecessary scan of all
+paint pages in destination-companion preparation. That helper now visits only
+the persistent destination-reading batches' damaged pages, removing two temporary
+collections without another rendering path. Fourteen existing Metal contact,
+project/history, destination-brush and sparse-page checks pass, as do both Apple
+Release builds. A frame-rate improvement is not established by these checks.
+
+Two other sampling attempts abort the workload and are invalid: the initial
+collector also exited before its sampler report was ready; the post-change
+report is mostly idle samples after the abort. Do not compare those samples to
+the valid baseline or repeat sampler retries as the routine development loop.
+The valid baseline and failures remain under ignored
+`artifacts/performance/contact-cpu-profile-v1/`, `contact-cpu-profile-v2/` and
+`contact-page-preparation-v1/`. CPU sample counts are not GPU timings, calibrated
+CPU milliseconds, or proof of the cause of missed display intervals.
+
+The post-change Mac Release run without the sampler completes all 45 measured
+seconds and its postlude: 10,129 accepted samples, 3,769 presentations, no renderer
+errors, recorder overflow or missing/zero-time measured callbacks. CPU owner
+p99/max is 3.931/19.064 ms, with 26 frames above 11.11 ms. There are 53 long
+continuous intervals out of 3,740, so the 90 Hz gate still fails. Measured footprint
+grows 24.83 MiB; thermal state stays nominal. The full capture shows the completed
+ink and live Navigator. This single run is not a calibrated before/after comparison
+or sustained acceptance. All owned apps/profilers are terminal; the iPad build is
+not installed or launched in this batch. The clean result is retained under
+`artifacts/performance/contact-page-preparation-v1/clean/`.
+
+After integrating the shared swept-contact renderer, both current Release apps
+complete a 45-second `layered-4k` diagnostic. Each uses the unchanged 4096-square,
+eight-paint-layer G-Pen fixture, prediction, pressure variation and 240 Hz input,
+with ten-second warm-up/postlude and GPU timestamp recording disabled. Mac uses
+2400 × 1740 drawable pixels at 90 Hz; physical iPad uses 2752 × 2064 at 120 Hz.
+The runs are serial, with no compiler, UI automation or GPU profiler running.
+
+| Short measurement | Mac | Physical iPad |
+| --- | ---: | ---: |
+| CPU owner p99 / max, ms | 4.035 / 15.695 | 7.939 / 17.628 |
+| CPU frames over host budget | 27 | 48 |
+| Long continuous intervals / total | 62 / 3,728 | 35 / 5,035 |
+| Continuous interval p99 / max, ms | 22.222 / 33.334 | 8.334 / 25.000 |
+| Peak measured footprint, MiB | 1,278.32 | 1,330.80 |
+| Measured footprint growth, MiB | 21.52 | 12.55 |
+
+Both intervals finish with no rejected input, renderer errors, recorder overflow,
+missing callbacks or zero-time measured presentations. Full readiness precedes
+measurement. Mac retains one zero-time presentation outside measurement. The
+reviewed Mac capture shows pressure-varying ink over the underpaint, the complete
+editor and live Navigator. These are valid runs with failing target cadence.
+
+All 27 slow Mac CPU frames follow a pen-up receipt. However, 61 of its 62 long
+continuous presentation intervals join frames whose latest receipts are both
+movement; shortening pen-up work alone does not explain those gaps. On iPad,
+22 slow CPU frames follow pen-up and 26 follow movement. The latter include
+drawable-acquisition waits exceeding 1 ms. Receipt associations are diagnostic,
+not causal proof or evidence of which input pixels appeared. No presentation,
+admission, fidelity or snapshot change is adopted from this observation.
+
+The same iPad binary subsequently completes 600.008 measured seconds with
+135,003 nonpredicted samples and 67,295 actual presentations. CPU owner
+p50/p95/p99/max is 1.743/2.664/9.245/22.298 ms, with 948 frames over 8.33 ms.
+Continuous presentation p99/max is 12.498/29.167 ms; 727 of 66,919 intervals
+exceed the existing cadence threshold. Drawable acquisition p99/max is
+5.004/21.209 ms. No measured callbacks are missing or zero-time; no input is
+rejected, and there are no renderer errors or recorder overflows. Full readiness
+precedes measurement and the postlude completes. Sustained cadence still fails.
+
+Measured iPad footprint grows 291.28 MiB to a 1,574.08 MiB peak. Thermal state
+remains nominal. History, renderer and recorder contributions are not isolated,
+so this does not establish a leak or bounded long-term memory use. The owned
+process is verified closed, its disposable app removed and the existing test
+runner restored. Both review and artist editor descriptors remain unchanged;
+neither editor is updated or restarted. No XCTest startup retry is attempted.
+
+The same Mac binary completes 600.001 measured seconds with 135,001
+nonpredicted samples and 50,213 actual presentations. CPU owner
+p50/p95/p99/max is 2.338/3.407/4.073/21.860 ms, with 322 frames over 11.11 ms.
+Continuous presentation p99/max is 22.222/33.334 ms; 909 of 49,837 intervals
+exceed the cadence threshold. Drawable acquisition p99/max is 0.155/0.654 ms.
+Measured footprint grows 326.47 MiB to a 1,574.75 MiB peak, with nominal thermal
+state. All input is accepted, readiness precedes measurement, the postlude
+completes, and there are no renderer errors, recorder overflows or missing/
+zero-time measured presentations. The final full-window capture is reviewed
+and the owned process is verified closed. Sustained Mac cadence also fails.
+
+Both ten-minute runs preserve the original workload on the same source; all
+measurement jobs are terminal. A subsequent mask-only contact-brush correction
+does not change their ordinary color-painting path. The following main integration
+adds explicit grouping to the shader's existing integer hash expression.
+Isolated GPU execution, calibrated recorder overhead,
+physical Pencil latency, memory attribution and the complete workload matrix
+remain open. Evidence and the completed-run checkpoint are ignored under
+`artifacts/performance/contact-layered4k-fb81ebe/`.
+
 ## Metal presentation notification diagnostic — 2026-09-13
 
 No renderer change was adopted from this diagnostic. Apple's
@@ -1318,10 +1685,10 @@ records for two seconds; missing completions at that boundary stay unverified.
 ## JSONL schema 1
 
 The first line is metadata. Each remaining line is `[kind, a, b, ..., j]` with
-unsigned integer fields; unused fields are zero. Times and durations use
-nanoseconds in the CACurrentMediaTime monotonic clock domain. Frame IDs are
-the admission timestamp. GPU timestamp differences are converted using the
-queue's timestamp period, not compared as absolute CPU clock values.
+unsigned integer fields; unused fields are zero. Host times use nanoseconds in
+the CACurrentMediaTime monotonic clock domain. Frame IDs are the admission
+timestamp. GPU queue durations use the queue's timestamp period. Raw GPU
+endpoints and paired Metal clock samples retain their separate clock domains.
 
 | Kind | Fields in order, excluding trailing zeros |
 | --- | --- |
@@ -1332,12 +1699,25 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 4 presented | frame ID, actual presentation time, callback observation time, drawable ID |
 | 5 memory | observation time, physical footprint bytes, resident bytes, thermal state, Mach status |
 | 6 display | observation time, pixel width/height, scale multiplied by 1000, maximum refresh rate |
-| 7 GPU | frame ID, GPU queue span, status (1 valid, 2 readback failure, 3 invalid timestamps) |
+| 7 GPU | frame ID, GPU queue span, status (1 valid, 2 readback failure, 3 invalid timestamps), raw GPU start/end ticks |
 | 8 GPU status | observation time, support (0 uninitialized, 1 supported, 2 unavailable), requested/skipped/invalid/pending counts, poll-error flag |
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
 | 13 presentation retry | attempt time, original display target, admitted flag, denial reason using kind 0 values |
+| 14 GPU clock | recorder time before sampling, Metal CPU nanoseconds, Metal GPU ticks, recorder time after sampling |
+
+Optional GPU recording samples paired clocks at most ten times per second.
+The analyzer follows Apple's [GPU-to-CPU timestamp conversion](https://developer.apple.com/documentation/metal/converting-gpu-timestamps-into-cpu-time),
+interpolating only between recorded samples. Recorder times surrounding each
+call bound the translation from Metal CPU time to the recorder clock. Reported
+uncertainty covers that sampling window, not unknown clock drift. Invalid or
+nonmonotonic clock samples disable calibration; absent or unbracketed endpoints
+remain missing. These observations are available for both the whole trace and
+its measured workload interval. The GPU end marker follows the frame's queued
+work and includes submission/polling gaps; it is not isolated GPU busy time.
+The display target is not a recorded Metal commit deadline, so completion before
+that target alone does not establish the cause of a missed presentation.
 
 The analyzer also retains local scheduling experiment records: kind 12 contains
 frame ID, CPU commit deadline, presentation target and drawable admission status

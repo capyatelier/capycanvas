@@ -290,7 +290,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let stored = self.claim(id).await?;
         let result: Result<StoredEntity> = async {
             let ItemContent::Workspace {
-                history, baseline, ..
+                history, ..
             } = &stored.entity.content
             else {
                 return Err(StoreError::invalid("Choose a workspace."));
@@ -305,7 +305,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .layout
                     .clone()
             } else {
-                baseline.as_ref().clone()
+                stored.entity.starting_layout(self.platform)?
             };
             self.publish_layout(
                 &stored,

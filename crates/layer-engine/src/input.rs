@@ -128,11 +128,25 @@ pub fn to_stroke_point(
     curve: PressureCurve,
     stroke_start_ns: u64,
 ) -> StrokePoint {
+    // Stylus orientation lives in the document just like position. Preserve
+    // tilt magnitude through zoom; rotate/reflect its direction with the view.
+    let [a, b, c, d, _, _] = transform.surface_to_document;
+    let map_direction = |vector: [f32; 2]| {
+        let mapped = [
+            a.mul_add(vector[0], c * vector[1]),
+            b.mul_add(vector[0], d * vector[1]),
+        ];
+        let scale = vector[0].hypot(vector[1]) / mapped[0].hypot(mapped[1]).max(f32::MIN_POSITIVE);
+        [mapped[0] * scale, mapped[1] * scale]
+    };
+    let twist_axis = map_direction([event.twist_radians.cos(), event.twist_radians.sin()]);
     StrokePoint {
         position: transform.map(event.surface_position),
         pressure: curve.map(event.pressure),
-        tilt: event.tilt_radians,
-        twist: event.twist_radians,
+        tilt: map_direction(event.tilt_radians),
+        twist: twist_axis[1]
+            .atan2(twist_axis[0])
+            .rem_euclid(std::f32::consts::TAU),
         elapsed_micros: event
             .timestamp_ns
             .saturating_sub(stroke_start_ns)
@@ -343,6 +357,37 @@ mod tests {
             }
         }
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn stylus_pose_rotates_and_reflects_with_the_document_without_zooming_tilt() {
+        let mut pen = event(1, false);
+        pen.tilt_radians = [0.6, 0.8];
+        pen.twist_radians = 0.;
+        let rotated = to_stroke_point(
+            pen,
+            ViewTransform {
+                revision: 1,
+                surface_to_document: [0., 2., -2., 0., 10., 20.],
+            },
+            PressureCurve::default(),
+            0,
+        );
+        assert!((rotated.tilt[0] + 0.8).abs() < 0.00001);
+        assert!((rotated.tilt[1] - 0.6).abs() < 0.00001);
+        assert!((rotated.twist - std::f32::consts::FRAC_PI_2).abs() < 0.00001);
+        let reflected = to_stroke_point(
+            pen,
+            ViewTransform {
+                revision: 2,
+                surface_to_document: [-0.5, 0., 0., 0.5, 0., 0.],
+            },
+            PressureCurve::default(),
+            0,
+        );
+        assert!((reflected.tilt[0] + 0.6).abs() < 0.00001);
+        assert!((reflected.tilt[1] - 0.8).abs() < 0.00001);
+        assert!((reflected.twist - std::f32::consts::PI).abs() < 0.00001);
     }
 
     #[test]

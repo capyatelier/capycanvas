@@ -470,6 +470,7 @@ fn style(brush: &BrushSnapshot, tool: StrokeTool, alpha_locked: bool) -> layer_r
         wet_mix: brush.wet_mix,
         transport: brush.transport.clone(),
         deform: brush.deform,
+        contact: brush.contact,
     }
 }
 
@@ -838,7 +839,17 @@ mod gpu_tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(
-            renderer.pipelines.material.iter().all(|p| !p.ready()),
+            renderer
+                .pipelines
+                .material
+                .iter()
+                .enumerate()
+                .all(|(index, p)| {
+                    let required = index
+                        == MaterialPipelineKind::Coverage.index(MaterialOperation::Coverage)
+                        || index == MaterialPipelineKind::Color.index(MaterialOperation::Coverage);
+                    !p.ready() || required
+                }),
             "Unrelated material shaders must not gate current content"
         );
         assert!(
@@ -867,6 +878,9 @@ mod gpu_tests {
             hardness: 1.,
             texture_sign: [1.; 2],
             material: [0.; 4],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         }];
         let mut batches = vec![DabBatch {
             material_update: 0,
@@ -920,7 +934,19 @@ mod gpu_tests {
             compilations,
             "Document warmup must include actual fused/image pipelines"
         );
-        assert!(renderer.pipelines.material.iter().all(|p| !p.ready()));
+        assert!(
+            renderer
+                .pipelines
+                .material
+                .iter()
+                .enumerate()
+                .all(|(index, p)| {
+                    let required = index
+                        == MaterialPipelineKind::Coverage.index(MaterialOperation::Coverage)
+                        || index == MaterialPipelineKind::Color.index(MaterialOperation::Coverage);
+                    !p.ready() || required
+                })
+        );
         reference.submit(packet).unwrap();
         assert_eq!(
             renderer.readback_srgb_rgba8().unwrap(),

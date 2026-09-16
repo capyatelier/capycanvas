@@ -1,4 +1,12 @@
 // DOM gestures and chrome only. Rust owns visibility, order and publication.
+export function workspaceSwitcherMenu(view) {
+  return {title:"Workspaces", sections:[(view?.switcher_display || []).map(row => ({
+    label:row.title, selected:row.id === view.id,
+    enabled:view.ready && !view.busy && !view.page && !view.form,
+    action:{type:"workspace_manager", command:{type:"switch", id:row.id}}, sections:[],
+  }))]};
+}
+
 export function createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView, redraw}) {
   const root = element("div", "workspace-switcher");
   root.setAttribute("role", "group"); root.setAttribute("aria-label", "Workspaces");

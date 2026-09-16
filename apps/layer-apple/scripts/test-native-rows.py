@@ -43,7 +43,7 @@ def main():
     sources = ["Shared/Bridge/JSON.swift", "Shared/Bridge/ReorderContact.swift",
                "Shared/Bridge/NativeReorderModel.swift", "Shared/Bridge/AppleContextMenu.swift",
                "Shared/Bridge/AppleContextMenuRequest.swift",
-               "Shared/Editor/WorkspaceRowInteraction.swift", "iOS/Platform/NativeContextMenu.swift",
+               "Shared/Editor/WorkspaceRowInteraction.swift",
                "iOS/Platform/NativeReorderInput.swift",
                "tests/native-row-menus.swift"]
     run("compile", ["xcrun", "--sdk", "iphonesimulator", "swiftc", "-parse-as-library",

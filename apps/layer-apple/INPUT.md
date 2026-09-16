@@ -7,6 +7,44 @@ nanoseconds and phase. The original camera revision travels with each batch.
 Ordinary Mac mouse/tablet input continues through this path; no native event
 object, device serial or vendor identifier crosses the queue.
 
+Both native canvas adapters register the shared input-interruption callback.
+On Mac it clears the captured contact and modifier state before lifecycle blur
+or renderer restart, so a missing mouse-up cannot block the next press.
+`tests/canvas-native-input.swift` checks the application's suspend/resume entry
+points and an actual Metal restart in the assembled AppKit editor, including
+stale movement, a fresh lasso and exact artwork/history. Both Apple policies
+run on Mac; physical sleep, tablet and UIKit interruption remain separate checks.
+
+The same assembled-editor fixture supplies AppKit wheel, pinch and rotation
+values to the real canvas callbacks. It checks precise/coarse scroll units,
+Shift/Control behavior, physical anchoring, contact exclusion and navigation
+after a cancellation frame, with exact artwork Undo/Redo. These supplied values
+do not establish physical trackpad recognition or OS gesture delivery.
+
+On iPad, the contact retains the mouse button selected at press time. Primary
+contacts paint, right/middle contacts pan, and other buttons follow the shared
+ignore policy. Normal and cancelled keyboard releases both end held shortcuts,
+including Space-to-pan.
+
+Pencil hover ends on both normal recognizer exit and cancellation. Both send the
+existing shared cancel phase to clear the cursor; an active Pencil contact still
+suppresses hover updates. `tests/canvas-hover.swift` runs the actual UIKit callback
+and records its accepted native input, covering exit, cancellation, contact
+exclusion, fresh hover and unchanged artwork history. Supplied recognizer states
+do not establish physical Pencil recognition or rendered cursor appearance.
+
+Trackpad and mouse-wheel navigation uses standard UIKit pan, pinch and rotation
+recognizers with the app's existing indirect-input opt-in. They accept scroll
+and transform events; finger and Pencil contacts keep their existing routing.
+Scrolling pans, Shift-scroll pans horizontally and Control-scroll zooms. Pinch
+and rotation can combine around the pointer anchor. Native deltas are consumed
+once, including when cancellation or an active contact suppresses them. Rust
+owns camera scaling and document-idle checks; a gesture arriving during paint
+leaves the camera unchanged without reporting a canvas error. See Apple's
+[trackpad input guidance](https://developer.apple.com/videos/play/wwdc2020/10094/).
+Focused callback and Metal checks cover routing, camera transforms and exact
+artwork/history preservation; physical trackpad/keyboard delivery remains open.
+
 UIKit coalesced observations are real input. Predictions remain visual-only.
 `touchesEstimatedPropertiesUpdated` now updates previously delivered Pencil
 location, pressure, altitude/azimuth and roll estimates. Apple documents these

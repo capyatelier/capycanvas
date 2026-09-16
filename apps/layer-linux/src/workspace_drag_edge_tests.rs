@@ -80,6 +80,7 @@ fn native_workspace_drag_edges() {
                         viewport,
                     });
                     if scenario == "drawer" {
+                        enable_individual_column_panels(&w, source_group);
                         w.dispatch(UiAction::Customize {
                             action: CustomizationAction::ToggleColumnDrawer {
                                 group: source_group,

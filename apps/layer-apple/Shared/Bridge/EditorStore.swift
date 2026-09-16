@@ -10,6 +10,7 @@ import SwiftUI
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
+    @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
     @Published var storagePending = true
     @Published var canRetryStorage = false
@@ -20,6 +21,7 @@ import SwiftUI
     var wake: (() -> Void)?
     var interruptInput: (() -> Void)?
     var focusWindow: (() -> Void)?
+    var focusCanvas: (() -> Void)?
     var systemSceneID: String?
     private(set) var native: NativeOwner?
     private(set) var workspaceLibrary: WorkspaceLibrary?
@@ -49,7 +51,7 @@ import SwiftUI
                 FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
             let usesWorkspaceLibrary = managedWorkspaces && storage.root != nil
-            native = try NativeOwner(platform: platform, scene: scene, persistence: storage,
+            native = try NativeOwner(platform: platform, persistence: storage,
                 traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata,
                 managedWorkspaces: usesWorkspaceLibrary) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
@@ -75,8 +77,13 @@ import SwiftUI
                 storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
                 return
             }
+            let hadRenderer = snapshot["gpu_ready"].bool
             switch ui.receive(next) {
             case .full:
+                if hadRenderer != snapshot["gpu_ready"].bool {
+                    layerThumbnails.reset(); filterPreviews.reset()
+                    if !snapshot["gpu_ready"].bool { canvasSubmitted = false }
+                }
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 projectFiles.receive(state.json)
@@ -102,10 +109,25 @@ import SwiftUI
         }
         wake?()
     }
+    func restartCanvas() {
+        guard !restartingCanvas, let native else { return }
+        interruptInput?()
+        restartingCanvas = true
+        canvasSubmitted = false
+        native.restartCanvas { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.restartingCanvas = false
+                self.failure = error
+                self.wake?()
+            }
+        }
+    }
     func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }
-        native.flushPersistence { [weak self] succeeded in DispatchQueue.main.async {
-            guard let self else { completion(false); return }
+        // Scene teardown may release its view while this barrier is in flight.
+        // Keep the document owner through the final recovery acknowledgement.
+        native.flushPersistence { [self] succeeded in DispatchQueue.main.async {
             Task { @MainActor in
                 var workspaceSaved = true
                 if let library = self.workspaceLibrary {
@@ -113,7 +135,9 @@ import SwiftUI
                     catch { library.error = error.localizedDescription; workspaceSaved = false }
                 }
                 let saved = succeeded && workspaceSaved
-                self.recovery.flush { completion(saved && $0) }
+                self.recovery.flush { [self] result in
+                    completion(saved && result); withExtendedLifetime(self) {}
+                }
             }
         } }
     }
@@ -227,7 +251,7 @@ import SwiftUI
     }
     func invoke(_ command: String) { dispatch(["type": "invoke", "command": command]) }
     func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
-    func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
+    func importLayer(_ url: URL, epoch: UInt64) { native?.importLayer(url, epoch: epoch); wake?() }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
     func doubleClickHandle(_ item: JSON) {
         query(["type": "panel_handle_target", "item": item.raw]) { [weak self] group in

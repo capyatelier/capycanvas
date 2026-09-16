@@ -33,9 +33,10 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
             if (item.preview != null) {
               const image = element("img", "brush-preview"); image.src = asset(`brush-previews/${item.preview}-${state().theme}.png`); image.alt = ""; image.draggable = false;
               node.append(image); node.dataset.brush = item.preview;
-            } else node.append(icon(item.icon));
-            const label = element("span", "tool-choice-label", item.label);
-            if (item.preview != null) label.prepend(icon(item.icon));
+            } else if (kind === "groups") node.append(icon(item.icon));
+            const label = element("span", "tool-choice-label");
+            if (item.preview != null || kind === "subtools") label.append(icon(item.icon));
+            label.append(element("span", "tool-choice-name", item.label));
             node.append(label); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
           }
         }

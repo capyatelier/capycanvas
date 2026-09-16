@@ -1,5 +1,5 @@
 import unittest
-from apple_trace import analyze
+from apple_trace import analyze, calibrate_gpu
 
 
 def record(kind, *values):
@@ -17,6 +17,51 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_gpu_clocks_translate_epochs_rates_and_preserve_target_uncertainty(self):
+        clocks = [record(14, 0, 500_000_000, 100, 2_000_000),
+                  record(14, 100_000_000, 600_000_000, 300, 102_000_000)]
+        events = clocks + [record(11, 5_000_000, 2, 1), record(11, 25_000_000, 3, 1)]
+        for time, start, end in [(10_000_000, 120, 130), (20_000_000, 140, 160), (30_000_000, 160, 174)]:
+            events += [frame(time), record(7, time, (end - start) * 500_000, 1, start, end),
+                       record(4, time, time + 20_000_000)]
+        result = analyze(header(workload={"name": "ink", "measurement_seconds": .02}), events)
+        timing = result["gpu_completion"]
+        self.assertEqual(timing["calibrated_frames"], 3)
+        self.assertEqual(timing["frames_without_calibrated_gpu_times"], 0)
+        self.assertEqual(timing["gpu_end_before_target"], 1)
+        self.assertEqual(timing["gpu_end_after_target"], 1)
+        self.assertEqual(timing["gpu_end_overlaps_target"], 1)
+        self.assertEqual(timing["sampling_uncertainty_ms"]["max"], 2)
+        self.assertEqual(timing["gpu_end_minus_presentation_target_ms"]["p50"], 0)
+        self.assertEqual(timing["gpu_end_minus_presentation_target_ms"]["max"], 3)
+        self.assertEqual(timing["gpu_end_to_presentation_ms"]["p50"], 12)
+        self.assertEqual(result["workload"]["gpu_completion"]["calibrated_frames"], 2)
+        self.assertEqual(result["workload"]["gpu_completion"]["gpu_end_overlaps_target"], 0)
+        self.assertTrue(any("not Metal commit deadlines" in w for w in result["warnings"]))
+
+    def test_gpu_clock_calibration_never_extrapolates_or_fabricates_endpoints(self):
+        clocks = [[10, 1000, 100, 12], [110, 1100, 200, 112]]
+        samples = {i: [i, 10, 1, start, end] for i, (start, end) in enumerate(
+            [(100, 200), (99, 150), (150, 201), (0, 0), (160, 150)])}
+        samples[5] = [5, 0, 2, 120, 130]
+        calibrated, diagnostics = calibrate_gpu(clocks, samples)
+        self.assertEqual(calibrated, {0: ((10, 12), (110, 112))})
+        self.assertEqual(diagnostics["invalid_samples"], 0)
+        old = analyze(header(), [frame(1), record(7, 1, 10, 1)])
+        self.assertEqual(old["gpu_completion"]["frames_without_calibrated_gpu_times"], 1)
+        self.assertIsNone(old["gpu_completion"]["gpu_end_to_presentation_ms"]["max"])
+
+    def test_invalid_or_discontinuous_gpu_clocks_prevent_calibration(self):
+        first = [10, 1000, 100, 12]
+        for last in [[110, 0, 200, 112], [110, 1100, 0, 112], [110, 1100, 200, 109],
+                     [110, 1000, 200, 112], [110, 1100, 100, 112], [110, 900, 90, 112]]:
+            with self.subTest(last=last):
+                calibrated, diagnostics = calibrate_gpu([first, last], {1: [1, 10, 1, 120, 130]})
+                self.assertFalse(calibrated)
+                self.assertGreater(diagnostics["invalid_samples"] + diagnostics["discontinuities"], 0)
+        conflicting = analyze(header(gpu_timing_requested=False), [record(14, *first)])
+        self.assertTrue(any("contradict" in w for w in conflicting["warnings"]))
+
     def test_presentation_retries_do_not_inflate_display_tick_counts(self):
         events = [record(13, 5, 9, 1), record(11, 10, 2, 1),
                   record(0, 11, 19, 0, 3), record(13, 12, 19, 1),

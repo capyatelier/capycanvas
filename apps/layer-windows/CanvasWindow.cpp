@@ -100,10 +100,16 @@ void CanvasWindow::Open() {
     Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,true);
+        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,true))
+            &&e.Key()!=Windows::System::VirtualKey::Escape)self->Key(e,true);
+    });
+    // Native editors and captured controls cancel first; only an unhandled
+    // Escape reaches the shared drawer and application shortcuts.
+    root.KeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
+        if(auto self=weak.lock();self&&!self->dialogOpen.load()&&e.Key()==Windows::System::VirtualKey::Escape)self->Key(e,true);
     });
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,false);
+        if(auto self=weak.lock())if(!self->dialogOpen.load()&&(!self->header||!self->header->Key(e,false)))self->Key(e,false);
     });
     root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e);
@@ -216,21 +222,30 @@ void CanvasWindow::Resize() {
     }else{
         if(captionRetry)captionRetry.Stop();
         if(workspace)workspace->SetTitlebarInsets(float(left)/scale,float(right)/scale,float(height)/scale);
-        std::vector<Windows::Graphics::RectInt32> regions;
+        std::vector<Windows::Graphics::RectInt32> regions,inputRegions;
         if(header){
             header->SetFullscreen(!caption);
             header->SetInsets(float(left)/scale,float(right)/scale);
-            if(caption)regions=header->DragRegions(scale,next.width);
+            if(caption){regions=header->DragRegions(scale,next.width);inputRegions=header->InputRegions(scale,next.width);}
         } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
             left,0,std::max(0,int32_t(next.width)-left-right),int32_t(48*scale)});
         if(caption){
-            bool same=captionRegionsValid&&regions.size()==captionRegions.size()&&
-                std::equal(regions.begin(),regions.end(),captionRegions.begin(),[](auto a,auto b){
-                    return a.X==b.X&&a.Y==b.Y&&a.Width==b.Width&&a.Height==b.Height;
+            auto equal=[](auto const& a,auto const& b){
+                return a.size()==b.size()&&std::equal(a.begin(),a.end(),b.begin(),[](auto x,auto y){
+                    return x.X==y.X&&x.Y==y.Y&&x.Width==y.Width&&x.Height==y.Height;
                 });
+            };
+            bool same=captionRegionsValid&&equal(regions,captionRegions)&&equal(inputRegions,captionInputRegions);
             // Painting snapshots can refresh header state without moving controls.
             // Only changed hit geometry needs a non-client window update.
-            if(!same){titlebar.SetDragRectangles(regions);captionRegions=std::move(regions);captionRegionsValid=true;}
+            if(!same){
+                titlebar.SetDragRectangles(regions);
+                // Caption changes alone do not reliably retire pen/touch hit
+                // regions. Publish the complementary interactive regions too.
+                auto source=Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(window.AppWindow().Id());
+                source.SetRegionRects(Microsoft::UI::Input::NonClientRegionKind::Passthrough,inputRegions);
+                captionRegions=std::move(regions);captionInputRegions=std::move(inputRegions);captionRegionsValid=true;
+            }
         }else captionRegionsValid=false;
     }
     {
@@ -278,7 +293,7 @@ void CanvasWindow::Start() {
         },
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
-        });
+        },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
     root.Children().Append(header->Root());
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
@@ -464,6 +479,8 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     using VirtualKey=Windows::System::VirtualKey;
     auto key=e.Key();
     if(pressed&&key==VirtualKey::Escape&&workspace&&workspace->CancelGesture()){e.Handled(true);return;}
+    auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
+
     std::wstring name;
     switch(key) {
     case VirtualKey::Shift:name=L"shift";break;
@@ -505,11 +522,18 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(name.empty())return;
     if(pressed)heldKeys.try_emplace(uint32_t(key),name);
     else heldKeys.erase(uint32_t(key));
-    auto focused=FocusManager::GetFocusedElement(root.XamlRoot());
     bool canvas=focused&&focused==canvasFocus;
-    // Native controls retain text, slider and focus-navigation keys. Releases
-    // still reach shared state so moving focus cannot leave a pan key held.
-    bool editing=!canvas;
+    // Ordinary buttons keep application shortcuts after a click. Their native
+    // activation/navigation keys, editors and open menus retain keyboard input.
+    // Releases still clear shared held state when focus moves during a gesture.
+    bool button=focused&&bool(focused.try_as<Primitives::ButtonBase>());
+    bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
+        key==VirtualKey::Escape||key==VirtualKey::Left||key==VirtualKey::Right||
+        key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
+        key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
+        key==VirtualKey::Menu||(GetKeyState(VK_MENU)&0x8000);
+    // F11 remains a window action while a toolbar button or native field has focus.
+    bool editing=key!=VirtualKey::F11&&(menuOpen.load()||(!canvas&&(!button||navigation)));
     if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;
@@ -943,10 +967,11 @@ void CanvasWindow::UpdatePopup() {
     if(closing||closed)return;
     auto storage=CapyUi::object(lastModel,L"windows_workspace");
     bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"close_requested"));
+    unavailable|=CapyUi::flag(CapyUi::object(lastModel,L"windows_settings_close"),L"requested");
     bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
-    if(header)header->Root().IsHitTestVisible(!unavailable);
+    if(header){header->Root().IsHitTestVisible(!unavailable);header->SetBlocked(blocked);}
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
@@ -984,6 +1009,8 @@ void CanvasWindow::RefreshWorkspaceSwitcher() {
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
+    auto focus=settings&&settings->IsOpen()?FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>():nullptr;
+    if(focus)if(auto owner=ItemsControl::ItemsControlFromItemContainer(focus))focus=owner;
     if(!workspace->Apply(model))return;
     lastModel=model;
     auto suspended=flag(model,L"windows_rendering_suspended");
@@ -1013,7 +1040,9 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
             workspaceOwnerProperty=std::move(property);
         }
     }
-    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))){Stop();return;}
+    auto preferencesClose=object(model,L"windows_settings_close");
+    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
+        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))){Stop();return;}
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
@@ -1024,11 +1053,22 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
             message=L"Importing image…";
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
-    root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+    auto nextTheme=theme==L"dark"?ElementTheme::Dark:ElementTheme::Light;
+    bool retheme=root.RequestedTheme()!=nextTheme;root.RequestedTheme(nextTheme);
+    // Artwork also reaches the caption area; keep the OS buttons readable on it.
+    auto captionBackground=color(str(object(state,L"palette"),L"bg",L"#333333"));
+    window.AppWindow().TitleBar().ButtonBackgroundColor(captionBackground);
+    window.AppWindow().TitleBar().ButtonInactiveBackgroundColor(captionBackground);
     auto foreground=color(str(object(state,L"palette"),L"text",L"#fafafb"));
     window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
     if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
     header->Apply(model);ApplyDialogs();
+    // Workspace theme replacement must not take focus from retained Preferences.
+    if(retheme&&focus)dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
+        [weak=weak_from_this(),target=make_weak(focus)]{
+            if(auto self=weak.lock();self&&!self->closing&&self->settings->IsOpen())
+                if(auto control=target.get();control&&control.IsLoaded())control.Focus(FocusState::Programmatic);
+        });
 }

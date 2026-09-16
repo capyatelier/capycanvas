@@ -32,9 +32,7 @@ impl From<StackWire> for ColumnStack {
         Self {
             column: w.column,
             members: w.members.unwrap_or_else(|| vec![w.column]),
-            drawers: w
-                .drawers
-                .unwrap_or(w.mode.as_deref() != Some("group_panel")),
+            drawers: w.drawers.unwrap_or_else(|| w.mode.as_deref().is_some_and(|m| m != "group_panel")),
             auto_hide: w.auto_hide,
             open_column: None,
         }
@@ -45,7 +43,7 @@ impl ColumnStack {
         Self {
             column,
             members: vec![column],
-            drawers: true,
+            drawers: false,
             auto_hide: false,
             open_column: None,
         }
@@ -152,6 +150,11 @@ impl DockLayout {
         if !self.is_collapsed(source) || !self.is_collapsed(target) {
             return Err("Only collapsed columns can be stacked".into());
         }
+        if !self.column_stack(source).members.contains(&source)
+            || !self.column_stack(target).members.contains(&target)
+        {
+            return Err("Move individual stack members".into());
+        }
         let moving = self.node(source).ok_or("Unknown source column")?.clone();
         if moving.find(target).is_some() {
             return Err("A column cannot contain itself".into());
@@ -161,12 +164,7 @@ impl DockLayout {
             .iter()
             .filter_map(|p| moving.group_for(p.id).map(|_| p.id))
             .collect();
-        let collapsed: Vec<_> = self
-            .collapsed
-            .iter()
-            .filter(|c| moving.find(c.root).is_some())
-            .cloned()
-            .collect();
+        let collapsed = self.collapsed.iter().find(|c| c.root == source).unwrap().clone();
         let geometry = self.workspace(
             viewport[0],
             viewport[1],
@@ -176,7 +174,7 @@ impl DockLayout {
         let mut next = self.clone();
         next.detach(&panels);
         next.reclaim_removed_columns(self, &geometry);
-        next.collapsed.extend(collapsed);
+        next.collapsed.push(collapsed);
         next.insert_stack_member(moving, target, before)?;
         next.validate()?;
         *self = next;
@@ -263,7 +261,7 @@ impl DockLayout {
             .panels
             .iter()
             .filter_map(|p| self.panel_group(p.id))
-            .filter_map(|g| self.column_for_group(g))
+            .filter_map(|g| self.collapsible_column_for_group(g))
             .collect();
         roots.extend(
             self.collapsed

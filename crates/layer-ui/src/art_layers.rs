@@ -545,7 +545,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.engine.document().is_locked(id) {
             return Err("This layer is locked".into());
         }
-        self.engine.set_layer_opacity(id, opacity).map_err(error)
+        if self.effect_gesture.is_some() {
+            self.engine
+                .preview_edit(Edit::SetLayerOpacity { id, opacity })
+                .map_err(error)
+        } else {
+            self.engine.set_layer_opacity(id, opacity).map_err(error)
+        }
     }
     pub(super) fn editable_layer(&self, id: u64) -> Result<Layer, String> {
         let layer = self
@@ -1596,15 +1602,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.gradient_fill(start, p, radial, transparent)?;
                         }
                     }
-                    if self.layer_interaction.tool == LayerCanvasTool::Select {
-                        let selection = Selection::polygon(self.layer_interaction.path.clone())
-                            .map_err(error)?;
-                        self.layer_edit(Edit::SetSelection(Some(selection)))?;
-                    }
-                    if self.layer_interaction.tool == LayerCanvasTool::LassoFill {
-                        let selection = Selection::polygon(self.layer_interaction.path.clone())
-                            .map_err(error)?;
-                        self.fill_selection(selection)?;
+                    if matches!(
+                        self.layer_interaction.tool,
+                        LayerCanvasTool::Select | LayerCanvasTool::LassoFill
+                    ) {
+                        let mut points = std::mem::take(&mut self.layer_interaction.path);
+                        points.dedup();
+                        // A click (including repeated stationary samples) does
+                        // not enclose an area or replace the current selection.
+                        if points.len() >= 3 {
+                            let selection = Selection::polygon(points).map_err(error)?;
+                            if self.layer_interaction.tool == LayerCanvasTool::Select {
+                                self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                            } else {
+                                self.fill_selection(selection)?;
+                            }
+                        }
                     }
                     self.layer_interaction.path.clear();
                     self.layer_interaction.original = None;
@@ -1620,12 +1633,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        let effect = self.cancel_effect_gesture()?;
         let transform = self.cancel_transform()?;
         self.cancel_ruler_gesture();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(region || transform);
+            return Ok(region || transform || effect);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine

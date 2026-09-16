@@ -69,7 +69,9 @@ val generateBrand by tasks.registering {
         val path = Regex("""<path[^>]*\sd="([^"]+)"""").find(svg)?.groupValues?.get(1)
             ?: error("Missing shared brand path")
         val viewBox = Regex("""viewBox="([^"]+)"""").find(svg)!!.groupValues[1].split(" ").map(String::toFloat)
-        val scale = 200 / maxOf(viewBox[2], viewBox[3])
+        // The launcher displays the center 72dp of the 108dp adaptive layer.
+        // Match the favicon's 440/512 artwork within that visible square.
+        val scale = (216f * 440f / 512f) / maxOf(viewBox[2], viewBox[3])
         val x = (324 - viewBox[2] * scale) / 2 - viewBox[0] * scale
         val y = (324 - viewBox[3] * scale) / 2 - viewBox[1] * scale
         output.resolve("drawable").mkdirs()

@@ -4,6 +4,12 @@ struct WorkspaceCollapsedColumns: View {
     @ObservedObject var store: EditorStore
     var body: some View {
         ForEach(store.snapshot["layout"]["collapsed"].array, id: \.workspaceColumnID) { column in
+            ForEach(column["open"]["connections"].array.indices, id: \.self) { index in
+                let connection = column["open"]["connections"][index]
+                DrawerBridge(connection: connection[1]).fill(EditorPalette(source: store.state["palette"])["panel"])
+                    .placed(connection[1]["bounds"]).allowsHitTesting(false).zIndex(159)
+                    .accessibilityIdentifier("column-connection-\(column["id"].uint)-\(connection[0].string)")
+            }
             WorkspaceCollapsedColumn(store: store, column: column).placed(column["bounds"])
                 .environment(\.workspaceLayer, 160).zIndex(160)
         }
@@ -33,17 +39,20 @@ private struct WorkspaceCollapsedColumn: View {
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
                             let panel = store.panel(icon["panel"].string)
-                            let selected = store.state["customization"]["column_drawers"].array.contains {
+                            let drawer = store.state["customization"]["column_drawers"].array.first {
                                 $0["anchor"]["column"].uint == column["id"].uint && $0["anchor"]["origin"].string == panel["id"].string
                             }
-                            IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected) {
+                            let selected = !column["open"].isNull ? group["active"].string == panel["id"].string : drawer != nil
+                            let direction = !column["open"].isNull ? column["open"]["direction"].string
+                                : store.contentDrawers.items[String(column["id"].uint)]?.geometry["placement"]["direction"].string
+                            IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: selected,
+                                joinedEdge: selected ? direction : nil) {
                                 guard !store.workspace.input.contact.consumeClick() else { return }
                                 store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
                             }.modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
                                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw])))
                                 .placed(JSON(icon["bounds"].rect.offsetBy(dx: -clip.rect.minX, dy: -clip.rect.minY + offset)))
                                 .accessibilityIdentifier("column-icon-" + panel["id"].string)
-                                .accessibilityAddTraits(selected ? .isSelected : [])
                         }
                     }
                 }.frame(width: clip.rect.width, height: max(clip.rect.height, bottom - clip.rect.minY + offset), alignment: .topLeading)
@@ -52,9 +61,10 @@ private struct WorkspaceCollapsedColumn: View {
                 .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, next in
                     if abs(next - offset) > 0.5 { store.dispatch(["type": "measure_column_scroll", "column": column["id"].raw, "offset": next]) }
                 }
-            SharedIcon(name: "grip").frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+            PanelGrip(vertical: true).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 .accessibilityElement().accessibilityHidden(false).accessibilityLabel("Move column")
-                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw])))
+                .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "column", "column": column["id"].raw]),
+                    context: JSON(["kind": "column", "column": column["id"].raw]), openOnTap: true))
                 .placed(column["grip"].relative(to: base)).accessibilityIdentifier("column-grip-\(column["id"].uint)")
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(palette["panel"]).clipShape(DrawerBodyShape(corners: JSON()))

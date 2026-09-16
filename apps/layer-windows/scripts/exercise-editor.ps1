@@ -170,7 +170,7 @@ function Check-Zen {
 function Check-Header {
     $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
     $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
-    $settings=(Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
+    $settings=(Control 'settings-button' -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
     $points=@(
         @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Help menu'},
         @{x=$settings.Left+$settings.Width/2;y=$settings.Top+$settings.Height/2;expected=1;name='Preferences'},
@@ -185,7 +185,7 @@ function Check-Header {
     }
 }
 function Preferences {
-    Invoke 'Preferences' -Name
+    Invoke 'settings-button'
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences($Dialog){
@@ -204,6 +204,10 @@ try{
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyEditorKeys]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not complete' 45
+    # Open secondary tools when the workspace keeps them in a collapsed column.
+    if(Find 'column-icon-brushes'){Invoke 'column-icon-brushes'}
+    Wait-Until {@((Model).layout.groups|Where-Object active -eq 'brushes').Count -eq 1} 'Secondary tools did not open'
     Set-Viewport
     Wait-Until {@((Model).panel_measurements|Where-Object {$_.panel -eq 'brushes' -and $_.content_height -gt 0 -and $_.content_height -ne 320}).Count -eq 1} 'Native content measurements did not reach Core'
     Start-Sleep -Milliseconds 400

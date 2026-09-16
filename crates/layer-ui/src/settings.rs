@@ -27,12 +27,6 @@ impl Platform {
         // The iOS host is an iPad app with independent native editor scenes.
         matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
-    pub fn stacked_columns(self) -> bool {
-        matches!(
-            self,
-            Self::Generic | Self::Gtk | Self::Web | Self::Android | Self::Windows
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1376,10 +1370,12 @@ mod copy_tests {
             Platform::Android,
             Platform::Ios,
             Platform::Mac,
+            Platform::Windows,
         ] {
             assert!(original.field(PreferenceId::ShowClock, platform).is_err());
         }
-        for platform in [Platform::Generic, Platform::Windows] {
+        {
+            let platform = Platform::Generic;
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
             assert_eq!(row.title, "Show battery and clock");

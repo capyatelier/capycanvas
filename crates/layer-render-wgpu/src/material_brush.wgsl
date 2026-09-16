@@ -15,6 +15,9 @@ struct Style {
     render_mode: vec4<f32>,
     transport_a: vec4<f32>,
     transport_b: vec4<f32>,
+    contact_a: vec4<f32>,
+    contact_b: vec4<f32>,
+    contact_c: vec4<f32>,
 }
 
 // The pass planner supplies the operation as a pipeline constant so the GPU
@@ -44,6 +47,9 @@ struct Dab {
     hardness: f32,
     texture_sign: vec2<f32>,
     material: vec4<f32>,
+    previous: vec4<f32>,
+    contact: vec4<f32>,
+    previous_contact: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> style: Style;
@@ -171,6 +177,10 @@ fn watercolor_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
 }
 
 fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
+    if style.contact_a.x > 0.5 {
+        return evolving_contact(world, dab.center, dab.radii, dab.rotation, dab.motion,
+            dab.previous, dab.contact, dab.previous_contact, dab.hardness) * brush_selection_at(world);
+    }
     let delta = world - dab.center;
     let local = rotate(delta, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));
     var coverage = tip_coverage(
@@ -684,12 +694,20 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             0.0,
             1.0,
         );
-        if style.operation.w != 0u {
-            result *= 1.0 - requested_alpha;
-            continue;
+        if style.contact_a.x > 0.5 && style.render_mode.y < 0.5 {
+            let exposure = contact_exposure(dab.motion, dab.radii, dab.rotation, dab.hardness);
+            let selected = brush_selection_at(world);
+            let unselected_coverage = coverage / max(selected, 0.000001);
+            requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * exposure * 6.0)) * selected;
         }
         var source_alpha = requested_alpha;
         if style.render_mode.y > 0.5 {
+            // Attachment-based hosts store R8 coverage. Match that storage
+            // before applying its delta so frame boundaries cannot change ink.
+            // Native SDR uses R32Float and must retain faint/16-bit coverage.
+            if !WORKING_EXTENDED {
+                requested_alpha = round(requested_alpha * 255.0) / 255.0;
+            }
             let next_coverage = max(stroke_coverage, requested_alpha);
             source_alpha = clamp(
                 working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
@@ -700,7 +718,8 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         } else if MATERIAL_OPERATION == OP_COVERAGE {
             stroke_coverage = max(stroke_coverage, requested_alpha);
         }
-        result = source_over(result, dab.color.rgb, source_alpha);
+        if style.operation.w != 0u { result *= 1.0 - source_alpha; }
+        else { result = source_over(result, dab.color.rgb, source_alpha); }
     }
     return MaterialOutput(
         result,

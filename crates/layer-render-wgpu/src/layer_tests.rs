@@ -35,6 +35,9 @@ fn dab(color: [f32; 4]) -> Dab {
         hardness: 1.,
         texture_sign: [1.; 2],
         material: [0.; 4],
+        previous: [0.0; 4],
+        contact: [0.0; 4],
+        previous_contact: [0.0; 4],
     }
 }
 fn batch(id: u64) -> DabBatch {
@@ -59,6 +62,7 @@ fn batch(id: u64) -> DabBatch {
             wet_mix: BrushWetMix::default(),
             transport: None,
             deform: BrushDeform::default(),
+            contact: None,
         },
         damage: Rect {
             min: Point { x: 0., y: 0. },
@@ -697,6 +701,7 @@ fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
         wet_mix: brush.wet_mix,
         transport: brush.transport,
         deform: brush.deform,
+        contact: brush.contact,
     }
 }
 
@@ -2384,7 +2389,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
             ..Default::default()
         }),
     ] {
-        for preset in [GPen, NaturalBlender, WatercolorWash] {
+        for preset in [GPen, Airbrush, NaturalBlender, WatercolorWash] {
             for opacity in [1., 0.45] {
                 let mut reference = Vec::new();
                 for keep_history in [false, true] {
@@ -2434,7 +2439,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                             r.scene.is_none(),
                             "baked history cannot require composition jobs"
                         );
-                        if preset == GPen && opacity == 1. && !committed {
+                        if preset == Airbrush && opacity == 1. && !committed {
                             assert!(r.preview_direct_to_composite);
                         }
                         let image = r.readback_srgb_rgba8().unwrap();

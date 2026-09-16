@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkInlineLayerOpacity(in app: XCUIApplication) {
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let value = app.buttons["number-value-layer-opacity"]
         let entry = app.textFields["number-entry-layer-opacity"]
         let property = app.buttons["number-value-property-opacity"]
@@ -43,11 +43,12 @@ extension XCTestCase {
         expect("100")
         workspaceActivate(value); entry.typeText("7 +")
         #if os(iOS)
-        // The keyboard covers the lower layer rows. Dismiss it while retaining
-        // the invalid draft, then switch targets through the visible thumbnail.
-        let hideKeyboard = app.buttons["Hide keyboard"]
-        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 5)); workspaceActivate(hideKeyboard)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertFalse(keyboard.frame.intersects(entry.frame), "Layer opacity must stay above the keyboard")
+        XCTAssertFalse(keyboard.frame.intersects(original.frame), "Layer switching must stay available while editing")
         XCTAssertEqual(entry.value as? String, "7 +")
+        attachEditor(in: app, name: "layer-opacity-draft-switch")
         #endif
         workspaceActivate(original); expect("42")
         XCTAssertFalse(entry.exists, "An unfinished draft must not move to another layer")
@@ -56,12 +57,49 @@ extension XCTestCase {
         workspaceActivate(track)
         expect("50")
         command("Undo"); expect("100")
+        let start = track.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let end = track.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectation(for: NSPredicate(format: "value != %@", "100"), evaluatedWith: value)
+        waitForExpectations(timeout: 5)
+        let dragged = value.value as? String ?? ""
+        XCTAssertNotNil(Double(dragged), "The completed slider drag must publish a numeric value")
+        command("Undo"); expect("100")
+        command("Redo"); expect(dragged)
         workspaceActivate(original); expect("42")
+        let propertyEntry = app.textFields["number-entry-property-opacity"]
+        let properties = app.descendants(matching: .any)["layer-properties"].firstMatch
+        for draft in ["", "37", "2 + (\n"] {
+            if !draft.isEmpty {
+                workspaceActivate(property)
+                XCTAssertTrue(propertyEntry.waitForExistence(timeout: 5))
+                propertyEntry.typeText(draft)
+                XCTAssertEqual(propertyEntry.value as? String, draft.trimmingCharacters(in: .newlines))
+            }
+            let label = properties.staticTexts["Opacity"].firstMatch
+            #if os(macOS)
+            label.rightClick()
+            let reset = app.menuItems["Reset"]
+            #else
+            label.press(forDuration: 0.7)
+            let reset = app.buttons["Reset"]
+            #endif
+            XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
+            workspaceActivate(reset)
+            expect("100")
+            XCTAssertTrue(propertyEntry.waitForNonExistence(timeout: 5), "Reset must discard the property draft")
+            XCTAssertFalse(app.staticTexts["number-error-property-opacity"].exists)
+            XCTAssertEqual(property.value as? String, "100.0 %")
+            command("Undo"); expect("42")
+            command("Redo"); expect("100")
+            workspaceActivate(value); entry.typeText("42\n"); expect("42")
+        }
+        attachEditor(in: app, name: "property-opacity-reset")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
     @MainActor func checkBlendChoices(in app: XCUIApplication) {
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let property = app.buttons["property-blend"], compact = app.buttons["layer-blend"]
         func expect(_ value: String) {
             for control in [property, compact] {
@@ -74,19 +112,42 @@ extension XCTestCase {
             XCTAssertTrue(button.isEnabled)
             workspaceActivate(button)
         }
+        func open(_ control: XCUIElement) {
+            let identifier = control.identifier
+            workspaceActivate(control)
+            let menu = app.descendants(matching: .any)["editor-action-menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            XCTAssertTrue(workspaceViewport(in: app).frame.contains(menu.frame), "The choice menu must fit inside its editor window")
+            attachEditor(in: app, name: identifier + "-menu")
+        }
         expect("Normal")
-        workspaceActivate(property)
+        open(property)
         let multiply = app.buttons["property-blend-option-1"]
         XCTAssertTrue(multiply.waitForExistence(timeout: 5)); workspaceActivate(multiply)
         expect("Multiply"); command("Undo"); expect("Normal")
-        workspaceActivate(compact)
+        open(compact)
         let screen = app.buttons["layer-blend-option-2"]
         XCTAssertTrue(screen.waitForExistence(timeout: 5)); workspaceActivate(screen)
         expect("Screen"); command("Undo"); expect("Normal"); command("Redo"); expect("Screen")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func captureDefaultEditor(in app: XCUIApplication, scenario: String = "initial") {
+    @MainActor func waitForLayerPreviews(in app: XCUIApplication) {
+        let thumbnails = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-"))
+        let visible = thumbnails.allElementsBoundByIndex.filter(\.isHittable)
+        XCTAssertFalse(visible.isEmpty)
+        for thumbnail in visible {
+            expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: thumbnail)
+        }
+        waitForExpectations(timeout: 30)
+    }
+
+    @MainActor func capturePaintEditor(in app: XCUIApplication, scenario: String = "paint-expanded", theme: String = "light") {
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        XCTAssertTrue(paint.waitForExistence(timeout: 30))
+        if !paint.isSelected { workspaceActivate(paint) }
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: paint)
+        waitForExpectations(timeout: 10)
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
@@ -98,37 +159,39 @@ extension XCTestCase {
                 XCTAssertEqual(workspace.isSelected, name == "illustrator")
             }
         }
-        for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "navigator", "properties", "layers"] {
+        for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "stats", "navigator", "properties", "adjustments", "layers"] {
             let control = panel == "toolbar" || panel == "commands"
                 ? app.descendants(matching: .any)["toolbar-options-" + panel].firstMatch
                 : app.buttons["panel-tab-" + panel]
             XCTAssertTrue(control.waitForExistence(timeout: 10),
                 "The complete default workspace must expose \(panel)")
         }
+        let opacity = app.buttons["number-value-layer-opacity"]
+        XCTAssertTrue(opacity.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in
+            (opacity.value as? String)?.isEmpty == false
+        }, evaluatedWith: opacity)
+        waitForExpectations(timeout: 10)
         let overview = app.descendants(matching: .any)["navigator-overview"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Live preview"), evaluatedWith: overview)
         waitForExpectations(timeout: 10)
         // GPU submission and Navigator readiness precede thumbnail readback.
         // Wait for the real visible images, not the empty input-colored boxes.
         if app.launchEnvironment["CAPY_CAPTURE_PROBE"] == "1" {
-            let thumbnails = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-"))
-            XCTAssertGreaterThan(thumbnails.count, 0)
-            for thumbnail in thumbnails.allElementsBoundByIndex where thumbnail.isHittable {
-                expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: thumbnail)
-            }
-            waitForExpectations(timeout: 30)
+            waitForLayerPreviews(in: app)
+        }
+        if scenario == "paint-expanded" {
+            #if os(macOS)
+            app.menuBars.menuBarItems["View"].click()
+            app.menuItems["Fit canvas"].firstMatch.click()
+            #else
+            workspaceActivate(app.buttons["menu-View"])
+            workspaceActivate(app.buttons["command-fit_canvas"])
+            #endif
         }
         #if os(macOS)
         let window = app.windows.firstMatch
-        // Open and close panel configuration to dismiss native help without
-        // touching ink. Empty header space can forward contacts to the canvas.
-        app.buttons["panel-tab-brushes"].click()
-        let closeConfiguration = app.buttons["close-panel-configuration"]
-        XCTAssertTrue(closeConfiguration.waitForExistence(timeout: 5))
-        closeConfiguration.click()
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: closeConfiguration)
-        waitForExpectations(timeout: 5)
-        app.buttons["panel-tab-brushes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        app.staticTexts["document-title"].hover()
         let viewport = window.frame
         #else
         let viewport = app.frame
@@ -145,8 +208,15 @@ extension XCTestCase {
         #endif
         let initial = XCTAttachment(screenshot: screenshot)
         initial.name = "complete-editor-" + scenario; initial.lifetime = .keepAlways; add(initial)
+        let bottomInset: Double = {
+            #if os(iOS)
+            if #available(iOS 26.0, *) { return 36 }
+            #endif
+            return 0
+        }()
         let metadata = XCTAttachment(data: try! JSONSerialization.data(withJSONObject:
-            ["scenario": scenario, "theme": "light", "viewport": [viewport.width, viewport.height]]), uniformTypeIdentifier: "public.json")
+            ["scenario": scenario, "theme": theme, "viewport": [viewport.width, viewport.height],
+             "workspace_bottom": bottomInset]), uniformTypeIdentifier: "public.json")
         metadata.name = "complete-editor-geometry-" + scenario; metadata.lifetime = .keepAlways; add(metadata)
     }
 
@@ -160,14 +230,14 @@ extension XCTestCase {
             element.tap()
             #endif
         }
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         for command in ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"] {
             XCTAssertTrue(app.buttons["navigator-" + command].isHittable)
         }
         // The shared zoom step is sqrt(2); four steps put the paper behind the
         // header on both viewport sizes, without changing document history.
         for _ in 0..<4 { activate(app.buttons["navigator-zoom_in"]) }
-        captureDefaultEditor(in: app, scenario: "canvas-under-header")
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header")
 
         let choice = app.buttons["property-blend"]
         activate(choice)
@@ -193,7 +263,7 @@ extension XCTestCase {
             element.tap()
             #endif
         }
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
         let value = app.buttons["number-value-tool-size"]
         let entry = app.textFields["number-entry-tool-size"]
         activate(value)
@@ -245,9 +315,24 @@ extension XCTestCase {
         activate(app.buttons["tool-group-1"])
         activate(app.buttons["brush-7"])
         XCTAssertTrue(app.buttons["brush-7"].isSelected, "The Marker brush must become selected")
+        let markerSize = value.value as? String
         activate(app.buttons["tool-group-0"])
         XCTAssertTrue(app.buttons["brush-1"].isSelected, "Returning to Pen must restore its selected subtool")
         XCTAssertEqual(value.value as? String, remembered, "Changing groups must preserve each brush's edited size")
+        activate(app.buttons["panel-tab-sizes"])
+        let sizeEntry = app.textFields["number-entry-Brush size"]
+        for draft in ["37", "2 * ("] {
+            activate(sizePanel)
+            XCTAssertTrue(sizeEntry.waitForExistence(timeout: 5))
+            sizeEntry.typeText(draft)
+            activate(app.buttons["tool-group-1"])
+            XCTAssertTrue(app.buttons["brush-7"].isSelected)
+            XCTAssertTrue(sizeEntry.waitForNonExistence(timeout: 5), "The draft must not follow a brush switch")
+            XCTAssertEqual(sizePanel.value as? String, markerSize, "The old size draft must not edit Marker")
+            XCTAssertFalse(app.staticTexts["number-error-Brush size"].exists)
+            activate(app.buttons["tool-group-0"])
+        }
+        attachEditor(in: app, name: "brush-size-draft-switch")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 }

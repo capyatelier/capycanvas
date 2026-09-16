@@ -1002,6 +1002,16 @@ fn decode_preset(value: u32) -> Result<DefaultBrushPreset, LayerStatus> {
         22 => Ok(DefaultBrushPreset::LoadedOil),
         23 => Ok(DefaultBrushPreset::PaletteKnife),
         24 => Ok(DefaultBrushPreset::NaturalBlender),
+        25 => Ok(DefaultBrushPreset::PointyPencil),
+        26 => Ok(DefaultBrushPreset::ShadingPencil),
+        27 => Ok(DefaultBrushPreset::Charcoal),
+        28 => Ok(DefaultBrushPreset::RoughGPen),
+        29 => Ok(DefaultBrushPreset::CalligraphyPen),
+        30 => Ok(DefaultBrushPreset::AntiquePen),
+        31 => Ok(DefaultBrushPreset::RealisticPen),
+        32 => Ok(DefaultBrushPreset::WetInk),
+        33 => Ok(DefaultBrushPreset::BlottyInk),
+        34 => Ok(DefaultBrushPreset::BrushedInk),
         _ => Err(LayerStatus::InvalidArgument),
     }
 }
@@ -1168,11 +1178,11 @@ mod tests {
     }
 
     #[test]
-    fn painter_preset_ids_are_part_of_the_validated_abi() {
-        for preset in 15..=24 {
+    fn painter_and_contact_preset_ids_are_part_of_the_validated_abi() {
+        for preset in 15..=34 {
             assert!(decode_preset(preset).is_ok(), "preset {preset}");
         }
-        assert_eq!(decode_preset(25), Err(LayerStatus::InvalidArgument));
+        assert_eq!(decode_preset(35), Err(LayerStatus::InvalidArgument));
     }
 
     #[test]

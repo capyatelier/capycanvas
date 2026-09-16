@@ -1,13 +1,10 @@
 import Foundation
 
-/// One I/O queue orders settings writes across windows. Workspace files belong
-/// to individual scenes; the last committed workspace seeds a newly opened one.
+/// One I/O queue orders settings writes and notifications across windows.
 final class EditorPersistence: @unchecked Sendable {
     struct Loaded: Sendable {
         var settings: Data?
-        var workspace: Data?
-        var workspaceNeedsSnapshot = false
-        var errors: [String: String] = [:]
+        var error: String?
     }
     struct SettingsChange: Sendable { let revision: UInt64; let data: Data }
     static let shared = EditorPersistence(root: configuredRoot())
@@ -31,24 +28,14 @@ final class EditorPersistence: @unchecked Sendable {
         #endif
         return base
     }
-    func load(scene: String, observer: UUID, managedWorkspaces: Bool = false, changed: @escaping @Sendable (SettingsChange) -> Void,
+    func load(observer: UUID, changed: @escaping @Sendable (SettingsChange) -> Void,
         completion: @escaping @Sendable (Loaded) -> Void) {
         queue.async { [self] in
             observers[observer] = changed
             var result = Loaded()
             if let root {
                 do { result.settings = try AtomicJSONFile.read(root.appendingPathComponent("settings.json")) }
-                catch { result.errors["settings"] = "Could not restore settings: \(error.localizedDescription)" }
-                if !managedWorkspaces {
-                    do {
-                        let sceneURL = workspaceURL(scene)
-                        result.workspace = try AtomicJSONFile.read(sceneURL)
-                        if result.workspace == nil {
-                            result.workspace = try AtomicJSONFile.read(root.appendingPathComponent("workspace.json"))
-                            result.workspaceNeedsSnapshot = true
-                        }
-                    } catch { result.errors["workspace"] = "Could not restore workspace: \(error.localizedDescription)" }
-                }
+                catch { result.error = "Could not restore settings: \(error.localizedDescription)" }
             }
             completion(result)
         }
@@ -64,23 +51,6 @@ final class EditorPersistence: @unchecked Sendable {
                 completion(nil)
             } catch { completion("Could not save settings: \(error.localizedDescription)") }
         }
-    }
-    func saveWorkspace(_ data: Data, scene: String, updateDefault: Bool = true, completion: @escaping @Sendable (String?) -> Void) {
-        queue.async { [self] in
-            do {
-                if let root {
-                    try AtomicJSONFile.write(data, to: workspaceURL(scene))
-                    if updateDefault { try AtomicJSONFile.write(data, to: root.appendingPathComponent("workspace.json")) }
-                }
-                completion(nil)
-            } catch { completion("Could not save workspace: \(error.localizedDescription)") }
-        }
-    }
-    private func workspaceURL(_ scene: String) -> URL {
-        // Scene identifiers are generated locally; reject path syntax even in
-        // debug fixtures. They will also identify document recovery sessions.
-        let name = UUID(uuidString: scene)?.uuidString ?? "default"
-        return root!.appendingPathComponent("workspaces", isDirectory: true).appendingPathComponent(name + ".json")
     }
     func flush(_ completion: @escaping @Sendable () -> Void) { queue.async(execute: completion) }
 }

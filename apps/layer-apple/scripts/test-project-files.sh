@@ -13,6 +13,9 @@ if [[ -n "${CAPY_TEST_ASSETS_APP:-}" ]]; then
   CAPY_CHECK_BUNDLE="$CAPY_CHECK_DIR/Check.app/Contents"
   mkdir -p "$CAPY_CHECK_BUNDLE/MacOS" "$CAPY_CHECK_BUNDLE/Resources"
   cp "$CAPY_TEST_ASSETS_APP/Contents/Resources/Assets.car" "$CAPY_CHECK_BUNDLE/Resources/Assets.car"
+  if [[ -d "$CAPY_TEST_ASSETS_APP/Contents/Resources/filters" ]]; then
+    cp -R "$CAPY_TEST_ASSETS_APP/Contents/Resources/filters" "$CAPY_CHECK_BUNDLE/Resources/filters"
+  fi
   cat > "$CAPY_CHECK_BUNDLE/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

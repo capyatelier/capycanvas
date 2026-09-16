@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, join, posix } from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
@@ -83,7 +83,7 @@ function runtimeFixture(t, changes = {}) {
     "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
     "app.js": 'import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-store.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
-    "header.js": "export const header = true;",
+    "header.js": "import {switcher} from './workspace-switcher.js'; export const header = true;",
     "editor-panels.js": "export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
     "documents.js": "export function createDocuments() {}",
@@ -122,9 +122,23 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.ok(app.includes(`from "./${names[path]}"`));
   for (const path of ["icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"])
     assert.ok(app.includes(JSON.stringify(names[path])));
+  for (const path of ["workspace-manager.js", "header.js"])
+    assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
+});
+
+test("production runtime module imports resolve to packaged files", (t) => {
+  const modules = readdirSync(new URL("./", import.meta.url)).filter(path => path.endsWith(".js") && path !== "sw.js");
+  const dir = runtimeFixture(t, Object.fromEntries(modules.map(path =>
+    [path, readFileSync(new URL(path, import.meta.url), "utf8")])));
+  const names = fingerprintAssets(dir), files = new Set(filesIn(dir));
+  for (const name of Object.values(names).filter(path => path.endsWith(".js"))) {
+    const source = readFileSync(join(dir, name), "utf8");
+    for (const [, dependency] of source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/g))
+      assert.ok(files.has(posix.join(posix.dirname(name), dependency)), `${name} imports missing ${dependency}`);
+  }
 });
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
@@ -136,6 +150,8 @@ test("changed assets propagate to their consumers and worker version, not unrela
     assert.equal(next["preferences.js"], names["preferences.js"], "Unchanged dependencies retain their URL");
     assert.equal(next["style.css"] === names["style.css"], !["style.css", "icons/pen.svg"].includes(path));
     assert.equal(next["app.js"] === names["app.js"], path === "style.css", "Module/artwork changes invalidate their consumer");
+    for (const consumer of ["workspace-manager.js", "header.js"])
+      assert.equal(next[consumer] === names[consumer], ![consumer, "workspace-switcher.js"].includes(path), `${consumer} follows switcher changes`);
     assert.equal(next["pkg/layer_web.js"] === names["pkg/layer_web.js"], path !== "pkg/layer_web_bg.wasm");
     assert.notEqual(writeWorker(dir).version, first.version, "Every content change updates the PWA cache version");
   }

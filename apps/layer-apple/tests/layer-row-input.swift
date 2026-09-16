@@ -101,13 +101,10 @@ import SwiftUI
             && store.state["layer_tools"]["editing_layer"]["id"].uint == original,
             "Opening a checked row's menu preserves multiselection and sets the drawing target")
         model.closeMenu()
-        let deferred = model.nativeMenu(at: body(original))!
         try await edit(store, ["type": "layer", "action": ["op": "toggle_selection", "id": added]])
         try await edit(store, ["type": "layer", "action": ["op": "delete_selected"]])
-        var completed = false, missing: AppleContextMenu?
-        deferred.load { missing = $0; completed = true }
-        try await wait("Removed source did not retire its deferred menu") { completed }
-        try require(missing == nil, "A removed row cannot load an old menu")
+        model.openMenu(id: original, mask: false)
+        try require(model.menu.isNull && model.menuSource == nil, "A removed row cannot open a menu")
         try require(store.failure == nil, store.failure ?? "")
         note("PASS platform \(platform): actual covered-row rejection, layer pen hold/menu/drag, immediate mouse body and pen grip, drop/Undo/Redo/focus; shared Paper, rename, multiselection and removed-menu policies")
     }

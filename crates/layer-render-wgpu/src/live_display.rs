@@ -264,11 +264,14 @@ impl Cache {
             })
             .sum::<u64>();
         let complete_bytes = pyramid_bytes + Self::base_bound(plan);
+        #[cfg(not(target_arch = "wasm32"))]
         let complete = plan.extent.into_iter()
             .all(|v| v <= r.device.limits().max_texture_dimension_2d) && r
             .native_edit
             .as_ref()
             .is_some_and(|native| complete_bytes <= native.display_complete_bytes);
+        #[cfg(target_arch = "wasm32")]
+        let complete = false;
         let limit = if complete { complete_bytes } else { limit };
         if Self::base_bound(plan) > limit {
             return Err(GpuRasterError::SizeOverflow);

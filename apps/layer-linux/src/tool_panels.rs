@@ -514,7 +514,10 @@ mod wheel {
                 );
                 let state = self.color.borrow();
                 let view = self.view.get();
-                let side = size.ceil() as u32;
+                // Retain the managed guide at display DPI; ordinary color
+                // changes and panel motion only sample the cached texture.
+                let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
+                let logical_pixel = size / side as f32;
                 let shape = state.wheel_shape();
                 let space = state.rgb_space();
                 {
@@ -522,7 +525,10 @@ mod wheel {
                     if cache.as_ref().is_none_or(|(s, p, c, v, _)| *s != side || *p != shape || *c != space || *v != view) {
                         let mut pixels = vec![0; side as usize * side as usize * 4];
                         for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
-                            let point = [(i as u32 % side) as f32 + 0.5, (i as u32 / side) as f32 + 0.5];
+                            let point = [
+                                ((i as u32 % side) as f32 + 0.5) * logical_pixel,
+                                ((i as u32 / side) as f32 + 0.5) * logical_pixel,
+                            ];
                             let hue = state.wheel_hue_at(&geometry, point);
                             let rgb = state.wheel_hue_color_in(hue, view.space());
                             for c in 0..3 { p[c] = (rgb[c] * 255.).round() as u8; }

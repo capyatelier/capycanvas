@@ -96,8 +96,10 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         else host.headerEdit(obj("type" to "cancel"))
     }
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
+        // The canvas extends behind the title bar. Empty chrome owns input,
+        // but must not paint an opaque strip over the drawing.
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
-            .background(colors.surround).headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
+            .headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
         val width = maxWidth.value
         val geometryKey = "$width:$modelKey:$editing:$metrics"
         SideEffect { input.width = width; input.metrics = metrics }
@@ -167,7 +169,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                                 input.overflow = null
                                 when (entry.getJSONObject("item").getString("kind")) {
                                     "menu", "menu_labels" -> overflowMenu = view.getJSONObject("primary_menu")
-                                    "workspaces" -> overflowMenu = menus.first { it.getString("id") == "window" }.getJSONObject("model")
+                                    "workspaces" -> overflowMenu = workspaceSwitcherMenu(host.workspaceManager)
                                     else -> activateHeader(host, entry)
                                 }
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -235,7 +237,11 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             .focusRequester(focus).onFocusChanged { if (it.isFocused) input.selected = id }.focusable().semantics { contentDescription = label; selected = input.selected == id } else Modifier),
         verticalAlignment = Alignment.CenterVertically) {
         if (editing) Box(Modifier.width(20.dp).fillMaxHeight().testTag("header-grip-$id"), contentAlignment = Alignment.Center) { PanelGrip("Move $label") }
-        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.Center) {
+        // SurfaceView artwork is outside Compose's render tree, so these use
+        // the translucent fallback rather than a blur of the foreground text.
+        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()
+            .then(if (kind in listOf("document_title", "clock", "battery"))
+                Modifier.background(colors.headerSurface, RoundedCornerShape(6.dp)) else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
                 "capy" -> snapshot.getJSONObject("state").array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon")
                 "settings" -> "settings"
@@ -243,13 +249,13 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                kind == "menu_labels" && !compact -> Row(Modifier.fillMaxSize().background(colors.headerSurface, RoundedCornerShape(6.dp)), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
                                 Modifier.fillMaxHeight().testTag("application-menu-${application.getString("id")}"),
-                                fillWidth = false,
+                                fillWidth = false, surface = false,
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 6.dp), fontWeight = FontWeight.Bold, maxLines = 1)
                             }
@@ -267,12 +273,13 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     onClick = {
                         when (kind) {
                             "menu", "menu_labels" -> menu = snapshot.getJSONObject("header").getJSONObject("primary_menu")
-                            "workspaces" -> menu = snapshot.array("application_menus").objects().first { it.getString("id") == "window" }.getJSONObject("model")
+                            "workspaces" -> menu = workspaceSwitcherMenu(host.workspaceManager)
                             else -> activateHeader(host, entry)
                         }
                     }) {
                     val fill = if (item.objectOrNull("control")?.optString("kind") == "color") snapshot.getJSONObject("state").getJSONObject("brush").array("color").let { Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat()) } else null
-                    SharedIcon(icon, label, Modifier.size(size.number("icon").dp), fill = fill)
+                    val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
+                    SharedIcon(icon, label, Modifier.size(iconSize.dp), fill = fill)
                 }
             }
             if (kind != "menu_labels" || compact) menu?.let { WorkspaceMenu(host, it) { menu = null } }
@@ -282,17 +289,19 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable private fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
-    modifier: Modifier, fillWidth: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+    modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val shape = drawerButtonShape(if (open) "bottom" else null)
     HoverTip(label, modifier) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape).background(when {
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
+        .background(if (surface) colors.headerSurface else Color.Transparent).background(when {
         selected -> colors.active
+        open -> colors.panel
         enabled && pressed -> colors.text.copy(alpha = .16f)
-        open || (enabled && hovered) -> colors.text.copy(alpha = .10f)
+        enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
     }).hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(), enabled = enabled,
         role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) { content() }

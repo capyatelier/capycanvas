@@ -202,7 +202,8 @@ impl WebApp {
 
 impl WebApp {
     pub(super) fn present_navigators(&mut self) -> Result<bool, JsValue> {
-        if !self.startup.canvas_ready {
+        // DOM reflow can run while an attached renderer is suspended/replaced.
+        if !self.gpu_ready() || !self.startup.canvas_ready {
             return Ok(false);
         }
         let state = self.session.state();

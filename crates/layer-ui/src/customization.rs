@@ -319,8 +319,8 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
-    /// Immediate action, if any. Dedicated panel tiles are opened through
-    /// ActivateTile, whose identity also anchors their drawer.
+    /// Immediate action, if any. Drawer-only controls are opened through
+    /// ActivateTile or ActivateHeaderItem, whose identity anchors their drawer.
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
             Self::Command { command } => UiAction::Invoke { command },
@@ -328,16 +328,7 @@ impl ToolbarControl {
             Self::Size { pixels } => UiAction::SetBrushSize {
                 value: pixels as f32,
             },
-            Self::Color | Self::Opacity => UiAction::Customize {
-                action: CustomizationAction::OpenControl {
-                    control: if self == Self::Color {
-                        PanelControl::BrushColor
-                    } else {
-                        PanelControl::BrushOpacity
-                    },
-                },
-            },
-            Self::Panel { .. } | Self::Divider => return None,
+            Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider => return None,
         })
     }
     pub fn validate(self) -> Result<(), String> {
@@ -574,20 +565,20 @@ impl DockLayout {
                 }
                 (
                     "Column".into(),
-                    self.column_sections(Some(column), platform),
+                    self.column_sections(Some(column)),
                 )
             }
             ContextTarget::ZenMode => return Err("Not a panel context".into()),
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
                 let mut sections = vec![self.hide_tab_items(target)?];
-                sections.extend(self.column_sections(self.panel_group(panel), platform));
+                sections.extend(self.column_sections(self.panel_group(panel)));
                 sections.push(self.panel_actions(p));
                 (p.menu_name(), sections)
             }
             ContextTarget::Group { group } => {
                 let mut sections = vec![self.tab_style_items(group)?, self.hide_tab_items(target)?];
-                sections.extend(self.column_sections(Some(group), platform));
+                sections.extend(self.column_sections(Some(group)));
                 sections.extend([
                     if let [panel] = self.group_panels(group)?
                         && let p = self.panel(*panel)?
@@ -658,22 +649,9 @@ impl DockLayout {
             self.hide_item(panel.id),
         ]
     }
-    fn column_sections(&self, group: Option<u32>, platform: Platform) -> Vec<Vec<ContextMenuItem>> {
-        let Some(group) = group.filter(|_| {
-            matches!(
-                platform,
-                Platform::Gtk
-                    | Platform::Generic
-                    | Platform::Android
-                    | Platform::Web
-                    | Platform::Ios
-                    | Platform::Mac
-                    | Platform::Windows
-            )
-        }) else {
-            return Vec::new();
-        };
-        if self.column_for_group(group).is_none()
+    fn column_sections(&self, group: Option<u32>) -> Vec<Vec<ContextMenuItem>> {
+        let Some(group) = group else { return Vec::new(); };
+        if self.collapsible_column_for_group(group).is_none()
             && self.collapsed_column_for_group(group).is_none()
         {
             return Vec::new();
@@ -690,7 +668,7 @@ impl DockLayout {
                 collapsed: column.is_none(),
             },
         )]];
-        if let Some(column) = column.filter(|_| platform.stacked_columns()) {
+        if let Some(column) = column {
             let settings = self.column_stack(column);
             let mut item = ContextMenuItem::edit("Open individual panels",
                 CustomizationAction::SetColumnDrawers { column, drawers: !settings.drawers });
@@ -1815,40 +1793,16 @@ impl CustomizationState {
                 self.drawer = (!close).then_some(drawer);
             }
             SetColumnCollapsed { group, collapsed } => {
-                if !matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) {
-                    return Err("Collapsed columns are not available on this platform yet".into());
-                }
                 layout.set_column_collapsed(group, collapsed, viewport)?;
                 self.expanded = None;
                 changed |= regions::LAYOUT;
             }
             ToggleColumnDrawer { group, panel } => {
-                if !matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Generic
-                        | Platform::Android
-                        | Platform::Web
-                        | Platform::Ios
-                        | Platform::Mac
-                        | Platform::Windows
-                ) {
-                    return Err("Collapsed columns are not available on this platform yet".into());
-                }
                 let column = layout
                     .collapsed_column_for_group(group)
                     .ok_or("The column is not collapsed")?;
                 let settings = layout.column_stack(column);
-                if !settings.drawers && platform.stacked_columns() {
+                if !settings.drawers {
                     let close = settings.open_column == Some(column) && layout.active_panel(panel) == Some(panel);
                     layout.select_tab(group, panel)?;
                     layout.column_stack_mut(column).open_column = (!close).then_some(column);
@@ -1885,6 +1839,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnDrawers { column, drawers } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let root = layout.column_stack(column).column;
                 let s = layout.column_stack_mut(column);
@@ -1895,6 +1852,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetColumnAutoHide { column, auto_hide } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() {
                     return Err("Unknown column".into());
                 }
@@ -1902,6 +1862,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ApplyColumnStack { column } => {
+                if !layout.is_top_level_column(layout.column_stack(column).column) {
+                    return Err("Column settings require a top-level column".into());
+                }
                 if layout.node(column).is_none() { return Err("Unknown column".into()); }
                 let source = layout.column_stack(column);
                 for root in layout.column_roots() {
@@ -1946,10 +1909,7 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             OpenControl { control } => {
-                if !matches!(
-                    control,
-                    PanelControl::BrushColor | PanelControl::BrushOpacity
-                ) {
+                if control != PanelControl::BrushColor {
                     return Err("Unsupported tool popup".into());
                 }
                 self.control = Some(control);

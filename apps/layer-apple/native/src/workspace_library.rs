@@ -3,7 +3,7 @@
 //! worker. Prepared adoptions are acknowledged after the render owner accepts
 //! them, so a late reply cannot replace another window's current workspace.
 use super::*;
-use layer_ui::{Platform, WorkspaceState, WorkspaceWorkingState};
+use layer_ui::{Platform, WorkspaceWorkingState};
 use layer_workspace::*;
 use std::path::Path;
 
@@ -26,15 +26,6 @@ enum Request {
     },
     Initialize {
         now: u64,
-        preferred: Option<String>,
-    },
-    Migrate {
-        scenes: Vec<(String, WorkspaceState)>,
-        fallback: Option<(String, WorkspaceState)>,
-        now: u64,
-    },
-    LegacyMapping {
-        source: String,
     },
     View {
         page: ManagerPage,
@@ -283,7 +274,7 @@ impl CapyWorkspaceLibrary {
                     "pages":([ManagerPage::Workspaces,ManagerPage::ThisWorkspace,ManagerPage::ToolbarLibrary].map(|page|json!({"id":page,"label":page.label()})))
                 }),
             ),
-            Request::Initialize { now, preferred } => {
+            Request::Initialize { now } => {
                 let _ = self.manager.store.request(StoreRequest::Reopen).await?;
                 let saved = match self
                     .manager
@@ -293,8 +284,8 @@ impl CapyWorkspaceLibrary {
                     })
                     .await?
                 {
-                    StoreResponse::Binding(id) => id.or(preferred),
-                    _ => preferred,
+                    StoreResponse::Binding(id) => id,
+                    _ => None,
                 };
                 // Resolve this scene before the global last-used fallback.
                 // Otherwise reopening beside a live window creates an unused
@@ -321,21 +312,6 @@ impl CapyWorkspaceLibrary {
                     return Err(error);
                 }
                 self.prepare(incoming)
-            }
-            Request::Migrate {
-                scenes,
-                fallback,
-                now,
-            } => Ok(
-                json!({"mappings":self.manager.migrate_legacy(&scenes, fallback.as_ref(), now).await?}),
-            ),
-            Request::LegacyMapping { source } => {
-                let result = self
-                    .manager
-                    .store
-                    .execute(StoreRequest::LegacyImport { source })
-                    .await?;
-                Ok(json!({"mapping":result}))
             }
             Request::View {
                 page,

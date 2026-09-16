@@ -288,9 +288,8 @@ fn native_starting_layout_preview() {
     let baseline = manager
         .current()
         .unwrap()
-        .starting_layout()
-        .unwrap()
-        .clone();
+        .starting_layout(layer_ui::Platform::Gtk)
+        .unwrap();
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Layers,
         target: DockTarget::Float {

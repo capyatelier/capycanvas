@@ -22,6 +22,11 @@ smudge, spatial-reservoir wet transfer, layer-wide watercolor, uniform
 accumulation, live and optional post-stroke edges, blend, and liquify contacts.
 The same packet and native UI boundary select all of them.
 
+Pencil, charcoal and the new ink family use the [swept contact
+model](../development/contact-brush-engine.md). Graphite uses normalized flow
+deposition against fixed paper; ink uses per-stroke maximum coverage. These
+contacts carry the preceding pose and interpolate their footprint on the GPU.
+
 ## One semantic model, specialized GPU stages
 
 A brush stroke is an ordered sequence of contact steps. A dry contact is the
@@ -54,8 +59,8 @@ The selected pipeline is prepared before pen-down:
 - a destination-aware step uses a source/destination GPU pass over its affected
   pages.
 
-These are stages of one wgpu engine. Ordinary source-over ink stays on the dry
-fast path and pays no destination-sampling cost.
+These are stages of one wgpu engine. Source-over materials use the direct path;
+the new ink presets use coverage state to grow a coherent stroke.
 
 Committed and predicted contacts use one batch scheduler. Preview is a target
 policy over the same schedule: it chooses private pages or reads committed pages

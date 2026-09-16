@@ -36,7 +36,7 @@ private final class TemporaryResource: NSObject {
     static func main() throws {
         for platform: UInt32 in [0, 1] {
             let retired = Retirements(expected: 64)
-            let owner = try NativeOwner(platform: platform, scene: UUID().uuidString,
+            let owner = try NativeOwner(platform: platform,
                 persistence: EditorPersistence(root: nil), receive: { _, error in
                     require(error == nil, error ?? "")
                 })

@@ -1,5 +1,7 @@
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
+import { workspaceSwitcherMenu } from './workspace-switcher.js';
+
 export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen}) {
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
@@ -54,6 +56,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   const application = id => app.editor_models(0,0).application_menus.find(m=>m.id===id).model;
   const primary = () => app.header_view().primary_menu;
+  const workspaceChoices = () => workspaceSwitcherMenu(JSON.parse(app.workspace_view()));
   const recoveryMenu = menu(primary, 'Title bar recovery: menus and customization', 'menu');
   recoveryMenu.id = 'header-recovery'; root.append(recoveryMenu);
   const overflow = zones.map((_, index) => {
@@ -71,7 +74,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
             const entry=entries().find(e=>e.id===id);if(!entry)return;
             if(editing){node.open=false;select(id,true);}
             else if(['menu','menu_labels','workspaces'].includes(entry.item.kind)) {
-              customization.renderMenu(contents, entry.item.kind==='workspaces'?application('window'):primary(),()=>{node.open=false;});
+              customization.renderMenu(contents, entry.item.kind==='workspaces'?workspaceChoices():primary(),()=>{node.open=false;});
             } else {node.open=false;activate(entry);}
           });
           const grip=element('span','header-item-grip');grip.setAttribute('aria-hidden','true');grip.append(icon('grip'));
@@ -119,7 +122,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     } else if(kind==='workspaces') {
       r.full=switcher;
       content.append(switcher);
-      r.compact=menu(()=>application('window'),'Workspaces'); r.compact.id='header-workspace-selector';
+      r.compact=menu(workspaceChoices,'Workspaces'); r.compact.id='header-workspace-selector';
       content.append(r.compact);
     } else if(kind==='document_title') content.append(title);
     else if(kind==='clock'||kind==='battery') {
@@ -210,7 +213,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       const r=records.get(entry.id),kind=entry.item.kind;
       if(r.status&&!editing&&r.status.hidden)return{id:entry.id,width:0,compact:0};
       // Natural text widths are measured independently of allocated/animated
-      // neighbors. The retained selector can switch to the shared Window menu.
+      // neighbors. The compact selector keeps the same workspace choices.
       const wasHidden=r.root.hidden; r.root.hidden=false;r.root.classList.add('header-measuring');
       const fullHidden=r.full?.hidden,compactHidden=r.compact?.hidden;
       if(r.compact){r.full.hidden=false;r.compact.hidden=true;}

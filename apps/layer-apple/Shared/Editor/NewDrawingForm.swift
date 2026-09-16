@@ -24,11 +24,11 @@ struct NewDrawingForm: View {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
                 GridRow {
                     Text(spec["labels"][0].string)
-                    dimension($width, id: "new-document-width")
+                    dimension($width, label: spec["labels"][0].string, id: "new-document-width")
                 }
                 GridRow {
                     Text(spec["labels"][1].string)
-                    dimension($height, id: "new-document-height")
+                    dimension($height, label: spec["labels"][1].string, id: "new-document-height")
                 }
             }
             HStack {
@@ -42,8 +42,9 @@ struct NewDrawingForm: View {
         }.padding(24).frame(minWidth: 320, idealWidth: 360, maxWidth: 440)
             .presentationDetents([.height(220)])
     }
-    private func dimension(_ value: Binding<String>, id: String) -> some View {
-        TextField("", text: value).textFieldStyle(.roundedBorder).accessibilityIdentifier(id)
+    private func dimension(_ value: Binding<String>, label: String, id: String) -> some View {
+        TextField("", text: value).textFieldStyle(.roundedBorder)
+            .accessibilityLabel(label).accessibilityIdentifier(id)
             #if os(iOS)
             .keyboardType(.numberPad)
             #endif

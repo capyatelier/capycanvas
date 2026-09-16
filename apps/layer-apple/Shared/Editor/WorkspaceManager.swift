@@ -10,34 +10,26 @@ import SwiftUI
     @Published private(set) var catalog = JSON()
     @Published private(set) var view = JSON()
     @Published private(set) var history = JSON()
-    @Published private(set) var historyPreview = JSON()
-    @Published private(set) var storage = JSON()
-    @Published private(set) var showingStorage = false
     @Published private(set) var processing = false
     @Published private(set) var selecting = false
     @Published private(set) var toolbarMode = false
     @Published var error: String?
-    @Published var note: String?
     @Published private(set) var prompt: JSON?
     @Published var formName = ""
     @Published var formDescription = ""
     @Published var formChoice = ""
     @Published private(set) var formError: String?
-    let files: WorkspacePackageFiles
     private weak var store: EditorStore?
     private var formCompletion: ((JSON?) -> Void)?
     private var hostRequest: UInt64?
     private var requestGeneration: UInt64 = 0
     private var historyID = ""
-    private var historyMode = "layout"
     private var pendingCustomization: JSON?
     private var selectionTask: Task<Void, Never>?
     private var selectionGeneration: UInt64 = 0
     var library: WorkspaceLibrary? { store?.workspaceLibrary }
     var title: String { catalog[toolbarMode ? "toolbar_title" : "title"].string }
-    init(store: EditorStore, files: WorkspacePackageFiles? = nil) {
-        self.store = store; self.files = files ?? WorkspacePackageFiles()
-    }
+    init(store: EditorStore) { self.store = store }
     func receive(_ state: JSON) {
         guard hostRequest == nil, !processing, library?.ready == true,
             let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "workspace" }) else { return }
@@ -79,20 +71,20 @@ import SwiftUI
         if catalog.isNull { catalog = try await service().read(["type": "catalog"]) }
     }
     func show(_ page: String) async throws {
-        guard ["workspaces", "this_workspace", "toolbar_library", "recently_deleted"].contains(page) else {
+        guard ["workspaces", "this_workspace", "toolbar_library"].contains(page) else {
             throw HostFailure(message: "This workspace page is unavailable")
         }
         await selectionTask?.value
         try await library?.finishLayoutPreview()
         try await loadCatalog()
         self.page = page
-        if page != "recently_deleted" { toolbarMode = ["this_workspace", "toolbar_library"].contains(page) }
+        toolbarMode = ["this_workspace", "toolbar_library"].contains(page)
         query = ""; selection = page == "workspaces" ? library?.status["active_id"].string : nil
-        history = JSON(); showingStorage = false; presented = true
+        history = JSON(); presented = true
         try await refresh()
     }
     func refresh(preferencesOnly: Bool = false) async throws {
-        guard !showingStorage && history.isNull else { return }
+        guard history.isNull else { return }
         requestGeneration &+= 1
         let generation = requestGeneration
         let library = try service()
@@ -151,9 +143,6 @@ import SwiftUI
             try await refresh(preferencesOnly: true)
             return
         }
-        guard !["save_as_template", "use_template", "update_from_current", "import_template", "edit_as_workspace", "new_from_template"].contains(action["type"].string) else {
-            throw HostFailure(message: "This workspace action is unavailable")
-        }
         guard !processing else { throw HostFailure(message: "Finish the current workspace action first") }
         processing = true
         let resumePreview = library?.previewingLayout == true
@@ -204,39 +193,19 @@ import SwiftUI
                 try? await library.finishLayoutPreview()
                 throw error
             }
-        case "history", "versions", "metadata":
-            historyID = value.string; historyMode = type == "history" ? "layout" : type
-            showingStorage = false; presented = true
-            if type == "history" {
-                guard value.string == library.status["active_id"].string else { throw HostFailure(message: "Switch to this workspace to view its history") }
-                try await library.beginLayoutPreview()
-            }
+        case "history":
+            historyID = value.string; presented = true
+            guard value.string == library.status["active_id"].string else { throw HostFailure(message: "Switch to this workspace to view its history") }
+            try await library.beginLayoutPreview()
             do { try await refreshHistory(nil) }
             catch { try? await library.finishLayoutPreview(); throw error }
-        case "storage":
-            presented = true; showingStorage = true; history = JSON()
-            storage = try await library.read(["type": "storage", "clear_older": false, "apply": false])["storage"]
-        case "export", "export_current":
-            presented = true
-            let package = try await library.read(["type": "export", "id": type == "export" ? value.raw : NSNull()])
-            if try await files.export(package) { note = "Export completed." }
-        case "export_database":
-            presented = true
-            if try await files.exportDatabase(library) { note = "Database export completed." }
-        case "import_toolbar", "import_backup":
-            let kind: WorkspacePackageKind = type == "import_toolbar" ? .toolbar : .workspaceBackup
-            presented = true
-            if let text = try await files.read(kind: kind) { try await importText(text, kind: kind) }
         case "retry_storage":
             if !library.ready { try await library.start() }
             else {
                 if library.readOnly { try await library.resume() }
                 _ = try await library.perform(["type": "retry"])
             }
-            note = "Storage is available."; try await refresh()
-        case "restore_deleted":
-            _ = try await library.operation(["type": "restore_deleted", "id": value.raw])
-            selection = nil; try await refresh()
+            try await refresh()
         case "add_toolbar":
             _ = try await library.installToolbar(id: value.string); presented = false
         case "show_toolbar":
@@ -244,11 +213,13 @@ import SwiftUI
             try await library.flush(); try await refresh()
         case "rename_toolbar", "duplicate_toolbar", "delete_toolbar":
             pendingCustomization = JSON(["type": type, "panel": value.raw]); presented = false
-        default:
+        case "new", "rename", "duplicate", "reset_brushes", "save_toolbar", "update_toolbar",
+            "delete", "save_as_new", "replace_toolbar", "new_toolbar", "recover_interrupted":
             let wasPresented = presented
             let spec = try await library.read(["type": "prompt", "action": action.raw])["prompt"]
             let succeeded = try await form(spec) { [self] fields in try await execute(action, fields: fields) }
             if !succeeded && !wasPresented { presented = false }
+        default: throw HostFailure(message: "This workspace action is unavailable")
         }
     }
     private func execute(_ action: JSON, fields: JSON) async throws {
@@ -281,7 +252,6 @@ import SwiftUI
         case "update_toolbar": operation["type"] = "update_toolbar"; operation["panel"] = try JSON.decode(choice).raw
         case "delete":
             operation["type"] = "delete"
-        case "delete_permanently": operation["type"] = "delete_permanently"
         case "save_as_new": operation["type"] = "save_as_new"; closeAfter = true
         case "replace_toolbar":
             _ = try await library.installToolbar(id: choice, replace: value); presented = false; return
@@ -289,15 +259,13 @@ import SwiftUI
             _ = try await library.installToolbar(id: choice.isEmpty ? nil : choice, name: name, group: value); presented = false; return
         case "recover_interrupted":
             _ = try await library.perform(["type": "recover", "id": choice]); try await refresh(); return
-        case "clear_older_history":
-            storage = try await library.perform(["type": "storage", "clear_older": true, "apply": true])["storage"]; return
         default: throw HostFailure(message: "This workspace form is unavailable")
         }
         let result = try await library.operation(operation)
         if closeAfter { presented = false; return }
         if let nextPage { page = nextPage; toolbarMode = nextPage == "toolbar_library" }
         if !result["selected"].isNull { selection = result["selected"].string }
-        if ["delete", "delete_permanently"].contains(type) { selection = nil }
+        if type == "delete" { selection = nil }
         try await refresh()
     }
     private func focusWindow(_ id: String, item: JSON) throws {
@@ -350,11 +318,11 @@ import SwiftUI
     func refreshHistory(_ selected: String?) async throws {
         requestGeneration &+= 1
         let generation = requestGeneration
-        let result = try await service().read(["type": "history", "id": historyID, "mode": historyMode,
+        let result = try await service().read(["type": "history", "id": historyID, "mode": "layout",
             "selected": selected as Any? ?? NSNull()])
         guard generation == requestGeneration else { return }
-        history = result["history"]; historyPreview = result["preview"]
-        if historyMode == "layout", library?.previewingLayout == true, !history["preview"].isNull {
+        history = result["history"]
+        if library?.previewingLayout == true, !history["preview"].isNull {
             try await service().previewLayout(history["preview"])
         }
     }
@@ -365,24 +333,10 @@ import SwiftUI
             processing = true
             defer { processing = false }
             do {
-                if historyMode == "layout" {
-                    try await service().finishLayoutPreview(revision: history["selected"].string)
-                    presented = false
-                    return
-                }
-                let id = historyID, mode = historyMode, selected = history["selected"].string
-                _ = try await form(history["restore"]) { [self] _ in
-                    var operation: [String: Any] = ["id": id, "version": selected]
-                    operation["type"] = mode == "versions" ? "restore_version" : "restore_metadata"
-                    _ = try await service().operation(operation)
-                    try await refreshHistory(selected)
-                }
+                try await service().finishLayoutPreview(revision: history["selected"].string)
+                presented = false
             } catch { self.error = error.localizedDescription }
         }
-    }
-    func back() {
-        history = JSON(); showingStorage = false
-        Task { do { try await refresh() } catch { self.error = error.localizedDescription } }
     }
     func openURL(_ url: URL, kind: WorkspacePackageKind) {
         Task {
@@ -391,18 +345,16 @@ import SwiftUI
             defer { processing = false }
             do {
                 try await loadCatalog(); presented = true
-                if let text = try await files.read(kind: kind, url: url) { try await importText(text, kind: kind) }
+                try await importText(WorkspacePackageFiles.read(from: url), kind: kind)
             } catch { self.error = error.localizedDescription }
         }
     }
     private func importText(_ text: String, kind: WorkspacePackageKind) async throws {
-        guard kind != .template else { throw HostFailure(message: "Loading saved layouts is no longer available") }
         let result = try await service().perform(["type": "import", "kind": kind.rawValue, "text": text])
         if kind == .workspaceBackup { presented = false }
         else {
             page = "toolbar_library"; toolbarMode = true
-            history = JSON(); showingStorage = false; selection = result["selected"].string
-            note = "Toolbar imported. Choose Add to Workspace to use it."
+            history = JSON(); selection = result["selected"].string
             try await refresh()
         }
     }

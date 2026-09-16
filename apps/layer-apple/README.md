@@ -84,7 +84,7 @@ independent history. Save Layout, Load Layout and their separate manager page
 have been removed from the product scope. Shared Rust owns
 availability, forms, history and storage policy; the Apple coordinator keeps
 database work off the drawing owner. See [Apple persistence](PERSISTENCE.md#workspace-library)
-for migration, window ownership and direct workflow checks.
+for startup, window ownership and direct workflow checks.
 
 The header follows saved workspace pins and list order. Manage Workspaces offers
 Show in top bar, Move Up/Down and narrow row grips; new workspaces are pinned by
@@ -106,8 +106,11 @@ Both hosts support all five shared toolbar styles: small, medium, large, medium
 labeled and large labeled. Ribbons, floating panels and content drawers
 use the Rust icon sizes, label line counts and weight. Labeled tiles place
 text beside the icon; size controls retain the shared size glyph. Vertical bars
-use horizontal separators. Zen hides editor controls until Tab restores them;
-disabled toolbar controls apply one dimming step while remaining inactive.
+use horizontal separators. Zen hides editor controls until Tab restores them.
+UIKit observes chrome contacts before button activation so the Zen button's
+release cannot immediately reveal chrome again. Its passive observer excludes
+the native canvas, which owns contact dismissal and drawing. Mac retains its
+tap observer. Disabled toolbar controls apply one dimming step while inactive.
 `testToolbarStylesAndActions` checks native style selection, button bounds,
 the Zoom action and Zen visibility. Direct bridge checks cover all style
 projections and workspace history on both hosts.
@@ -155,9 +158,29 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
 ```
 
+[Stacked collapsed columns](../../docs/ui/stacked-columns.md) use shared Rust
+membership, drop targets, preferences, geometry and history. The ordinary dock
+views render an open member's panels and split dividers; existing drawer shapes
+connect its selected sidebar icons. Grip menus choose full-column opening,
+individual tabbed drawers and Auto-hide. Closed multi-member stacks have no
+resize affordance; an open member retains its own resizable width. Fresh Paint
+opens the right stack. Saved custom arrangements start closed while retaining
+their stack settings and ordinary panel layout.
+
+`tests/column-stacks.swift` checks AppKit mouse/tablet input on both presets,
+including held icons, immediate tabs/grips, target distinctions, cancellation and
+one-step history. `tests/column-stack-persistence.swift` uses real temporary
+workspace libraries for switching, relaunch and persisted Undo/Redo. Run these
+with `scripts/test-project-files.sh`. Both native UI targets provide
+`testColumnStacks` and `testColumnStacksDark`; physical Pencil validation remains
+part of the broader input gate.
+
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.
+Brush previews fill the row above a right-aligned single-line label, matching Web.
+Open tool buttons use the adjoining drawer's panel color; selection keeps its
+shared accent highlight.
 The Tool panel shows the active tool's numeric fields and actions. Numeric
 expressions, units, ranges, slider mappings and stepping resolve through Rust.
 The shared Apple control
@@ -165,6 +188,76 @@ handles optimistic edits and local validation feedback; small AppKit/UIKit
 adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 Native focus changes are deferred until after SwiftUI updates to avoid entering
 the hosting responder graph recursively when accepting an expression.
+
+Settings' Done action submits the focused text or numeric field through SwiftUI
+before closing, preserving valid drafts even when native focus-loss callbacks
+arrive afterward. Result and sidebar navigation release search focus, and the native sidebar
+width keeps page labels readable. Shared
+text fields ignore unchanged native callbacks so ending editing cannot resubmit
+the old query after navigation clears it. Run `tests/settings-text-input.swift` with
+`scripts/test-project-files.sh` for both theme-color fields on the shared Apple
+presets, including Reset to Default while a text draft is focused and subsequent
+Done/reopen. Updated theme-color values replace the focused draft so Done cannot
+restore a discarded value. The grouped `testNumericSettingsDone` editor workflow checks expression
+entry, Done, reopen, search-result/sidebar navigation and iPad keyboard dismissal
+through the actual native Settings window.
+Toolbar Color/Opacity controls use their existing drawers; the explicit
+configuration popup contains only Color. The obsolete modal opacity path is
+removed from the shared action and Apple dialog.
+
+For focused canvas checks without simulator startup:
+
+```bash
+cargo test -p layer-apple apple_region_ -- --nocapture
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app \
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/canvas-native-input.swift
+```
+
+The region checks exercise the Apple pointer/action bridge with Metal. The
+canvas fixture mounts the assembled editor with its visible panels and overlays.
+It sends local AppKit mouse, key and focus events through verified canvas hit
+targets for lasso/fill and ruler workflows, checking exact exported pixels and
+saved ruler geometry through cancellation and Undo/Redo. New mouse and supplied
+standalone tablet contacts also clear stale modifier flags from other controls.
+New Drawing uses the
+native Discard button and waits for its alert to close. The application's
+suspend/resume entry points and actual renderer restart also cancel unfinished
+contacts without a mouse-up, ignore stale movement and allow the next lasso,
+preserving exact artwork/history. Navigation checks supply AppKit wheel, pinch
+and rotation values to the real canvas callbacks, covering scroll units,
+modifiers, anchors and contact exclusion/recovery after a cancellation frame.
+The test does not sleep the machine or emulate a physical trackpad. Point
+`CAPY_TEST_ASSETS_APP` at a built Mac app to supply vector/filter resources.
+Both shared Apple configurations run on Mac; these checks do not establish
+external OS event posting, OS menu navigation or UIKit/Pencil/tablet delivery.
+Group full-application UI runs at milestone boundaries.
+
+The focused iPad `EditorLaunchTests/testTwoFingerCanvasNavigation` workflow
+checks UIKit-delivered pinch-in, rotation, a fresh pinch-out, fixed window bounds,
+unchanged artwork history and Fit restoration. It hides panels through ordinary
+workspace customization: XCTest starts pinch-out near the full canvas element's
+corners, which otherwise lie beneath docked controls. This simulator check does
+not establish physical finger/Pencil, cancellation or performance acceptance.
+
+For RGB draft ownership, run `tests/property-slider-input.swift` with
+`CAPY_PROPERTY_CASE=brush-color` through the same local script. Switching between
+foreground and background replaces the old numeric fields and rejects their late
+callbacks; ordinary updates within one paint slot preserve an unfinished draft.
+The fixture checks both shared Apple policies without simulator startup.
+
+`tests/canvas-modifiers.swift` is a standalone UIKit scene application built
+with the production Shared/iOS sources, Rust bridge and bundled filters. Its
+eighty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
+touch identity reuse and palm rejection; saved ruler geometry; all figure and
+gradient variants; constrained/free painting with all three ruler types; and
+transform edge/corner scaling, movement, rotation, Shift/Alt constraints and
+Apply/Cancel.
+Cancellation and Undo/Redo compare every decoded PNG pixel. The same suite passes
+on simulator and the physical iPad GPU without XCTest, using temporary storage
+and supplied event values. `CAPY_INPUT_RUN` identifies the launch in the fixture's
+`Documents/canvas-input-result.json`, allowing verification when device console
+output is missing. Physical sensors/key delivery, visible editor hit
+targets and OS interruption delivery remain separate acceptance checks.
 
 Numeric labels truncate within compact panels, leaving values readable. Spin
 fields keep the shared unit suffix when idle, with the value and both step buttons
@@ -174,6 +267,27 @@ text adapters use tabular digits. The
 [numeric-control comparison](../../tools/visual/README.md#numeric-editor-controls)
 includes both Apple presets/themes, width and endpoint cases, plus mounted-field
 checks of actual editor actions. Full UIKit and editor pixel parity remain open.
+
+Property slider drags use the existing shared effect gesture transaction for
+numeric and color values, layer/Paper opacity and gradient stop controls. Moves
+preview without adding history; release commits one Undo step and cancellation
+restores the original value while preserving Redo. Ordinary text, step and tap
+edits retain their discrete numeric validation path.
+New curve points and gradient stops become selected from Rust's published list,
+so removal and color/position edits work immediately after insertion. Undoing a
+single-point removal selects the restored point. Property colors reuse the shared
+RGBA color conversion.
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-slider-input.swift
+cargo test -p layer-apple property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms -- --test-threads=1
+```
+
+The native component check uses local AppKit contacts through the shared property
+views for both Apple presets, including insertion/selection/removal, history,
+view-removal cancellation and locked layers. The Metal check compares every
+artwork pixel through preview, commit, Undo/Redo and cancellation. UIKit delivery
+is checked separately by the grouped `testInlineLayerOpacity` editor workflow.
 
 The compact Color panel follows the shared layout down to 128 logical points:
 an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
@@ -211,8 +325,9 @@ open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_p
 Release builds ignore this variable. The focused `testNumericToolControls` test
 uses a fresh light-theme editor on both platforms. It checks expression acceptance,
 invalid input, stepping and remembered brush settings across group changes.
-`testCompleteEditorCapture` captures only the settled default workspace and its
-logical dimensions for the Chrome `initial` comparison. Standalone edit-state
+`testCompleteEditorCapture` captures the settled Paint workspace with its
+default right stack open for the Chrome `paint-expanded` comparison. Its metadata
+records logical dimensions and any native window-control clearance. Standalone edit-state
 checks need no GUI automation:
 
 ```sh
@@ -231,7 +346,11 @@ captures plus measured wheel geometry for the shared
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
 The Color panel shares the Web layout, vector icons and readout spacing on both
-Apple targets. Its
+Apple targets. Docked wheels shrink to the available viewport height, retaining
+the shared 128-point minimum and scrolling below that size. The Paint and Photo default
+checks include visibility of the wheel and every corner control. Panel headers,
+vertical toolbar footers and collapsed-column footers use one grip drawing with
+the same orientation, opacity and inset as Web/Android. The Color
 [complete-panel fixture](../../tools/visual/README.md#complete-color-panels)
 compares 216 cases per host: both presets/themes, three shapes, two readouts,
 three paint slots and three widths. The same source has AppKit and UIKit capture
@@ -244,7 +363,7 @@ closed control to the longest option while keeping room for its row label.
 The layer blend control exposes its current value to accessibility.
 `testEditorControlLayout` checks all six Navigator hit targets, changes a blend
 mode through Properties, verifies the Layers value and undoes the change. It
-also attaches matching `initial` and `canvas-under-header` captures. The latter
+also attaches matching `paint-expanded` and `paint-canvas-under-header` captures. The latter
 uses four shared zoom-in steps so the paper is visible through empty header
 space; title, Zen and Settings retain their own background plates.
 
@@ -272,8 +391,18 @@ project format. Both targets support custom canvas dimensions and PNG export. GP
 readback and PNG encoding run on the file worker. Unsaved artwork also receives
 private recovery copies. Use **File → Recovered Drawings…** to open one; copies
 are offered after restart and retain unsaved status until you explicitly save.
+GPU failure preserves the editor's CPU session and offers **Restart Canvas** or
+**Save As…**. Restart reconstructs the document through the shared renderer API,
+retaining history and working settings. Recovery preparation handles queued
+pen-up without a drawable; lifecycle success waits for durable publication.
 See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
 reproducible checks and remaining physical-device/performance acceptance.
+
+`EditorLaunchTests/testArtworkRecoveryAfterRestart` checks painted artwork,
+native background/return to the same scene, fill Undo/Redo, then process restart
+and reopening the private recovery copy. It compares sampled pixels and layer
+structure. Mac uses Hide/activate; UIKit uses Home/activate. This workflow does
+not establish physical pen interruption or memory-pressure termination.
 
 Both targets now project the live shared application menus. Keyboard Shortcuts
 supports search, alternate bindings, conflict replacement and resets; Settings
@@ -291,7 +420,7 @@ workspace IDs are synthetic; the inventory never opens user storage. The
 `--gpu` mode seeds a disposable drawing through shared fill actions so transform
 controls can be enumerated with a real hardware renderer.
 
-The [command review](command-coverage.json) classifies all 62 commands, nine
+The [command review](command-coverage.json) classifies all 63 commands, nine
 workspace service commands, 14 panel control types, six preference kinds and
 six property kinds,
 with Apple handler/check references. The audit detects catalog and availability
@@ -311,7 +440,7 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/nativ
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/editor-menu-keyboard.swift
 ```
 
-The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
+The current graph contains 90 tool choices and 28 setting IDs per Apple preset;
 the workspace scenarios include 133 context menus per preset. Without `--gpu`,
 renderer-dependent tool failures remain explicit and fail the expanded audit.
 Schema 4 also records paint, paper, groups and every shipped filter: currently
@@ -329,6 +458,21 @@ the serial `NativeOwner`, comparing the actual published schemas and values.
 Both presets run without visible windows or a renderer, in disposable storage.
 This covers shared Apple routing, decoding, history and lock behavior; it does
 not establish UIKit widget, GPU filter-pixel or physical interaction acceptance.
+
+The Filters category control reuses the shared editor choice and its opaque menu.
+Opening a choice focuses its selected enabled row; Escape closes filter search.
+The focused native check visits every category, types a search, verifies Escape
+and unchanged document state, and captures both themes on both Apple presets:
+
+```sh
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app \
+CAPY_FILTER_CAPTURES=/tmp/capy-filter-controls \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/filter-controls.swift
+```
+
+Point `CAPY_TEST_ASSETS_APP` at a built Mac app to supply the shared vector assets.
+This check uses local mouse/keyboard events in temporary AppKit windows; it does
+not launch the simulator or validate UIKit event delivery or GPU filter previews.
 
 The direct Swift menu check dispatches actual shared menu payloads through the
 Apple editor and workspace service on both presets. It checks all nine routes,
@@ -368,7 +512,20 @@ Both hosts also pass `testWorkspaceSwitcher`, `testToolbarStylesAndActions` and
 `testToolbarCustomization`. Toolbar grips include their names in accessibility
 labels; Mac's Select All command respects the focused native text editor.
 The direct menu keyboard check uses native events in its own Mac window for
-arrows, Return, Escape, disabled rows and shifted shortcuts. Menus reuse
+arrows, Home/End, Return, Escape, disabled rows and shifted shortcuts. Submenu
+pages retain their parent row, so returning from a later submenu restores keyboard navigation
+to that row instead of the first enabled item. Accelerators search the complete
+menu tree, so an enabled action remains reachable from another page or before
+its submenu opens; disabled actions stay inactive. The focused
+`EditorMenuChecks/testCompactMenuShortcutAcrossPages` checks Undo/Redo through
+the real iPad compact menu; its last result fails and acceptance remains open
+in the [handoff](../../docs/development/apple-handoff.md). Menus shrink to the available
+window bounds while retaining their native scroller. The fixture verifies
+700×500, 360×500 and 700×760 windows, including scrolling to and activating the
+last row; set `CAPY_MENU_CAPTURES` to save captures of its owned windows.
+The grouped `testBlendChoices` and `testToolbarStylesAndActions` workflows check
+actual choice and toolbar menu bounds, selection, actions and history on both
+hosts. Menus reuse
 `ShortcutKeyCapture`; UIKit restores the preceding responder when a menu closes.
 The iPad workflow verifies arrows and command shortcuts. XCTest Escape produced
 no UIKit press or key-command callback in a traced first-responder probe; Return
@@ -421,8 +578,9 @@ fullscreen notifications. Neither observation requests an iPad fullscreen change
 
 Small, Medium and Large use shared tile/icon dimensions and six-point gaps.
 The selector retains its pill background and compacts to a menu when necessary.
-Transparent controls use contrasting ink over artwork, and Color shows the live
-foreground/background paints. See the
+Title-bar controls, menu labels and status text use Web's rounded theme-gray
+backgrounds over artwork; gaps retain the live canvas. Color shows the live
+foreground/background paints. The retired text/icon halo renderer is removed. See the
 [header comparison](../../tools/visual/README.md#complete-header-components)
 for native/Web captures and recorded host differences.
 
@@ -508,6 +666,12 @@ The Apple tests dispatch through the real C ABI for both platform configurations
 They check brush/zoom/settings actions, session isolation, committed ink after
 pen-up, and exact GPU document pixels through undo/redo. The GPU tests require
 hardware Metal access; they do not establish physical input or presentation timing.
+`cargo test -p layer-apple lasso_pointer_contacts -- --test-threads=1` checks pen
+contacts through that ABI: empty/cancelled paths preserve selection and Redo;
+enclosed selection/fill paths change actual document pixels and restore exactly
+through Undo/Redo. The native `testLassoControls` check covers control routes and,
+on Mac, ordinary clicks followed by Redo and layer editing. Freehand OS input
+and physical Pencil acceptance remain separate.
 The staged-startup check also verifies pending ink survives the initial paper
 frame and stays undoable while document/brush shaders become ready.
 Layer checks cover checked selection versus the drawing target, mask targeting,
@@ -527,7 +691,26 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 
 Synthetic images check EXIF orientation, sRGB channels, straight alpha, row order
 and rejection of dimensions beyond the shared import limit. File decoding runs
-off the UI and render-owner queues; document import runs on the serial owner.
+off the UI and render-owner queues inside the same security-scoped, coordinated
+reader used for projects and workspace packages. The decoder returns owned
+pixels before releasing file access; the layer retains the selected filename.
+Document import runs on the serial owner.
+The picker captures its drawing's identity. The native bridge rejects a late
+decode after New/Open replaces that drawing, while ordinary edits in the same
+drawing remain allowed. Document replacement also dismisses its old image picker.
+Run the ordered replacement/import regression without simulator automation:
+
+```sh
+CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/image-import-owner.swift
+```
+
+This uses temporary images/documents and both Apple policies. It verifies waiting
+for a coordinated writer, stale import rejection, missing/invalid files, fresh
+import after an intervening edit, one-step Undo/Redo and unchanged source bytes.
+It does not exercise the native file picker or a cloud provider. The Mac UI
+workflow `testNativeImageImport` covers the actual picker, cancellation, the
+imported layer name, sampled artwork and Undo/Redo.
 
 The shared JSON transport uses direct Foundation container lookup to avoid
 bridging a complete dictionary for each field read by the editor. Check native
@@ -647,21 +830,36 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 The shared `testFilterSearchPreviewAndProperties` workflow checks filter search,
 GPU preview loading, radius expressions, curve insertion/reset and gradient
 insertion/position/reset. On iPad it also checks canvas geometry while the search
-keyboard is open. A faster Mac-only alternative avoids XCTest startup and never
-addresses the system menu bar:
+keyboard is open. The Chrome `filter-properties` scenario in
+[`tools/visual`](../../tools/visual/README.md) provides the corresponding property
+fixture.
 
-```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcrun swift apps/layer-apple/tests/effect-controls-mac.swift \
-  apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app
-```
+Use `testFilterArtworkAndHistory` for brightness expressions, Red-channel curve
+insertion/selection/dragging/removal/reset, Gradient Map reversal/color editing
+and stop insertion/selection/dragging/removal/reset, filter deletion and one-step
+Undo/Redo. Curve-point selection also preserves pending Redo; dragging retains
+the original grab offset.
+Both hosts create the drawing through native Select/Fill commands, compare exact
+8-by-8 displayed canvas samples and retain
+full editor screenshots.
+These checks exercise mouse/touch controls; they do not establish Pencil input
+or all-pixel filter parity. Both workflows use the native test runner above;
+the obsolete direct-event Mac probe is removed.
 
-This utility requires existing Accessibility permission for its launching
-terminal/agent. It opens a separate editor with persistence disabled, uses
-control identifiers and graph-relative pointer events, and leaves its final
-fixture open for direct capture. Missing permission returns failure without
-launching or modifying an editor. The Chrome `filter-properties` scenario in
-[`tools/visual`](../../tools/visual/README.md) reproduces its final document.
+Use `testMaskActionsAndHistory` for selection-based mask creation/replacement,
+copy/paste, enable/invert, reveal/hide all, mask-area inspection, apply/delete and
+one-step Undo/Redo. It creates bounded artwork through native Select/Fill and
+numeric transform controls, checks four exact 8-by-8 canvas samples across the
+mask boundary, and retains full editor captures. Copy must preserve pending
+Redo, and paste must also work on a second layer. This supplements
+`testMaskTransforms`; physical Pencil interaction remains separate.
+
+Use `testLayerContentActionsAndHistory` for independent duplicates, clearing,
+alpha-locked fills, editing-lock capabilities, clipping and new clipping layers.
+It also duplicates and deletes a selected clipping stack, checking layer counts,
+exact sampled artwork and one-step Undo/Redo. The original bounded paint layer
+must survive recoloring and deleting its copies. Both hosts use native menus,
+selection controls and numeric transforms, with full editor captures retained.
 
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state

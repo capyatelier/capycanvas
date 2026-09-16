@@ -6,7 +6,9 @@ import CoreGraphics
 @MainActor final class LayerThumbnails: ObservableObject {
     @Published private(set) var images: [String: CGImage] = [:]
     private weak var store: EditorStore?
-    private var visible: Set<UInt64> = []
+    // A replacement panel can appear before its predecessor disappears.
+    // Each mounted row owns its request independently, as filter previews do.
+    private var visible: [String: UInt64] = [:]
     private struct Version: Equatable { let target: UInt64; let revision: UInt64 }
     private struct Request { let key: String; let version: Version }
     private var completed: [String: Version] = [:]
@@ -21,10 +23,10 @@ import CoreGraphics
         images.removeAll(); completed.removeAll(); pending.removeAll(); refresh()
     }
     static func key(_ id: UInt64, _ mask: Bool) -> String { "\(id):\(mask)" }
-    func show(_ id: UInt64) { visible.insert(id); refresh() }
-    func hide(_ id: UInt64) { visible.remove(id) }
+    func show(token: String, id: UInt64) { visible[token] = id; refresh() }
+    func hide(_ token: String) { visible.removeValue(forKey: token) }
     func refresh() {
-        guard task == nil else { return }
+        guard task == nil, store?.snapshot["gpu_ready"].bool == true else { return }
         task = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
@@ -37,7 +39,8 @@ import CoreGraphics
     }
     private func desired() -> [String: Version] {
         var result: [String: Version] = [:]
-        for layer in store?.state["layers"].array ?? [] where visible.contains(layer["id"].uint) {
+        let ids = Set(visible.values)
+        for layer in store?.state["layers"].array ?? [] where ids.contains(layer["id"].uint) {
             for mask in [false, true] {
                 if mask ? !layer["has_mask"].bool : layer["group"].bool || !layer["content_icon"].isNull { continue }
                 result[Self.key(layer["id"].uint, mask)] = Version(

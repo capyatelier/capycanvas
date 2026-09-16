@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {writeFile} from "node:fs/promises";
 
 export async function checkRaster({call,evaluate,settle,canvasPixels}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>30000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(check,20);}check();})`);
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>30000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(check,20);}check();})`).catch(error=>{throw new Error(`Raster wait failed: ${condition}`,{cause:error});});
   await wait('layerApp.startupTimes.complete!==null');
   console.log('Raster startup',await evaluate('JSON.parse(JSON.stringify({startup:layerApp.startupTimes,stats:layerApp.app.renderer_stats(),camera:layerApp.app.camera(),file:layerApp.state().document_file,status:document.querySelector("#status").textContent},(key,value)=>typeof value==="bigint"?Number(value):value))'));
   console.log('Presented pixels',await canvasPixels());
@@ -43,7 +43,17 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   await invoke('open_document');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt archive cannot replace the document');
   await evaluate('rasterOriginal=rasterGood');
-  await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready() && layerApp.startupTimes.complete!==null');
+  await evaluate(`(async()=>{
+    const suspend=layerApp.app.suspend_gpu.bind(layerApp.app);
+    layerApp.app.suspend_gpu=()=>{
+      const change=suspend();
+      window.suspendedNavigator=layerApp.app.reflow_navigators();
+      return change;
+    };
+    try{await layerApp.restartGpu();}finally{layerApp.app.suspend_gpu=suspend;}
+  })()`);
+  assert.equal(await evaluate('window.suspendedNavigator'),false,'A queued Navigator reflow defers while the GPU is suspended');
+  await wait('layerApp.app.brush_ready() && layerApp.startupTimes.complete!==null');
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate(`rasterHash(rasterFiles.get('restored.png'))`),await evaluate('rasterHash(rasterPaintPng)'),'GPU replacement retains committed pixels');
   console.log('Exact raster save/reopen, undo/redo, corrupt-file retention and GPU replacement passed');

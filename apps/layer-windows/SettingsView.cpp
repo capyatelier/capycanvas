@@ -29,7 +29,9 @@ TextBlock description(std::shared_ptr<WorkspaceData> const& data,hstring const& 
 }
 Button actionButton(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J action){
     auto result=button(data,title,[data,action]{send(data,action);});
-    result.Padding({10,5,10,5});result.MinHeight(34);return result;
+    result.Padding({10,5,10,5});result.MinHeight(34);
+    result.ActualThemeChanged([data](auto const& sender,auto&&){buttonColors(data,sender.template as<Button>());});
+    return result;
 }
 }
 struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
@@ -40,7 +42,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     TextBox search,shortcutSearch;
     TextBlock title,error;
     ScrollViewer scroller;
-    Bindings bindings,commits;
+    Bindings bindings,commits,themeBindings;
     std::map<std::wstring,StackPanel> pageNodes;
     std::map<std::wstring,Button> tabs;
     std::map<std::wstring,FrameworkElement> rows;
@@ -71,7 +73,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         });
     }
     void build(J const& model){
-        bindings.clear();commits.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";shortcutKey=L"";editorKey=L"";
+        bindings.clear();commits.clear();themeBindings.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";shortcutKey=L"";editorKey=L"";
         body=Grid();ColumnDefinition navigation;navigation.Width({192,GridUnitType::Pixel});
         ColumnDefinition main;main.Width({1,GridUnitType::Star});body.ColumnDefinitions().Append(navigation);body.ColumnDefinitions().Append(main);
         sidebar=StackPanel();sidebar.Spacing(6);sidebar.Margin({0,0,16,0});
@@ -158,7 +160,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
                     choice.Resources().Insert(box_value(role),selected());
                 ToolTipService::SetToolTip(choice,box_value(options.GetStringAt(i)));
-                if(i<icons.Size())choice.Content(icon(icons.GetStringAt(i),data->theme(),48));
+                if(i<icons.Size())themeBindings.emplace_back([data=data,choice,id=icons.GetStringAt(i)]{
+                    choice.Content(icon(id,data->theme(),48));
+                });
                 choice.Click([data=data,id,i](auto&&,auto&&){if(!data->updating)edit(data,id,N(i));});
                 Grid::SetColumn(choice,i%columns);Grid::SetRow(choice,i/columns);choices.Children().Append(choice);
                 bindings.emplace_back([data=data,id,i,choice]{
@@ -172,8 +176,13 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             auto options=array(kind,L"options"),icons=array(kind,L"icons");
             for(uint32_t i=0;i<options.Size();++i){
                 StackPanel option;option.Orientation(Orientation::Horizontal);option.Spacing(8);
-                if(i<icons.Size()&&!icons.GetStringAt(i).empty())option.Children().Append(icon(icons.GetStringAt(i),data->theme()));
-                option.Children().Append(label(data,options.GetStringAt(i)));control.Items().Append(option);
+                if(i<icons.Size()&&!icons.GetStringAt(i).empty()){
+                    ContentControl glyph;glyph.IsTabStop(false);option.Children().Append(glyph);
+                    themeBindings.emplace_back([data=data,glyph,id=icons.GetStringAt(i)]{glyph.Content(icon(id,data->theme()));});
+                }
+                option.Children().Append(label(data,options.GetStringAt(i)));
+                ComboBoxItem choice;choice.Content(option);AutomationProperties::SetName(choice,options.GetStringAt(i));
+                control.Items().Append(choice);
             }
             control.SelectionChanged([data=data,id](auto&& sender,auto&&){
                 auto index=sender.template as<ComboBox>().SelectedIndex();
@@ -287,7 +296,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(!model.Size()){showFailed=false;if(showing&&!closing)dialog.Hide();return;}
         if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};
-        if(!built||theme!=data->theme()){theme=data->theme();build(model);}
+        // Retain native controls and their automation peers across theme changes.
+        bool restyle=!built||theme!=data->theme();theme=data->theme();
+        if(!built)build(model);
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto size=xamlRoot.Size();body.Width(std::max(320.,std::min(800.,double(size.Width)-96)));
         body.Height(std::max(200.,std::min(560.,double(size.Height)-200)));scroller.Height(std::max(140.,body.Height()-64));
@@ -309,6 +320,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         updateLists(model);
         auto reveal=str(model,L"reveal");
         if(reveal!=revealed){revealed=reveal;auto it=rows.find(reveal.c_str());if(it!=rows.end())it->second.StartBringIntoView();}
+        if(restyle)for(auto const& bind:themeBindings)bind();
         if(!showing)show();
     }
 };

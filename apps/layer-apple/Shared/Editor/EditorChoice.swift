@@ -29,6 +29,7 @@ struct EditorChoice: View {
     let identifier: String
     let background: Color
     var compact = false
+    var bold = false
     let select: (Int) -> Void
     @State private var choosing = false
     @Environment(\.isEnabled) private var enabled
@@ -37,7 +38,7 @@ struct EditorChoice: View {
             ChoiceLabelLayout(ellipsis: compact) {
                 ForEach(options.indices, id: \.self) { Text(options[$0]).hidden().accessibilityHidden(true) }
                 Text(options.indices.contains(selected) ? options[selected] : label).lineLimit(1)
-            }.fontWeight(compact ? .bold : .regular).clipped()
+            }.fontWeight(compact || bold ? .bold : .regular).clipped()
                 .modifier(ChoiceMeasurement(id: identifier + ":text"))
                 .padding(.leading, compact ? 10 : 14).padding(.trailing, compact ? 22 : 26)
                 .frame(height: compact ? 24 : 34)

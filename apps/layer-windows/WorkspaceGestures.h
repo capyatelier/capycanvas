@@ -10,6 +10,7 @@ public:
     // Classify the visible source independently of its Rust payload.
     // Action is DragWorkspace, a native tile_drag, DragDivider, ResizeFloating
     // actions. Resize handles always use immediate pickup.
+    // An empty action registers context/double-click behavior without dragging.
     void Source(winrt::Microsoft::UI::Xaml::FrameworkElement const& element,
         CapyUi::J const& action,CapyUi::J const& context={},bool doubleClick=false,
         CapyUi::J const& tab={},Pickup pickup=Pickup::Immediate);

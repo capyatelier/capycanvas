@@ -21,12 +21,29 @@ in Git history. They are not valid expectations for encoded sRGB8 paint.
 Separate double-precision oracles test transfer/alpha, tone filters, halftone
 endpoints and linear spatial sampling. Conversion tests propagate adjacent
 physical storage-code bounds through unassociation, rather than applying an
-arbitrary straight-color tolerance near zero alpha. The spatial oracle keeps
+arbitrary straight-color tolerance near zero alpha. The import and tone oracles
+also propagate the half-encoded-code uncertainty allowed for fixed-function
+sRGB loads by Direct3D (`D3D12_SRGB_TO_FLOAT_TOLERANCE_IN_ULP`), using independent
+scalar transfer functions. Negative cases reject missing sRGB decoding and the
+old linear-eight-bit storage contract. See Microsoft's
+[data conversion rules](https://learn.microsoft.com/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-data-conversion).
+The spatial oracle keeps
 its original one-linear-code sampling bound and accounts for the new storage
 quantizer. Neither changes the strict independent PNG comparison.
 
 This qualification is Vulkan on the Linux reference GPU. It does not establish
 Metal, D3D12 or browser parity. No renderer test overwrites reference fixtures.
+
+A separate [Windows independent comparison](../../../../docs/development/windows-filter-qualification.md)
+qualifies the same sampled migration cases against the old algorithms on one
+Intel D3D12/Vulkan device. Both versions still differ from this Linux PNG; the
+reference and ordinary comparison gate remain unchanged.
+
+The [Metal comparison](../../../../docs/development/apple-filter-qualification.md)
+finds exact sampled agreement with the independent algorithms on one Mac. Across
+all 160 full-size images, thirteen pixels differ, with maximum raw error two;
+the reviewed artwork is perceptually equivalent. This does not change the
+Linux fixture or establish physical iPad, browser or arbitrary-parameter parity.
 
 All artwork is original project test data under MIT OR Apache-2.0.
 

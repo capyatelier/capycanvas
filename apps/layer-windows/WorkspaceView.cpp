@@ -94,6 +94,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
     TextBlock camera;
+    Grid cameraSlot;
+    Button fitCamera{nullptr};
     Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -103,10 +105,18 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->send=std::move(send);data->catalog=catalog;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
+        camera.FontWeight(Windows::UI::Text::FontWeights::Normal());
         camera.IsHitTestVisible(false);
         AutomationProperties::SetAutomationId(camera,L"canvas-camera");
     }
     void init(){
+        fitCamera=button(data,L"Fit canvas",[data=data]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"fit_canvas")}}));});
+        fitCamera.Content(camera);fitCamera.Padding({10,3,10,3});fitCamera.CornerRadius({20,20,20,20});
+        AutomationProperties::SetAutomationId(fitCamera,L"canvas-fit");
+        ToolTipService::SetToolTip(fitCamera,box_value(L"Fit canvas"));
+        Border surface;surface.Child(fitCamera);surface.Background(data->brush(L"bg"));surface.CornerRadius({20,20,20,20});
+        surface.HorizontalAlignment(HorizontalAlignment::Right);surface.VerticalAlignment(VerticalAlignment::Bottom);surface.Margin({4,0,4,0});
+        cameraSlot.Children().Append(surface);
         zen=std::make_unique<ZenToolbars>(data,root,gestures);
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
@@ -260,7 +270,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();zen->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
+            expansion->Reset();zen->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -324,8 +334,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         updateConfiguration();
         expansion->Apply(configurationHeight());present();
         zen->Apply();collapsed->Apply();drawers->Apply();gestures->Refresh();
-        camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
-        camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
+        auto status=object(layout,L"status");place(cameraSlot,status);
+        cameraSlot.Visibility(num(status,L"height")>0?Visibility::Visible:Visibility::Collapsed);
+        camera.Foreground(data->brush(L"text"));
+        auto fit=find(array(data->state,L"commands"),L"id",L"fit_canvas");
+        fitCamera.IsEnabled(flag(fit,L"enabled"));
+        AutomationProperties::SetName(fitCamera,str(fit,L"label",L"Fit canvas"));
+        updateCamera(object(data->state,L"camera"));
         updatePopup();publishOverviews();reportTitlebar();queueMeasurements();
         applyMotion(object(update,L"drag"));tracePresentation();return true;
     }
@@ -598,6 +613,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(added){handle.Background(clear());handle.RenderTransform(TranslateTransform());root.Children().Append(handle);}
         auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
+        if(str(action,L"type")==L"drag_divider"){
+            using namespace winrt::Microsoft::UI::Input;
+            auto shape=num(bounds,L"width")<num(bounds,L"height")?
+                InputSystemCursorShape::SizeWestEast:InputSystemCursorShape::SizeNorthSouth;
+            handle.as<IUIElementProtected>().ProtectedCursor(InputSystemCursor::Create(shape));
+        }
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
     }

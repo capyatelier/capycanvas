@@ -7,6 +7,22 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 public static class CapyLayersCapture {
+    [StructLayout(LayoutKind.Sequential)] public struct Keyboard {public ushort key,scan;public uint flags,time;public UIntPtr extra;}
+    [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Keyboard keyboard;}
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
+    public static void Key(uint process,ushort key,ushort modifier=0) {
+        uint owner;GetWindowThreadProcessId(GetForegroundWindow(),out owner);
+        if(owner!=process)throw new Exception("Review does not own keyboard focus; no key sent.");
+        var keys=modifier==0?new[]{key}:new[]{modifier,key};var input=new Input[keys.Length*2];
+        for(int i=0;i<keys.Length;i++){
+            input[i]=new Input{type=1,keyboard=new Keyboard{key=keys[i]}};
+            input[input.Length-1-i]=new Input{type=1,keyboard=new Keyboard{key=keys[i],flags=2}};
+        }
+        if(SendInput((uint)input.Length,input,40)!=input.Length)throw new Exception("Windows rejected the review key.");
+    }
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
@@ -48,6 +64,16 @@ function Invoke([string]$Value,[switch]$Name){
         $null -ne $hit.item
     } "Missing action: $Value"
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+function Focus([string]$Id){
+    [CapyLayersCapture]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    $item=Control $Id;$item.SetFocus();Wait-Until {$item.Current.HasKeyboardFocus} "Missing focus on $Id"
+}
+function Toggle-Flag([string]$Id,[switch]$Keyboard){
+    $pattern=(Control $Id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $before=$pattern.Current.ToggleState
+    if($Keyboard){Focus $Id;[CapyLayersCapture]::Key($review.Id,0x20)}else{$pattern.Toggle()}
+    Wait-Until {$pattern.Current.ToggleState -ne $before} "Accessible toggle state did not change: $Id"
 }
 function Edit([string]$Id,[string]$Text){
     $entry=Control $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
@@ -112,10 +138,12 @@ try {
     Wait-Until {[Math]::Abs((Control 'layer-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.6) -lt .000001} 'Opacity slider did not follow the numeric field'
     Choose 'layer-blend' 'Multiply'
     Wait-Until {(Model).state.layer_tools.editing_layer.blend -eq 1} 'Layer blend not applied'
-    Invoke 'layer-alpha_lock';Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked} 'Alpha lock not applied'
-    Invoke 'layer-lock';Wait-Until {(Model).state.layer_tools.editing_layer.locked} 'Edit lock not applied'
+    Toggle-Flag 'layer-alpha_lock';Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked} 'Alpha lock not applied'
+    Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.editing_layer.alpha_locked -and (Control 'layer-alpha_lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off} 'Undo did not restore the accessible alpha-lock state'
+    Invoke 'Redo' -Name;Wait-Until {(Model).state.layer_tools.editing_layer.alpha_locked -and (Control 'layer-alpha_lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On} 'Redo did not restore the accessible alpha-lock state'
+    Toggle-Flag 'layer-lock' -Keyboard;Wait-Until {(Model).state.layer_tools.editing_layer.locked} 'Edit lock not applied'
     Wait-Until {!(Control 'layer-opacity').Current.IsEnabled -and !(Control 'layer-opacity-slider').Current.IsEnabled -and !(Control 'layer-blend').Current.IsEnabled} 'Locked controls remained enabled'
-    Invoke 'layer-lock';Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'Edit lock not cleared'
+    Toggle-Flag 'layer-lock' -Keyboard;Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'Edit lock not cleared'
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer not created'
     $created=(Model).state.layer_tools.editing_layer.id
@@ -127,7 +155,16 @@ try {
     Wait-Until {(Find "layer-$created-mask-thumbnail").Current.ItemStatus -eq 'Ready'} 'Mask thumbnail not ready' 15
     Invoke "layer-$created-name"
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content target not selected'
-    Invoke 'layer-actions';Invoke 'layer-menu-begin_rename'
+    foreach($target in @('name','content','mask')){foreach($shift in @($false,$true)){
+        $isMask=$target -eq 'mask';$command=if($isMask){'layer-menu-enable_mask'}else{'layer-menu-begin_rename'}
+        Focus "layer-$created-$target"
+        [CapyLayersCapture]::Key($review.Id,($shift ? 0x79 : 0x5D),($shift ? 0x10 : 0))
+        Wait-Until {$item=Find $command;$null -ne $item -and !$item.Current.IsOffscreen -and (Model).state.layer_tools.editing_layer.mask_selected -eq $isMask} "Keyboard opened the wrong layer context: $target, Shift=$shift"
+        if($isMask -and $shift){Capture 'keyboard-mask-menu'}
+        [CapyLayersCapture]::Key($review.Id,0x1B)
+        Wait-Until {$item=Find $command;$null -eq $item -or $item.Current.IsOffscreen} 'Escape did not dismiss the layer menu'
+    }}
+    Focus "layer-$created-name";[CapyLayersCapture]::Key($review.Id,0x71)
     Wait-Until {(Model).state.layer_tools.rename_layer -eq $created} 'Rename did not begin'
     Edit "layer-$created-rename" 'Native layer';(Control 'layer-blend').SetFocus()
     Wait-Until {(Model).state.layer_tools.editing_layer.label -eq 'Native layer' -and $null -eq (Model).state.layer_tools.rename_layer} 'Rename did not commit'
@@ -146,10 +183,10 @@ try {
     Invoke "layer-$created-link"
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_linked} 'Mask link not applied'
     Invoke "layer-$created-name"
-    Invoke 'layer-clip';Wait-Until {(Model).state.layer_tools.editing_layer.clipped} 'Clipping not applied'
-    Invoke 'layer-clip';Wait-Until {!(Model).state.layer_tools.editing_layer.clipped} 'Clipping not cleared'
-    Invoke 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Reference selection not applied'
-    Invoke 'layer-reference';Wait-Until {!(Model).state.layer_tools.references_selected} 'Reference selection not cleared'
+    Toggle-Flag 'layer-clip';Wait-Until {(Model).state.layer_tools.editing_layer.clipped} 'Clipping not applied'
+    Toggle-Flag 'layer-clip';Wait-Until {!(Model).state.layer_tools.editing_layer.clipped} 'Clipping not cleared'
+    Toggle-Flag 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Reference selection not applied'
+    Toggle-Flag 'layer-reference';Wait-Until {!(Model).state.layer_tools.references_selected} 'Reference selection not cleared'
     Invoke 'layer-actions';Invoke 'layer-menu-duplicate'
     Wait-Until {(Model).state.layers.Count -eq $count+2} 'Duplicate did not create a layer'
     Invoke 'layer-delete';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Delete selected did not remove duplicate'
@@ -186,15 +223,14 @@ try {
     $scroll.SetScrollPercent(-1,0)
     Capture 'virtualized'
     $theme=(Model).state.theme
-    Invoke 'Preferences' -Name
+    Invoke 'settings-button'
     $preferences=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
     (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
-    $close=$preferences.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Close'),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+    $close=$preferences.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'Drawing canvas' -Name).Current.IsEnabled} 'Preferences did not close'
     Capture 'alternate-theme'
@@ -214,7 +250,7 @@ try {
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Cancel did not reopen the canvas'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
+    [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

@@ -148,6 +148,7 @@ fn native_stack_drop_input(append: bool) {
                         },
                     });
                     if source == "drawer-tab" {
+                        enable_individual_column_panels(&w, 8);
                         w.dispatch(UiAction::Customize {
                             action: CustomizationAction::ToggleColumnDrawer {
                                 group: 8,
@@ -552,6 +553,10 @@ fn native_column_stack_input() {
                 layer_ui::durable_layout(&state(&w).workspace.layout),
                 stacked
             );
+            // Exercise switching from explicitly enabled individual drawers.
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetColumnDrawers { column: 4, drawers: true },
+            });
             let empty = center(
                 w.resolved()
                     .collapsed

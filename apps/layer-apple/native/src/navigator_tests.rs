@@ -255,6 +255,24 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
         let [x, y] = current.work_area_center();
         let center = current.input_transform().map(layer_core::Point { x, y });
         assert!((center.x - 40.).abs() < 0.01 && (center.y - 40.).abs() < 0.01);
+        // UIKit indirect recognizers and AppKit use these same camera bridges.
+        // Navigation must preserve the raster document and its artwork history.
+        for (scale, rotation) in [(1.25, 0.2), (0.8, -0.2)] {
+            let before = camera();
+            assert_eq!(
+                unsafe { capy_apple_gesture(app.0, x, y, scale, rotation) },
+                0
+            );
+            assert_ne!(camera(), before);
+        }
+        for (zoom, horizontal) in [(0, 0), (0, 1), (1, 0)] {
+            let before = camera();
+            assert_eq!(
+                unsafe { capy_apple_scroll(app.0, x, y, 5., -10., 2., zoom, horizontal) },
+                0
+            );
+            assert_ne!(camera(), before);
+        }
         app.draw_until_idle();
         assert_eq!(
             unsafe { &*app.0 }.host.session.engine().document().revision,

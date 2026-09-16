@@ -357,6 +357,71 @@ class AndroidTitleBarTest {
         }
     }
 
+    @Test fun compactWorkspaceChoicesAndOverflowIconsFollowTheTitleBar() {
+        val initial = view().array("switcher_display").objects().map { it.getString("id") }
+        send(obj("type" to "edit_switcher", "edit" to obj("type" to "move", "id" to initial[2], "before" to initial[0])))
+        var next = 1
+        fun entry(kind: String) = obj("id" to next++, "item" to obj("kind" to kind))
+        val left = JSONArray(listOf(entry("capy"), entry("menu")) + List(40) { entry("space") })
+        val workspace = entry("workspaces")
+        val id = workspace.getInt("id")
+        val center = JSONArray(listOf(workspace) + List(30) { entry("space") })
+        fixture.getJSONObject("layout").put("header", obj("size" to "small", "next_id" to next,
+            "zones" to JSONArray(listOf(left, center, JSONArray()))))
+        fun texts(node: SemanticsNode): List<String> =
+            (node.config.getOrNull(SemanticsProperties.Text)?.map { it.text } ?: emptyList()) + node.children.flatMap(::texts)
+        fun label(node: SemanticsNode, title: String): SemanticsNode? =
+            if (node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == title } == true) node
+            else node.children.firstNotNullOfOrNull { label(it, title) }
+        fun choose() {
+            val choices = view().array("switcher_display").objects()
+            val target = choices.first { it.getString("id") != view().getString("id") }
+            waitFor("workspace choices") { node("workspace-menu") != null }
+            instrumentation.runOnMainSync {
+                val (root, popup) = checkNotNull(node("workspace-menu"))
+                assertEquals("Only the pill's choices, in configured order", listOf("Workspaces") + choices.map { it.getString("title") }, texts(popup))
+                pressed = root
+                point = checkNotNull(label(popup, target.getString("title"))).boundsInRoot.center
+            }
+            event(MotionEvent.ACTION_DOWN); event(MotionEvent.ACTION_UP)
+            idle()
+            assertEquals(target.getString("id"), view().getString("id"))
+            instrumentation.runOnMainSync { assertNull(node("workspace-menu")) }
+        }
+        for (theme in listOf("dark", "light")) for ((index, size) in listOf("small", "medium", "large").withIndex()) {
+            tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index]
+            restore(size)
+            action(obj("type" to "set_theme", "theme" to theme))
+            waitFor("compact workspace selector") { node("header-control-$id") != null && node("workspace-switcher") == null }
+            instrumentation.runOnMainSync {
+                val overflow = checkNotNull(node("header-overflow-0")).second
+                fun image(node: SemanticsNode): SemanticsNode? =
+                    if (node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("More title bar items") == true) node
+                    else node.children.firstNotNullOfOrNull(::image)
+                val icon = checkNotNull(image(overflow)).boundsInRoot
+                val expected = listOf(20f, 28f, 36f)[index]
+                assertEquals("Hamburger width at $size", expected, icon.width / density, .5f)
+                assertEquals("Hamburger height at $size", expected, icon.height / density, .5f)
+                assertEquals(overflow.boundsInRoot.center.x, icon.center.x, 1f)
+                assertEquals(overflow.boundsInRoot.center.y, icon.center.y, 1f)
+            }
+            tap("header-control-$id")
+            shot("workspace-choices-$theme-$size")
+            choose()
+        }
+        // Moving the selector into a crowded region must retain its menu action.
+        restore("large")
+        var before = 0
+        instrumentation.runOnMainSync {
+            before = left.objects().first { node("header-item-${it.getInt("id")}") == null }.getInt("id")
+        }
+        edit(obj("type" to "move", "id" to id, "zone" to "left", "before" to before))
+        waitFor("hidden workspace selector") { node("header-item-$id") == null }
+        tap("header-overflow-0")
+        tap("header-overflow-item-$id")
+        choose()
+    }
+
     @Test fun nativeMenusToolPickerDrawersFooterZenAndRestart() {
         tool = MotionEvent.TOOL_TYPE_FINGER
         restore()
@@ -398,6 +463,67 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Restart uses committed header", committed, model().toString())
         shot("restart")
     }
+    @Test fun photoDefaultColumnsAndPaintRestorationSurviveRestart() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        assertEquals("builtin:workspace:photographer", view().getString("id"))
+        val before = capture()
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("latest default preview") { node("panel-body-color") != null && node("panel-body-layers") != null }
+        assertEquals("Preview is not saved", before, capture())
+        send(obj("type" to "cancel"))
+        assertEquals("Cancel retains the current layout", before, capture())
+        send(obj("type" to "form", "kind" to "reset"))
+        waitFor("starting layout confirmation") { node("workspace-submit") != null }
+        tap("workspace-submit")
+        fun checkColumns() {
+            waitFor("primary Photo panels") { node("panel-body-color") != null && node("panel-body-properties") != null && node("panel-body-layers") != null }
+            val color = bounds("group-14")
+            val properties = bounds("group-15")
+            val layers = bounds("group-16")
+            val strip = bounds("collapsed-column-4")
+            assertEquals(color.left, properties.left, 1f)
+            assertEquals(properties.left, layers.left, 1f)
+            assertTrue(color.bottom < properties.top && properties.bottom < layers.top)
+            assertEquals("Secondary strip is immediately inward from the outer column", color.left, strip.right + 6 * density, density)
+            val icons = listOf("brushes", "tool_settings", "sizes", "navigator").map { bounds("column-icon-$it") }
+            assertTrue(icons.zipWithNext().all { (a, b) -> a.bottom < b.top })
+            instrumentation.runOnMainSync { assertNull("Secondary column starts closed", node("group-6")) }
+        }
+        checkColumns()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            tap("tab-stats"); waitFor("Diagnostics tab") { node("panel-body-stats") != null }
+            tap("tab-color")
+            tap("tab-adjustments"); waitFor("Filters tab") { node("panel-body-adjustments") != null }
+            tap("tab-properties")
+            checkColumns(); shot("photo-default-$theme")
+        }
+        for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = device
+            for (panel in listOf("brushes", "tool_settings", "sizes", "navigator")) {
+                tap("column-icon-$panel")
+                waitFor("secondary $panel opens") { node("panel-body-$panel") != null }
+                assertTrue(bounds("group-6").right < bounds("collapsed-column-4").left)
+                assertNotNull(bounds("panel-body-color"))
+                tap("column-icon-$panel")
+                checkColumns()
+            }
+        }
+        val committed = layout()
+        scenario.close(); launch()
+        checkColumns()
+        assertEquals("Default arrangement survives restart", committed, layout())
+        shot("photo-default-restart")
+        send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+        send(obj("type" to "form", "kind" to "reset"))
+        tap("workspace-submit")
+        waitFor("original Paint panels") { node("panel-body-brushes") != null && node("panel-body-color") != null && node("panel-body-navigator") != null }
+        assertEquals("Paint restores its left panel column", bounds("group-6").left, bounds("group-10").left, 1f)
+        assertTrue(bounds("group-10").right < bounds("group-14").left)
+        assertTrue(bounds("group-14").right < bounds("collapsed-column-12").left)
+        shot("paint-original-restored")
+    }
+
     @Test fun sketchDefaultsDrawersFeedbackStatusAndWorkspaceSwitch() {
         tool = MotionEvent.TOOL_TYPE_MOUSE
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))

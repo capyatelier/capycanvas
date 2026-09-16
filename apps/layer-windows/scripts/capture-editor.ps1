@@ -55,22 +55,37 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=45) {
     }while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
-function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root) {
+function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
+    $property=if($Id){[System.Windows.Automation.AutomationElement]::AutomationIdProperty}else{[System.Windows.Automation.AutomationElement]::NameProperty}
     $Scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.AndCondition]::new(
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
+            [System.Windows.Automation.PropertyCondition]::new($property,$Name),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type)))
 }
-function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root) {
-    Wait-Until {Find $Name $Type $Scope} "Missing native control: $Name"
-    (Find $Name $Type $Scope).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
+    Wait-Until {Find $Name $Type $Scope -Id:$Id} "Missing native control: $Name"
+    (Find $Name $Type $Scope -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+function View-Command([string]$Id) {
+    # A camera acknowledgement can precede the previous flyout closing.
+    Wait-Until {
+        $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0
+    } 'Previous application menu did not close'
+    Wait-Until {
+        try {$null=& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View' -Inspect;return $true}catch{return $false}
+    } 'View menu entry did not become available'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
+    Invoke $Id ([System.Windows.Automation.ControlType]::MenuItem) -Id
 }
 function Fit-Canvas {
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
-    Invoke 'Fit canvas' ([System.Windows.Automation.ControlType]::MenuItem)
+    $fit=Find 'canvas-fit' -Id
+    if($fit -and !$fit.Current.IsOffscreen){Invoke 'canvas-fit' -Id}else{View-Command 'fit_canvas'}
 }
 function Set-Theme([string]$Theme) {
-    Invoke 'Preferences'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
+    Invoke 'Preferences' ([System.Windows.Automation.ControlType]::MenuItem)
     Wait-Until {Find 'Preferences' ([System.Windows.Automation.ControlType]::Window)} 'Preferences did not open'
     $dialog=Find 'Preferences' ([System.Windows.Automation.ControlType]::Window)
     $picker=Find 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox) $dialog
@@ -100,13 +115,16 @@ function Settle {
         if($status -and !$status.Current.IsOffscreen){return $false}
         $readout=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'canvas-camera'))
-        $expected=([Math]::Round($m.state.camera.zoom*100,[MidpointRounding]::AwayFromZero)).ToString()+'% · 0°'
-        if(!$readout -or $readout.Current.Name -ne $expected){return $false}
+        $expected=([Math]::Round($m.state.camera.zoom*100,[MidpointRounding]::AwayFromZero)).ToString()+'% '+[char]0xB7+' 0'+[char]0xB0
+        if($m.state.workspace.layout.canvas_info.visible){
+            if(!$readout -or $readout.Current.IsOffscreen -or $readout.Current.Name -ne $expected){return $false}
+        }elseif($readout -and !$readout.Current.IsOffscreen){return $false}
         # A stable model does not imply that asynchronous GPU readbacks reached
         # the visible Image controls. Require each visible raster row's previews.
         $visibleRows=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
             Where-Object {!$_.Current.IsOffscreen -and $_.Current.AutomationId -match '^layer-row-[0-9]+$'})
-        if(!$visibleRows.Count){return $false}
+        $layersVisible=@($m.layout.groups|Where-Object active -eq 'layers').Count -gt 0
+        if(($visibleRows.Count -gt 0) -ne $layersVisible){return $false}
         foreach($row in $visibleRows){
             $layerId=$row.Current.AutomationId.Substring(10)
             $layer=$m.state.layers | Where-Object {$_.id.ToString() -eq $layerId}
@@ -121,7 +139,7 @@ function Settle {
             }
         }
         $evidence=Layout-Evidence
-        if(!$evidence.elements){return $false}
+        if(!$evidence -or ($m.layout.groups.Count -gt 0 -and !$evidence.elements)){return $false}
         $geometry=@($m.layout,$m.panel_measurements,$m.state.camera,$m.titlebar_insets,$m.state.theme,$evidence.elements)|ConvertTo-Json -Depth 60 -Compress
         if($geometry -eq $script:previousGeometry){$script:stable++}else{$script:stable=0;$script:previousGeometry=$geometry}
         $script:stable -ge 3
@@ -147,8 +165,9 @@ if(![CapyEditorCapture]::MoveWindow($handle,$outer.left,$outer.top,
     [int]($outer.bottom-$outer.top+$pixelHeight-$surfaceRect.Height),$true)){throw 'Cannot size native drawing surface'}
 Wait-Until {
     [CapyEditorCapture]::GetClientRect($handle,[ref]$client)|Out-Null
-    $surface.Current.BoundingRectangle.Width -eq $pixelWidth -and $surface.Current.BoundingRectangle.Height -eq $pixelHeight -and
-        (Model).state.camera.viewport[0] -eq $pixelWidth -and (Model).state.camera.viewport[1] -eq $pixelHeight
+    $m=Model
+    $m -and $surface.Current.BoundingRectangle.Width -eq $pixelWidth -and $surface.Current.BoundingRectangle.Height -eq $pixelHeight -and
+        $m.state.camera.viewport[0] -eq $pixelWidth -and $m.state.camera.viewport[1] -eq $pixelHeight
 } 'Native drawing surface and GPU viewport did not reach the exact capture dimensions'
 $fixtures=@()
 foreach($theme in @('dark','light')){
@@ -159,7 +178,7 @@ foreach($theme in @('dark','light')){
         if($scenario -eq 'canvas-under-header'){
             for($i=0;$i -lt 4;$i++){
                 $previousZoom=(Model).state.camera.zoom
-                Invoke 'Zoom in'
+                View-Command 'zoom_in'
                 Wait-Until {(Model).state.camera.zoom -gt $previousZoom} 'Zoom command did not reach the shared camera'
             }
         }
@@ -215,11 +234,11 @@ foreach($theme in @('dark','light')){
         $elements|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $OutputDirectory "elements-$name.json")
         $fixtures+=@{name=$name;viewport=@($Width,$Height);scale=$scale;theme=$theme;scenario=$scenario;
             native="native-$name.png";full_client="client-$name.png";surface_offset_pixels=$offset;client_pixels=@($client.right,$client.bottom);
-            workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;
+            workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;header_model=$model.header.model;workspace_switcher=$model.windows_workspace.switcher_display;
             document=$model.state.tabs[0];camera=$model.state.camera;layout=$model.layout;
             tool_set=@($elements|Where-Object{$_.id -match '^tool-(group|subtool)-'});
             layers=$layerElements;layer_geometry_source='UIElement RenderSize transformed into Drawing workspace; ActualWidth/Height and UIA bounds retained';
-            header=@($elements|Where-Object{$_.id -match '^(application-menu[s-]|workspace-switch|document-title$|zen-button$|fullscreen$|settings-button$)'})}
+            header=@($elements|Where-Object{$_.id -match '^(application-(menu[s-]|primary-menu$)|workspace-switch|header-workspace-menu$|header-overflow-[0-2]$|document-title$|zen-button$|fullscreen$|settings-button$)'})}
         Write-Output "Captured $name at $Width x $Height logical, scale $scale"
     }
 }

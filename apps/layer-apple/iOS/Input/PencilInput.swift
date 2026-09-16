@@ -3,15 +3,60 @@ import UIKit
 struct PencilContact {
     let id: UInt64
     let tool: UInt32
+    let button: UInt32
     var lastTimestamp: TimeInterval = -1
     var last: [Double] = []
 }
 
 extension CanvasView {
+    func installIndirectGestures() {
+        let scroll = UIPanGestureRecognizer(target: self, action: #selector(scrolled(_:)))
+        scroll.allowedScrollTypesMask = .all
+        for recognizer in [scroll,
+            UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))),
+            UIRotationGestureRecognizer(target: self, action: #selector(rotated(_:)))] {
+            // The app opts into indirect events. Finger/Pencil contacts keep
+            // their existing shared routing; these handle scroll/transform events.
+            recognizer.allowedTouchTypes = []
+            recognizer.delegate = self
+            addGestureRecognizer(recognizer)
+        }
+    }
+    @objc func scrolled(_ recognizer: UIPanGestureRecognizer) {
+        let delta = recognizer.translation(in: self)
+        recognizer.setTranslation(.zero, in: self)
+        guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
+        let point = recognizer.location(in: self), scale = contentScaleFactor
+        store.native?.scroll(x: Float(point.x * scale), y: Float(point.y * scale),
+            dx: Float(-delta.x), dy: Float(-delta.y), scale: Float(scale),
+            zoom: recognizer.modifierFlags.contains(.control), horizontal: recognizer.modifierFlags.contains(.shift))
+        wake()
+    }
+    @objc func pinched(_ recognizer: UIPinchGestureRecognizer) {
+        let scale = recognizer.scale
+        recognizer.scale = 1
+        guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
+        let point = recognizer.location(in: self)
+        store.native?.gesture(x: Float(point.x * contentScaleFactor), y: Float(point.y * contentScaleFactor),
+            scale: Float(scale), rotation: 0)
+        wake()
+    }
+    @objc func rotated(_ recognizer: UIRotationGestureRecognizer) {
+        let rotation = recognizer.rotation
+        recognizer.rotation = 0
+        guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
+        let point = recognizer.location(in: self)
+        store.native?.gesture(x: Float(point.x * contentScaleFactor), y: Float(point.y * contentScaleFactor),
+            scale: 1, rotation: Float(rotation))
+        wake()
+    }
     func route(_ touches: Set<UITouch>, event: UIEvent?, phase: Double) {
+        if let event { updateModifiers(event.modifierFlags, force: phase == 1) }
         let ordered = touches.sorted { $0.timestamp < $1.timestamp }
         for touch in ordered {
             let key = ObjectIdentifier(touch)
+            // A fresh contact may reuse an interrupted touch's identity.
+            if phase == 1 { ignoredContacts.remove(key) }
             if ignoredContacts.contains(key) {
                 if phase >= 3 { ignoredContacts.remove(key) }
                 continue
@@ -34,7 +79,14 @@ extension CanvasView {
                     }
                 }
                 nextContact &+= 1
-                contacts[key] = PencilContact(id: nextContact, tool: tool)
+                // Keep the press button through release, when UIKit's mask is
+                // empty. Rust owns primary paint, right/middle pan and other buttons.
+                var button: UInt32 = 0
+                if touch.type == .indirectPointer, let buttons = event?.buttonMask, !buttons.isEmpty {
+                    button = buttons.contains(.primary) ? 0
+                        : buttons.contains(.secondary) || buttons.contains(.button(3)) ? 1 : 2
+                }
+                contacts[key] = PencilContact(id: nextContact, tool: tool, button: button)
             }
             guard var contact = contacts[key] else { continue }
             let history = event?.coalescedTouches(for: touch) ?? []
@@ -58,7 +110,7 @@ extension CanvasView {
                 contact.lastTimestamp = sample.timestamp
             }
             if !records.isEmpty {
-                store.native?.pointer(id: contact.id, tool: contact.tool, button: 0, records: records,
+                store.native?.pointer(id: contact.id, tool: contact.tool, button: contact.button, records: records,
                     predicted: false, revision: revision, updates: updates)
             }
             if phase >= 3 {
@@ -108,13 +160,15 @@ extension CanvasView {
         finishEstimates()
         ignoredContacts.formUnion(contacts.keys)
         contacts.removeAll()
+        modifiers = []
     }
     private func send(_ contact: PencilContact, records: [Double], predicted: Bool) {
-        store.native?.pointer(id: contact.id, tool: contact.tool, button: 0, records: records,
+        store.native?.pointer(id: contact.id, tool: contact.tool, button: contact.button, records: records,
             predicted: predicted, revision: store.cameraRevision)
     }
     @objc func hovered(_ recognizer: UIHoverGestureRecognizer) {
         guard contacts.values.allSatisfy({ $0.tool != 0 }) else { return }
+        updateModifiers(recognizer.modifierFlags)
         let point = recognizer.location(in: self)
         let altitude = recognizer.altitudeAngle
         let azimuth = recognizer.azimuthAngle(in: self)
@@ -122,16 +176,42 @@ extension CanvasView {
             atan2(cos(altitude) * cos(azimuth), sin(altitude)),
             atan2(cos(altitude) * sin(azimuth), sin(altitude)),
             recognizer.rollAngle, recognizer.zOffset,
-            CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended ? 4 : 0]
+            CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
         store.native?.pointer(id: 0, tool: 0, button: 0, records: record, predicted: false, revision: store.cameraRevision)
         wake()
     }
     func routeKeys(_ presses: Set<UIPress>, pressed: Bool) {
         for press in presses {
             guard let key = press.key else { continue }
-            let flags = key.modifierFlags
-            store.input(["type": "key", "key": AppleKeyName.name(key), "pressed": pressed,
-                "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty, "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
+            modifiers = key.modifierFlags
+            sendKey(AppleKeyName.name(key), pressed: pressed, flags: modifiers)
         }
+    }
+    private func updateModifiers(_ next: UIKeyModifierFlags, force: Bool = false) {
+        // A modifier may change while another native control owns key focus.
+        // Refresh every flag at contact start: other controls can forward keys
+        // directly to shared input without updating this canvas's cached flags.
+        for (flag, name): (UIKeyModifierFlags, String) in [(.shift, "Shift"), (.control, "Control"), (.alternate, "Alt"), (.command, "Meta")] {
+            if force || next.contains(flag) != modifiers.contains(flag) {
+                sendKey(name, pressed: next.contains(flag), flags: next)
+            }
+        }
+        modifiers = next
+    }
+    private func sendKey(_ key: String, pressed: Bool, flags: UIKeyModifierFlags) {
+        store.input(["type": "key", "key": key, "pressed": pressed,
+            "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty,
+                "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
+    }
+}
+
+extension CanvasView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        contacts.isEmpty && (event.type == .scroll || event.type == .transform)
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        (gestureRecognizer is UIPinchGestureRecognizer && otherGestureRecognizer is UIRotationGestureRecognizer)
+            || (gestureRecognizer is UIRotationGestureRecognizer && otherGestureRecognizer is UIPinchGestureRecognizer)
     }
 }

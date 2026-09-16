@@ -85,14 +85,13 @@ struct WorkspaceSwitcherRows: View {
         interaction.commit = { [weak manager] id, before in
             manager?.activate(JSON(["type": "edit_switcher", "edit": ["type": "move", "id": id, "before": before as Any? ?? NSNull()]]))
         }
-        interaction.activate = { [weak manager] in manager?.activate($0) }
     }
     @ViewBuilder private var overlays: some View {
         if let hint = interaction.hint {
             Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: hint.y - 1)
                 .allowsHitTesting(false).accessibilityHidden(true)
         }
-        if !interaction.nativeDragging, let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
+        if let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
             HStack { SharedIcon(name: "grip", size: 12); Text(row["title"].string).lineLimit(1); Spacer() }
                 .padding(.horizontal, 10).frame(width: drag.bounds.width, height: drag.bounds.height)
                 .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 6)))

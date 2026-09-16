@@ -990,7 +990,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .push((self.builder.real_points().len() - 1, point));
             }
             if !feedback {
-                self.append_real_dab(point, self.builder.real_points().len() - 1);
+                self.append_real_dab(point, self.builder.real_points().len() - 1, false);
             }
         }
     }
@@ -1040,7 +1040,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         );
         while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
-            self.append_real_dab(point, self.finalized_real_points);
+            self.append_real_dab(point, self.finalized_real_points, false);
             self.finalized_real_points += 1;
         }
     }
@@ -1048,7 +1048,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn finalize_active_tail(&mut self) {
         while self.finalized_real_points < self.builder.real_points().len() {
             let point = self.builder.real_points()[self.finalized_real_points];
-            self.append_real_dab(point, self.finalized_real_points);
+            let terminal = self.finalized_real_points + 1 == self.builder.real_points().len();
+            self.append_real_dab(point, self.finalized_real_points, terminal);
             self.finalized_real_points += 1;
         }
     }
@@ -1203,6 +1204,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     brush.color_dynamics = Default::default();
                     brush.execution = BrushExecution::Dry;
                     brush.grain = None;
+                    // Retain contact geometry while disabling the removed paper material.
+                    if let Some(contact) = &mut brush.contact {
+                        contact.paper = 0.0;
+                    }
                     brush.dual = None;
                     brush.rendering = Default::default();
                     brush.transport = None;
@@ -1265,7 +1270,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .feedback
                     .enabled
                 {
-                    self.append_real_dab(point, self.builder.real_points().len() - 1);
+                    self.append_real_dab(point, self.builder.real_points().len() - 1, false);
                 }
             }
             PenPhase::Move => {
@@ -1291,7 +1296,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         .real_points()
                         .last()
                         .expect("real move adds a point");
-                    self.append_real_dab(point, self.builder.real_points().len() - 1);
+                    self.append_real_dab(point, self.builder.real_points().len() - 1, false);
                 }
             }
             PenPhase::Up => {
@@ -1311,7 +1316,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         self.finalize_active_tail();
                     } else {
                         let point = *self.builder.real_points().last().expect("up adds a point");
-                        self.append_real_dab(point, self.builder.real_points().len() - 1);
+                        self.append_real_dab(point, self.builder.real_points().len() - 1, true);
                     }
                 }
                 self.flush_smudge_chunks(true);
@@ -1356,7 +1361,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    fn append_real_dab(&mut self, point: layer_core::StrokePoint, point_index: usize) {
+    fn append_real_dab(
+        &mut self,
+        point: layer_core::StrokePoint,
+        point_index: usize,
+        terminal: bool,
+    ) {
         let active = self.active_stroke.as_ref().expect("stroke is active");
         if active.style.execution == BrushExecution::Smudge {
             self.dab_generator
@@ -1373,9 +1383,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .partition_point(|end| *end as usize <= point_index)
             as u32;
         let start = self.dabs.len();
-        let damage = self
+        let mut damage = self
             .dab_generator
             .append(point, &active.brush, &mut self.dabs);
+        if terminal {
+            damage = damage.union(self.dab_generator.finish(&active.brush, &mut self.dabs));
+        }
         if self.dabs.len() > start {
             self.active_stroke
                 .as_mut()
@@ -1676,7 +1689,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let mut started = false;
             for (point_index, point) in stroke.points.iter().copied().enumerate() {
                 let start = self.dabs.len();
-                let damage = generator.append(point, &stroke.brush, &mut self.dabs);
+                let mut damage = generator.append(point, &stroke.brush, &mut self.dabs);
+                if point_index + 1 == stroke.points.len() {
+                    damage = damage.union(generator.finish(&stroke.brush, &mut self.dabs));
+                }
                 if self.dabs.len() == start {
                     continue;
                 }
@@ -1944,6 +1960,7 @@ fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
         wet_mix: brush.wet_mix,
         transport: brush.transport.clone(),
         deform: brush.deform,
+        contact: brush.contact,
     }
 }
 
@@ -4264,6 +4281,9 @@ mod tests {
                 hardness: 1.0,
                 texture_sign: [1.0, 1.0],
                 material: [0.0; 4],
+                previous: [0.0; 4],
+                contact: [0.0; 4],
+                previous_contact: [0.0; 4],
             })
             .collect::<Vec<_>>();
         let make_batch = |execution, first_dab, dab_count| {

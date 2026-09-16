@@ -3,6 +3,73 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNewEditorAfterLastWindowClose() {
+        checkNewEditorAfterLastWindowClose(in: editorCaptureApplication())
+    }
+
+    @MainActor func testNativeProjectRoundTrip() throws {
+        try checkNativeProjectRoundTrip(in: editorCaptureApplication())
+    }
+
+    @MainActor func testNativeImageImport() throws {
+        try checkNativeImageImport(in: editorCaptureApplication())
+    }
+
+    @MainActor func testEditorKeyboardFocus() { checkEditorKeyboardFocus(in: editorCaptureApplication()) }
+    @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
+    @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }
+    @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
+    @MainActor func testSettingsTextState() { checkSettingsTextState(in: editorCaptureApplication()) }
+    @MainActor func testSettingsChoicePresentation() { checkSettingsChoicePresentation(in: editorCaptureApplication()) }
+
+    @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
+
+    @MainActor func testPaintingBrushes() { checkPaintingBrushes(in: editorCaptureApplication()) }
+
+    @MainActor func testFullscreenEditor() { checkFullscreenEditor(in: editorCaptureApplication()) }
+
+    @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
+
+    @MainActor func testMaskActionsAndHistory() { checkMaskActionsAndHistory(in: editorCaptureApplication()) }
+
+    @MainActor func testLayerContentActionsAndHistory() { checkLayerContentActionsAndHistory(in: editorCaptureApplication()) }
+
+    @MainActor func testGroupArtworkWorkflow() { checkGroupArtworkWorkflow(in: editorCaptureApplication()) }
+
+    @MainActor func testMoveAndTransformCancellation() {
+        checkMoveAndTransformCancellation(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformFieldRetainsScroll() {
+        checkTransformFieldRetainsScroll(in: editorCaptureApplication())
+    }
+
+    @MainActor func testTransformRotationAndHandles() {
+        checkTransformRotationAndHandles(in: editorCaptureApplication())
+    }
+
+    @MainActor func testLassoControls() { checkLassoControls(in: editorCaptureApplication()) }
+
+    @MainActor func testHandAndEyedropper() { checkHandAndEyedropper(in: editorCaptureApplication()) }
+
+    @MainActor func testRegionSelectionAndFill() { checkRegionSelectionAndFill(in: editorCaptureApplication()) }
+
+    @MainActor func testSelectionInversion() { checkSelectionInversion(in: editorCaptureApplication()) }
+
+    @MainActor func testRulerWorkflow() {
+        checkRulerWorkflow(in: editorCaptureApplication())
+    }
+
+    @MainActor func testFiguresAndGradients() {
+        checkFiguresAndGradients(in: editorCaptureApplication())
+    }
+
+    @MainActor func testAboutAndApplicationMenus() { checkAboutAndApplicationMenus(in: editorCaptureApplication()) }
+
+    @MainActor func testApplicationLinkHandoff() { checkApplicationLinkHandoff(in: editorCaptureApplication()) }
+
+    @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
+
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
     @MainActor func testWorkspaceSwitcher() {
@@ -28,6 +95,16 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testTitleBarCustomization() { checkTitleBarCustomization(in: editorTestApplication()) }
 
     @MainActor func testTitleBarToolDrawers() { checkTitleBarToolDrawers(in: editorCaptureApplication()) }
+
+    @MainActor func testColumnStacks() { checkColumnStacks(in: editorTestApplication()) }
+
+    @MainActor func testColumnStacksDark() { checkColumnStacks(in: editorTestApplication(), theme: "dark") }
+
+    @MainActor func testPaintDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication()) }
+
+    @MainActor func testPhotoDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true) }
+
+    @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
 
     @MainActor func testTitleBarSystemStatus() {
         let app = editorTestApplication()
@@ -90,6 +167,10 @@ final class EditorLaunchTests: XCTestCase {
         checkToolbarCustomization(in: app)
     }
 
+    @MainActor func testLayerConfiguration() throws {
+        checkLayerConfiguration(in: editorTestApplication())
+    }
+
     @MainActor func testPanelConfigurationAndLiveDrag() throws {
         let app = editorTestApplication()
         #if os(iOS)
@@ -112,6 +193,12 @@ final class EditorLaunchTests: XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         checkNavigatorAndDiagnostics(in: app)
+    }
+
+    @MainActor func testFilterArtworkAndHistory() throws {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        checkFilterArtworkAndHistory(in: app)
     }
 
     @MainActor func testFilterSearchPreviewAndProperties() throws {
@@ -166,7 +253,17 @@ final class EditorLaunchTests: XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
-        captureDefaultEditor(in: app)
+        capturePaintEditor(in: app)
+    }
+
+    @MainActor func testCompleteEditorDarkCapture() {
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
+        app.launch()
+        capturePaintEditor(in: app, theme: "dark")
+        for _ in 0..<4 { workspaceActivate(app.buttons["navigator-zoom_in"]) }
+        capturePaintEditor(in: app, scenario: "paint-canvas-under-header", theme: "dark")
     }
 
     @MainActor func testBlendChoices() {

@@ -1,6 +1,80 @@
 //! Compact color controls with real input on the private Mutter display.
 use super::*;
 
+pub(super) fn hue_guide(w: &Workspace) -> gtk::gdk::Texture {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    let wheel = find_named(w.color_panel.root.upcast_ref(), "color-wheel")
+        .unwrap()
+        .downcast::<crate::tool_panels::ColorWheel>()
+        .unwrap();
+    let cache = wheel.imp().ring.borrow();
+    let (side, shape, space, view, texture) = cache.as_ref().expect("visible wheel caches its hue guide");
+    assert_eq!(*shape, state(w).colors.wheel_shape());
+    assert_eq!(*space, state(w).colors.rgb_space());
+    assert_eq!(*view, wheel.imp().view.get());
+    assert_eq!(
+        *side,
+        (wheel.drawing_bounds().0 * wheel.scale_factor() as f32).ceil() as u32
+    );
+    assert_eq!(texture.width(), *side as i32);
+    texture.clone()
+}
+
+fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
+    // Compare the texture against the former native gradient at the same DPI.
+    // Only the ring is displayed; the gradient's center is not part of the UI.
+    let colors = state(w).colors;
+    let side = texture.width() as usize;
+    let geometry = layer_ui::ColorWheelGeometry::new(side as f32).unwrap();
+    let bounds = gtk::graphene::Rect::new(0., 0., side as f32, side as f32);
+    let stops: Vec<_> = colors
+        .wheel_hue_stops()
+        .iter()
+        .map(|stop| {
+            let [r, g, b] = stop.color;
+            gtk::gsk::ColorStop::new(stop.offset, gdk::RGBA::new(r, g, b, 1.))
+        })
+        .collect();
+    let snapshot = gtk::Snapshot::new();
+    snapshot.append_conic_gradient(
+        &bounds,
+        &gtk::graphene::Point::new(geometry.center[0], geometry.center[1]),
+        colors.wheel_hue_start_degrees() + 90.,
+        &stops,
+    );
+    let reference = w
+        .window
+        .renderer()
+        .unwrap()
+        .render_texture(&snapshot.to_node().unwrap(), Some(&bounds));
+    let mut expected = vec![0; side * side * 4];
+    let mut actual = vec![0; expected.len()];
+    reference.download(&mut expected, side * 4);
+    texture.download(&mut actual, side * 4);
+    let mut maximum = 0;
+    let mut samples = 0;
+    for y in 0..side {
+        for x in 0..side {
+            let radius = (x as f32 + 0.5 - geometry.center[0])
+                .hypot(y as f32 + 0.5 - geometry.center[1]);
+            if radius < geometry.inner + 2. || radius > geometry.outer - 2. {
+                continue;
+            }
+            let offset = (y * side + x) * 4;
+            for c in 0..4 {
+                maximum = maximum.max(actual[offset + c].abs_diff(expected[offset + c]));
+            }
+            samples += 1;
+        }
+    }
+    assert!(samples > 100);
+    assert!(
+        maximum <= 2,
+        "{:?} hue guide differs from native gradient by {maximum}/255",
+        colors.wheel_shape()
+    );
+}
+
 #[test]
 #[ignore = "isolated Mutter input driver: --color-panel"]
 fn native_color_panel_input() {
@@ -36,6 +110,7 @@ fn native_color_panel_input() {
         )
         .unwrap();
     let mut reports = Vec::new();
+    let mut previous_guide = None;
     for theme in [Theme::Dark, Theme::Light] {
         for width in [144., 160., 200., 280., 360.] {
             for float in &mut fixture.layout.floating {
@@ -62,6 +137,13 @@ fn native_color_panel_input() {
                     action: layer_ui::ColorAction::Shape { shape },
                 });
                 pump(150);
+                let guide = hue_guide(&w);
+                if width == 280. {
+                    assert_hue_guide_colors(&w, &guide);
+                }
+                if let Some(previous) = previous_guide.replace(guide.clone()) {
+                    assert_ne!(guide, previous, "shape/size changes replace the hue guide");
+                }
                 let root = &w.color_panel.root;
                 let wheel = find_named(root.upcast_ref(), "color-wheel").unwrap();
                 let wb = wheel.compute_bounds(root).unwrap();
@@ -165,6 +247,7 @@ fn native_color_panel_input() {
                         });
                     }
                     pump(50);
+                    assert_eq!(hue_guide(&w), guide, "readout refresh retains the hue guide");
                     let name = format!("{theme:?}-{width}-{shape:?}-{model:?}");
                     let b = root.compute_bounds(&w.window).unwrap();
                     reports.push(serde_json::json!({"name":name,"panel":[b.x(),b.y(),b.width(),wb.y()+wb.height()],"wheel":[wb.x()+origin[0],wb.y()+origin[1],size,size],"shape":shape,"readout":model}));
@@ -278,7 +361,9 @@ fn native_color_panel_input() {
         });
         pump(100);
         let before = state(&w).colors.foreground;
+        let guide = hue_guide(&w);
         gesture(on_ring(150.), on_ring(240.));
+        assert_eq!(hue_guide(&w), guide, "hue picking retains the hue guide");
         assert_ne!(
             state(&w).colors.foreground,
             before,
@@ -297,6 +382,7 @@ fn native_color_panel_input() {
             });
             pump(40);
             let before = state(&w).colors.foreground;
+            let guide = hue_guide(&w);
             gesture(
                 locate("color-wheel", 0.5, 0.5),
                 locate("color-wheel", 0.58, 0.42),
@@ -306,6 +392,7 @@ fn native_color_panel_input() {
                 before,
                 "touch={touch}: {shape:?} drag"
             );
+            assert_eq!(hue_guide(&w), guide, "field picking retains the hue guide");
         }
         for (name, slot) in [
             ("color-Background", layer_ui::ColorSlot::Background),

@@ -36,12 +36,15 @@ struct WorkspacePanels: View {
             if workspace.expansion.isNull && !store.snapshot["chrome_hidden"].bool {
                 ForEach(store.snapshot["layout"]["dividers"].array.indices, id: \.self) { index in
                     let divider = store.snapshot["layout"]["dividers"][index]
-                    WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]))
-                        .placed(divider["bounds"])
-                        .accessibilityAdjustableAction { direction in
-                            store.dispatch(["type": "nudge_divider", "id": divider["id"].raw, "forward": direction == .increment,
-                                "viewport": store.snapshot["layout"]["viewport"].raw])
-                        }
+                    if !divider["fixed"].bool {
+                        WorkspaceResizeHandle(store: store, action: JSON(["type": "drag_divider", "id": divider["id"].raw]))
+                            .placed(divider["bounds"])
+                            .accessibilityIdentifier("workspace-divider-\(divider["id"].uint)")
+                            .accessibilityAdjustableAction { direction in
+                                store.dispatch(["type": "nudge_divider", "id": divider["id"].raw, "forward": direction == .increment,
+                                    "viewport": store.snapshot["layout"]["viewport"].raw])
+                            }
+                    }
                 }
             }
             WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
@@ -115,7 +118,7 @@ private struct WorkspacePanelGroup: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("panel-preview-" + active["id"].string)
     }
     private var grip: some View {
-        WorkspaceGroupGrip(store: store, group: group["id"])
+        WorkspaceGroupGrip(store: store, group: group["id"], vertical: true)
     }
 }
 
@@ -137,7 +140,7 @@ struct WorkspaceToolbar: View {
                     .placed(geometry["tiles"][index])
             }
             if !geometry["grip"].isNull {
-                SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
+                PanelGrip(vertical: vertical).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .accessibilityElement().accessibilityLabel("Toolbar options for " + panel["title"].string)
                 .accessibilityIdentifier("toolbar-options-" + panel["id"].string)
@@ -159,6 +162,10 @@ private struct WorkspaceTile: View {
     let vertical: Bool
     private var kind: String { tile["control"]["kind"].string }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var drawerOpen: Bool {
+        let anchor = store.state["customization"]["drawer"]["anchor"]
+        return anchor["kind"].string == "tile" && anchor["panel"].string == panel["id"].string && anchor["tile"].uint == tile["id"].uint
+    }
     var body: some View {
         Group {
             if kind == "divider" {
@@ -167,7 +174,7 @@ private struct WorkspaceTile: View {
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.state["brush"]["color"]) {
+                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.state["brush"]["color"], drawerOpen: drawerOpen) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
                     store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
                 }

@@ -6,6 +6,7 @@ struct PanelControls: View {
     var scrollable = true
     var measureForWorkspace = true
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var padding: CGFloat { panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8 }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
             .background {
@@ -29,43 +30,57 @@ struct PanelControls: View {
     }
     private var controls: some View {
         Group {
-            if scrollable { ScrollView { controlBody }.frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { controlBody }
+            if scrollable {
+                GeometryReader { viewport in
+                    ScrollView {
+                        controlBody(maximumHeight: max(128, viewport.size.height - padding * 2))
+                    }
+                    // Workspace layout already reserves space above the keyboard.
+                    .ignoresSafeArea(.keyboard)
+                }
+            } else { controlBody() }
         }
     }
-    private var controlBody: some View {
+    private func controlBody(maximumHeight: CGFloat? = nil) -> some View {
         VStack(alignment: .leading, spacing: 12) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
                     let item = panel["controls"][index]
-                    if item["visible_in_panel"].bool { control(item) }
+                    if item["visible_in_panel"].bool { control(item, maximumHeight: maximumHeight) }
                 }
-        }.padding(panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8)
+        }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .modifier(PanelBodyMeasurement(panel: panel["id"].string))
     }
-    @ViewBuilder func control(_ item: JSON) -> some View {
+    @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {
         case "brushes": ToolSetControls(store: store)
         case "tool_settings": ToolSettingsControls(store: store)
-        case "color_wheel": ColorPanel(store: store)
+        // Match the shared panel's fit-to-viewport wheel while retaining its
+        // readable minimum size and scrolling for smaller/customized panels.
+        case "color_wheel": ColorPanel(store: store).frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes
         case "brush_color":
+            let slot = store.state["colors"]["paint_slot"].string
+            BrushColorButton(store: store, label: item["label"].string)
             ForEach(0..<3, id: \.self) { component in
                 NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value, completion in
+                    guard slot == store.state["colors"]["paint_slot"].string else { completion(nil); return }
                     store.edit(["type": "color", "action": ["op": "rgba_component", "index": component, "value": value]], completion: completion)
-                }
+                }.id(slot)
             }
         default: Text(item["label"].string).fontWeight(.bold)
         }
     }
     private func number(_ label: String, key: String, spec: String, action: String) -> some View {
-        NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+        let preset = store.state["brush"]["preset"].uint
+        return NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+            guard preset == store.state["brush"]["preset"].uint else { completion(nil); return }
             store.edit(["type": action, "value": value], completion: completion)
-        }
+        }.id(preset)
     }
     private var sizes: some View {
         let lineHeight = max(1, store.catalog["text_size_pt"].number * 4 / 3) * 1.42

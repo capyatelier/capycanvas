@@ -13,6 +13,7 @@ struct State {
     settings: Settings,
     bytes: Vec<u8>,
     load_error: Option<String>,
+    dirty: bool,
     listeners: Vec<Weak<Wake>>,
 }
 impl Hub {
@@ -39,6 +40,7 @@ impl Hub {
                 settings,
                 bytes,
                 load_error,
+                dirty: false,
                 listeners: Vec::new(),
             }),
             file: Mutex::new(file),
@@ -49,6 +51,9 @@ impl Hub {
     pub(super) fn load_error(&self) -> Option<String> {
         self.state.lock().unwrap().load_error.clone()
     }
+    pub(super) fn dirty(&self) -> bool {
+        self.state.lock().unwrap().dirty
+    }
     pub(super) fn write(&self, bytes: &[u8]) -> Result<(), String> {
         // Serialize replacement across all windows. A newer accepted edit will
         // either supersede this job before it starts or replace it afterwards.
@@ -57,7 +62,11 @@ impl Hub {
             return Ok(());
         }
         file.write(bytes)?;
-        self.state.lock().unwrap().load_error = None;
+        let mut state = self.state.lock().unwrap();
+        state.load_error = None;
+        if state.bytes == bytes {
+            state.dirty = false;
+        }
         Ok(())
     }
 }
@@ -109,6 +118,7 @@ impl Subscription {
             settings.validate()?;
             let bytes = encode(&settings)?;
             let changed = state.settings != settings;
+            state.dirty |= changed;
             state.settings = settings;
             state.bytes = bytes.clone();
             self.baseline = state.settings.clone();

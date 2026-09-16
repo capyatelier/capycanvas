@@ -85,7 +85,6 @@ extension XCTestCase {
         workspaceActivate(options)
         XCTAssertTrue(pin.waitForExistence(timeout: 10)); XCTAssertFalse(pin.isSelected)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "workspace-switcher-restarted"; attachment.lifetime = .keepAlways; add(attachment)
+        attachEditor(in: app, name: "workspace-switcher-restarted")
     }
 }

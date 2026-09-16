@@ -231,7 +231,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
-pub const ZEN_ICON_SIZE: u32 = 28;
+pub const ZEN_ICON_SIZE: u32 = 31;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
@@ -519,9 +519,17 @@ impl CommandId {
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac
+                Platform::Gtk
+                    | Platform::Web
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
+                    | Platform::Windows
             ),
-            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
+            Self::Fullscreen => matches!(
+                platform,
+                Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows
+            ),
             Self::NewDocument
             | Self::OpenDocument
             | Self::SaveDocument

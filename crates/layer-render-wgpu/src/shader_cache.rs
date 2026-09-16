@@ -341,6 +341,9 @@ mod tests {
             hardness: 1.,
             texture_sign: [1.; 2],
             material: [0.; 4],
+            previous: [0.0; 4],
+            contact: [0.0; 4],
+            previous_contact: [0.0; 4],
         }];
         let batches = [layer_render::DabBatch {
             material_update: 0,
@@ -363,6 +366,7 @@ mod tests {
                 wet_mix: brush.wet_mix,
                 transport: brush.transport.clone(),
                 deform: brush.deform,
+                contact: brush.contact,
             },
             damage: layer_core::Rect {
                 min: layer_core::Point { x: 16., y: 16. },

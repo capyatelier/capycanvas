@@ -5,6 +5,7 @@ Receipts associated with frames do not prove input pixels reached the screen.
 GPU queue spans include submission gaps; they are not isolated GPU busy time.
 """
 import argparse
+import bisect
 import collections
 import json
 import math
@@ -32,6 +33,42 @@ def admission_denials(records):
     return {name: counts[name] for name in [*reasons.values(), "unclassified"]}
 
 
+def calibrate_gpu(clocks, samples):
+    """Bracket device timestamps with paired Metal CPU/GPU clock samples.
+
+    Metal CPU time is nanoseconds, but its epoch need not match the recorder.
+    Each call's recorder bounds constrain that offset. Interpolate within two
+    samples only; these bounds cover sampling latency, not unknown clock drift.
+    """
+    clocks = sorted(clocks, key=lambda r: r[0])
+    invalid = sum(not r[1] or not r[2] or r[3] < r[0] for r in clocks)
+    discontinuities = sum(b[0] <= a[0] or b[1] <= a[1] or b[2] <= a[2]
+                          for a, b in zip(clocks, clocks[1:]))
+    diagnostics = {"samples": len(clocks), "invalid_samples": invalid,
+                   "discontinuities": discontinuities,
+                   "sample_call_ms": distribution(r[3] - r[0] for r in clocks if r[3] >= r[0])}
+    if len(clocks) < 2 or invalid or discontinuities:
+        return {}, diagnostics
+    ticks = [r[2] for r in clocks]
+    def convert(tick):
+        if tick < ticks[0] or tick > ticks[-1]:
+            return None
+        index = min(bisect.bisect_right(ticks, tick), len(ticks) - 1)
+        left, right = clocks[index - 1], clocks[index]
+        fraction = (tick - left[2]) / (right[2] - left[2])
+        cpu = left[1] + fraction * (right[1] - left[1])
+        return tuple(cpu + (left[i] - left[1]) + fraction *
+                     ((right[i] - right[1]) - (left[i] - left[1])) for i in (0, 3))
+    calibrated = {}
+    for sample in samples.values():
+        if sample[2] != 1 or not sample[1] or not 0 < sample[3] < sample[4]:
+            continue
+        start, end = convert(sample[3]), convert(sample[4])
+        if start is not None and end is not None:
+            calibrated[sample[0]] = (start, end)
+    return calibrated, diagnostics
+
+
 def analyze(header, events, target_hz=120):
     if header.get("schema") != 1:
         raise ValueError("Unsupported trace schema")
@@ -49,6 +86,7 @@ def analyze(header, events, target_hz=120):
     presented = {(r[0], r[3]): r for r in grouped[4]}
     visible = {key: r for key, r in presented.items() if r[1] > 0}
     gpu = {r[0]: r for r in grouped[7]}
+    calibrated_gpu, gpu_clocks = calibrate_gpu(grouped[14], gpu)
     schedules = {r[0]: r for r in grouped[12]}
     submitted = [r for r in frames.values() if r[6] > 0]
     ready_states = [r[0] for r in grouped[9] if r[2] & 11 == 11 and not r[3]]
@@ -108,6 +146,21 @@ def analyze(header, events, target_hz=120):
             "presentation_target_after_commit_deadline_ms": distribution(r[2] - r[1] for r in recorded if r[1] and r[2] >= r[1]),
         }
     visible_frames = [(r, frames[r[0]]) for r in visible.values() if r[0] in frames]
+    def gpu_completion_metrics(records):
+        identities = {r[0] for r in records}
+        ends = {key: bounds[1] for key, bounds in calibrated_gpu.items() if key in identities}
+        targets = [(end, frames[key][1]) for key, end in ends.items() if frames[key][1]]
+        return {
+            "calibrated_frames": len(ends),
+            "frames_without_calibrated_gpu_times": len(identities) - len(ends),
+            "sampling_uncertainty_ms": distribution(hi - lo for lo, hi in ends.values()),
+            "gpu_end_minus_presentation_target_ms": distribution((lo + hi) / 2 - target for (lo, hi), target in targets),
+            "gpu_end_before_target": sum(hi <= target for (_, hi), target in targets),
+            "gpu_end_after_target": sum(lo > target for (lo, _), target in targets),
+            "gpu_end_overlaps_target": sum(lo <= target < hi for (lo, hi), target in targets),
+            "gpu_end_to_presentation_ms": distribution(r[1] - sum(ends[r[0]]) / 2
+                                                       for r in visible.values() if r[0] in ends),
+        }
     warnings = []
     if header.get("configuration") != "release":
         warnings.append("Debug build; not performance acceptance evidence.")
@@ -122,13 +175,17 @@ def analyze(header, events, target_hz=120):
     gpu_timing_requested = header.get("gpu_timing_requested", True)
     if not gpu_timing_requested:
         warnings.append("GPU timing intentionally disabled; this trace measures CPU and presentation only.")
-        if gpu or last_stats[2]:
+        if gpu or last_stats[2] or grouped[14]:
             warnings.append("GPU observations contradict the disabled instrumentation setting.")
     elif last_stats[1] != 1:
         warnings.append("GPU timestamps are unavailable or not initialized.")
     zero_gpu = sum(r[2] == 1 and r[1] == 0 for r in gpu.values())
     if last_stats[3] or last_stats[4] or last_stats[5] or any(r[6] for r in stats) or zero_gpu:
         warnings.append("GPU observations include skipped, invalid, pending or failed polls.")
+    if gpu_clocks["invalid_samples"] or gpu_clocks["discontinuities"]:
+        warnings.append("GPU clock samples are invalid or discontinuous; endpoint calibration is unavailable.")
+    if calibrated_gpu:
+        warnings.append("Calibrated GPU endpoints use interpolation and sampling bounds; presentation targets are not Metal commit deadlines.")
     if not displays or all(d[3] < target_hz for d in displays):
         warnings.append(f"No observed display configuration advertises {target_hz:g} Hz.")
     if ready_at is None:
@@ -168,6 +225,8 @@ def analyze(header, events, target_hz=120):
         "display_scheduling": schedule_metrics(list(frames.values())),
         "frames_after_readiness": frame_metrics([r for r in submitted if ready_at is not None and r[0] > ready_at]),
         "gpu_queue_span_ms": distribution(r[1] for r in gpu.values() if r[2] == 1 and r[1] > 0),
+        "gpu_clock_calibration": gpu_clocks,
+        "gpu_completion": gpu_completion_metrics(submitted),
         "presentation": {
             "frame_admission_to_present_ms": distribution(r[1] - f[0] for r, f in visible_frames if r[1] >= f[0]),
             "all_intervals_including_idle_ms": distribution(b - a for a, b in zip(times, times[1:])),
@@ -230,6 +289,7 @@ def analyze(header, events, target_hz=120):
                 "display_scheduling": schedule_metrics(admitted),
                 "gpu_queue_span_ms": distribution(r[1] for key, r in gpu.items() if key in identities and r[2] == 1 and r[1] > 0),
                 "gpu_samples_missing": sum(key not in gpu for key in identities),
+                "gpu_completion": gpu_completion_metrics(rows),
                 "actual_presentations": len(shown_rows),
                 "frame_admission_to_present_ms": distribution(r[1] - r[0] for r in shown_rows if r[1] >= r[0]),
                 # The fixed workload includes explicit pen-up gaps. Preserve

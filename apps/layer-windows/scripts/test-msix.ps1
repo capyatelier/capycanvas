@@ -79,6 +79,36 @@ try{
     $reader=[IO.StreamReader]::new($entry.Open())
     try{if($reader.ReadToEnd() -cne 'normalization fixture'){throw 'ZIP32 payload was changed.'}}finally{$reader.Dispose()}
 }finally{$fixture.Dispose()}
+# Exercise a real Windows sharing violation, including a lock that never clears.
+Add-Type -TypeDefinition '
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+public static class CapyMsixLockFixture {
+    public static Task ReleaseAfter(IDisposable stream, int milliseconds) {
+        return Task.Run(() => { Thread.Sleep(milliseconds); stream.Dispose(); });
+    }
+}'
+$transient=New-Fixture 'transient-lock.zip' $false
+$held=[IO.File]::Open($transient,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+$release=[CapyMsixLockFixture]::ReleaseAfter($held,400)
+$lockTimer=[Diagnostics.Stopwatch]::StartNew()
+try{& (Join-Path $PSScriptRoot 'normalize-msix.ps1') -Path $transient}finally{$release.GetAwaiter().GetResult()}
+if($lockTimer.Elapsed.TotalMilliseconds -lt 300 -or (Get-FileHash -LiteralPath $transient).Hash -ne (Get-FileHash -LiteralPath $plain).Hash){
+    throw 'Transient sharing conflict did not wait and normalize to the same bytes.'
+}
+$locked=New-Fixture 'persistent-lock.zip' $false
+$lockedHash=(Get-FileHash -LiteralPath $locked).Hash
+$held=[IO.File]::Open($locked,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+$lockTimer.Restart();$rejected=$false
+try{
+    try{& (Join-Path $PSScriptRoot 'normalize-msix.ps1') -Path $locked}catch [IO.IOException]{
+        if(($_.Exception.GetBaseException().HResult -band 0xffff) -notin @(32,33)){throw}
+        $rejected=$true
+    }
+}finally{$held.Dispose()}
+if(!$rejected -or $lockTimer.Elapsed.TotalSeconds -lt 5 -or $lockTimer.Elapsed.TotalSeconds -gt 8 -or
+    (Get-FileHash -LiteralPath $locked).Hash -ne $lockedHash){throw 'Persistent sharing conflict did not fail within its bound without mutation.'}
 $signed=New-Fixture 'signed-sentinel.zip' $true
 $before=(Get-FileHash -LiteralPath $signed).Hash
 $rejected=$false
@@ -123,5 +153,6 @@ Reject-Input 'Portable payload contains files absent from its manifest'
     archive=$archive;sha256=$result.sha256;source_commit=$result.source_commit;development=$result.development;
     archive_files=$names.Count;inventory='passed';makeappx_unpack='passed';activation_manifest='passed';
     repeat_logos='passed';normalization_idempotence='passed';zip32='passed';signed_refusal_without_mutation='passed';invalid_inputs='passed';
+    transient_lock_retry='passed';persistent_lock_timeout_without_mutation='passed';
     scope='Archive validation only. Installed identity, launch, update, uninstall and distribution signing remain separate checks.'
 }|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'result.json')

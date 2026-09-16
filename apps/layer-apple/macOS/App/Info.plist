@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Capy Canvas</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -40,18 +40,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>art.capycanvas.capyworkspace</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Capy Canvas Workspace Template</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSHandlerRank</key>
-			<string>Owner</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>art.capycanvas.capytemplate</string>
 			</array>
 		</dict>
 		<dict>
@@ -102,23 +90,6 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>capyworkspace</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>art.capycanvas.capytemplate</string>
-			<key>UTTypeDescription</key>
-			<string>Capy Canvas Workspace Template</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>capytemplate</string>
 				</array>
 			</dict>
 		</dict>

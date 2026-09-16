@@ -8,7 +8,7 @@ $run=Join-Path $repo ('artifacts/windows/settings-storage/'+[Guid]::NewGuid().To
 $settingsProfile=Join-Path $run 'profile'
 [IO.Directory]::CreateDirectory($settingsProfile)|Out-Null
 $settingsFile=Join-Path $settingsProfile 'settings.json'
-$stateFile=Join-Path $directory 'ui-state.json'
+$script:stateFile=$null
 $names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
@@ -17,8 +17,14 @@ $script:launch=0
 $locked=$null
 function Model {
     try {
-        $snapshot=Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-        if($snapshot.process_id -eq $review.Id){return $snapshot.model}
+        if(!$script:stateFile){
+            foreach($path in [IO.Directory]::EnumerateFiles($directory,('ui-state-'+$review.Id+'-*.json'))){
+                if([IO.File]::GetLastWriteTimeUtc($path) -lt $review.StartTime.ToUniversalTime()){continue}
+                $snapshot=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
+                if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){$script:stateFile=$path;break}
+            }
+        }
+        if($script:stateFile){$snapshot=Get-Content -LiteralPath $script:stateFile -Raw|ConvertFrom-Json;if($snapshot.process_id -eq $review.Id){return $snapshot.model}}
     } catch {} # Opt-in snapshot may be finishing a write.
 }
 function Saved {
@@ -57,7 +63,9 @@ function Edit([string]$Name,[string]$Value) {
 function Commit-Color {Focus-Control (Control 'Light theme base color' ([System.Windows.Automation.ControlType]::Edit))}
 function Open-Preferences {
     $script:scope=$root
-    Invoke-Control 'Preferences'
+    $button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'settings-button'))
+    if(!$button){throw 'Settings button is missing'}
+    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {
@@ -67,9 +75,12 @@ function Close-Preferences {
 }
 function Start-App {
     $script:launch++
+    $script:stateFile=$null
     $script:stderr=Join-Path $run ("launch-$launch.stderr.log")
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
-    Write-Output "Review process $($review.Id), launch $launch"
+    $null=$review.Handle
+    @{process_id=$review.Id;run=$run;profile=$settingsProfile}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/settings-storage-review.json')
+    Write-Output "Owned settings review $($review.Id), launch $launch"
     Wait-Until {
         $review.Refresh()
         if($review.HasExited){throw 'Review app exited during startup'}
@@ -79,19 +90,46 @@ function Start-App {
     $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $script:scope=$root
 }
-function Close-App {
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+function Check-Exit {
+    if(!$review.WaitForExit(8000)){throw 'Authorized settings close did not finish'}
+    if($review.ExitCode -ne 0){throw ('Native settings exit code: '+$review.ExitCode)}
     if((Get-Item -LiteralPath $stderr).Length -ne 0){throw 'Review runtime stderr requires inspection'}
     $script:review=$null
 }
-$fixtureSucceeded=$false
+function Close-App {
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    Check-Exit
+}
+function Close-Error {
+    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'preferences-close-error'))
+}
+function Wait-CloseError {
+    Wait-Until {
+        $review.Refresh();if($review.HasExited){throw 'Failed preferences save closed the window'}
+        $state=(Model).windows_settings_close;$dialog=Close-Error
+        $state.requested -and !$state.ready -and !$state.busy -and $state.error -and $dialog -and !$dialog.Current.IsOffscreen
+    } 'Preferences close recovery did not appear'
+}
+function Request-CloseError {
+    $script:scope=$root
+    $review.CloseMainWindow()|Out-Null
+    Wait-CloseError
+}
+function Recovery-Choice([string]$Name) {
+    $dialog=Close-Error
+    if(!$dialog){throw 'Preferences recovery dialog is missing'}
+    $choice=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.AndCondition]::new(
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+    $choice.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
 try {
     foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
     $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
     $env:CAPY_TRACE_UI='1'
     $env:CAPY_SMOKE_TEST='1'
-    $env:CAPY_TEST_DISPLAY='1'
-    $env:CAPY_TEST_PRIMARY='1'
 
     Start-App
     if(Test-Path -LiteralPath $settingsFile){throw 'Missing settings must not cause an initial write'}
@@ -124,6 +162,12 @@ try {
     $null=Control $message ([System.Windows.Automation.ControlType]::Text)
     if((Saved).dark_base -ne '#203040'){throw 'Failed replacement damaged the last saved file'}
     Close-Preferences
+    $workspaceId=(Model).windows_workspace.id
+    Request-CloseError
+    & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'preferences-close-error.png') -ClientOnly *> (Join-Path $run 'preferences-close-error.json')
+    Recovery-Choice 'Keep open'
+    Wait-Until {!(Model).windows_settings_close.requested -and !(Model).state.document_file.close_ready -and !(Close-Error)} 'Keep open did not cancel preferences close'
+    if((Model).state.settings.dark_base -ne '#304050' -or (Model).windows_workspace.id -ne $workspaceId -or (Model).windows_workspace.close_requested){throw 'Keep open lost preferences or released the workspace'}
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
@@ -134,13 +178,40 @@ try {
     Wait-Until {(Control 'Undo').Current.IsEnabled} 'The controlled stroke did not reach the shared undo history'
     Invoke-Control 'Undo'
     Wait-Until {!(Control 'Undo').Current.IsEnabled} 'The controlled stroke could not be undone after a save failure'
+    Request-CloseError
+    $attempt=(Model).windows_settings_close.attempt
+    Recovery-Choice 'Retry'
+    Wait-Until {(Model).windows_settings_close.attempt -gt $attempt} 'Retry did not start a new save attempt'
+    Wait-CloseError
+    if((Saved).dark_base -ne '#203040'){throw 'Failed close retry changed the saved file'}
     $locked.Dispose();$locked=$null
+    Recovery-Choice 'Retry'
+    Check-Exit
+    if((Saved).dark_base -ne '#304050'){throw 'Close retry did not save the retained preferences'}
+    Start-App
+    if((Model).state.settings.dark_base -ne '#304050'){throw 'Restart lost preferences saved by close retry'}
     Open-Preferences
     Edit 'Dark theme base color' '#405060'
     Commit-Color
     Wait-Until {(Saved).dark_base -eq '#405060' -and !(Model).state.host_error -and !(Model).error} 'A later successful save did not clear the storage error'
     Close-App
 
+    # This profile and all changed values belong to this fixture. Exercise an
+    # explicit preference discard; the drawing is still the clean new document.
+    Start-App
+    $savedHash=(Get-FileHash -LiteralPath $settingsFile).Hash
+    Open-Preferences
+    $locked=[IO.File]::Open($settingsFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+    Edit 'Dark theme base color' '#456789'
+    Commit-Color
+    Wait-Until {(Model).state.host_error} 'Discard fixture did not fail its write'
+    Close-Preferences
+    Request-CloseError
+    if((Model).state.document_file.modified){throw 'Preference discard fixture has unexpected drawing changes'}
+    Recovery-Choice 'Close without saving'
+    Check-Exit
+    $locked.Dispose();$locked=$null
+    if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Explicit discard changed the last saved preferences'}
     $invalid='{"version":999,"retain":"isolated recovery fixture"}'
     [IO.File]::WriteAllText($settingsFile,$invalid)
     Start-App
@@ -169,24 +240,19 @@ try {
         write_failure_preserves_previous_file='passed'
         visible_error_and_later_recovery='passed'
         canvas_continues_after_write_failure='passed'
+        failed_close_keeps_preferences_and_workspace='passed'
+        repeated_close_retry_and_restart='passed'
+        explicit_discard_preserves_saved_file='passed'
         unreadable_file_recovery='passed'
         scope='isolated native UI Automation; not OS pen delivery or a performance benchmark'
     } | ConvertTo-Json
-    $fixtureSucceeded=$true
+} catch {
+    if($review){
+        $review.Refresh()
+        if(!$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
+    }
+    throw
 } finally {
-    try {
-        if($locked){$locked.Dispose()}
-        if($review){
-            $review.Refresh()
-            if(!$review.HasExited){
-                try {& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved}
-                catch {if($fixtureSucceeded){throw};Write-Warning ("Review cleanup: "+$_.Exception.Message)}
-            }
-        }
-    } finally {
-        foreach($name in $names){
-        if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
-    }
-    }
+    if($locked){$locked.Dispose()}
+    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
 }

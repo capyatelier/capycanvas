@@ -3,15 +3,27 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $id=$Name.ToLowerInvariant().Replace('application-menu-','')
 if($id -notin @('file','edit','layer','select','filter','view','window','help')){throw "Unknown application menu: $Name"}
-function Visible-Control([string]$Id,$Type){
-    $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id)
+function Visible-Control([string]$Id,$Type,[switch]$ByName){
+    $property=if($ByName){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
+    $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)
     foreach($entry in $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
         if(!$entry.Current.IsOffscreen -and (!$Type -or $entry.Current.ControlType -eq $Type)){return $entry}
     }
 }
+function Menu-Button {
+    foreach($entry in @('application-menus','application-primary-menu','header-recovery-menu')){
+        $button=Visible-Control $entry ([System.Windows.Automation.ControlType]::Button)
+        if($button){return $button}
+    }
+}
+function Submenu {
+    $entry=Visible-Control ('application-menu-'+$id) ([System.Windows.Automation.ControlType]::MenuItem)
+    if(!$entry){$entry=Visible-Control ([Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($id)) ([System.Windows.Automation.ControlType]::MenuItem) -ByName}
+    $entry
+}
 $button=Visible-Control ("application-menu-"+$id) ([System.Windows.Automation.ControlType]::Button)
 if($Inspect){
-    if(!$button){$button=Visible-Control 'application-menus' ([System.Windows.Automation.ControlType]::Button)}
+    if(!$button){$button=Menu-Button}
     if(!$button){throw 'The application menu has no visible entry point'}
     return $button
 }
@@ -20,14 +32,14 @@ if($button){
     if($PassThru){$button}
     return
 }
-$submenu=Visible-Control ("application-menu-"+$id) ([System.Windows.Automation.ControlType]::MenuItem)
+$submenu=Submenu
 if(!$submenu){
-    $overflow=Visible-Control 'application-menus' ([System.Windows.Automation.ControlType]::Button)
+    $overflow=Menu-Button
     if(!$overflow){throw 'The compact application menu is unavailable'}
     $overflow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{
-        $submenu=Visible-Control ("application-menu-"+$id) ([System.Windows.Automation.ControlType]::MenuItem)
+        $submenu=Submenu
         if($submenu){break}
         Start-Sleep -Milliseconds 50
     }while($watch.Elapsed.TotalSeconds -lt 5)

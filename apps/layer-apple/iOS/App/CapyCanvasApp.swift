@@ -19,9 +19,8 @@ private struct IPadEditorScene: View {
     @Environment(\.scenePhase) private var phase
     init(scene: String) { _store = StateObject(wrappedValue: EditorStore(platform: 0, scene: scene)) }
     var body: some View {
-        // The editor uses shared absolute dock geometry. Let the keyboard cover
-        // its lower region; shrinking/centering that fixed layout would move
-        // the canvas and its top search fields offscreen.
+        // Keep the drawable in full-window coordinates. UIKit's keyboard guide
+        // supplies workspace clearance for controls through the shared layout.
         GeometryReader { geometry in
             EditorView(store: store) { MetalCanvas(store: store) }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)

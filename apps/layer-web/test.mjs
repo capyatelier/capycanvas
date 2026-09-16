@@ -5,6 +5,7 @@ import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnStacks} from "./column-stacks.test.mjs";
+import {checkLayoutDrops} from "./layout-drops.test.mjs";
 import {checkColumnDrops} from "./column-drops.test.mjs";
 import {checkWorkspaceFocus,checkWorkspaceSwitcher} from "./workspace-switcher.test.mjs";
 import {checkWorkspaceManagerVisual} from "./workspace-manager-visual.test.mjs";
@@ -13,6 +14,7 @@ import {checkTitleBarState} from "./title-bar-state.test.mjs";
 import {checkTitleBar} from "./title-bar.test.mjs";
 import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkTitleBarOverflow} from "./title-bar-overflow.test.mjs";
+import {checkCompactWorkspaces} from "./compact-workspaces.test.mjs";
 import {checkMenuLabels} from "./menu-labels.test.mjs";
 import {checkHeaderControls} from "./header-controls.test.mjs";
 import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
@@ -228,6 +230,9 @@ try {
   } else if (process.argv.includes("--menu-labels")) {
     await checkMenuLabels({call,evaluate,settle});
     assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--compact-workspaces")) {
+    await checkCompactWorkspaces({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-overflow")) {
     await checkTitleBarOverflow({call,evaluate,settle});
     assert.deepEqual(errors,[]);
@@ -248,6 +253,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--header-controls")) {
     await checkHeaderControls({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--layout-drops")) {
+    await checkLayoutDrops({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--column-stacks")) {
     await checkColumnStacks({call,evaluate,settle});

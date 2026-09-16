@@ -41,7 +41,8 @@ The build:
    rounded corners, preserving its separate branding terms. The Apple-only
    180px icon instead has an opaque, full-bleed background; iPadOS applies its
    own corner mask. Manifest icons use `purpose: any`, since those retain their
-   rounded artwork.
+   rounded artwork. All icons use a 440 px mark on the 512 px design canvas.
+   The shared SVG raises the capy by 3% of its view box (the approved B position).
 4. Fingerprints every runtime asset with the first 20 hex digits of its own
    SHA-256: `assets/app.<sha>.js`, `assets/style.<sha>.css`, and similarly for
    imported JS, Wasm, SVGs, PNGs and filter JSON/WGSL. Dependencies are renamed first; rewritten
@@ -77,6 +78,11 @@ of the package's uncompressed size. It contains notices, not vendored toolchain
 source or binaries.
 
 ## Preview and test
+
+Square-corner profile artwork using the enlarged mark is checked in as
+[`docs/assets/capy-profile.png`](../assets/capy-profile.png) (1024 × 1024), with
+an editable [`SVG`](../assets/capy-profile.svg). It uses the same colors and
+proportions as the favicon. See [BRANDING.md](../../BRANDING.md) for its terms.
 
 ```bash
 # Preview the package, not the source tree. This does not rebuild it.

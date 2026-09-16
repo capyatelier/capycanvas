@@ -88,7 +88,8 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                     image.Source(Imaging::BitmapImage(asset(L"brush-previews/"+std::to_wstring(int(preview.GetNumber()))+L"-"+std::wstring(data->theme().c_str())+L".png")));
                     content.Children().Append(image);
                 }else content.Children().Append(icon(str(item,L"icon"),data->theme()));
-                Grid::SetColumn(title,1);content.Children().Append(title);pick.Content(content);
+                auto caption=brush?toolLabel(data,item).as<FrameworkElement>():title.as<FrameworkElement>();
+                Grid::SetColumn(caption,1);content.Children().Append(caption);pick.Content(content);
                 pick.Height(8+std::max(brush?32.:16.,title.LineHeight()));
             }
             buttons.push_back(pick);if(group)groups.Children().Append(pick);else list.Children().Append(pick);

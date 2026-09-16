@@ -159,11 +159,14 @@ pub(super) fn updated_illustrator_default(
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(platform);
+    let previous_collapsed = layer_ui::WorkspacePreset::legacy_illustrator_layout(platform);
+    let previous_primary = layer_ui::WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = layer_ui::DockLayout::for_platform(platform);
     let without_preferences = previous.clone();
-    previous.column_stacks = layout.column_stacks.clone();
+    previous.column_stacks = previous_collapsed.column_stacks.clone();
     if history.revisions.len() != 1 || history.layout() != baseline.as_ref() || baseline.as_ref() == &layout
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &without_preferences)
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &without_preferences
+            && baseline.as_ref() != &previous_collapsed && baseline.as_ref() != &previous_primary)
     {
         return None;
     }
@@ -178,7 +181,7 @@ pub(super) fn updated_illustrator_default(
     Some(content)
 }
 
-/// Update only the untouched first Photographer arrangement, after its owner
+/// Update only untouched older Photographer arrangements, after their owner
 /// has been claimed. Brush edits and renamed workspaces remain intact.
 pub(super) fn updated_photographer_default(
     entity: &Entity,
@@ -198,7 +201,8 @@ pub(super) fn updated_photographer_default(
         return None;
     }
     let layout = WorkspacePreset::Photographer.layout(platform);
-    let mut previous = layout.clone();
+    let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
+    let mut previous = previous_columns.clone();
     for panel in [Panel::Toolbar, Panel::Commands] {
         previous
             .panels
@@ -207,7 +211,8 @@ pub(super) fn updated_photographer_default(
             .tile_style = TileStyle::Medium;
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
-    if baseline.as_ref() != &previous || history.layout() != &previous {
+    if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns) {
         return None;
     }
     let mut content = entity.content.clone();

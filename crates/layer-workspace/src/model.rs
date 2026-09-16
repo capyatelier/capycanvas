@@ -451,11 +451,18 @@ impl Entity {
             },
         }
     }
-    pub fn starting_layout(&self) -> Result<&DockLayout, StoreError> {
-        match &self.content {
-            ItemContent::Workspace { baseline, .. } => Ok(baseline),
-            _ => Err(StoreError::invalid("Choose a workspace.")),
+    /// Built-in workspaces restore the current shipped preset for this host.
+    /// Copies and custom workspaces retain their original saved baseline.
+    pub fn starting_layout(&self, platform: layer_ui::Platform) -> Result<DockLayout, StoreError> {
+        let ItemContent::Workspace { baseline, .. } = &self.content else {
+            return Err(StoreError::invalid("Choose a workspace."));
+        };
+        if self.metadata.builtin
+            && let Some((_, preset)) = DEFAULT_WORKSPACES.iter().find(|(id, _)| *id == self.id)
+        {
+            return Ok(preset.layout(platform));
         }
+        Ok(baseline.as_ref().clone())
     }
     pub fn capture(&self) -> Result<WorkspaceCapture, StoreError> {
         match (&self.content, &self.working) {

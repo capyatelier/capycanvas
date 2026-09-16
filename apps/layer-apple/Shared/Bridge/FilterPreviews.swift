@@ -62,7 +62,13 @@ final class NativeFilterPreviews: @unchecked Sendable {
     private var next: UInt64 = 0
     private var size = [80, 40]
     private var task: Task<Void, Never>?
+    private var generation: UInt64 = 0
     init(store: EditorStore) { self.store = store }
+
+    func reset() {
+        generation &+= 1; task?.cancel(); task = nil; pending = nil; key = nil
+        completed.removeAll(); images.removeAll(); size = [80, 40]; refresh()
+    }
 
     func show(token: String, id: String, width: CGFloat, scale: CGFloat) {
         let value = Visible(id: id, size: [min(512, max(80, Int(width * scale))), min(128, max(1, Int(40 * scale)))])
@@ -72,7 +78,7 @@ final class NativeFilterPreviews: @unchecked Sendable {
     func hide(_ token: String) { visible.removeValue(forKey: token) }
     func hidePanel(_ prefix: String) { visible = visible.filter { !$0.key.hasPrefix(prefix + ":") } }
     func refresh() {
-        guard let store else { return }
+        guard let store, store.snapshot["gpu_ready"].bool else { return }
         let epoch = store.state["document_file"]["epoch"].uint
         if let key, key.epoch != epoch {
             pending = nil; completed.removeAll(); images.removeAll(); size = [80, 40]
@@ -93,11 +99,13 @@ final class NativeFilterPreviews: @unchecked Sendable {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
                 guard let self else { return }
                 let more = await self.poll()
+                if Task.isCancelled { return }
                 if !more { self.task = nil; return }
             }
         }
     }
     private func poll() async -> Bool {
+        let generation = generation
         guard let store, let native = store.native, let key, !visible.isEmpty else { return false }
         let wanted = Set(visible.values.map(\.id))
         let missing = wanted.sorted().filter { completed[$0] != key }
@@ -111,6 +119,7 @@ final class NativeFilterPreviews: @unchecked Sendable {
         }
         // A New/Open may replace the renderer while this queue reply is in
         // flight. Its old request can never complete on the new renderer.
+        guard generation == self.generation else { return false }
         guard key.epoch == self.key?.epoch else { return !visible.isEmpty }
         if let error = reply.error { pending = nil; store.failure = error; return false }
         if reply.status["accepted"].bool { pending = Pending(request: request, key: key) }

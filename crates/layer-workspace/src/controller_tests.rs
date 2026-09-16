@@ -365,58 +365,86 @@ fn history_rows_repair_legacy_labels_without_rewriting_saved_versions() {
 
 #[test]
 fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
-    let mut f = Fixture::new();
-    let baseline = f
-        .controller
-        .manager
-        .current()
-        .unwrap()
-        .starting_layout()
-        .unwrap()
-        .clone();
-    f.action(serde_json::json!({"type":"move_panel","panel":"layers","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
-    f.action(serde_json::json!({"type":"set_brush_size","value":73}));
-    f.save();
-    let before = f.host.session.capture_workspace().unwrap();
-    assert_ne!(before.history.layout(), &baseline);
-    for confirm in [false, true] {
-        let saved = f.controller.manager.current().unwrap();
-        f.input(serde_json::json!({"type":"form","kind":"reset"}));
-        assert_eq!(f.host.session.state().workspace.layout, baseline);
-        assert_eq!(f.host.session.capture_workspace().unwrap(), before);
-        f.save();
-        assert_eq!(
-            f.controller.manager.current().unwrap(),
-            saved,
-            "preview is never persisted"
-        );
-        let prompt = f.controller.view.form.as_ref().unwrap();
-        assert_eq!(prompt.message, reset_prompt(&saved).unwrap().message);
-        assert!(prompt.message.contains("Window → Undo Workspace"));
-        f.input(if confirm {
-            serde_json::json!({"type":"submit","name":""})
+    for builtin in [None, Some(DEFAULT_WORKSPACES[0]), Some(DEFAULT_WORKSPACES[1]), Some(DEFAULT_WORKSPACES[2])] {
+        let mut f = Fixture::new();
+        let baseline = if let Some((id, preset)) = builtin {
+            // Persist an older baseline with user edits, so ordinary adoption must
+            // preserve it and only explicit Restore selects the current default.
+            let mut old = match preset {
+                layer_ui::WorkspacePreset::Painter => layer_ui::WorkspacePreset::legacy_painter_layout(Platform::Web),
+                layer_ui::WorkspacePreset::Illustrator => layer_ui::WorkspacePreset::legacy_illustrator_layout(Platform::Web),
+                layer_ui::WorkspacePreset::Photographer => layer_ui::WorkspacePreset::legacy_photographer_layout(Platform::Web),
+            };
+            old.header.size = layer_ui::HeaderSize::Large;
+            let mut edited = old.clone();
+            edited.header.size = layer_ui::HeaderSize::Small;
+            let mut history = layer_ui::LayoutHistory::new(&old);
+            history.append(&edited, "Customize old default");
+            assert!(history.undo());
+            let mut database: serde_json::Value = serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
+            database["items"][id]["entity"]["content"] = serde_json::to_value(ItemContent::Workspace {
+                history, baseline: Box::new(old.clone()), origin: None,
+            }).unwrap();
+            *f.backend.database.borrow_mut() = BrowserDatabase::decode(&database.to_string()).unwrap();
+            f.input(serde_json::json!({"type":"switch", "id":id}));
+            assert_eq!(f.host.session.capture_workspace().unwrap().history.layout(), &old);
+            assert!(f.host.session.command(layer_ui::CommandId::ResetLayout).enabled,
+                "An unchanged old baseline must still offer the latest default");
+            preset.layout(Platform::Web)
         } else {
-            serde_json::json!({"type":"cancel"})
-        });
-        if !confirm {
+            f.controller.manager.current().unwrap().starting_layout(Platform::Web).unwrap()
+        };
+        f.action(serde_json::json!({"type":"move_panel","panel":"toolbar","viewport":[1200,900],"target":{"kind":"float","position":[480,220]}}));
+        f.action(serde_json::json!({"type":"set_brush_size","value":73}));
+        f.save();
+        let before = f.host.session.capture_workspace().unwrap();
+        let before_layout = f.host.session.state().workspace.layout.clone();
+        assert_ne!(before.history.layout(), &baseline);
+        for confirm in [false, true] {
+            let saved = f.controller.manager.current().unwrap();
+            f.input(serde_json::json!({"type":"form","kind":"reset"}));
+            assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), baseline);
             assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+            f.save();
             assert_eq!(
-                &f.host.session.state().workspace.layout,
-                before.history.layout()
+                f.controller.manager.current().unwrap(),
+                saved,
+                "preview is never persisted"
             );
+            let prompt = f.controller.view.form.as_ref().unwrap();
+            assert_eq!(prompt.message, reset_prompt(&saved).unwrap().message);
+            assert!(prompt.message.contains("Window → Undo Workspace"));
+            if builtin.is_some() {
+                assert!(prompt.message.contains("latest default"));
+            } else {
+                assert!(prompt.message.contains("saved starting layout"));
+            }
+            f.input(if confirm {
+                serde_json::json!({"type":"submit","name":""})
+            } else {
+                serde_json::json!({"type":"cancel"})
+            });
+            if !confirm {
+                assert_eq!(f.host.session.capture_workspace().unwrap(), before);
+                assert_eq!(
+                    f.host.session.state().workspace.layout,
+                    before_layout
+                );
+            }
         }
+        let restored = f.host.session.capture_workspace().unwrap();
+        assert!(!f.host.session.command(layer_ui::CommandId::ResetLayout).enabled);
+        assert_eq!(restored.history.layout(), &baseline);
+        assert_eq!(restored.working, before.working);
+        assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
+        f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
+        assert_eq!(
+            &layer_ui::durable_layout(&f.host.session.state().workspace.layout),
+            before.history.layout()
+        );
+        f.action(serde_json::json!({"type":"invoke","command":"redo_workspace"}));
+        assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), baseline);
     }
-    let restored = f.host.session.capture_workspace().unwrap();
-    assert_eq!(restored.history.layout(), &baseline);
-    assert_eq!(restored.working, before.working);
-    assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
-    f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
-    assert_eq!(
-        &f.host.session.state().workspace.layout,
-        before.history.layout()
-    );
-    f.action(serde_json::json!({"type":"invoke","command":"redo_workspace"}));
-    assert_eq!(f.host.session.state().workspace.layout, baseline);
 }
 
 #[test]

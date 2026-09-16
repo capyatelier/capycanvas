@@ -21,6 +21,7 @@ import SwiftUI
         choice: String? = nil, retryName: String? = nil, cancel: Bool = false) async throws {
         var finished = false
         let task = Task { @MainActor in defer { finished = true }; try await manager.run(JSON(action)) }
+        defer { if !finished { manager.answer(confirm: false); task.cancel() } }
         try await wait("workspace form") { manager.prompt != nil || finished }
         if finished { try await task.value; throw HostFailure(message: "Expected a workspace form") }
         precondition(!(manager.prompt?["message"].string ?? "").isEmpty)
@@ -30,6 +31,13 @@ import SwiftUI
             try await wait("inline validation") { manager.prompt != nil && manager.formError != nil || finished }
             precondition(!finished && manager.formName == name, "Validation must retain the entered name")
             manager.formName = retryName; manager.answer(confirm: true)
+        }
+        try await wait("completion of workspace action \(action["type"] ?? "")") { finished || manager.prompt != nil }
+        if !finished {
+            let failure = manager.formError ?? "Unexpected workspace form"
+            manager.answer(confirm: false)
+            try await task.value
+            throw HostFailure(message: "Workspace action \(action["type"] ?? "") failed: \(failure)")
         }
         try await task.value
     }
@@ -44,7 +52,7 @@ import SwiftUI
             precondition(library.ready, library.error ?? "Startup failed")
             let original = library.status["active_id"].string
             let defaults = library.status["default_workspaces"].array
-            precondition(defaults.map { $0["name"].string } == ["Painter", "Illustrator", "Photographer"])
+            precondition(defaults.map { $0["name"].string } == ["Sketch", "Paint", "Photo"])
             precondition(original == defaults[1]["id"].string)
             // Exercise the actual host request, rather than assuming the menu's
             // visible label means the editor/service action is connected.
@@ -56,6 +64,10 @@ import SwiftUI
             try await capture(manager, platform: platform, phase: "browser")
             let currentButton = manager.view["details"]["actions"].array.first { $0["action"]["type"].string == "switch" }!
             precondition(!currentButton["enabled"].bool)
+            precondition(!manager.view["details"]["actions"].array.contains {
+                $0["action"]["type"].string == "rename"
+                    || ($0["action"]["type"].string == "delete" && $0["enabled"].bool)
+            }, "Included workspaces keep their names and cannot be deleted")
             try await form(manager, ["type": "new"], name: "Cancelled", cancel: true)
             precondition(library.status["active_id"].string == original)
             let newPrompt = try await library.read(["type": "prompt", "action": ["type": "new"]])
@@ -93,15 +105,6 @@ import SwiftUI
             editor.input(["type": "pointer", "id": 900, "phase": "up", "kind": "pen", "button": "primary", "position": [500, 400]])
             let ended = try await captureSession(editor)
             precondition(ended["idle"].bool)
-            try await manager.run(JSON(["type": "metadata", "value": inking]))
-            precondition(!manager.history["rows"].array.isEmpty && !manager.history["restore"].isNull)
-            manager.historyAction()
-            try await wait("metadata restore form") { manager.prompt != nil }
-            manager.answer(confirm: true)
-            try await wait("metadata restored") { !manager.processing && manager.prompt == nil }
-            let restored = try await library.read(["type": "load", "id": inking])
-            precondition(restored["entity"]["metadata"]["name"].string == "Inking")
-            manager.back()
             try await startingLayoutPreview(editor)
             precondition(editor.state["brush"]["diameter"].number == 67)
             try await liveHistory(editor, platform: platform)
@@ -120,8 +123,6 @@ import SwiftUI
             precondition(storedReset["entity"]["working"]["tools"]["overrides"].object.isEmpty)
             let untouched = try await library.read(["type": "load", "id": inking])["entity"]["working"]
             precondition(untouched["tools"]["overrides"][String(untouched["preset"].uint)]["size"].number == 31)
-            try await form(manager, ["type": "rename", "value": defaults[0]["id"].raw], name: "Paint")
-            precondition(library.status["default_workspaces"][0]["name"].string == "Paint")
             // A live source window's most recent edit must be copied before
             // its debounce timer writes. The source remains independently open.
             let other = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
@@ -138,6 +139,7 @@ import SwiftUI
             precondition(focused && library.status["active_id"].string == original,
                 "The header switch action must focus a claimed default workspace without taking it over")
             try await form(manager, ["type": "duplicate", "value": otherID], name: "Other Window Copy")
+            let copied = library.status["active_id"].string
             precondition(editor.state["brush"]["diameter"].number == 113 && other.workspaceLibrary!.status["active_id"].string == otherID)
             try await manager.run(JSON(["type": "switch", "value": original]))
             try await form(manager, ["type": "new_toolbar"], name: "Ink Tools")
@@ -171,8 +173,7 @@ import SwiftUI
                 precondition(action == "rename_toolbar" ? titles.contains("Renamed Ink")
                     : action == "duplicate_toolbar" ? titles.contains("Copied Ink") : !titles.contains("Renamed Ink"))
             }
-            try await form(manager, ["type": "delete", "value": sketching])
-            try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
+            try await form(manager, ["type": "delete", "value": copied])
             try await manager.run(JSON(["type": "switch", "value": sketching]))
             let deletion = try await library.read(["type": "prompt", "action": ["type": "delete", "value": sketching]])["prompt"]
             precondition(deletion["choices"].array.isEmpty && deletion["message"].string.contains("permanent"))
@@ -181,7 +182,6 @@ import SwiftUI
             precondition(library.status["active_id"].string == "builtin:workspace:illustrator")
             precondition(library.status["order"].array.map { $0.string } == orderBeforeDelete.filter { $0 != sketching },
                 "Deleting the active workspace must not create an extra replacement")
-            try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
             try await packageDelivery(editor: editor, root: root, toolbar: savedToolbar)
             let allowed: Bool = await withCheckedContinuation { continuation in editor.projectFiles.confirmClose { continuation.resume(returning: $0) } }
             precondition(allowed)
@@ -281,7 +281,7 @@ import SwiftUI
         try await edit(editor, ["type": "invoke", "command": "undo_workspace"])
         let undone = try await captureSession(editor)
         precondition(undone["capture"]["history"]["current"].string == current)
-        manager.back()
+        try await manager.show("workspaces")
     }
     @MainActor static func startingLayoutPreview(_ editor: EditorStore) async throws {
         let library = editor.workspaceLibrary!, manager = editor.workspaceManager
@@ -362,29 +362,20 @@ import SwiftUI
     }
     @MainActor static func packageDelivery(editor: EditorStore, root: URL, toolbar: String) async throws {
         let destination = root.appendingPathComponent("shared.capytoolbar")
-        var open: URL? = destination, save: URL? = destination
-        let files = WorkspacePackageFiles(dialogs: .init(open: { _, done in done(open) }, save: { _, _, done in done(save) }, export: nil))
-        let manager = WorkspaceManager(store: editor, files: files)
-        try await manager.run(JSON(["type": "export", "value": toolbar]))
-        let bytes = try Data(contentsOf: destination)
-        precondition(!bytes.isEmpty)
-        try await manager.run(JSON(["type": "import_toolbar"]))
+        let package = try await editor.workspaceLibrary!.read(["type": "export", "id": toolbar])
+        let bytes = Data(package["text"].string.utf8)
+        try bytes.write(to: destination)
+        let manager = WorkspaceManager(store: editor)
+        manager.openURL(destination, kind: .toolbar)
+        try await wait("external toolbar import") { manager.selection != nil && !manager.processing || manager.error != nil }
+        precondition(manager.error == nil, manager.error ?? "")
         precondition(manager.selection != toolbar && manager.page == "toolbar_library")
         let count = manager.view["rows"].array.count
-        open = nil
-        try await manager.run(JSON(["type": "import_toolbar"]))
-        precondition(manager.view["rows"].array.count == count)
-        save = nil
-        try await manager.run(JSON(["type": "export", "value": toolbar]))
         let unchanged = try Data(contentsOf: destination)
         precondition(unchanged == bytes)
-        open = destination
         try Data("broken package".utf8).write(to: destination)
-        do { try await manager.run(JSON(["type": "import_toolbar"])); preconditionFailure("Corrupt import must fail") }
-        catch { precondition(manager.view["rows"].array.count == count) }
-        // A failed destination write leaves the old file bytes intact.
-        save = root.appendingPathComponent("missing/failed.capytoolbar")
-        do { try await manager.run(JSON(["type": "export", "value": toolbar])); preconditionFailure("Unavailable destination must fail") }
-        catch { }
+        manager.openURL(destination, kind: .toolbar)
+        try await wait("invalid external toolbar import") { manager.error != nil && !manager.processing }
+        precondition(manager.view["rows"].array.count == count)
     }
 }

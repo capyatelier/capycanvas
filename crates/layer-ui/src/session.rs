@@ -86,6 +86,7 @@ pub struct UiSession<R: CanvasRenderer> {
     rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
+    effect_gesture: Option<effects::EffectGesture>,
     navigator_preview: crate::navigator::Preview,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
@@ -149,6 +150,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
+            effect_gesture: None,
             navigator_preview: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
@@ -1618,7 +1620,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let mut hint = if let DockItem::Column { column } = item {
+        let group_body = matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows);
+        let menubar = (group_body && !docks_hidden && !matches!(item, DockItem::Tile { .. }))
+            .then(|| self.state.workspace.layout.menubar_drop_hint(&resolved, position)).flatten();
+        let mut hint = if let Some(hint) = menubar {
+            hint
+        } else if let DockItem::Column { column } = item {
             if docks_hidden {
                 return None;
             }
@@ -1640,14 +1647,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .flatten();
             group_hint.or_else(|| resolved.tile_drop_hint(position, layout))?
         } else {
-            // Hosts opt in after projecting the complete stack and its member targets.
-            (matches!(
-                self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows
-            ) && !docks_hidden)
+            (!docks_hidden)
                 .then(|| resolved.stack_item_drop_hint(position))
                 .flatten()
-                .or_else(|| resolved.drop_hint(position[0], position[1], tabs, !docks_hidden))?
+                .or_else(|| resolved.drop_hint_with_group_body(position[0], position[1], tabs, !docks_hidden, group_body))?
         };
         // The attached preview and the committed drop use the same frozen
         // switch points, including a release between pointer-motion events.
@@ -1657,6 +1660,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } = hint.target
             && let Some(drag) = self.workspace_tab_drag.as_ref()
             && drag.group == group
+            && (hint.bounds.width <= 3. || hint.bounds.height <= 3.)
             && let Some(preview) = self.tab_drag_preview(position)
         {
             hint.target = DockTarget::Tab {
@@ -1856,10 +1860,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
-        if self.rendering_suspended && !Self::action_without_renderer(&action) {
+        // An interrupted property contact still needs to restore its preview.
+        // The gesture handler cancels it when editing is no longer available.
+        let continuing_effect_gesture = matches!(&action, UiAction::Effect {
+            action: EffectAction::Gesture {
+                phase: ContactPhase::Move | ContactPhase::Up | ContactPhase::Cancel, ..
+            }
+        });
+        if self.rendering_suspended && !continuing_effect_gesture && !Self::action_without_renderer(&action) {
             return Err("Painting is unavailable. Save the drawing and reopen it.".into());
         }
         if self.workspace_read_only
+            && !continuing_effect_gesture
             && !matches!(
                 &action,
                 UiAction::WorkspaceManager { .. }
@@ -1899,6 +1911,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             );
         }
         if self.workspace_transition
+            && !continuing_effect_gesture
             && !matches!(
                 &action,
                 UiAction::CompleteRequest { .. }
@@ -2086,7 +2099,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (DOCUMENT, false)
             }
             UiAction::Effect { action } => {
-                self.require_idle()?;
+                if !continuing_effect_gesture {
+                    self.require_idle()?;
+                }
                 self.effect_action(action)?;
                 self.refresh_document();
                 (DOCUMENT | LAYOUT, true)
@@ -2270,7 +2285,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         | Platform::Ios
                         | Platform::Mac
                         | Platform::Windows
-                ) && layout.column_for_group(group).is_some()
+                ) && layout.collapsible_column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
                 } else {
@@ -2615,7 +2630,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down {
                         let divider = self.divider(id, viewport)?;
                         let mut drag = ResizeDrag::new(position, divider.bounds);
-                        if self.column_resize_enabled() && self.layout(viewport).open_column_at_divider(id).is_none() {
+                        if self.layout(viewport).open_column_at_divider(id).is_none() {
                             let columns = self
                                 .state
                                 .workspace
@@ -2852,13 +2867,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     DrawerAnchor::Column { group, origin, .. } => {
                         let layout = &self.state.workspace.layout;
                         let column = layout.collapsed_column_for_group(group)?;
-                        if self.state.platform.stacked_columns() && !layout.column_stack(column).drawers {
+                        if !layout.column_stack(column).drawers {
                             return None;
                         }
                         // These hosts draw the sidebar selection and connector at the visible tab.
                         let origin = if matches!(
                             self.state.platform,
-                            Platform::Gtk | Platform::Android | Platform::Web
+                            Platform::Gtk | Platform::Android | Platform::Web | Platform::Mac | Platform::Ios
                         ) {
                             self.state.workspace.layout.active_panel(origin)?
                         } else {
@@ -3087,7 +3102,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         scale: f32,
         rotation: f32,
     ) -> Result<UiChange, String> {
-        self.require_idle()?;
+        if self.require_idle().is_err() {
+            return Ok(self.changed(0, false));
+        }
         self.state.camera.gesture(from, to, scale, rotation)?;
         self.initial_fit = false;
         self.sync_camera();
@@ -3174,19 +3191,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .into_iter()
             .find(|d| d.id == id)
             .ok_or_else(|| "Unknown divider".into())
-    }
-
-    fn column_resize_enabled(&self) -> bool {
-        matches!(
-            self.state.platform,
-            Platform::Gtk
-                | Platform::Generic
-                | Platform::Android
-                | Platform::Web
-                | Platform::Ios
-                | Platform::Mac
-                | Platform::Windows
-        )
     }
 
     fn resize_divider(
@@ -3301,15 +3305,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
         }
-        let collapse = self
-            .column_resize_enabled()
-            .then(|| {
-                self.state
-                    .workspace
-                    .layout
-                    .collapse_at_divider(id, point, viewport)
-            })
-            .flatten();
+        let collapse = self.state.workspace.layout.collapse_at_divider(id, point, viewport);
         if let Some(collapse) = collapse {
             let root = collapse.root;
             let original_width = self.workspace_history.gesture_start().and_then(|s| {
@@ -3766,6 +3762,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    /// Retry the current preferences through the ordinary host request path.
+    /// Native close recovery can call this without changing a preference value.
+    pub fn retry_settings_save(&mut self) -> Result<(), String> {
+        self.request(HostRequestKind::SaveSettings {
+            settings: Box::new(self.state.settings.clone()),
+        })?;
+        self.changed(crate::regions::HOST, false);
+        Ok(())
+    }
+
     fn request(&mut self, kind: HostRequestKind) -> Result<(), String> {
         let id = self.next_request;
         self.next_request = id.checked_add(1).ok_or("Host request IDs exhausted")?;
@@ -3923,6 +3929,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn require_idle(&self) -> Result<(), String> {
         if self.input_pending
+            || self.effect_gesture.is_some()
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
         {
@@ -4385,7 +4392,7 @@ mod tests {
 
     #[test]
     fn diagnostics_sample_in_open_columns_and_stop_when_hidden() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
             for drawers in [false, true] {
                 let mut s = session();
                 s.set_platform(platform);
@@ -9693,7 +9700,7 @@ mod tests {
                     .bounds;
                 let destination = [
                     neighbor.x + neighbor.width * 0.5,
-                    neighbor.y + TAB_BAR_HEIGHT + 3.0,
+                    if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows) { HEADER_HEIGHT * 0.5 } else { neighbor.y + TAB_BAR_HEIGHT + 3.0 },
                 ];
                 drag(&mut app, ContactPhase::Move, destination);
                 drag(&mut app, ContactPhase::Up, destination);
@@ -10962,6 +10969,9 @@ mod tests {
     fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
+        for column in [4, 8] {
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
+        }
         let viewport = [1200., 900.];
         s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
             .unwrap();
@@ -12016,6 +12026,9 @@ mod tests {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             let viewport = [1200., 900.];
             s.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport })
                 .unwrap();
@@ -12075,6 +12088,9 @@ mod tests {
     fn collapsed_drawers_are_persistent_per_column_and_follow_tab_selection() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
+        for column in [4, 8] {
+            s.state.workspace.layout.column_stack_mut(column).drawers = true;
+        }
         let viewport = [1200., 900.];
         let collapse = |s: &mut UiSession<Recorder>, group| {
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
@@ -12163,6 +12179,9 @@ mod tests {
         {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                 .unwrap();
             s.dispatch(UiAction::Customize {
@@ -12408,6 +12427,9 @@ mod tests {
         for platform in [Platform::Generic, Platform::Gtk, Platform::Windows] {
             let mut s = session();
             s.set_platform(platform);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             let viewport = [1200., 900.];
             let group = 8;
             s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
@@ -12492,6 +12514,9 @@ mod tests {
         for group in [5, 8] {
             let mut s = session();
             s.set_platform(Platform::Gtk);
+            for column in [4, 8] {
+                s.state.workspace.layout.column_stack_mut(column).drawers = true;
+            }
             s.dispatch(UiAction::MovePanel {
                 panel: Panel::Toolbar,
                 target: DockTarget::Tab { group, index: None },
@@ -12904,7 +12929,7 @@ mod tests {
                         .target,
                     DockTarget::Tab {
                         group: target,
-                        index: None
+                        index: if matches!(platform, Platform::Gtk | Platform::Web | Platform::Android) && point[1] < 830. { Some(0) } else { None }
                     }
                 );
             }
@@ -13067,6 +13092,226 @@ mod tests {
             .is_err()
         );
         assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), valid);
+    }
+
+    #[test]
+    fn effect_gestures_preview_commit_once_and_cancel_without_losing_redo() {
+        use layer_core::{EffectValue, GradientStop, color::{RgbColor, RgbSpace}};
+        fn color([r, g, b, a]: [f32; 4]) -> RgbColor {
+            // Preserve deliberately invalid samples for the dispatch rejection
+            // case below; valid upstream fixtures described linear sRGB.
+            let [r, g, b] = [r, g, b].map(|v| RgbSpace::Srgb.encode(v as f64) as f32);
+            RgbColor { space: RgbSpace::Srgb, rgba: [r, g, b, a] }
+        }
+        for platform in [
+            Platform::Gtk,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Web,
+            Platform::Android,
+            Platform::Windows,
+        ] {
+            for effect in [
+                "curves",
+                "gradient_map",
+                "brightness_contrast",
+                "split_tone",
+                "paint",
+                "paper",
+            ] {
+                let mut app = session();
+                app.set_platform(platform);
+                if effect == "paper" {
+                    let id = app
+                        .engine
+                        .document()
+                        .layers
+                        .iter()
+                        .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                        .unwrap()
+                        .id
+                        .0;
+                    app.dispatch(UiAction::SelectLayer { id }).unwrap();
+                } else if effect != "paint" {
+                    app.dispatch(UiAction::Effect {
+                        action: EffectAction::Insert {
+                            effect: effect.into(),
+                        },
+                    })
+                    .unwrap();
+                }
+                let controls = &app.state.layer_properties.controls;
+                let index = controls
+                    .iter()
+                    .position(|c| {
+                        matches!(
+                            &c.value,
+                            EffectValue::Curve(_)
+                                | EffectValue::Gradient(_)
+                                | EffectValue::Number(_)
+                                | EffectValue::Color(_)
+                        )
+                    })
+                    .unwrap();
+                let key = controls[index].key.clone();
+                let layer = app.engine.document().active_layer.0;
+                let initial = if effect == "curves" {
+                    EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
+                } else if effect == "split_tone" {
+                    EffectValue::Color(color([0.5, 0.25, 0.75, 1.]))
+                } else if effect != "gradient_map" {
+                    EffectValue::Number(0.5)
+                } else {
+                    EffectValue::Gradient(vec![
+                        GradientStop {
+                            position: 0.,
+                            color: color([0., 0., 0., 1.]),
+                        },
+                        GradientStop {
+                            position: 0.5,
+                            color: color([0.5, 0.5, 0.5, 1.]),
+                        },
+                        GradientStop {
+                            position: 1.,
+                            color: color([1., 1., 1., 1.]),
+                        },
+                    ])
+                };
+                app.dispatch(UiAction::Effect {
+                    action: EffectAction::Set {
+                        layer,
+                        key: key.clone(),
+                        value: initial.clone(),
+                    },
+                })
+                .unwrap();
+                let gesture = |phase, position| UiAction::Effect {
+                    action: EffectAction::Gesture {
+                        phase,
+                        action: Box::new(if effect == "curves" {
+                            EffectAction::CurvePoint {
+                                layer,
+                                key: key.clone(),
+                                index: Some(1),
+                                point: [position, 0.75],
+                                remove: false,
+                            }
+                        } else if effect == "gradient_map" {
+                            EffectAction::GradientStop {
+                                layer,
+                                key: key.clone(),
+                                index: Some(1),
+                                position,
+                                color: None,
+                                remove: false,
+                            }
+                        } else {
+                            EffectAction::Set {
+                                layer,
+                                key: key.clone(),
+                                value: if effect == "split_tone" {
+                                    EffectValue::Color(color([position, 0.25, 0.75, 1.]))
+                                } else {
+                                    EffectValue::Number(position)
+                                },
+                            }
+                        }),
+                    },
+                };
+                let checkpoint = app.engine.checkpoint();
+                app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                for i in 1..=20 {
+                    app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01))
+                        .unwrap();
+                }
+                assert_eq!(
+                    app.engine.checkpoint(),
+                    checkpoint,
+                    "Preview must not consume history"
+                );
+                let preview = app.state.layer_properties.controls[index].value.clone();
+                assert_ne!(preview, initial);
+                assert!(
+                    app.require_document_snapshot_idle().is_err(),
+                    "A save must wait for the gesture to finish"
+                );
+                assert!(
+                    app.dispatch(UiAction::SelectLayer { id: 1 }).is_err(),
+                    "Another document operation must not overwrite the preview"
+                );
+                app.dispatch(gesture(ContactPhase::Up, 0.7)).unwrap();
+                app.require_document_snapshot_idle().unwrap();
+                assert_ne!(app.engine.checkpoint(), checkpoint);
+                invoke(&mut app, CommandId::Undo);
+                assert_eq!(
+                    app.state.layer_properties.controls[index].value, initial,
+                    "One Undo restores the whole drag"
+                );
+                invoke(&mut app, CommandId::Redo);
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                invoke(&mut app, CommandId::Undo);
+                for end in [
+                    "cancel",
+                    "blur",
+                    "escape",
+                    "readonly",
+                    "invalid",
+                    "unchanged",
+                ] {
+                    app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                    if end != "unchanged" {
+                        app.dispatch(gesture(ContactPhase::Move, 0.65)).unwrap();
+                    }
+                    match end {
+                        "cancel" => {
+                            app.dispatch(gesture(ContactPhase::Cancel, 0.65)).unwrap();
+                        }
+                        "blur" => {
+                            app.input(UiInput::Blur).unwrap();
+                        }
+                        "escape" => {
+                            app.input(UiInput::Key {
+                                key: "escape".into(),
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Default::default(),
+                                editing: false,
+                                divider: None,
+                            })
+                            .unwrap();
+                        }
+                        "readonly" => {
+                            app.set_workspace_read_only(true);
+                            app.dispatch(gesture(ContactPhase::Up, 0.65)).unwrap();
+                            assert!(app.dispatch(gesture(ContactPhase::Down, 0.5)).is_err());
+                            app.set_workspace_read_only(false);
+                        }
+                        "invalid" => {
+                            assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN)).is_err());
+                        }
+                        _ => {
+                            app.dispatch(gesture(ContactPhase::Up, 0.5)).unwrap();
+                        }
+                    }
+                    app.dispatch(gesture(ContactPhase::Up, 0.8)).unwrap();
+                    assert_eq!(app.state.layer_properties.controls[index].value, initial);
+                    assert_eq!(app.engine.checkpoint(), checkpoint);
+                    app.require_document_snapshot_idle().unwrap();
+                    assert!(
+                        app.engine.can_redo(),
+                        "Cancelled and empty drags preserve the earlier Redo"
+                    );
+                }
+                invoke(&mut app, CommandId::Redo);
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                app.dispatch(gesture(ContactPhase::Down, 0.7)).unwrap();
+                app.dispatch(gesture(ContactPhase::Move, 0.6)).unwrap();
+                app.suspend_renderer().unwrap();
+                app.dispatch(gesture(ContactPhase::Cancel, 0.6)).unwrap();
+                assert_eq!(app.state.layer_properties.controls[index].value, preview);
+                app.require_document_snapshot_idle().unwrap();
+            }
+        }
     }
 
     #[test]
@@ -13288,6 +13533,25 @@ mod tests {
             .unwrap();
         assert!(s.state.camera.zoom > before.zoom);
         assert_eq!(s.state.camera.rotation, before.rotation);
+    }
+    #[test]
+    fn camera_gestures_wait_for_paint_to_finish_without_reporting_an_error() {
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut s = session();
+            s.set_platform(platform);
+            let before = s.state.camera.clone();
+            s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+            assert!(!change.canvas_wake);
+            assert_eq!(s.state.camera, before);
+            s.pen(event(&s, 2, PenPhase::Up, 0.)).unwrap();
+            s.frame(1, 1).unwrap();
+            let change = s.gesture([500., 500.], [500., 500.], 1.25, 0.2).unwrap();
+            assert!(change.canvas_wake);
+            assert!((s.state.camera.zoom - before.zoom * 1.25).abs() < 0.0001);
+            assert!((s.state.camera.rotation - before.rotation - 0.2).abs() < 0.0001);
+            assert!(s.state.host_error.is_none());
+        }
     }
     #[test]
     fn zen_does_not_move_camera_layout_or_request_canvas_work() {
@@ -14505,53 +14769,63 @@ mod tests {
     }
 
     #[test]
-    fn windows_tiles_toggle_drawers_and_explicit_control_open_is_idempotent() {
-        let mut app = session();
-        app.set_platform(Platform::Windows);
-        let tile = |app: &UiSession<Recorder>, control| {
-            app.state
-                .workspace
-                .layout
-                .panel(Panel::Toolbar)
-                .unwrap()
-                .tiles()
-                .iter()
-                .find(|t| t.control == control)
-                .unwrap()
-                .id
-        };
-        let color = tile(&app, ToolbarControl::Color);
-        let opacity = tile(&app, ToolbarControl::Opacity);
-        for id in [color, opacity] {
-            for open in [true, false] {
-                app.dispatch(UiAction::ActivateTile {
-                    panel: Panel::Toolbar,
-                    tile: id,
+    fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent_on_all_platforms() {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            let tile = |app: &UiSession<Recorder>, control| {
+                app.state
+                    .workspace
+                    .layout
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .find(|t| t.control == control)
+                    .unwrap()
+                    .id
+            };
+            let color = tile(&app, ToolbarControl::Color);
+            let opacity = tile(&app, ToolbarControl::Opacity);
+            for id in [color, opacity] {
+                for open in [true, false] {
+                    app.dispatch(UiAction::ActivateTile {
+                        panel: Panel::Toolbar,
+                        tile: id,
+                    })
+                    .unwrap();
+                    assert_eq!(app.state.customization.drawer.is_some(), open);
+                    assert!(app.state.customization.control.is_none());
+                }
+            }
+            for _ in 0..2 {
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::OpenControl {
+                        control: PanelControl::BrushColor,
+                    },
                 })
                 .unwrap();
-                assert_eq!(app.state.customization.drawer.is_some(), open);
-                assert!(app.state.customization.control.is_none());
+                assert_eq!(
+                    app.state.customization.control,
+                    Some(PanelControl::BrushColor)
+                );
             }
-        }
-        for _ in 0..2 {
-            app.dispatch(UiAction::Customize {
-                action: CustomizationAction::OpenControl {
-                    control: PanelControl::BrushColor,
-                },
+            app.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: opacity,
             })
             .unwrap();
-            assert_eq!(
-                app.state.customization.control,
-                Some(PanelControl::BrushColor)
-            );
+            assert!(app.state.customization.control.is_none());
+            assert!(app.state.customization.drawer.is_some());
         }
-        app.dispatch(UiAction::ActivateTile {
-            panel: Panel::Toolbar,
-            tile: opacity,
-        })
-        .unwrap();
-        assert!(app.state.customization.control.is_none());
-        assert!(app.state.customization.drawer.is_some());
     }
 
     #[test]
@@ -15093,6 +15367,88 @@ mod tests {
                 .any(|r| r.id == PreferenceId::PlatformPrediction)
         );
     }
+    #[test]
+    fn stationary_lasso_contacts_preserve_selection_history_and_save_readiness() {
+        for platform in [
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Web,
+            Platform::Android,
+            Platform::Windows,
+        ] {
+            for tool in [LayerCanvasTool::Select, LayerCanvasTool::LassoFill] {
+                let mut s = session();
+                s.set_platform(platform);
+                invoke(&mut s, CommandId::SelectAll);
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::New {
+                        group: false,
+                        clipped: false,
+                    },
+                })
+                .unwrap();
+                invoke(&mut s, CommandId::Undo);
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::Tool { tool },
+                })
+                .unwrap();
+                let selection = s.engine.document().selection.clone();
+                let checkpoint = s.engine.checkpoint();
+                let mut sequence = 0;
+                for moves in [0, 1, 20] {
+                    let phases = std::iter::once(PenPhase::Down)
+                        .chain(std::iter::repeat_n(PenPhase::Move, moves))
+                        .chain([PenPhase::Up, PenPhase::Up]);
+                    for phase in phases {
+                        sequence += 1;
+                        let mut sample = event(&s, sequence, phase, 1.);
+                        sample.surface_position = Point { x: 300., y: 300. };
+                        s.pen(sample).unwrap();
+                    }
+                    assert!(
+                        s.state.host_error.is_none(),
+                        "A stationary lasso must not report a canvas error: {:?}",
+                        s.state.host_error
+                    );
+                    s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
+                        .unwrap();
+                    assert_eq!(s.engine.document().selection, selection);
+                    assert_eq!(s.engine.checkpoint(), checkpoint);
+                    assert!(
+                        s.engine.can_redo(),
+                        "An empty contact preserves the preceding Redo"
+                    );
+                    s.require_document_snapshot_idle().unwrap();
+                }
+                // An actual enclosed path must still commit normally.
+                for (phase, x, y) in [
+                    (PenPhase::Down, 300., 300.),
+                    (PenPhase::Move, 400., 300.),
+                    (PenPhase::Move, 400., 400.),
+                    (PenPhase::Move, 300., 400.),
+                    (PenPhase::Up, 300., 300.),
+                ] {
+                    sequence += 1;
+                    let mut sample = event(&s, sequence, phase, 1.);
+                    sample.surface_position = Point { x, y };
+                    s.pen(sample).unwrap();
+                }
+                assert!(s.state.host_error.is_none());
+                s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
+                    .unwrap();
+                if tool == LayerCanvasTool::Select {
+                    assert_ne!(s.engine.document().selection, selection);
+                } else {
+                    assert_ne!(s.engine.checkpoint(), checkpoint);
+                }
+                invoke(&mut s, CommandId::Undo);
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+                assert_eq!(s.engine.document().selection, selection);
+                s.require_document_snapshot_idle().unwrap();
+            }
+        }
+    }
+
     #[test]
     fn predicted_samples_never_enter_nonpainting_gestures() {
         for tool in [
@@ -15936,7 +16292,13 @@ mod tests {
             app.pen(event(&app, 1, PenPhase::Down, 0.2)).unwrap();
             assert!(!app.command(CommandId::AddLayer).enabled);
             assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
-            assert!(app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0).is_err());
+            let camera = app.state.camera.clone();
+            assert!(
+                !app.gesture([0.0; 2], [1.0; 2], 1.0, 0.0)
+                    .unwrap()
+                    .canvas_wake
+            );
+            assert_eq!(app.state.camera, camera);
             let change = app.frame(10_000_000, 18_000_000).unwrap();
             assert_eq!(
                 change.regions & regions::COMMANDS,
@@ -16049,5 +16411,25 @@ mod tests {
     mod column_stack_tests {
         use super::*;
         include!("column_stack_tests.rs");
+    }
+    mod layout_drop_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Gtk;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_android_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Android;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_web_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Web;
+        include!("layout_drop_tests.rs");
+    }
+    mod layout_drop_windows_tests {
+        use super::*;
+        const PLATFORM: Platform = Platform::Windows;
+        include!("layout_drop_tests.rs");
     }
 }

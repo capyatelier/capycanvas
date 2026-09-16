@@ -23,7 +23,10 @@ pub struct CapyApple {
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
         self.error = None;
-        match catch_unwind(AssertUnwindSafe(|| work(self))) {
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.metal.observe_failure(&mut self.host, false);
+            work(self)
+        })) {
             Ok(Ok(value)) => Some(value),
             result => {
                 let message = match result {
@@ -34,6 +37,15 @@ impl CapyApple {
                 None
             }
         }
+    }
+    fn gpu_operation<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        let result = catch_unwind(AssertUnwindSafe(|| work(self)))
+            .unwrap_or_else(|_| Err("Canvas rendering stopped unexpectedly".into()));
+        if let Err(message) = &result {
+            self.metal.stop(&mut self.host, message.clone());
+            self.dismissed_contacts.clear();
+        }
+        result
     }
 }
 /// # Safety
@@ -329,10 +341,9 @@ pub unsafe extern "C" fn capy_apple_attach(
             .to_str()
             .map_err(|e| e.to_string())?;
         a.host.resize(width, height, scale)?;
-        unsafe {
-            a.metal
-                .attach(&mut a.host, layer, std::path::Path::new(cache))
-        }
+        a.gpu_operation(|a| unsafe {
+            a.metal.attach(&mut a.host, layer, std::path::Path::new(cache))
+        })
     })
     .map_or(-1, |_| 0)
 }
@@ -367,6 +378,17 @@ pub unsafe extern "C" fn capy_apple_resize(
         .map_or(-1, |_| 0)
 }
 /// # Safety
+/// Valid exclusively owned handle. Request presentation after native exposure
+/// without changing document, camera or history.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_redraw(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.host.dirty = true;
+    0
+}
+/// # Safety
 /// Valid exclusively owned handle; detach before releasing its native layer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_detach(app: *mut CapyApple) -> i32 {
@@ -381,12 +403,59 @@ pub unsafe extern "C" fn capy_apple_detach(app: *mut CapyApple) -> i32 {
     })
     .map_or(-1, |_| 0)
 }
+
+/// # Safety
+/// Serial owner only. Retire GPU resources while retaining the CPU session;
+/// attach the retained native layer again to restart rendering.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_suspend_renderer(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else { return -1; };
+    app.perform(|a| {
+        a.metal.stop(&mut a.host, "Canvas stopped. Save the drawing or restart the canvas to continue.".into());
+        a.dismissed_contacts.clear();
+        Ok(())
+    }).map_or(-1, |_| 0)
+}
+
+/// # Safety
+/// Serial owner only. Nonblocking health check, including when no frame is due.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_poll_renderer(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else { return -1; };
+    app.perform(|a| {
+        a.gpu_operation(|a| {
+            a.metal.observe_failure(&mut a.host, true);
+            Ok(i32::from(a.host.session.rendering_suspended()))
+        })
+    }).unwrap_or(-1)
+}
+
+/// # Safety
+/// Debug fixtures only; affects this editor's device, never the system GPU.
+#[cfg(debug_assertions)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_test_gpu_fault(app: *mut CapyApple, validation: u32) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else { return -1; };
+    app.perform(|a| {
+        let device = a.host.session.engine().backend().0.as_ref().ok_or("No test GPU")?.device();
+        if validation == 1 {
+            let _invalid = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("isolated invalid buffer"), size: 16,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            });
+        } else if validation == 0 { device.destroy(); }
+        else { return Err("Unknown GPU fault".into()); }
+        Ok(())
+    }).map_or(-1, |_| 0)
+}
 /// # Safety
 /// Valid exclusively owned handle, UTF-8 NUL-terminated name and `count` readable
 /// image bytes. Neither input is retained after this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_import_layer(
     app: *mut CapyApple,
+    epoch: u64,
     name: *const c_char,
     width: u32,
     height: u32,
@@ -397,6 +466,9 @@ pub unsafe extern "C" fn capy_apple_import_layer(
         return -1;
     };
     app.perform(|a| {
+        if a.host.session.state().document_file.epoch != epoch {
+            return Err("The drawing changed before the image finished importing. Import it again.".into());
+        }
         if name.is_null()
             || rgba.is_null()
             || width == 0
@@ -592,7 +664,8 @@ pub unsafe extern "C" fn capy_apple_frame(
         if presentation < now {
             return Err("Presentation precedes observation time".into());
         }
-        let (again, timing) = a.metal.frame(&mut a.host, now, presentation)?;
+        if a.host.session.rendering_suspended() { return Ok(0); }
+        let (again, timing) = a.gpu_operation(|a| a.metal.frame(&mut a.host, now, presentation))?;
         if !costs.is_null() {
             unsafe {
                 std::ptr::copy_nonoverlapping(timing.as_ptr(), costs, 5);

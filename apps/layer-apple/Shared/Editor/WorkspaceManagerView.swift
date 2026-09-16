@@ -25,7 +25,6 @@ struct WorkspaceManagerPresentation: ViewModifier {
             }
             .sheet(isPresented: $manager.presented, onDismiss: { manager.dismissed() }) {
                 WorkspaceManagerView(manager: manager, library: library)
-                    .modifier(WorkspacePackagePicker(files: manager.files))
                     .modifier(EditorPopupPresentation())
             }
     }
@@ -152,19 +151,18 @@ struct WorkspaceManagerView: View {
                 LazyVStack(spacing: 6) {
                     ForEach(manager.history["rows"].array, id: \.managerID) { row in
                         Button { manager.selectHistory(row["id"].string) } label: {
-                            HStack {
-                                rowLabel(row)
-                                if manager.history["selected"].string == row["id"].string { SharedIcon(name: "check") }
-                            }.padding(12).contentShape(Rectangle())
-                                .background(Color.accentColor.opacity(manager.history["selected"].string == row["id"].string ? 0.14 : 0), in: RoundedRectangle(cornerRadius: 10))
-                        }.buttonStyle(.plain).accessibilityIdentifier("workspace-history-" + row["id"].string)
+                            rowLabel(row).padding(12).contentShape(Rectangle())
+                        }.buttonStyle(EditorControlButtonStyle(selected: manager.history["selected"].string == row["id"].string))
+                            .accessibilityAddTraits(manager.history["selected"].string == row["id"].string ? .isSelected : [])
+                            .accessibilityIdentifier("workspace-history-" + row["id"].string)
                     }
                 }
             }.disabled(manager.processing)
             HStack {
-                Spacer()
                 Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
+                    .buttonStyle(WorkspaceManagerButtonStyle())
                 Button("Restore This Version") { manager.historyAction() }
+                    .buttonStyle(WorkspaceManagerButtonStyle(primary: true))
                     .disabled(manager.processing || !library.previewingLayout || manager.history["restore"].isNull)
                     .accessibilityIdentifier("workspace-history-restore")
             }
@@ -183,7 +181,7 @@ private struct WorkspaceManagerButtonStyle: ButtonStyle {
     }
     func makeBody(configuration: Configuration) -> some View {
         let prominent = primary && enabled
-        configuration.label.fontWeight(.semibold).lineLimit(1)
+        configuration.label.fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
             .padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 40)
             .foregroundStyle(prominent ? .white : foreground)
             .background(prominent ? EditorPalette.sharedAccent : foreground.opacity(0.10))

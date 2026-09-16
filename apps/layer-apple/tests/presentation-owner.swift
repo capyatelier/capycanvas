@@ -23,7 +23,7 @@ private func require(_ value: Bool, _ message: String) {
     }
     static func main() throws {
         for platform: UInt32 in [0, 1] {
-            let owner = try NativeOwner(platform: platform, scene: UUID().uuidString,
+            let owner = try NativeOwner(platform: platform,
                 persistence: EditorPersistence(root: nil), receive: { _, error in
                     require(error == nil, error ?? "")
                 })

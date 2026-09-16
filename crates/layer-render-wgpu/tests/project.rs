@@ -462,6 +462,68 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
 }
 
 #[test]
+fn every_contact_preset_survives_save_reopen_and_exact_undo_redo() {
+    contact_preset_history(false);
+}
+
+#[test]
+fn every_contact_preset_paints_masks_and_survives_save_reopen_and_exact_undo_redo() {
+    contact_preset_history(true);
+}
+
+fn contact_preset_history(masked: bool) {
+    let mut initial = fixture(false);
+    if masked {
+        let mut mask =
+            LayerMask::reveal_all(initial.document.allocate_layer_id(), Point::default());
+        mask.default_coverage = 0.;
+        initial.document.layers[0].mask = Some(mask);
+    }
+    let (mut live, mut input) = engine(&initial);
+    if masked {
+        live.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+    }
+    let mut before = image(&mut live, 0);
+    for (index, preset) in CONTACT_BRUSH_PRESETS.into_iter().enumerate() {
+        let time = (index as u64 + 1) * 100_000_000;
+        draw(
+            &mut live,
+            &mut input,
+            preset,
+            [0.03, 0.02, 0.01, 0.8],
+            40. + (index % 4) as f32 * 52.,
+            time,
+        );
+        let expected = image(&mut live, time + 80_000_000);
+        assert_ne!(before, expected, "{preset:?} must leave a visible mark");
+        let checkpoint =
+            Project::snapshot_with(live.document(), |id| live.backend().source_asset(id)).unwrap();
+        let mut archive = Vec::new();
+        checkpoint.write(&mut archive).unwrap();
+        let decoded = Project::read(archive.as_slice(), ProjectLimits::default()).unwrap();
+        let (mut reopened, _) = engine(&decoded);
+        assert_eq!(
+            image(&mut reopened, time + 80_000_000),
+            expected,
+            "{preset:?}: archive roundtrip"
+        );
+        assert!(live.undo().unwrap());
+        assert_eq!(
+            image(&mut live, time + 81_000_000),
+            before,
+            "{preset:?}: undo"
+        );
+        assert!(live.redo().unwrap());
+        assert_eq!(
+            image(&mut live, time + 82_000_000),
+            expected,
+            "{preset:?}: redo"
+        );
+        before = expected;
+    }
+}
+
+#[test]
 fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
     use layer_core::raster::{RasterPlane, TileKey};
     let mut project = Project {

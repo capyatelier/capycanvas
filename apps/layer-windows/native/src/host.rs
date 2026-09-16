@@ -121,9 +121,12 @@ impl CapyHost {
     }
 
     fn accepts_workspace_input(&self) -> bool {
-        self.workspaces
+        self.services
             .as_ref()
-            .is_none_or(|s| s.accepts_input(crate::workspace_service::now_ms()))
+            .is_none_or(|s| !s.close_status().requested)
+            && self.workspaces
+                .as_ref()
+                .is_none_or(|s| s.accepts_input(crate::workspace_service::now_ms()))
     }
     fn poll_services(&mut self) -> Result<(), String> {
         if let Some(service) = self.documents.as_mut() {
@@ -137,6 +140,7 @@ impl CapyHost {
         }
         if let Some(service) = self.workspaces.as_mut() {
             if self.native.session.state().document_file.close_ready
+                && self.services.as_ref().is_none_or(|s| s.close_status().ready)
                 && !service.status().close_requested
             {
                 service.request_close(&mut self.native);
@@ -521,17 +525,39 @@ pub unsafe extern "C" fn capy_pointer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
+        use crate::workspace_service::{WorkspaceAction, now_ms};
+        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        if matches!(
+            action,
+            WorkspaceAction::PreferencesRetry
+                | WorkspaceAction::PreferencesKeepOpen
+                | WorkspaceAction::PreferencesDiscardClose
+        ) {
+            let service = host
+                .services
+                .as_mut()
+                .ok_or("Preferences service is unavailable")?;
+            match action {
+                WorkspaceAction::PreferencesRetry => service.retry_close(&mut host.native)?,
+                WorkspaceAction::PreferencesKeepOpen => service.keep_open(&mut host.native),
+                WorkspaceAction::PreferencesDiscardClose => service.discard_close(&mut host.native),
+                _ => unreachable!(),
+            }
+            host.poll_services()?;
+            return Ok(0);
+        }
         if host.native.session.rendering_suspended() {
             fail("Workspace changes are unavailable. Save the drawing and reopen it.");
             return Ok(1);
         }
-        use crate::workspace_service::{WorkspaceAction, now_ms};
-        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
         let service = host
             .workspaces
             .as_mut()
             .ok_or("Workspace service is unavailable")?;
         let result = match action {
+            WorkspaceAction::PreferencesRetry
+            | WorkspaceAction::PreferencesKeepOpen
+            | WorkspaceAction::PreferencesDiscardClose => unreachable!(),
             WorkspaceAction::Manager { dialog, command } => {
                 service.manager_input(&mut host.native, dialog, command)
             }
@@ -782,6 +808,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .as_ref()
                 .and_then(|service| service.import_request()),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
+            windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
             windows_workspace_manager: host
                 .workspaces

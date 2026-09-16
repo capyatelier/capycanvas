@@ -31,7 +31,8 @@ fn request(json: &str) -> Result<Value, String> {
             | "expansion"
             | "renderer_stats"
             | "application_menu"
-            | "application_link",
+            | "application_link"
+            | "header",
         ) => Ok(value),
         _ => Err("Unsupported workspace query".into()),
     }
@@ -440,6 +441,88 @@ mod tests {
         }
         assert_eq!(host.session.engine().document().revision, revision);
     }
+    #[test]
+    fn header_queries_keep_drag_motion_out_of_workspace_history() {
+        use layer_ui::{HeaderAction, HeaderZone, Platform};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        initialize(&mut host).unwrap();
+        let before = host.session.durable_workspace();
+        host.dispatch(HeaderAction::Edit { editing: true }.action())
+            .unwrap();
+        let layout = host.session.state().workspace.layout.header.clone();
+        let id = layout.zones[0][0].id;
+        let metrics: Vec<_> = layout
+            .entries()
+            .map(|e| json!({"id":e.id,"width":56,"compact":56}))
+            .collect();
+        let call = |host: &mut NativeHost, request: Value| {
+            let reply = metadata(
+                query(
+                    host,
+                    &json!({"type":"header","request":request}).to_string(),
+                )
+                .unwrap(),
+            );
+            assert!(reply["error"].is_null(), "{reply}");
+            reply["result"].clone()
+        };
+        let geometry = call(
+            &mut host,
+            json!({
+                "op":"geometry","width":1400,"insets":[0,150],"metrics":metrics
+            }),
+        );
+        let grab = geometry["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap()["bounds"]
+            .clone();
+        let begin = json!({"op":"begin","source":{"kind":"item","value":id},
+            "width":1400,"insets":[0,150],"metrics":metrics,
+            "press":[grab["x"].as_f64().unwrap()+10.,grab["y"].as_f64().unwrap()+10.],
+            "grab":grab});
+        for cancel in [true, false] {
+            assert_eq!(call(&mut host, begin.clone()), true);
+            assert!(!call(&mut host, json!({"op":"preview","position":[700,20]})).is_null());
+            assert_eq!(host.session.state().workspace.layout.header, layout);
+            assert_eq!(host.session.durable_workspace(), before);
+            let action = call(
+                &mut host,
+                json!({"op":"finish","position":[700,20],"cancel":cancel}),
+            );
+            if cancel {
+                assert!(action.is_null());
+            } else {
+                host.dispatch(serde_json::from_value(action).unwrap())
+                    .unwrap();
+                assert_eq!(
+                    host.session
+                        .state()
+                        .workspace
+                        .layout
+                        .header
+                        .location(id)
+                        .unwrap()
+                        .0,
+                    HeaderZone::Center
+                );
+                assert_eq!(host.session.durable_workspace(), before);
+                host.dispatch(HeaderAction::Cancel.action()).unwrap();
+                assert_eq!(host.session.state().workspace.layout.header, layout);
+            }
+        }
+        assert_eq!(call(&mut host, begin), false);
+        assert!(
+            call(
+                &mut host,
+                json!({"op":"finish","position":[700,20],"cancel":false})
+            )
+            .is_null()
+        );
+    }
+
     #[test]
     fn optional_queries_reject_mutations_oversize_and_stale_geometry_without_failing_host() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();

@@ -29,9 +29,13 @@ struct Property {
         return epoch==num(object(data->state,L"document_file"),L"epoch")
             &&layer==num(view(),L"layer",-1)&&schema==object(model(),L"kind").Stringify();
     }
-    void action(J operation)const{
-        if(data->updating||!current()||!flag(view(),L"enabled"))return;
+    void action(J operation,hstring const& phase={})const{
+        // A captured preview must finish even if its view was hidden or disabled.
+        // Rust validates the gesture owner; dispatchDocument guards its epoch.
+        bool continuing=!phase.empty()&&phase!=L"down";
+        if(!continuing&&(data->updating||!current()||!flag(view(),L"enabled")))return;
         operation.Insert(L"layer",N(layer));operation.Insert(L"key",S(key));
+        if(!phase.empty())operation=O({{L"op",S(L"gesture")},{L"phase",S(phase)},{L"action",operation}});
         data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",operation}}),to_hstring(uint64_t(epoch)));
     }
     void set(V const& value)const{

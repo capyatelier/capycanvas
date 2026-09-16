@@ -150,7 +150,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.dabs.clear();
         self.batches.clear();
         for index in 0..count {
-            self.append_real_dab(self.builder.real_points()[index], index);
+            self.append_real_dab(self.builder.real_points()[index], index, false);
         }
         self.rebuild_all = true;
     }

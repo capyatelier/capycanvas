@@ -1,7 +1,7 @@
 # Apple persistence
 
-Settings and workspace persistence use the existing versioned Rust models and
-restore actions. Both native apps share storage and owner coordination.
+Settings use the versioned Rust model and atomic JSON storage; workspaces use
+the shared SQLite library. Both native apps share storage and owner coordination.
 Both apps expose New, Open, Save and Save As using the shared editable
 [`Project` format](../../docs/reference/project-format.md), plus PNG export. Both protect
 window close with the shared unsaved-change decision; macOS also protects app
@@ -22,10 +22,10 @@ shared current-workspace and saved-toolbar actions. Rust owns the rows, action
 availability, forms, validation and history policy. Row actions use metadata
 summaries without loading every item's retained layout history.
 
-Initialization seeds the shared Painter, Illustrator and Photographer workspaces
-idempotently. Stable IDs drive the header switcher, including current edited names.
-The defaults are editable and undeletable; existing user data and the last active
-workspace survive upgrades. Reset All Brushes locks the editor at an idle boundary,
+Initialization seeds the shared Sketch, Paint and Photo workspaces idempotently.
+Stable IDs drive the header switcher. Included workspaces keep their names and
+cannot be deleted; their layouts and tool settings remain editable. Existing SQLite workspace
+data and the last active workspace retain their saved scene bindings. Reset All Brushes locks the editor at an idle boundary,
 calls Rust's reset operation, then captures and flushes the current working values.
 It creates no layout-history event and leaves other workspaces unchanged.
 
@@ -39,12 +39,14 @@ selection and preview. Late or rapid selection replies cannot revive a dismissed
 preview. Separate Save/Load Layout UI and Apple bridge operations have been
 removed. Existing shared template records remain preserved for core migration.
 
-The native package transport supports coordinated `.capyworkspace` and
-`.capytoolbar` delivery and consistent database backup. Opening a legacy
-`.capytemplate` reports that loading saved layouts is no longer available.
-These storage capabilities are covered by direct integration checks; the compact
-workspace screens follow the revised shared design without storage-administration,
-import/export, trash or metadata/version-management controls.
+Externally opened `.capyworkspace` and `.capytoolbar` files use coordinated reads
+on the file queue and shared Rust import validation. Apple no longer registers
+the removed `.capytemplate` format. The compact workspace screens follow the
+shared design without storage administration, package pickers/exporters, trash
+or metadata/version-management controls; their obsolete routing and presentation
+state are removed. Layout History keeps the existing preview/Cancel/Restore flow.
+The lower-level storage service retains consistent SQLite backup and package
+serialization, with direct integration coverage.
 
 `NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
 the shared Rust storage worker. The drawing owner only captures or adopts
@@ -54,14 +56,14 @@ writes in the editor persistence barrier. Startup blocks new editor input until
 restoration completes. Ownership recovery blocks new pen contacts and shortcuts
 while allowing existing contacts and property corrections to finish. It retains the outgoing workspace
 until storage and adoption acknowledge the transition. Failed ownership retains
-in-memory changes for Save as New Workspace or a current-state export.
+in-memory changes for Save as New Workspace.
 
-Migration reads unacknowledged `workspaces/<scene>.json` and `workspace.json`
-sources on the storage queue. It preserves distinct scenes, aliases an identical
-fallback, commits mappings with the imported records, and retains the original
-files. Acknowledged files are no longer read or written. Unknown/corrupt inputs
-fail before creating default workspaces. Concurrent imports reconcile both
-identical and partially overlapping source sets through the shared manager.
+Workspace startup uses the SQLite scene binding and shared default catalog.
+The Apple legacy JSON writer, migration scan and migration bridge requests are
+removed. Old `workspaces/<scene>.json` and `workspace.json` files are ignored and
+left untouched; malformed obsolete files cannot block current-library startup.
+Current SQLite errors still surface without replacing the stored data. Shared
+migration code used by other hosts is unchanged.
 
 The direct checks use temporary storage and both Apple platform configurations:
 
@@ -72,8 +74,8 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/works
 cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --features layer-workspace/native
 ```
 
-They exercise latest-edit switching, failed-transition unlock, migration and
-restart beside another owner, toolbar metadata/versions, toolbars, layout
+They exercise latest-edit switching, failed-transition unlock, startup and
+restart beside another owner, obsolete-file isolation, toolbar metadata/versions, toolbars, layout
 history, import/export packages, trash, consistent SQLite backup and recovery as
 a new workspace after a competing owner claims an expired lease. A deliberately
 locked temporary database verifies that the drawing owner still serves edits
@@ -89,6 +91,24 @@ GTK can create another window. Undo returning to the saved checkpoint marks the
 document clean again, while later edits remain unsaved after an older snapshot
 finishes writing. New/Open and close decisions require an idle canvas. A late
 open result or input from the previous document cannot change a replacement.
+External Open and recovery reserve their pending URL before shared busy state
+arrives; another Open, recovery or window close cannot overtake that reservation.
+If a queued command makes Open unavailable, the document service reports the
+rejection and releases the URL so the next request remains usable.
+File delivery during launch waits for the first editor state, full native startup
+and workspace restoration. Metal attachment alone is insufficient: first-frame
+bundled-filter validation can still begin afterward and temporarily block Open.
+The existing `shaders_ready` flag covers that startup interval.
+The same pending URL resumes from existing state
+publications and workspace initialization, without a startup timer or another
+picker. Local checks cover delivery before the first snapshot and before Metal
+attachment with temporary managed workspaces on both Apple configurations,
+including the interval before first-frame catalog validation. Actual cold and
+warm OS URL delivery also passes on Mac and the physical iPad with synthetic
+painted documents and unchanged source bytes. Mac retains the first document in
+its own window when warm delivery creates another. These checks do not establish
+the full file-provider or lifecycle matrix; evidence and current scope are in
+the [Apple handoff](../../docs/development/apple-handoff.md).
 
 macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
 Save As prepares an archive in a private temporary directory before presenting
@@ -125,6 +145,16 @@ export is completed by the native picker. Source/sample allocations are shared
 with the snapshot, but large-document capture cost, GPU preparation, memory peaks
 and storage latency still require measurement.
 
+Image layer imports use that same coordinated reader, including its substituted
+URL, throughout ImageIO decoding. This follows Apple's
+[external-document access requirements](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller).
+The layer name comes from the selected URL. The picker captures the drawing's
+epoch, and the Rust bridge rejects a late result after document replacement;
+ordinary edits in the same drawing remain allowed. The local owner fixture
+holds a coordinated image write, verifies that decoding waits for completed
+bytes, and covers read/decode errors, document replacement, retry and history.
+That check does not establish cloud-provider delivery or native picker behavior.
+
 Restoring a provider URL across launches, provider conflicts/file presenters,
 interruption during provider access, iPad multi-window lifecycle, and physical
 background-task expiration remain open. Recovery uses a private copy and does
@@ -135,8 +165,10 @@ not restore access to the original provider destination.
 Unsaved changes schedule a recovery attempt after two seconds. Each editor keeps
 one capture/write in flight and the latest desired document revision; edits during
 a write schedule a subsequent snapshot instead of queuing full document copies.
-Capture requires an idle committed document and waits while a stroke, transform
-or other canvas operation is active. Pruning, compression and disk operations use
+Capture retains the last committed raster boundary while a stroke is active;
+transforms and other non-capturable canvas operations still defer it. Queued
+pen-up work is prepared without a drawable, including raster reconstruction
+after renderer replacement. Pruning, compression and disk operations use
 the existing project worker. Recovery neither creates a manual Save request nor
 acknowledges its checkpoint. The full editable project format is reused, including
 embedded source assets, masks and effects; undo history is not stored.
@@ -162,15 +194,30 @@ mark it clean. A successful manual save restores ordinary checkpoint behavior.
 The source recovery remains until the new owner publishes its own durable copy
 or the user saves/discards. A cancelled replacement leaves both drawings intact.
 
-Lifecycle flushing drains accepted input without acquiring a drawable, then waits
-for preferences and the recovery barrier. This includes pen-up queued immediately
+Lifecycle flushing prepares a capturable committed snapshot without acquiring a
+drawable, then waits for preferences, workspace writes and the recovery worker's
+atomic manifest publication. Preparation alone never acknowledges durability.
+This includes pen-up queued immediately
 before a surface stops. Mac cleanup follows actual window close or final accepted
 application termination; iPad cleanup follows an authorized scene's view detachment.
-Cancelled termination does not consume recovery copies. Barriers retain the
-coordinator if the UI owner disappears while its write completes. The iPad uses
+Cancelled termination does not consume recovery copies. The barrier retains the
+editor and recovery coordinator through the final acknowledgement, even if scene
+teardown releases the last UI reference before native preparation returns. Local
+checks on both Apple configurations verify that this flush finishes, releases
+its owner and leaves an archive that reopens with the accepted edits. The iPad uses
 the OS background-task allowance; a kill or allowance expiration before durable
 publication can still leave only the previous completed copy. Full physical
 expiration/interruption and sustained storage overhead remain acceptance work.
+
+GPU loss and uncaptured validation errors suspend the shared session and retire
+the failed renderer on a worker. CPU document state, embedded sources, committed
+rasters, history and working settings remain owned by the editor. An unfinished
+contact is cancelled. The canvas error offers Restart Canvas and Save As; restart
+uses the shared renderer-replacement API to reconstruct the retained document.
+Callbacks from a retired device cannot stop its replacement. A nonblocking owner
+health check detects failures even after the display link becomes idle. Native
+thumbnail and filter-preview generations reset when renderer availability changes.
+Healthy native surface replacement retains the existing GPU.
 
 ## Ownership and files
 
@@ -182,9 +229,10 @@ Neither the UI thread nor the active render owner performs file reads/writes.
 Files live under the app's own Application Support directory. `settings.json`
 contains shared app settings. `workspaces.sqlite3` holds named workspaces,
 layout/history, latest tool/color/Zen values, reusable templates/toolbars,
-metadata history and scene bindings. Legacy scene/default JSON files are retained
-as migration inputs and are no longer written by normal app launches. Tests can
-explicitly disable the library to exercise the legacy adapter.
+metadata history and scene bindings. The drawing owner persists settings only;
+workspace capture/adoption and storage use the library coordinator. Tests can
+disable the library to isolate document or settings behavior without enabling
+a second workspace store.
 
 Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
@@ -199,10 +247,10 @@ allocations. Committed layout history and latest working tool values have
 independent generations. Motion/camera publications do not schedule storage.
 Autosave coalesces full editor publications, queries unchanged layouts without
 copying their history, and performs database work off the input owner. Startup
-does not overwrite invalid or unsupported saved data with defaults; the storage
+does not overwrite invalid settings or SQLite data with defaults; the library
 service retains current-state and consistent database exports for recovery.
 
-JSON preferences and legacy migration inputs are limited to 1 MiB per file.
+JSON preferences and recovery indexes are limited to 1 MiB per file.
 Preference writes sync a private temporary file, atomically rename it, then sync
 the directory before acknowledgement. Settings requests remain pending in Rust
 until the write completes. Packages use coordinated, bounded file I/O outside
@@ -225,6 +273,13 @@ coverage remains an acceptance requirement.
 
 ## Checks
 
+Editor construction waits for the resolved `SceneStorage` identifier. Creating
+an owner from an eager UUID could leave a restored Mac scene displaying one
+identity while opening a different workspace binding. The native Paint check
+requires automatic workspace restoration for the same scene; a new system scene
+can reopen the saved workspace through the ordinary switcher. The complete OS
+window/scene restoration matrix remains acceptance work.
+
 On an Apple Silicon development Mac, run from the repository root:
 
 ```sh
@@ -232,6 +287,7 @@ bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
 cargo test -p layer-apple project_ --lib
+cargo test -p layer-apple renderer_failure_retains -- --test-threads=1
 cargo test -p layer-apple ui_actions_change_only_the_addressed_apple_session
 cargo test -p layer-host workspace_persistence --lib
 ```
@@ -255,11 +311,26 @@ Physical file-provider delivery remains unverified.
 The recovery checks use actual Swift owners and the Metal bridge for both platform
 policies. They verify private file modes, cancelled capture, newest-revision flush
 under queued edits, stale removal, malformed-record isolation, failed-write retry,
-owner loss/restart, migration and Save/Discard/Cancel protection. The Rust recovery
+owner loss/restart, migration and Save/Discard/Cancel protection. The Swift fixture
+also queues real ink and pen-up without a following drawable, then requires the
+complete store barrier to publish that revision. The Rust recovery
 check drains pen-up without a drawable, compares exact recovered GPU pixels and
 checks that only a durable manual save clears the recovered document's dirty state.
 Save-before-recovery checks preserve the selected archive through both Mac saves
 and iPad staged exports, without requesting another Open location.
+
+The hardware Rust renderer test covers explicit suspension, device destruction
+and an actual uncaptured validation error on both Apple presets. It verifies an
+unfinished contact is cancelled, retained sources and raster pixels reconstruct
+exactly, saving works while stopped, pending requests and working settings survive,
+and Undo/Redo and later painting remain correct. Faults affect only the isolated
+editor device. They do not reset the system GPU.
+
+The focused native `testRendererRecovery` exercises both device loss and
+validation errors through the visible restart control. It compares artwork
+pixels and Undo/Redo, and waits for visible layer thumbnails to regenerate.
+The retained catalog must complete each replacement GPU's staged startup;
+otherwise idle thumbnail work remains deferred indefinitely.
 
 The focused `testArtworkRecoveryAfterRestart` UI check passes on Mac and the
 connected iPad. It waits for a completed private copy, terminates and relaunches the

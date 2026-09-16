@@ -13,6 +13,7 @@
 #include <memory>
 #include <map>
 #include <vector>
+#include <type_traits>
 
 namespace CapyUi {
 using namespace winrt;
@@ -131,6 +132,12 @@ struct WorkspaceData {
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){
     auto tint=color(str(object(data->state,L"palette"),L"button"));tint.A=13;return fill(tint);
 }
+// Light headers use the shared half-opacity surround surface over the canvas.
+inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){
+    auto tint=color(str(object(data->state,L"palette"),L"bg"));
+    if(data->theme()==L"light")tint.A=128;
+    return fill(tint);
+}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
@@ -138,19 +145,28 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const&
     if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     return result;
 }
-inline Button button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
-    Button result;result.Content(box_value(text));result.FontSize(data->textSize());
+template<typename T>
+inline void buttonColors(std::shared_ptr<WorkspaceData> const& data,T const& result){
+    auto ink=color(str(object(data->state,L"palette"),L"text"));
+    auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
+    hstring prefix=std::is_same_v<T,Primitives::ToggleButton>?L"ToggleButton":L"Button";
+    result.Resources().Insert(box_value(prefix+L"BackgroundPointerOver"),fill(hover));
+    result.Resources().Insert(box_value(prefix+L"BackgroundPressed"),fill(pressed));
+    result.Resources().Insert(box_value(prefix+L"BackgroundDisabled"),clear());
+    result.Resources().Insert(box_value(prefix+L"ForegroundDisabled"),fill(disabled));
+    if constexpr(std::is_same_v<T,Primitives::ToggleButton>)
+        for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
+            result.Resources().Insert(box_value(role),selected());
+}
+template<typename T=Button>
+inline T button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
+    T result;result.Content(box_value(text));result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
     result.FontWeight(Windows::UI::Text::FontWeights::Bold());
     result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
     result.BorderThickness(Thickness{0});result.CornerRadius(CornerRadius{6,6,6,6});
     result.Background(clear());AutomationProperties::SetName(result,text);
-    auto ink=color(str(object(data->state,L"palette"),L"text"));
-    auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
-    result.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(hover));
-    result.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(pressed));
-    result.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),clear());
-    result.Resources().Insert(box_value(L"ButtonForegroundDisabled"),fill(disabled));
+    buttonColors(data,result);
     result.Click([action=std::move(action)](auto&&,auto&&){action();});
     return result;
 }

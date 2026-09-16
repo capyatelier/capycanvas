@@ -51,22 +51,34 @@ struct PanelConfiguration: View {
         switch control {
         case "size_presets": configurationSizes
         case "brush_color":
-            Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
-                ColorSwatch(rgba: store.state["brush"]["color"])
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
-                    .background(palette["button"].opacity(13 / 255), in: RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(item["label"].string)
-                .accessibilityIdentifier("configuration-brush-color")
+            BrushColorButton(store: store, label: item["label"].string)
         case "brushes": ScrollView { ToolSetControls(store: store) }.frame(height: 250)
         case "color_wheel": ColorPanel(store: store)
         case "navigator": NavigatorPanel(store: store).frame(height: 240)
         case "adjustments": AdjustmentPanel(store: store).frame(height: 280)
-        case "layers", "layer_opacity", "layer_actions":
-            LayerPanel(store: store, panel: panel.replacing("controls", with: JSON([
-                item.replacing("visible_in_panel", with: JSON(true)).raw
-            ]))).frame(height: control == "layers" ? 240 : control == "layer_opacity" ? 64 : 32)
+        case "layers":
+            let layers = store.state["layers"].array
+            EditorChoice(label: item["label"].string, options: layers.map { $0["label"].string },
+                selected: layers.firstIndex { $0["selected"].bool } ?? 0,
+                identifier: "configuration-layer", background: palette["input"]) {
+                store.dispatch(["type": "select_layer", "id": layers[$0]["id"].raw])
+            }
+        case "layer_opacity":
+            LayerOpacityField(store: store, inline: false)
+                .disabled(!store.state["layer_tools"]["controls"]["opacity"].bool)
+        case "layer_actions":
+            ConfigurationFlow(spacing: 6) {
+                ForEach(store.catalog["layer_commands"].array.map(\.string), id: \.self) { id in
+                    let command = store.command(id)
+                    Button { store.invoke(id) } label: {
+                        Text(command["label"].string).fontWeight(.bold).padding(.horizontal, 12)
+                            .frame(height: fontSize * 1.66 + 8).contentShape(Rectangle())
+                    }.buttonStyle(EditorControlButtonStyle(background: palette["button"].opacity(13 / 255)))
+                        .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
+                        .help(command["tooltip"].string)
+                        .accessibilityIdentifier("configuration-command-" + id)
+                }
+            }
         default: PanelControls(store: store, panel: panel).control(item)
         }
     }

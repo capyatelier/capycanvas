@@ -7,6 +7,10 @@ remain in the [validation record](color-management-gtk-m2-validation.md) and
 [performance record](color-management-gtk-m2-performance.md). Historical milestone
 proposals are not declarations of current support.
 
+The subsequent [main integration and platform assessment](color-management-m2-main-integration.md)
+records the merged upstream source, fresh checks and concrete non-GTK landing
+blockers. The release qualification below describes the earlier GTK checkpoint.
+
 ## Scope and implemented workflows
 
 | Workflow | Implemented and validated behavior | Evidence in validation record |

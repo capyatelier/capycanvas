@@ -205,25 +205,29 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
 }
 
 /// # Safety
-/// DEPRECATED recovery barrier: input retirement alone does not establish host
-/// backing or durability. Migrate the Swift lifecycle caller to a committed
-/// capture_project_recovery snapshot, worker completion and atomic publication;
-/// use suspend_renderer/replace_renderer to preserve the session across loss.
-/// Owner only. Drain accepted input without acquiring/presenting a drawable so
-/// a backgrounded or detached surface cannot strand the last pen-up batch.
-/// Returns 1 while preparation or a live interaction still prevents capture.
+/// Owner only. Submit queued input without a drawable, then validate a committed
+/// snapshot. An active stroke can retain its preceding committed raster. This
+/// is preparation only: the caller must capture a project job, wait for its
+/// file worker, and atomically publish recovery before acknowledging durability.
+/// Returns 1 while queued input or a non-capturable canvas operation remains.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_recovery_flush_input(app: *mut CapyApple, now: u64) -> i32 {
+pub unsafe extern "C" fn capy_apple_prepare_recovery(app: *mut CapyApple, now: u64) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
     app.perform(|app| {
+        app.metal.observe_failure(&mut app.host, true);
         if app.host.session.engine().backend().0.is_some() {
-            app.host.prepare_canvas_frame(now, now, true)?;
+            // A failed GPU is suspended with its surviving CPU state. Recovery
+            // still proceeds; the shared snapshot/worker validates the pixels.
+            let _ = app.gpu_operation(|app| app.host.prepare_canvas_frame(now, now, true));
         }
+        let renderer_ready = app.host.session.engine().backend().0.is_none()
+            || (app.host.startup.canvas_ready
+                && !app.host.session.engine().has_pending_document_edits());
         Ok(i32::from(
-            app.host.session.require_document_idle().is_err()
-                || app.host.session.state().filter_load.pending,
+            !renderer_ready || app.host.session.engine().has_pending_input()
+                || app.host.session.capture_project_recovery().is_err(),
         ))
     })
     .unwrap_or(-1)

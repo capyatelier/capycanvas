@@ -17,27 +17,21 @@ struct AdjustmentPanel: View {
                     EditorTextField(picker["search_label"].string, value: picker["search"].string) {
                         send(["op": "search", "query": $0])
                     }
-                        .textFieldStyle(.plain).padding(6).background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
+                        .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 34)
+                        .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
                         .focused($searching).accessibilityIdentifier("filter-search")
+                        .onKeyPress(.escape) { send(["op": "toggle_search"]); return .handled }
                 } else {
-                    Menu {
-                        ForEach(categories.indices, id: \.self) { index in
-                            Button(categories[index]["label"].string) {
-                                send(["op": "category", "category": categories[index]["id"].raw])
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            SharedIcon(name: categories.first { $0["id"].string == picker["category"].string }?["icon"].string ?? "adjustments")
-                            Text(categories.first { $0["id"].string == picker["category"].string }?["label"].string ?? "")
-                                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                            SharedIcon(name: "chevron-down")
-                        }.padding(6).background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
-                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).accessibilityIdentifier("filter-category")
+                    SharedIcon(name: categories.first { $0["id"].string == picker["category"].string }?["icon"].string ?? "adjustments")
+                    EditorChoice(label: "Category", options: categories.map { $0["label"].string },
+                        selected: categories.firstIndex { $0["id"].stableKey == picker["category"].stableKey } ?? 0,
+                        identifier: "filter-category", background: palette["input"], bold: true) {
+                        send(["op": "category", "category": categories[$0]["id"].raw])
+                    }.frame(maxWidth: .infinity)
                 }
                 IconTile(icon: "search", label: picker["search_label"].string, selected: !picker["search"].isNull) {
                     send(["op": "toggle_search"])
-                }.frame(width: 34, height: 34).accessibilityIdentifier("filter-search-toggle")
+                }.frame(width: 48, height: 34).accessibilityIdentifier("filter-search-toggle")
             }.frame(minHeight: 34).modifier(PanelBodyMeasurement(panel: "adjustments", part: "header"))
             GeometryReader { viewport in
                 ScrollView {

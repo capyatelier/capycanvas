@@ -22,9 +22,9 @@ struct EditorView<Canvas: View>: View {
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
-            if !store.state.isNull {
+            // Controls need both the live values and their shared specifications.
+            if !store.state.isNull && !store.catalog.isNull {
                 if !store.snapshot["chrome_hidden"].bool { EditorHeader(store: store) }
-                WorkspacePanels(store: store, workspace: store.workspace)
                 if !store.snapshot["chrome_hidden"].bool && store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack {
                         Spacer()
@@ -32,12 +32,21 @@ struct EditorView<Canvas: View>: View {
                             .background(palette["bg"], in: Capsule())
                     }.placed(store.snapshot["layout"]["status"])
                 }
+                WorkspacePanels(store: store, workspace: store.workspace)
             }
-            if let failure = store.failure {
+            if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Canvas error").font(.headline)
                     Text(failure).textSelection(.enabled)
-                    Button("Dismiss") { store.failure = nil }
+                    if !store.snapshot["gpu_ready"].bool {
+                        HStack {
+                            Button("Restart Canvas") { store.restartCanvas() }.disabled(store.restartingCanvas)
+                            Button("Save As…") { store.invoke("save_document_as") }
+                                .disabled(!store.command("save_document_as")["enabled"].bool)
+                        }
+                    } else {
+                        Button("Dismiss") { store.failure = nil }
+                    }
                 }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -45,14 +54,23 @@ struct EditorView<Canvas: View>: View {
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)
             }
+            if ProcessInfo.processInfo.environment["CAPY_GPU_RECOVERY_TEST"] == "1" {
+                HStack {
+                    Button("Lose test device") { store.native?.testGpuFault(validation: false) }
+                    Button("Validate test failure") { store.native?.testGpuFault(validation: true) }
+                    Text(store.snapshot["gpu_ready"].bool && store.snapshot["brush_ready"].bool ? "Renderer ready" : "Renderer stopped")
+                        .accessibilityIdentifier("renderer-test-status")
+                }.padding(6).background(palette["panel"])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            }
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
-        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
-            store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
-        })
+        .editorChromeContact { point in
+            store.workspace.chrome(["kind": "contact", "position": [point.x, point.y], "canvas": false])
+        }
         .onContinuousHover(coordinateSpace: .named("editor-workspace")) { phase in
             switch phase {
             case .active(let point): store.workspace.chrome(["kind": "motion", "position": [point.x, point.y]])
@@ -75,7 +93,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(ProjectFilesModifier(files: store.projectFiles))
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
-        .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
+        .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {
             SettingsView(store: store).modifier(StorageAlert(store: store)).modifier(EditorPopoverHost())
                 .foregroundStyle(.primary).presentationBackground(.background)
                 .modifier(EditorPresentationAppearance())
@@ -167,7 +185,8 @@ struct MenuItems: View {
                         .help(item["hint"].string)
                         .accessibilityIdentifier(item["action"]["type"].string == "invoke"
                             ? "command-" + item["action"]["command"].string : "menu-action-" + item["label"].string)
-                        .keyboardShortcut(usesShortcuts ? menuShortcut(item["bindings"][0]) : nil)
+                        .keyboardShortcut(usesShortcuts && store.snapshot["preferences"].isNull
+                            ? menuShortcut(item["bindings"][0]) : nil)
                 }
             }
         }

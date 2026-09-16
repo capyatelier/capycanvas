@@ -18,6 +18,8 @@ extension XCTestCase {
         let restore = app.buttons["workspace-history-restore"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: restore)
         waitForExpectations(timeout: 10)
+        XCTAssertTrue(start.isSelected, "The previewed history version must expose its selection")
+        attachEditor(in: app, name: "workspace-history-selected")
         #if os(macOS)
         restore.click()
         #else
@@ -27,8 +29,6 @@ extension XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertTrue(app.buttons["panel-tab-navigator"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "workspace-history-restored"; attachment.lifetime = .keepAlways
-        add(attachment)
+        attachEditor(in: app, name: "workspace-history-restored")
     }
 }

@@ -9,7 +9,7 @@ struct ToolSetControls: View {
             ToolGroupsLayout {
                 items(store.state["tool_set"]["groups"], group: true)
             }
-            VStack(spacing: 4) { items(store.state["tool_set"]["subtools"], group: false) }
+            VStack(spacing: 2) { items(store.state["tool_set"]["subtools"], group: false) }
         }
     }
 
@@ -27,17 +27,22 @@ struct ToolSetControls: View {
                                 .frame(minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 0.85 * 1.66)
                         }.font(.system(size: store.catalog["text_size_pt"].number * 4 / 3 * 0.85))
                     } else {
-                        HStack(spacing: 8) {
+                        VStack(spacing: 0) {
                             if !item["preview"].isNull {
                                 Image("preview-\(item["preview"].uint)-\(store.state["theme"].string)")
-                                    .resizable().scaledToFit().frame(width: 82, height: 32)
+                                    .resizable().frame(height: 40)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
                             }
-                            SharedIcon(name: item["icon"].string)
-                            Text(item["label"].string).fontWeight(.bold)
-                                .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .leading)
+                            HStack(spacing: 6) {
+                                SharedIcon(name: item["icon"].string)
+                                Text(item["label"].string).fontWeight(.bold)
+                                    .lineLimit(1).truncationMode(.tail)
+                                    .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .trailing)
+                            }
                         }
                     }
-                }.padding(.horizontal, 12).padding(.vertical, 4).frame(maxWidth: .infinity)
+                }.padding(.horizontal, group ? 0 : 6).padding(.vertical, group ? 4 : 3)
+                    .frame(maxWidth: .infinity, minHeight: group ? nil : store.catalog["text_size_pt"].number * 4 / 3 * 1.66 + 8)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
                 .disabled(!command.isNull && !command["enabled"].bool)
@@ -83,12 +88,14 @@ private struct ToolGroupsLayout: Layout {
 struct ToolSettingsControls: View {
     @ObservedObject var store: EditorStore
     private var settings: [JSON] { store.state["tool_settings"].array }
-    // Changing tool or target must discard an unfinished field draft. Ordinary
-    // value updates retain view identity, focus and selection.
+    // Changing document, tool or target must discard an unfinished field draft.
+    // Layer IDs can be reused by a new document. Ordinary value updates retain
+    // view identity, focus and selection.
     private var context: String {
         let selected = ["groups", "subtools"].flatMap { store.state["tool_set"][$0].array }
             .filter { $0["selected"].bool }.map { $0["action"].stableKey }.joined(separator: ":")
-        return selected + ":" + String(store.state["brush"]["preset"].uint)
+        return String(store.state["document_file"]["epoch"].uint)
+            + ":" + selected + ":" + String(store.state["brush"]["preset"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["id"].uint)
             + ":" + String(store.state["layer_tools"]["editing_layer"]["mask_selected"].bool)
     }
@@ -98,7 +105,7 @@ struct ToolSettingsControls: View {
             ForEach(settings, id: \.settingID) { item in
                 let index = settings.firstIndex { $0.settingID == item.settingID } ?? 0
                 if !item["group"].string.isEmpty && (index == 0 || settings[index - 1]["group"].string != item["group"].string) {
-                    Text(item["group"].string).opacity(0.55).padding(.top, 6)
+                    Text(item["group"].string).fontWeight(.bold).padding(.vertical, 4)
                 }
                 NumberControl(store: store, label: item["label"].string, value: item["value"].number,
                     control: item["numeric"], identifier: "tool-" + item.settingID) { value, completion in

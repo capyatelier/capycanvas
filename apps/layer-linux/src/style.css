@@ -8,18 +8,19 @@ window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: va
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
-/* A contrasting halo keeps plain controls legible over both white and black
-   artwork without covering the canvas with a toolbar-shaped background. */
+/* Dark-mode plain controls keep their halo over artwork. Light mode uses
+   translucent surfaces below; the opaque workspace pill never needs a halo. */
 .window-bar image { -gtk-icon-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color), 0 0 2px var(--window-bg-color); }
 .window-bar label { text-shadow: 1px 0 var(--window-bg-color), -1px 0 var(--window-bg-color), 0 1px var(--window-bg-color), 0 -1px var(--window-bg-color); }
 .window-bar popover image, .window-bar .header-editor image { -gtk-icon-shadow: none; }
-.window-bar popover label, .window-bar .header-editor label { text-shadow: none; }
+.window-bar popover label, .window-bar .header-editor label, .window-bar .workspace-switcher label { text-shadow: none; }
 .window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control, .window-bar .document-title { background: transparent; box-shadow: none; padding: 0; }
 .window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: 6px; }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: 6px; }
+.window-bar .header-tool.capy-button { padding: 0; }
 .window-bar .header-tool:hover, .window-bar .chrome-control > button:hover { background: alpha(var(--window-fg-color), .10); }
 .window-bar .header-tool.selected-tool { background: alpha(var(--accent-bg-color), .22); }
-.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: alpha(var(--window-fg-color), .10); }
+.window-bar .header-tool.drawer-open:not(.selected-tool), .toolbar-controls button.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
 .window-bar .header-tool.drawer-origin-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .window-bar .header-grip { min-width: 16px; min-height: 0; padding: 0; }
 .header-editor { background: var(--window-bg-color); border-radius: 8px; box-shadow: 0 3px 12px alpha(black, .18); }
@@ -38,7 +39,30 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar.header-large windowcontrols button { min-width: 60px; min-height: 60px; }
 .document-title { font-weight: 600; min-height: 24px; padding: 6px; }
 .header-clock { min-height: 36px; padding: 0 6px; }
-.workspace-switcher { background: mix(var(--window-bg-color), black, .2); border: 0; border-radius: 18px; padding: 4px; }
+/* The live canvas is an app-owned Wayland subsurface, outside GTK's render
+   tree. Use translucent fills: a GTK backdrop-filter cannot sample that canvas. */
+.light-theme .window-bar { --header-control-bg: alpha(var(--window-bg-color), .5); }
+.light-theme .window-bar label { text-shadow: none; }
+.light-theme .window-bar image { -gtk-icon-shadow: none; }
+.light-theme .window-bar .header-tool,
+.light-theme .window-bar menubutton.chrome-control > button,
+.light-theme .window-bar .header-menu-labels,
+.light-theme .window-bar .header-readout { background: var(--header-control-bg); }
+.light-theme .window-bar .header-menu-labels,
+.light-theme .window-bar .header-readout { border-radius: 6px; }
+.light-theme .window-bar .header-readout { min-height: 36px; }
+.light-theme .window-bar .document-title { padding: 6px; }
+/* Keep the labels' existing button padding, with one fill behind the whole row. */
+.light-theme .window-bar .header-menu-labels menubutton.chrome-control > button { background-color: transparent; }
+.light-theme .window-bar .header-tool:hover,
+.light-theme .window-bar menubutton.chrome-control > button:hover { background-image: linear-gradient(alpha(var(--window-fg-color), .10), alpha(var(--window-fg-color), .10)); }
+.light-theme .window-bar .header-tool.selected-tool { background-image: linear-gradient(alpha(var(--accent-bg-color), .22), alpha(var(--accent-bg-color), .22)); }
+.light-theme .window-bar .header-tool:active,
+.light-theme .window-bar menubutton.chrome-control > button:active,
+.light-theme .window-bar menubutton.chrome-control > button:checked { background-image: linear-gradient(alpha(var(--window-fg-color), .16), alpha(var(--window-fg-color), .16)); }
+/* Open neutral tiles, their connectors and drawers share one opaque surface. */
+.light-theme .window-bar .header-tool.drawer-open:not(.selected-tool) { background: var(--panel-bg); }
+.workspace-switcher { background: var(--tabbar-bg); border: 0; border-radius: 18px; padding: 4px; }
 .workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 10px; border-radius: 15px; background: transparent; box-shadow: none; font-weight: 500; }
 .workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: mix(var(--window-bg-color), var(--accent-bg-color), .28); color: var(--window-fg-color); }

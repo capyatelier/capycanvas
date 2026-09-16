@@ -40,7 +40,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     HWND owner=nullptr;
     Point origin{},position{};
     bool dragging=false,finishing=false,busy=false,dirty=false,releasing=false;
-    bool needsHold=false,contextOnly=false,held=false,recognizing=false,ignoreClick=false,menuOpen=false,menuPending=false;
+    bool needsHold=false,contextOnly=false,startedInZen=false,held=false,recognizing=false,ignoreClick=false,menuOpen=false,menuPending=false;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,motion=0,menuGeneration=0;
     double slopX=4,slopY=4;
@@ -69,7 +69,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         AutomationProperties::SetHelpText(root,value.Stringify());
     }
     bool current()const{
-        if(flag(data->model,L"partial_zen")!=contextOnly||data->externalPopup)return false;
+        if(flag(data->model,L"partial_zen")!=startedInZen||data->externalPopup)return false;
         if(!dragging){
             auto element=source.get();
             if(!element||!element.IsLoaded())return false;
@@ -203,10 +203,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                     if(next.Size())self->data->dispatch(next);
                     self->clear();return;
                 }
-                auto bounds=object(result,L"bounds");
-                if(bounds.Size()){
-                    place(self->hint,bounds);self->hint.Visibility(Visibility::Visible);self->refresh();
-                }else self->hint.Visibility(Visibility::Collapsed);
+                self->showHint(result);self->refresh();
                 self->evidence();
             }
         }))busy=false;else dirty=false;
@@ -257,8 +254,12 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         // projected toolbars. Mouse retains ordinary long button presses.
         bool zen=flag(data->model,L"partial_zen");
         if(zen&&(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse||!object(tag,L"workspace_context").Size()))return;
-        action=object(tag,L"workspace_action");if(!action.Size())return;
-        ++generation;hideMenu();sourceTag=tag;contextOnly=zen;needsHold=zen||flag(tag,L"workspace_hold");held=false;
+        action=object(tag,L"workspace_action");
+        // Empty column space offers a menu and double-click, without becoming
+        // another drag source. Pen/touch holds retain native scroll arbitration.
+        if(!action.Size()&&(p.PointerDeviceType()==NativeInput::PointerDeviceType::Mouse||!object(tag,L"workspace_context").Size()))return;
+        ++generation;hideMenu();sourceTag=tag;startedInZen=zen;contextOnly=zen||!action.Size();
+        needsHold=contextOnly||flag(tag,L"workspace_hold");held=false;
         rememberPath(e.OriginalSource());
         for(auto const& weak:pressedPath)if(auto element=weak.get().try_as<FrameworkElement>()){
             if(element.Tag()==tag){source=make_weak(element);break;}
@@ -290,7 +291,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             scrollObservers.emplace_back(make_weak(scroll),token);
         }
         auto kind=str(action,L"type");
-        if(kind!=L"drag_workspace"&&kind!=L"tile_drag"){begin();e.Handled(true);}
+        if(!contextOnly&&kind!=L"drag_workspace"&&kind!=L"tile_drag"){begin();e.Handled(true);}
     }
     void move(PointerRoutedEventArgs const& e){
         if(!pointer||*pointer!=e.Pointer().PointerId()||finishing)return;
@@ -351,6 +352,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(flag(data->model,L"partial_zen"))return;
         auto tag=target(e.OriginalSource());if(!flag(tag,L"workspace_double"))return;
         auto sourceAction=object(tag,L"workspace_action");
+        auto context=object(tag,L"workspace_context");
+        if(!sourceAction.Size()&&str(context,L"kind")==L"column"){
+            cancel();
+            data->dispatch(O({{L"type",S(L"customize")},{L"action",O({
+                {L"type",S(L"set_column_collapsed")},{L"group",N(num(context,L"column"))},{L"collapsed",B(false)}})}}));
+            e.Handled(true);return;
+        }
         if(str(sourceAction,L"type")==L"drag_divider"){
             cancel();
             data->dispatch(O({{L"type",S(L"reset_column_width")},{L"id",N(num(sourceAction,L"id"))},{L"viewport",viewport()}}));
@@ -369,17 +377,24 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             });
         e.Handled(true);
     }
+    void showHint(J const& value){
+        auto bounds=object(value,L"bounds");
+        if(!bounds.Size()){hint.Visibility(Visibility::Collapsed);return;}
+        bool body=str(object(value,L"target"),L"kind")==L"tab"&&num(bounds,L"width")>3&&num(bounds,L"height")>3;
+        auto accent=selected();auto tint=accent.Color();tint.A=255;accent.Color(tint);tint.A=64;
+        hint.Background(body?fill(tint):accent);hint.BorderBrush(accent);
+        hint.BorderThickness(body?Thickness{2,2,2,2}:Thickness{});
+        hint.CornerRadius(body?CornerRadius{}:CornerRadius{2,2,2,2});
+        place(hint,bounds);hint.Visibility(Visibility::Visible);
+    }
     void present(J const& drag){
         if(!dragging||str(action,L"type")!=L"drag_workspace")return;
         tabSlide->Update(object(drag,L"tab"));tabSlide->Refresh(tabs);
-        auto bounds=object(object(drag,L"drop_hint"),L"bounds");
-        if(bounds.Size()){place(hint,bounds);hint.Visibility(Visibility::Visible);}
-        else hint.Visibility(Visibility::Collapsed);
+        showHint(object(drag,L"drop_hint"));
         evidence();
     }
     void refresh(){
         uint32_t index;if(!root.Children().IndexOf(hint,index))root.Children().Append(hint);
-        hint.Background(selected());hint.BorderBrush(data->brush(L"text"));hint.BorderThickness({1,1,1,1});
         tabSlide->Refresh(tabs);
     }
     void init(){

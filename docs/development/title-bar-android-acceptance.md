@@ -66,6 +66,14 @@ each other. Captures are named `anchored-*` and `aligned-editor-*`.
 The feedback run and its captures are retained under ignored
 `artifacts/android/title-bar/feedback-2026-09-13/`.
 
+The title bar's empty areas are transparent over the full canvas. Its native
+background hit region no longer paints an opaque surround-colored strip.
+On the attached tablet, zooming the paper behind the bar confirms that it shows
+through the gaps and behind unselected controls. Debug builds and lint pass;
+the menu/size/alignment and Sketch drawer/theme journeys report **OK (2 tests)**
+in 38.959 seconds on the final build. Before/after captures and logs are retained under ignored
+`artifacts/android/title-bar/transparency-2026-09-13/`.
+
 ## Regressions and artifacts
 
 The port fixes two native ownership problems found on the tablet: pointer
@@ -85,3 +93,19 @@ Captures are generated under the app's external-files `validation/title-bar/`
 directory and pulled into ignored `artifacts/android/title-bar/accepted-2026-09-13/`, including
 theme/size/device, compact menus, all Sketch drawers, feedback, status and restart.
 The final instrumentation report is retained with these artifacts.
+
+
+## Compact workspace selector — September 13, 2026
+
+The compact workspace button and its overflow entry now project only the pill's
+`switcher_display` choices and use the normal shared workspace-switch command.
+The existing hamburger sizing is confirmed at 20/28/36dp, centered in its button.
+
+Debug app/instrumentation builds and lint pass. On the connected Wacom tablet,
+`AndroidTitleBarTest#compactWorkspaceChoicesAndOverflowIconsFollowTheTitleBar`
+reports **OK (1 test)** in 19.114 seconds. It covers configured choice order,
+workspace switching with typed native mouse/finger/stylus events, both themes,
+all sizes, and selection when the whole item is in overflow. Captures were
+inspected under `artifacts/android-compact-workspaces/title-bar`.
+Validation used the separate `art.capycanvas.overflowreview` application ID and
+isolated workspace/recovery stores; the normal app's data was preserved.

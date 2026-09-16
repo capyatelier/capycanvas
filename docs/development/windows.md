@@ -2,6 +2,9 @@
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
+See the [current acceptance status](windows-acceptance.md) for validated workflows,
+package scope, known differences and remaining release gates.
+
 The Windows client uses C++/WinRT and WinUI 3 controls. Its Rust bridge uses
 `NativeHost` and the shared wgpu D3D12 renderer, presenting through a
 `SwapChainPanel`.
@@ -33,6 +36,29 @@ and C++ parts. Packages go into ignored `artifacts/windows/packages`; use
 
 The Windows App SDK runtime is copied beside the executable. No UWP application
 package or generated application XAML is needed for this development build.
+
+## Current Web references on Windows
+
+A fresh Web reference also needs a Wasm-capable Clang for the shared raster
+compression dependency. A portable [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases)
+provides Clang and llvm-ar without changing the installed Windows toolchain.
+With its extracted directory assigned to `$wasiSdk`, build the current Web source:
+
+~~~powershell
+$env:CC_wasm32_unknown_unknown = Join-Path $wasiSdk 'bin/clang.exe'
+$env:AR_wasm32_unknown_unknown = Join-Path $wasiSdk 'bin/llvm-ar.exe'
+cargo build --locked --release -p layer-web --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir apps/layer-web/pkg target/wasm32-unknown-unknown/release/layer_web.wasm
+New-Item -ItemType Directory -Force apps/layer-web/filters | Out-Null
+Copy-Item assets/filters/*.json,assets/filters/*.wgsl -Destination apps/layer-web/filters
+~~~
+
+Use the wasm-bindgen version pinned in the Web manifest. These target-specific
+compiler variables apply to the Web reference build. The standard
+[Web build script](../../apps/layer-web/build.sh) also stages current filter
+assets. Follow the [matched editor capture commands](../../apps/layer-windows/README.md#matched-editor-captures)
+for isolated profiles and native/Web evidence. The reviewed reference build used
+WASI SDK 34; an older generated Wasm bundle is not evidence for current source.
 
 ## Portable package
 
@@ -74,8 +100,7 @@ Deployment follows Microsoft's
 [self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
 Clean-machine installation, distribution signing, full visual and physical-input
-acceptance, device recovery and sustained painting performance remain separate
-acceptance work.
+acceptance and sustained painting performance remain separate acceptance work.
 
 ## MSIX package
 
@@ -161,8 +186,9 @@ GPU Navigator previews use compositor clips when overlapping native panels.
 The full editor preset and titlebar-aware Zen layout are available. Incremental
 workspace messages retain panel models while native translation transforms move
 floating panels, resize grips and GPU overview allocations. Full content refresh,
-motion and camera updates retain their separate ordering rules. Complete
-workspace gesture acceptance remains in progress. Runtime filter JSON/WGSL loads
+motion and camera updates retain their separate ordering rules. The
+[acceptance status](windows-acceptance.md) records completed gesture journeys and
+remaining physical-device checks. Runtime filter JSON/WGSL loads
 from editable packaged assets through background file transport and the shared
 GPU validator; compatible live replacement preserves current parameter values.
 New Window creates independent native windows with shared preferences and storage. Native task workspace management uses the
@@ -172,6 +198,10 @@ local files; export does not mark the editable project as saved.
 
 ## Validate
 
+The [independent filter comparison](windows-filter-qualification.md) records
+D3D12/Vulkan migration checks and distinguishes them from the still-failing
+Linux PNG reference comparison.
+
 ```powershell
 cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib
 ./apps/layer-windows/scripts/exercise-persistence.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
@@ -179,10 +209,18 @@ cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-window
 ./apps/layer-windows/scripts/exercise-startup-close.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -FailPreferences
+pwsh -NoProfile -Sta -File ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable ./artifacts/windows/Release/CapyCanvas.exe -RecoverGpu
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbar-library.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-toolbars.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ```
+
+The document journey checks native import/save/export pickers, Unicode paths,
+corrupt-file recovery, Preferences drafts and save/cancel/close behavior. With
+`-RecoverGpu`, it also verifies two GPU reconstructions, queued and active
+controlled pen strokes, identical exported images, thumbnails and Undo/Redo.
+Preferences opens through Edit, independently of the configured titlebar buttons.
 
 The persistence fixture owns disposable profiles through the absolute
 `CAPY_SETTINGS_DIRECTORY` override. It verifies autosave, restart, final-edit
