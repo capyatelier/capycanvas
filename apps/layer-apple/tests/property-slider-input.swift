@@ -14,8 +14,8 @@ import QuartzCore
         let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
         let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "brush-color"), ("", "tool-document"),
             ("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
-            ("brightness_contrast", "brightness"), ("split_tone", "red"),
-            ("gradient_map", "position"), ("gradient_map", "opacity"), ("gradient_map", "red")]
+            ("brightness_contrast", "brightness"),
+            ("gradient_map", "position"), ("gradient_map", "opacity")]
             .filter { filter.isEmpty || $0.1.hasPrefix(filter) }
         try require(!cases.isEmpty, "No property cases match \(filter)")
         for platform: UInt32 in [0, 1] {
@@ -49,21 +49,21 @@ import QuartzCore
                 let colorControl = mode == "brush-color"
                 let brushControl = mode == "brush-size" || mode == "brush-opacity"
                 let defaultControls = store.state["layer_properties"]["controls"].stableKey
-                let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient" : effect == "split_tone" ? "shadows"
+                let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
                 let identifier = colorControl ? "Red" : toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"
-                    ? (mode == "red" ? "gradient-stop-rgba-0" : "gradient-" + mode)
-                    : "property-" + key + (mode == "red" ? "-rgba-0" : "")
+                    ? "gradient-" + mode
+                    : "property-" + key
                 func value() -> Double {
                     if colorControl { return store.state["brush"]["color"][0].number }
                     if toolControl { return store.state["tool_settings"].array.first { $0["id"].string == "tolerance" }!["value"].number }
                     if brushControl { return store.state["brush"][mode == "brush-size" ? "diameter" : "opacity"].number }
                     let value = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
                     if effect == "gradient_map" {
-                        return mode == "position" ? value[1]["position"].number : value[1]["color"][mode == "red" ? 0 : 3].number
+                        return mode == "position" ? value[1]["position"].number : value[1]["color"]["rgba"][3].number
                     }
-                    return mode == "red" ? value[0].number : value.number
+                    return value.number
                 }
                 let geometry = PropertySliderGeometry()
                 let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 300, height: 500),
@@ -227,11 +227,6 @@ import QuartzCore
                     try require(stops.count == 3 && abs(stops[1]["position"].number - 0.5) < 0.0001,
                         "Native gradient insertion must add the middle stop")
                 }
-                if mode == "red" {
-                    let swatchY = effect == "gradient_map" ? geometry.frames["gradient-position:root"]!.maxY + 6 + 14
-                        : geometry.frames["property-balance:root"]!.minY - 6 - 28 - 6 - 14
-                    try await click(CGPoint(x: 300 - 6 - 24, y: swatchY))
-                }
                 guard let track = geometry.frames[identifier + ":track"] else {
                     throw HostFailure(message: "Missing native property slider")
                 }
@@ -299,12 +294,9 @@ import QuartzCore
                     try require(abs(value() - edited) < 0.0001, "Undo must retain the former layer's accepted value")
                     note("PASS: platform \(platform), \(identifier), retired field and document-epoch rejection preserve values and history")
                 }
-                if effect == "gradient_map" && ["opacity", "red"].contains(mode) {
+                if effect == "gradient_map" && mode == "opacity" {
                     let markerY = geometry.frames["gradient-position:root"]!.minY - 6 - 52 + 43
                     try await click(CGPoint(x: 150, y: markerY))
-                    if mode == "red" {
-                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
-                    }
                     let (field, delegate) = try await draft(identifier, "37 %")
                     try await click(CGPoint(x: 12, y: markerY))
                     let accepted = store.state["layer_properties"]["controls"].stableKey
@@ -314,9 +306,6 @@ import QuartzCore
                     note("PASS: platform \(platform), gradient stop selection rejects a retired \(mode) field")
 
                     try await click(CGPoint(x: 150, y: markerY))
-                    if mode == "red" {
-                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
-                    }
                     let (insertionField, insertionDelegate) = try await draft(identifier, "37 %")
                     // The inserted quarter stop takes index 1 from the selected
                     // middle stop. Index equality must not preserve its draft.
@@ -332,9 +321,6 @@ import QuartzCore
                         "A previous stop's unfinished field must not edit a new stop reusing its index")
                     note("PASS: platform \(platform), gradient insertion retires the \(mode) field even when its index is reused")
 
-                    if mode == "red" {
-                        try await click(CGPoint(x: 300 - 6 - 24, y: geometry.frames["gradient-position:root"]!.maxY + 6 + 14))
-                    }
                     let (historyField, historyDelegate) = try await draft(identifier, "37 %")
                     try await action(["type": "invoke", "command": "undo"])
                     try require(store.state["layer_properties"]["controls"].stableKey == accepted,

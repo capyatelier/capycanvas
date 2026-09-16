@@ -7,10 +7,11 @@ test plans. The goal is incomplete.
 
 Main now includes shared SDR color/photo work through `7d2511e5`. Its
 [Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate
-implementation priority: existing tagged color controls and renderer contracts,
-then the new workflows. Earlier passes remain scoped to their recorded sources;
-they do not qualify the new contracts. The integrated Rust bridge compiles, but
-native runtime integration and new feature acceptance remain open.
+implementation priority. Existing effect/gradient controls and native SDR
+constructors now pass scoped local checks and both Release builds. Next are the
+new host workflows, managed display integration and physical acceptance. Earlier
+passes remain scoped to their recorded sources; they do not qualify the entire
+new feature scope. See the [foundation record](apple-handoff.md#native-sdr-foundation).
 
 ## Acceptance rules
 
@@ -65,7 +66,7 @@ Do not replace a missing result with a catalog entry or build success.
 | R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. iPad expiration now ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion, with a clean iPad Release build. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; interrupted recovery and actual OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and window/display/surface transitions. Verify artwork, settings/workspace, continued input and independent history. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
 | R5 | **Perceptual visual parity.** Main editor/component comparisons and reported fixes exist. Benchmark document replacement exposed stranded layer-preview readbacks; central invalidation now passes both-policy AppKit/Metal regression and a final Mac Release capture. | Map retained normal-size light/dark, preset and narrow/windowed captures to the final feature inventory; inspect missing visible states on both native hosts against Web. Correct straightforward visible mismatches. Do not rerun every pixel comparison for an unrelated engine fix. |
 | R6 | **Sustained hardware performance and measurement.** The missing-callback startup stall is reproduced and fixed by removing the custom presentation counter/retry. Both physical fixed Releases complete ten minutes of 4K watercolor with correct thumbnails, nominal thermals and prompt canvas idle. Long active intervals are 0.959% Mac / 1.997% iPad, with no missing/zero measured callbacks, rejected input or renderer errors. Current and retained ink results remain separately scoped. Rare measured misses alone do not fail acceptance. | Preserve the startup regression and these completed runs. Finish only outstanding source-qualified platform/profile, recorder-off resource/storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. The retained footprint curves do not justify a memory workaround. Use [Performance](../../apps/layer-apple/PERFORMANCE.md#startup-progress-without-presentation-callbacks--2026-09-16); its CPU/GPU/presentation proxies are not physical latency. Do not restart profiler experiments without a concrete unresolved requirement or visible regression. |
-| R7 | **Integration and delivery.** The grouped visual milestone adds UIKit Tool actions, populated Diagnostics on both hosts, and twelve full Sketch/Photo baseline pairs. Two shared title-bar lines correct the overflow glyph and paint-icon alignment. Both pre-SDR Release builds pass without warnings. Main through `7d2511e5` is integrated with a passing Apple Rust compile check; the incoming SDR runtime remains unqualified. Installed review apps and drawings are preserved. Evidence: `artifacts/apple-preset-editor-v1/`. | Publish and verify this grouped checkpoint. Implement and qualify the incoming Apple SDR contracts before claiming current Release acceptance. The final goal still requires R2–R6 and the new feature scope. |
+| R7 | **Integration and delivery.** The grouped visual milestone `c6e616f5` is published. The subsequent native SDR foundation passes both Release builds, local Swift/Metal file operations, tagged color/gradient controls, and P3/U8 plus ProPhoto/U16 backing/history/recovery checks. The physical review apps and drawings remain preserved. Evidence: `artifacts/apple-sdr-controls-v1/`. | Implement the remaining color/photo workflows, managed display policy and physical SDR acceptance. The final goal still requires R2–R6 and the new feature scope. |
 
 ## Feature closure map
 

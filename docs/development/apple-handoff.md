@@ -2,8 +2,9 @@
 
 For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
-SDR changes require native renderer and color-control integration; earlier
-acceptance below does not qualify those new contracts.
+SDR renderer foundation and existing effect/gradient controls are integrated;
+the new host workflows and device acceptance remain. Earlier acceptance below
+does not qualify all of those new contracts.
 
 ## Goal
 
@@ -203,6 +204,44 @@ Next, follow the phase 2 handoff above: repair existing tagged effect/gradient
 controls, adopt the native SDR renderer, then complete the new host workflows.
 Do not install this unqualified integration over the physical review drawings or
 count earlier visual/performance results as acceptance of the new contracts.
+
+## Native SDR foundation
+
+Apple now constructs the native SDR renderer for initial attachment, prepared
+Open/New/recovery documents and replacement devices. It requests supported
+Float32 and native publication capabilities, retaining the shared portable
+fallback. Prepared documents start deferred compilation before waiting for
+readiness; the existing atomic adoption and prediction policy remain intact.
+
+Effect and gradient color editors use the shared tagged form instead of the
+obsolete array sliders. Unchanged and alpha-only edits preserve exact RGB values
+and their space; explicit RGB edits use the document space. Shared conversion
+supplies sRGB swatches and document-space gradient interpolation. The title-bar
+paint swatches also consume the tagged values correctly.
+
+All 55 Apple bridge checks pass across the full run and the corrected focused
+follow-up. Shared UI/host checks pass 456 tests with one existing hardware-only
+case ignored. Metal coverage includes P3/U8 and ProPhoto/U16 painting, exact integer
+backing through Undo/Redo, save/open, recovery and GPU replacement. The native
+Swift/Metal file-owner fixture passes both Apple policies. Sixteen real AppKit
+color-entry cases pass, as do gradient position/opacity, one-step history,
+cancellation and retired-draft checks on both policies. The broader slider run
+could not locate an unrelated brush-opacity field; that result remains recorded
+and is not a pass. Both final Release builds pass without compiler warnings.
+Evidence and initial failed attempts are under `artifacts/apple-sdr-controls-v1/`.
+
+The export fixture failure was early input, not lost pixels: it sent a stroke
+before the prepared renderer reconciled the receiving brush. It now waits for
+readiness and requires real ink before checking snapshot isolation. The new
+color-history fixture also now accounts for monotonic document revisions while
+still comparing every retained sample. Neither required a product workaround.
+
+This checkpoint does not qualify new document/color/photo interfaces, wide-gamut
+or 16-bit export, managed display changes, UIKit form delivery, modal dismissal,
+physical SDR workflows or sustained performance. Continue with steps 3–4 of the
+phase 2 handoff. Both installed review apps and the user's drawings are preserved;
+the new Release products have not been installed over them. Main was fetched
+without incoming changes before this grouped milestone.
 
 ## Native provider acceptance
 

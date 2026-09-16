@@ -4,6 +4,11 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+#[path = "color_tests.rs"]
+mod color;
+fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {
+    layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).expect("Native SDR hardware GPU required")
+}
 #[path = "header_tests.rs"]
 mod header;
 #[path = "input_tests.rs"]
@@ -225,7 +230,7 @@ fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() 
             (
                 None,
                 "tint_color",
-                json!({"kind":"color","value":[0.7,0.2,0.3,0.6]}),
+                json!({"kind":"color","value":{"space":"Srgb","rgba":[0.7,0.2,0.3,0.6]}}),
             ),
             (
                 Some("curves"),
@@ -235,8 +240,8 @@ fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() 
             (
                 Some("gradient_map"),
                 "gradient",
-                json!({"kind":"gradient","value":[{"position":0,"color":[0,0,0,1]},
-                {"position":0.3,"color":[1,0,0,1]},{"position":1,"color":[1,1,1,1]}]}),
+                json!({"kind":"gradient","value":[{"position":0,"color":{"space":"Srgb","rgba":[0,0,0,1]}},
+                {"position":0.3,"color":{"space":"Srgb","rgba":[1,0,0,1]}},{"position":1,"color":{"space":"Srgb","rgba":[1,1,1,1]}}]}),
             ),
         ] {
             if let Some(effect) = effect {
@@ -287,7 +292,7 @@ fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() 
             }
             if key == "gradient" {
                 app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":null,"position":0.5,"color":null,"remove":false}}));
-                assert_eq!(current()["value"][1]["color"], json!([0.5, 0.5, 0.5, 1.0]));
+                assert_eq!(current()["value"][1]["color"], json!({"space":"Srgb","rgba":[0.5, 0.5, 0.5, 1.0]}));
                 app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":1,"position":0.25,"color":null,"remove":false}}));
                 assert_eq!(current()["value"][1]["position"], 0.25);
             }
@@ -307,7 +312,7 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
         for target in ["paint", "paper", "gaussian_blur", "split_tone"] {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
-                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"),
+                native_renderer(),
             );
             app.draw_frame();
             app.stroke();
@@ -349,8 +354,8 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
                     json!({"kind":"number","value":12}),
                 ),
                 "split_tone" => (
-                    json!({"kind":"color","value":[0.4,0.2,0.1,1]}),
-                    json!({"kind":"color","value":[0.8,0.2,0.1,1]}),
+                    json!({"kind":"color","value":{"space":"Srgb","rgba":[0.4,0.2,0.1,1]}}),
+                    json!({"kind":"color","value":{"space":"Srgb","rgba":[0.8,0.2,0.1,1]}}),
                 ),
                 _ => (
                     json!({"kind":"number","value":0.6}),
@@ -410,7 +415,7 @@ fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -531,7 +536,7 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
             .unwrap();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -690,7 +695,7 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
             .unwrap();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -753,7 +758,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         let invalid = ProjectJob::new(&app, true);
         assert_eq!(unsafe { capy_project_new(invalid.0, 0, 47) }, -1);
@@ -781,9 +786,13 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
             47
         );
         app.action(json!({"type":"set_color","rgba":[0.8,0.2,0.5,0.6]}));
+        // Prepared native canvases still reconcile the receiving window's
+        // brush before accepting input. Wait for that owner frame first.
+        app.draw_until_idle();
         app.stroke();
         app.draw_frame();
         let expected = app.pixels();
+        assert!(expected.chunks_exact(4).any(|p| p != [255; 4]), "Export must include actual ink");
         app.invoke("export_document");
         let id = app.state()["requests"]
             .as_array()
@@ -803,7 +812,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         // owns everything it needs after the editor and renderer are destroyed.
         app.action(json!({"type":"set_layer_opacity","opacity":0.25}));
         app.draw_frame();
-        assert_ne!(app.pixels(), expected);
+        assert!(app.pixels() != expected, "Changing opacity must change the rendered stroke");
         assert!(app.state()["document_file"]["modified"].as_bool().unwrap());
         assert!(app.state()["document_file"]["location"].is_null());
         drop(app);
@@ -844,7 +853,7 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.action(json!({"type":"effect","action":{"op":"insert","effect":"unsharp_mask"}}));
         app.draw_frame();
         let before = unsafe { &*app.0 }.host.session.engine().document().clone();
@@ -902,7 +911,7 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_until_idle();
         app.stroke();
         app.draw_until_idle();
@@ -989,8 +998,12 @@ impl App {
         loop {
             self.draw_frame();
             let session = &unsafe { &*self.0 }.host.session;
-            if session.require_document_idle().is_ok()
-                && !session.engine().has_pending_document_edits()
+            let engine = session.engine();
+            if unsafe { &*self.0 }.host.startup.brush_ready
+                && !engine.backend().0.as_ref().unwrap().startup_needs_update(
+                    engine.document(), engine.brush(), engine.transform_preview().is_some())
+                && session.require_document_idle().is_ok()
+                && !engine.has_pending_document_edits()
             {
                 return;
             }
@@ -1099,7 +1112,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         let paper = app.pixels();
         let name = CString::new("Embedded source").unwrap();
@@ -1175,7 +1188,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
             Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap();
         assert_project_document(&document, &original.document);
         let mut gpu =
-            layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required");
+            native_renderer();
         for (id, asset) in &assets {
             gpu.prepare_asset(
                 id,
@@ -1295,7 +1308,7 @@ fn apple_paint_undo_redo_restores_exact_document_pixels() {
         // A real hardware renderer with no window: these are document/output
         // checks, not display timing or native physical-input acceptance.
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.action(json!({"type": "set_color", "rgba": [0,0,0,1]}));
         app.action(json!({"type": "set_brush_size", "value": 32}));
         app.draw_until_idle();
@@ -1325,11 +1338,12 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
     use std::time::{Duration, Instant};
     for platform in [0, 1] {
         let app = App::new(platform);
-        let reference = WgpuRasterizer::new_headless().expect("Hardware GPU required");
-        let staged = WgpuRasterizer::from_wgpu_staged(
+        let reference = native_renderer();
+        let staged = WgpuRasterizer::from_wgpu_native_staged(
             reference.adapter().clone(),
             reference.device().clone(),
             reference.queue().clone(),
+            Default::default(),
         )
         .unwrap();
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(reference);
@@ -1478,7 +1492,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+            Some(native_renderer());
         app.draw_until_idle();
         let paper = app.pixels();
         let name = CString::new("Test image").unwrap();
@@ -1531,6 +1545,52 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
         app.draw_until_idle();
         assert!(app.pixels() == imported);
     }
+}
+
+#[test]
+fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
+    let resolve = |request: Value| {
+        let request = CString::new(request.to_string()).unwrap();
+        let response = unsafe { capy_apple_color_ui(request.as_ptr()) };
+        assert!(!response.is_null());
+        let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(response) }.to_bytes()).unwrap();
+        unsafe { capy_apple_string_free(response) };
+        value
+    };
+    for space in layer_core::color::RgbSpace::ALL {
+        let color = layer_core::color::RgbColor::new(space, [-0.12, 1.2, 31234. / 65535., 213. / 65535.]).unwrap();
+        let mut form = resolve(json!({"type":"form","request":{"color":color,"document_space":"ProPhoto"}}));
+        for model in layer_ui::ColorInputModel::ALL {
+            let mut draft = form["draft"].clone();
+            draft["change_model"] = serde_json::to_value(model).unwrap();
+            form = resolve(json!({"type":"form","request":draft}));
+            assert_eq!(serde_json::from_value::<layer_core::color::RgbColor>(form["value"].clone()).unwrap(), color);
+        }
+        let mut draft = form["draft"].clone();
+        draft["fields"][3] = json!("37");
+        form = resolve(json!({"type":"form","request":draft}));
+        let updated: layer_core::color::RgbColor = serde_json::from_value(form["value"].clone()).unwrap();
+        assert_eq!(updated.space, space);
+        assert_eq!(updated.rgba[..3], color.rgba[..3]);
+        assert_eq!(updated.rgba[3], 0.37);
+        let mut draft = form["draft"].clone();
+        draft["fields"][0] = json!("invalid");
+        let invalid = resolve(json!({"type":"form","request":draft}));
+        assert!(invalid["value"].is_null() && invalid["error"].is_string());
+    }
+    let preview = resolve(json!({"type":"preview","colors":[{"space":"DisplayP3","rgba":[1.,0.,0.,0.25]}]}));
+    assert_eq!(preview[0]["space"], "Srgb");
+    assert_eq!(preview[0]["rgba"], json!([1.,0.,0.,0.25]));
+    assert_eq!(preview[0]["in_gamut"], false);
+    let gradient = resolve(json!({"type":"gradient","document_space":"ProPhoto","stops":[
+        {"position":0.,"color":{"space":"ProPhoto","rgba":[0.,0.,0.,1.]}},
+        {"position":1.,"color":{"space":"ProPhoto","rgba":[1.,1.,1.,1.]}}
+    ]}));
+    assert_eq!(gradient.as_array().unwrap().len(), 257);
+    // Encoded ProPhoto midpoint -> linear (gamma 1.8) -> encoded sRGB.
+    let expected = 1.055 * 0.5_f64.powf(1.8 / 2.4) - 0.055;
+    for channel in 0..3 { assert!((gradient[128]["rgba"][channel].as_f64().unwrap() - expected).abs() < 0.0001); }
+    assert!(resolve(json!({"type":"preview","colors":[[1.,0.,0.,1.]]}))["error"].is_string(), "Retired untagged requests must fail");
 }
 
 #[test]
@@ -1666,7 +1726,7 @@ fn apple_transform_settings_and_actions_preserve_pixel_transactions() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -1795,7 +1855,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
             action(json!({"op":"rgba_component","index":index,"value":value}));
         }
         close(&app.state()["brush"]["color"], [0.25, 0.5, 0.75, 1.]);
-        close(&app.state()["colors"]["foreground"], [0., 1., 1., 1.]);
+        close(&app.state()["colors"]["foreground"]["rgba"], [0., 1., 1., 1.]);
         action(json!({"op":"select","slot":"transparent"}));
         action(json!({"op":"pick","part":"hue","point":[0.95,0.5],"size":1}));
         assert_eq!(app.state()["colors"]["slot"], "background");
@@ -1809,7 +1869,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
         action(json!({"op":"swap"}));
         close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
         close(
-            &app.state()["colors"]["foreground"],
+            &app.state()["colors"]["foreground"]["rgba"],
             [1. / 3., 2. / 3., 0.5, 1.],
         );
     }
@@ -1828,7 +1888,7 @@ fn apple_color_actions_change_real_paint_and_transparent_eraser_pixels() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
         let brush = app.state()["brush"].clone();
         app.draw_frame();

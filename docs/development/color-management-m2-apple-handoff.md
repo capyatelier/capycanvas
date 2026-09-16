@@ -12,15 +12,24 @@ Read the [current scope and remaining work](../history/color-management-m2-port-
 [tablet validation](../history/color-management-web-android-m2-validation.md).
 Historical plans are proposals/evidence; verify against current code and Metal.
 
+The native SDR foundation checkpoint now passes both Release builds and local
+Swift/Metal checks. Existing effect/gradient controls preserve tagged colors;
+startup and prepared-document constructors use native integer backing with
+Float32 processing. P3/U8 and ProPhoto/U16 exact save/recovery/history and GPU
+replacement pass on Mac Metal for both Apple policies. See the
+[scoped acceptance record](apple-handoff.md#native-sdr-foundation).
+**Continue with the host workflows in step 3**, then display integration and
+physical acceptance. Profiled export and device performance are not closed.
+
 ## Implement in this order
 
-1. Fix existing controls first: `Shared/Editor/PropertyControls.swift` still reads
-   effect colors/gradient stops as arrays. Shared `RgbColor` is
+1. Existing effect/gradient controls in `Shared/Editor/PropertyControls.swift`
+   now use the shared tagged form. Preserve this contract: shared `RgbColor` is
    `{space, rgba}` with **encoded** RGB in the named space. Preserve the tag in
    edits; convert native swatches/previews to their declared display space.
-2. Replace the attachment-based constructors in `native/src/metal.rs` and
-   `native/src/project.rs` with the native SDR path, including initial startup,
-   prepared documents, export/snapshots and GPU replacement. Use Android's
+2. `native/src/metal.rs` and `native/src/project.rs` now use the native SDR path
+   for startup, prepared documents and GPU replacement. Carry that contract
+   through the new export/snapshot workflows. Use Android's
    `native/src/android.rs` and `documents.rs` as reference. Backing is straight
    alpha U8/U16; processing is Float32. Query actual Metal capabilities; preserve
    the shared portable publication path where in-place editing is unavailable.

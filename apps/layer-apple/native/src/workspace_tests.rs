@@ -68,7 +68,7 @@ fn apple_stack_auto_hide_consumes_native_contact_before_the_next_contact_paints(
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         let group = unsafe { &*app.0 }.host.session.state().workspace.layout
             .panel_group(layer_ui::Panel::Brushes).unwrap();
         customize(&app, json!({"type":"set_column_collapsed","group":group,"collapsed":true}));
@@ -570,7 +570,7 @@ fn toolbar_picker_naming_duplication_manager_and_history_preserve_artwork() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -662,7 +662,7 @@ fn panel_drag_and_resize_use_cancelable_shared_history_without_changing_pixels()
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_frame();
@@ -808,7 +808,7 @@ fn apple_drawer_dismissal_consumes_the_entire_canvas_contact_then_allows_paintin
             0
         );
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+            Some(native_renderer());
         app.draw_frame();
         let paper = app.pixels();
         app.action(json!({"type":"activate_tile","panel":"toolbar","tile":1}));

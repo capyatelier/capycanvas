@@ -6,7 +6,7 @@ fn mac_manual_prediction_paints_ahead_of_pen_and_mouse_without_committing_the_ti
         for milliseconds in [0, 64] {
             let app = App::new(1);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
-                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"),
+                native_renderer(),
             );
             app.action(json!({"type":"select_brush","id":layer_core::DefaultBrushPreset::GPen as u32}));
             app.action(json!({"type":"set_brush_size","value":4}));
@@ -64,7 +64,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
         for recovered in [false, true] {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
-                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"),
+                native_renderer(),
             );
             let mut settings = app.state()["settings"].clone();
             settings["platform_prediction"] = json!(true);
@@ -170,7 +170,7 @@ fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_pla
         for tool in ["select", "lasso_fill"] {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
-                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"),
+                native_renderer(),
             );
             app.action(json!({"type":"set_color","rgba":[0.2,0.45,0.8,1]}));
             app.layer_action(json!({"op":"new","group":false,"clipped":false}));
@@ -334,8 +334,7 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
             let mut results = Vec::new();
             for (estimated, app) in apps.iter().enumerate() {
                 unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
-                    layer_render_wgpu::WgpuRasterizer::new_headless()
-                        .expect("Hardware Metal required"),
+                    native_renderer(),
                 );
                 app.draw_frame();
                 app.stroke();

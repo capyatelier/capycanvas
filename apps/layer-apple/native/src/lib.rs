@@ -109,17 +109,32 @@ pub unsafe extern "C" fn capy_apple_string_free(text: *mut c_char) {
 /// This stateless operation has no session, GPU or file access.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing numeric request", |source| {
+        let request: layer_ui::NumericRequest = serde_json::from_str(source).map_err(|e| e.to_string())?;
+        serde_json::to_value(request.resolve()?).map_err(|e| e.to_string())
+    }) }
+}
+/// Shared tagged color forms, display previews and sampled gradient ramps.
+/// # Safety
+/// `json` is a NUL-terminated UTF-8 color request, valid for this call.
+/// This stateless operation has no session, GPU or file access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_color_ui(json: *const c_char) -> *mut c_char {
+    unsafe { stateless_json(json, "Missing color request", |source| {
+        layer_ui::color_ui(serde_json::from_str(source).map_err(|e| e.to_string())?)
+    }) }
+}
+unsafe fn stateless_json(json: *const c_char, missing: &str,
+    resolve: impl FnOnce(&str) -> Result<serde_json::Value, String> + std::panic::UnwindSafe) -> *mut c_char {
     catch_unwind(|| {
         let result = (|| {
             if json.is_null() {
-                return Err("Missing numeric request".to_string());
+                return Err(missing.to_string());
             }
             let source = unsafe { CStr::from_ptr(json) }
                 .to_str()
                 .map_err(|e| e.to_string())?;
-            let request: layer_ui::NumericRequest =
-                serde_json::from_str(source).map_err(|e| e.to_string())?;
-            serde_json::to_value(request.resolve()?).map_err(|e| e.to_string())
+            resolve(source)
         })();
         let response = result.unwrap_or_else(|error| serde_json::json!({"error": error}));
         CString::new(response.to_string())

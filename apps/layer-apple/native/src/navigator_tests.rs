@@ -28,7 +28,7 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
         show_stats(&app);
         let host = unsafe { &mut *app.0 };
         host.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         host.host.session.sync_renderer_telemetry();
         app.draw_frame();
         app.stroke();
@@ -108,7 +108,7 @@ fn live_navigator_uses_current_document_camera_and_display_scale_without_bitmaps
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         show_stats(&app);
         assert_eq!(unsafe { capy_apple_resize(app.0, 2400, 1800, 2.) }, 0);
         app.draw_frame();
@@ -208,7 +208,7 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_until_idle();
         app.stroke();
         app.draw_until_idle();

@@ -23,6 +23,7 @@ struct Environment {
     device: wgpu::Device,
     queue: wgpu::Queue,
     viewport: [u32; 2],
+    brush: layer_core::BrushSnapshot,
 }
 enum Payload {
     Save {
@@ -166,6 +167,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                     device: gpu.device().clone(),
                     queue: gpu.queue().clone(),
                     viewport: session.state().camera.viewport,
+                    brush: session.engine().configured_brush().clone(),
                 }),
                 candidate: None,
             }
@@ -357,12 +359,10 @@ unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2
             )?
         };
         task.check_cancelled()?;
-        // This eager constructor is confined to the background candidate. The
-        // interactive canvas continues on its established staged renderer.
-        #[allow(deprecated)]
-        let mut gpu =
-            WgpuRasterizer::from_wgpu(environment.adapter, environment.device, environment.queue)
-                .map_err(|e| e.to_string())?;
+        let mut gpu = WgpuRasterizer::from_wgpu_native_staged(
+            environment.adapter, environment.device, environment.queue, project.document.color,
+        ).map_err(|e| e.to_string())?;
+        gpu.finish_startup_cache();
         let mut programs = Vec::new();
         for effect in project
             .document
@@ -374,28 +374,30 @@ unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2
                 programs.push(effect.program.clone());
             }
         }
-        if !programs.is_empty() {
+        let mut validating = !programs.is_empty();
+        if validating {
             gpu.request_effect_validation(EffectValidationRequest {
                 request_id: 1,
                 namespace: programs.clone(),
                 programs,
             })
             .map_err(|e| e.to_string())?;
-            let deadline = Instant::now() + Duration::from_secs(60);
-            loop {
-                task.check_cancelled()?;
-                gpu.device()
-                    .poll(wgpu::PollType::Poll)
-                    .map_err(|e| e.to_string())?;
-                if let Some(result) = gpu.take_effect_validation() {
-                    result.result?;
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    return Err("Project shader preparation timed out".into());
-                }
-                std::thread::sleep(Duration::from_millis(2));
+        }
+        // Start deferred compilation before waiting for validation. The worker
+        // publishes only a ready native SDR canvas, including prepared opens.
+        gpu.prepare_startup(&project.document, &environment.brush, false).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            task.check_cancelled()?;
+            gpu.device().poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
+            if validating && let Some(result) = gpu.take_effect_validation() {
+                result.result?;
+                validating = false;
             }
+            let ready = gpu.poll_startup().map_err(|e| e.to_string())?;
+            if !validating && ready.canvas_ready && ready.brush_ready { break; }
+            if Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
+            std::thread::sleep(Duration::from_millis(2));
         }
         let mut prepared =
             UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;

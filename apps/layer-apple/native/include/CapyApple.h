@@ -46,6 +46,9 @@ void capy_project_free(CapyProjectTask *task);
 /* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
    either the shared numeric response or {"error": ...}. */
 char *capy_apple_numeric(const char *json);
+/* Stateless shared tagged-color forms, sRGB display previews and gradient
+   samples. Owned JSON result; same error and lifetime rules as numeric. */
+char *capy_apple_color_ui(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Shape: 0 circle,
    1 square, 2 triangle. Result: 0 miss/invalid, 1 hue ring, 2 field. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);

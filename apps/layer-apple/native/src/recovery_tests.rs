@@ -19,7 +19,7 @@ fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
             .unwrap();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         app.stroke();
         app.draw_until_idle();
@@ -107,7 +107,7 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
             .unwrap();
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+            Some(native_renderer());
         app.draw_frame();
         let blank = app.pixels();
         app.stroke();

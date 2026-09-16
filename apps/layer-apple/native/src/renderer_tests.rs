@@ -4,7 +4,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 
 fn install(app: &App) {
-    let gpu = layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required");
+    let gpu = native_renderer();
     let app = unsafe { &mut *app.0 };
     app.metal.install_renderer(&mut app.host, gpu).unwrap();
 }

@@ -331,7 +331,7 @@ private struct HeaderPaintIcon: View {
     }
     private func swatch(_ slot: String, edge: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: size / 16)
-        return ColorSwatch(rgba: colors[slot]).frame(width: edge * size / 16, height: edge * size / 16)
+        return ColorSwatch(rgba: ColorUI.preview(colors[slot])["rgba"]).frame(width: edge * size / 16, height: edge * size / 16)
             .clipShape(shape).overlay(shape.stroke(.foreground, lineWidth: size / 16))
     }
 }

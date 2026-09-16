@@ -86,49 +86,13 @@ private struct PropertyField: View {
                     background: EditorPalette(source: store.state["palette"])["input"]) { change($0, revision: revision) }
             }
         case "color":
-            PropertyColor(store: store, label: label, identifier: "property-" + key, value: value) {
-                change($0, revision: revision, phase: $1, completion: $2)
-            }
+            ManagedColorButton(label: label, identifier: "property-" + key, value: value,
+                documentSpace: store.state["colors"]["rgb_space"].string) { change($0.raw, revision: revision) }
         case "gradient":
             GradientProperty(store: store, control: control, effect: {
                 effect($0, revision: revision, phase: $1, completion: $2)
             }, reset: reset)
         default: EmptyView()
-        }
-    }
-}
-
-private struct PropertyColor: View {
-    @ObservedObject var store: EditorStore
-    let label: String
-    let identifier: String
-    let value: JSON
-    let change: (Any, String?, @escaping @MainActor (String?) -> Void) -> Void
-    @State private var expanded = false
-    private func component(_ index: Int, _ value: Double, phase: String? = nil,
-        completion: @escaping @MainActor (String?) -> Void) {
-        var color = self.value.array.map(\.number)
-        guard color.count == 4 else { completion("Invalid color"); return }
-        color[index] = value; change(color, phase, completion)
-    }
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text(label).frame(maxWidth: .infinity, alignment: .leading)
-                Button { expanded.toggle() } label: {
-                    RoundedRectangle(cornerRadius: 6).fill(value.paintColor).frame(width: 48, height: 28)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.primary.opacity(0.3), lineWidth: 1))
-                }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
-            }
-            if expanded {
-                ForEach(0..<4, id: \.self) { index in
-                    NumberControl(store: store, label: ["Red", "Green", "Blue", "Alpha"][index],
-                        value: value[index].number, control: store.catalog["opacity"], identifier: identifier + "-rgba-\(index)",
-                        gestureChange: { component(index, $1, phase: $0, completion: $2) }) {
-                        component(index, $0, completion: $1)
-                    }
-                }
-            }
         }
     }
 }
@@ -243,6 +207,8 @@ private struct GradientProperty: View {
     @State private var fieldRevision: UInt64 = 0
     @State private var dragging = false
     @State private var dragStop: (index: Int, position: Double)?
+    @State private var ramp = JSON()
+    @State private var previews = JSON()
     private var stops: [JSON] { control["value"]["value"].array }
     private var index: Int { max(0, min(selected, stops.count - 1)) }
     private var removable: Bool { index > 0 && index < stops.count - 1 }
@@ -262,10 +228,10 @@ private struct GradientProperty: View {
     }
     private func opacity(_ value: Double, index: Int, revision: UInt64, phase: String? = nil,
         completion: @escaping @MainActor (String?) -> Void) {
-        var color = stops[index]["color"].array.map(\.number)
+        var color = stops[index]["color"]["rgba"].array.map(\.number)
         guard color.count == 4 else { completion("Invalid color"); return }
         color[3] = value
-        change(stops[index]["position"].number, index: index, color: color, revision: revision, phase: phase, completion: completion)
+        change(stops[index]["position"].number, index: index, color: stops[index]["color"].replacing("rgba", with: JSON(color)).raw, revision: revision, phase: phase, completion: completion)
     }
     private func cancelDrag() {
         if let stop = dragStop { change(0, index: stop.index, phase: "cancel") }
@@ -278,13 +244,14 @@ private struct GradientProperty: View {
             GeometryReader { geometry in
                 Canvas { context, size in
                     let width = max(1, size.width - 12)
-                    let gradient = Gradient(stops: stops.map { Gradient.Stop(color: $0["color"].paintColor, location: $0["position"].number) })
+                    let samples = ramp.array
+                    let gradient = Gradient(stops: samples.enumerated().map { Gradient.Stop(color: $0.element["rgba"].paintColor, location: Double($0.offset) / Double(max(1, samples.count - 1))) })
                     context.fill(Path(roundedRect: CGRect(x: 6, y: 0, width: width, height: 32), cornerRadius: 4), with: .linearGradient(gradient,
                         startPoint: CGPoint(x: 6, y: 0), endPoint: CGPoint(x: size.width - 6, y: 0)))
                     for (i, stop) in stops.enumerated() {
                         let x = 6 + stop["position"].number * width
                         let marker = Path(ellipseIn: CGRect(x: x - 4.5, y: 38.5, width: 9, height: 9))
-                        context.fill(marker, with: .color(stop["color"].paintColor))
+                        context.fill(marker, with: .color(previews[i]["rgba"].paintColor))
                         context.stroke(marker, with: .color(palette["text"]), lineWidth: 1)
                         if i == index {
                             context.stroke(Path(ellipseIn: CGRect(x: x - 7, y: 36, width: 14, height: 14)),
@@ -329,10 +296,11 @@ private struct GradientProperty: View {
                         gestureChange: { change($1, index: index, revision: revision, phase: $0, completion: $2) }) {
                         change($0, index: index, revision: revision, completion: $1)
                     }.disabled(!removable)
-                    PropertyColor(store: store, label: "Color", identifier: "gradient-stop", value: stops[index]["color"]) {
-                        change(stops[index]["position"].number, index: index, color: $0, revision: revision, phase: $1, completion: $2)
+                    ManagedColorButton(label: "Color", identifier: "gradient-stop", value: stops[index]["color"],
+                        documentSpace: store.state["colors"]["rgb_space"].string) {
+                        change(stops[index]["position"].number, index: index, color: $0.raw, revision: revision)
                     }
-                    NumberControl(store: store, label: "Opacity", value: stops[index]["color"][3].number,
+                    NumberControl(store: store, label: "Opacity", value: stops[index]["color"]["rgba"][3].number,
                         control: store.catalog["opacity"], identifier: "gradient-opacity",
                         gestureChange: { opacity($1, index: index, revision: revision, phase: $0, completion: $2) }) {
                         opacity($0, index: index, revision: revision, completion: $1)
@@ -346,6 +314,12 @@ private struct GradientProperty: View {
                 Button("Reset", action: reset)
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
+        }.task(id: JSON([stops.map(\.raw), store.state["colors"]["rgb_space"].raw]).stableKey) {
+            ramp = ColorUI.resolve(["type": "gradient", "stops": stops.map(\.raw),
+                "document_space": store.state["colors"]["rgb_space"].raw, "display_space": "Srgb"])
+            previews = ColorUI.resolve(["type": "preview", "colors": stops.map { $0["color"].raw }, "display_space": "Srgb"])
+            if !ramp["error"].isNull { store.failure = ramp["error"].string }
+            if !previews["error"].isNull { store.failure = previews["error"].string }
         }.onChange(of: stops.map { $0["position"].number }) { previous, current in
             if current.count != previous.count { fieldRevision &+= 1 }
             // Select the stop Rust actually inserted, including history restoration.

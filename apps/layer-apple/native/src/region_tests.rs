@@ -4,7 +4,7 @@ use super::*;
 fn region_app(platform: u32, gap: bool) -> App {
     let app = App::new(platform);
     unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-        Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"));
+        Some(native_renderer());
     app.draw_until_idle();
     let project = ProjectJob::new(&app, true);
     assert_eq!(unsafe { capy_project_new(project.0, 64, 64) }, 0);

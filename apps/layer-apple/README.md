@@ -276,14 +276,22 @@ includes both Apple presets/themes, width and endpoint cases, plus mounted-field
 checks of actual editor actions. Full UIKit and editor pixel parity remain open.
 
 Property slider drags use the existing shared effect gesture transaction for
-numeric and color values, layer/Paper opacity and gradient stop controls. Moves
+numeric values, layer/Paper opacity and gradient stop controls. Moves
 preview without adding history; release commits one Undo step and cancellation
 restores the original value while preserving Redo. Ordinary text, step and tap
 edits retain their discrete numeric validation path.
 New curve points and gradient stops become selected from Rust's published list,
 so removal and color/position edits work immediately after insertion. Undoing a
-single-point removal selects the restored point. Property colors reuse the shared
-RGBA color conversion.
+single-point removal selects the restored point. Effect colors and gradient stops
+use the shared tagged color form, preserving the original space and exact values
+through unchanged and alpha-only edits. Use Color publishes one history edit;
+Cancel discards the draft. Shared transforms supply sRGB previews and gradient
+ramps interpolated in the document's encoded RGB space.
+
+`bash apps/layer-apple/scripts/test-color-input.sh` checks real AppKit text entry
+and default-button delivery for all four RGB spaces without a renderer or
+simulator. It covers unchanged precision, alpha edits, extended RGB values and
+invalid drafts. Modal dismissal and UIKit delivery remain separate UI checks.
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-slider-input.swift
