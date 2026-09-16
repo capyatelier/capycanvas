@@ -12,7 +12,7 @@ import QuartzCore
 @main final class PropertySliderChecks: NativeWorkspaceInputFixture {
     @MainActor static func run() async throws {
         let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
-        let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "brush-color"), ("", "tool-document"),
+        let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "tool-document"),
             ("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
             ("brightness_contrast", "brightness"),
             ("gradient_map", "position"), ("gradient_map", "opacity")]
@@ -46,17 +46,15 @@ import QuartzCore
                 let toolControl = mode == "tool-document"
                 if toolControl { try await action(["type": "invoke", "command": "auto_select"]) }
                 let layer = store.state["layer_properties"]["layer"].uint
-                let colorControl = mode == "brush-color"
                 let brushControl = mode == "brush-size" || mode == "brush-opacity"
                 let defaultControls = store.state["layer_properties"]["controls"].stableKey
                 let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
-                let identifier = colorControl ? "Red" : toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
+                let identifier = toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"
                     ? "gradient-" + mode
                     : "property-" + key
                 func value() -> Double {
-                    if colorControl { return store.state["brush"]["color"][0].number }
                     if toolControl { return store.state["tool_settings"].array.first { $0["id"].string == "tolerance" }!["value"].number }
                     if brushControl { return store.state["brush"][mode == "brush-size" ? "diameter" : "opacity"].number }
                     let value = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
@@ -72,9 +70,9 @@ import QuartzCore
                 defer { window.contentView = nil; window.close() }
                 let content = AnyView(Group {
                     if toolControl { ToolSettingsControls(store: store) }
-                    else if brushControl || colorControl {
+                    else if brushControl {
                         PanelControls(store: store, panel: JSON(["id": "sizes", "controls": [
-                            ["control": colorControl ? "brush_color" : mode == "brush-size" ? "brush_size" : "brush_opacity", "visible_in_panel": true]
+                            ["control": mode == "brush-size" ? "brush_size" : "brush_opacity", "visible_in_panel": true]
                         ]]), scrollable: false, measureForWorkspace: false)
                     } else if mode == "layer-opacity" { LayerOpacityField(store: store) }
                     else { LayerPropertiesPanel(store: store) }
@@ -116,27 +114,6 @@ import QuartzCore
                         "The retained native field must handle its commit callback")
                     try await drain()
                 }
-                if colorControl {
-                    let (field, delegate) = try await draft(identifier, "37 %")
-                    let foreground = store.state["colors"]["foreground"].stableKey
-                    let background = store.state["colors"]["background"].stableKey
-                    try await action(["type": "color", "action": ["op": "select", "slot": "background"]])
-                    try await commit(field, delegate)
-                    try require(store.state["colors"]["background"].stableKey == background,
-                        "A foreground color draft must not change the background after switching paint slots")
-                    try require(store.state["colors"]["foreground"].stableKey == foreground,
-                        "Switching paint slots must discard the unfinished color draft")
-                    try require(!field.isDescendant(of: host), "Switching paint slots must retire the original numeric field")
-                    let (current, currentDelegate) = try await draft(identifier, "37 %")
-                    try await action(["type": "color", "action": ["op": "rgba_component", "index": 0, "value": 0.23]])
-                    try require(current.isDescendant(of: host) && current.stringValue == "37 %",
-                        "Ordinary color changes must preserve an active draft in the same paint slot")
-                    try await commit(current, currentDelegate)
-                    try require(abs(value() - 0.37) < 0.0001 && store.failure == nil,
-                        "The background's own color field must accept its edit")
-                    note("PASS: platform \(platform), color slot switch rejects retired edits while ordinary updates preserve drafts")
-                    continue
-                }
                 if toolControl {
                     let (field, delegate) = try await draft(identifier, "37 %")
                     let epoch = store.state["document_file"]["epoch"].uint
@@ -150,7 +127,7 @@ import QuartzCore
                         "An ordinary tool-value update must preserve its active draft")
                     store.projectFiles = ProjectFiles(store: store, dialogs: .init(
                         open: { $0(nil) }, save: { _, _, completed in completed(nil) },
-                        create: { _, completed in completed([256, 256]) }))
+                        create: { _, completed in completed(JSON(["extent": [256, 256], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])) }))
                     store.invoke("new_document")
                     let deadline = Date().addingTimeInterval(30)
                     while store.state["document_file"]["epoch"].uint == epoch || store.projectFiles.busy {

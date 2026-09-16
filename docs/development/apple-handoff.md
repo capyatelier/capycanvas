@@ -2,8 +2,9 @@
 
 For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
-SDR renderer foundation and existing effect/gradient controls are integrated;
-the new host workflows and device acceptance remain. Earlier acceptance below
+SDR renderer, existing effect/gradient controls, New Drawing options and tagged
+paint/palette workflows are integrated; the remaining host workflows and device
+acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
 ## Goal
@@ -242,6 +243,68 @@ physical SDR workflows or sustained performance. Continue with steps 3–4 of th
 phase 2 handoff. Both installed review apps and the user's drawings are preserved;
 the new Release products have not been installed over them. Main was fetched
 without incoming changes before this grouped milestone.
+
+## SDR creation and paint workflows
+
+New Drawing now carries the complete shared creation options through the native
+worker: presets, dimensions, background and independent RGB-space/bit-depth
+choices. Optional preset/default changes use shared validation; conflicts stay
+in the form for correction. Captured defaults are stable while a worker runs.
+The Color panel, brush controls and brush popup expose the shared tagged editor
+and workspace palettes. Obsolete inline RGB fields are removed. Wheel fields,
+hue guides and image-cache keys now include the document's RGB space.
+
+All 56 Apple bridge checks pass. Local Metal checks cover all 32 creation combinations across both Apple policies,
+captured defaults and preservation after invalid input. The Swift/Metal owner
+workflow passes preset conflict/retry, cancellation, all four tagged palette
+spaces, document replacement and exact fresh-owner persistence. Shared UI/host
+checks pass 456 tests with one existing hardware-only case ignored. Converted
+wheel pixels and cache invalidation also pass. Evidence and failed local control
+fixture attempts are retained under `artifacts/apple-sdr-workflows-v1/`.
+
+The full Mac XCTest workflow passes native presets, dimensions, background,
+depth, saved defaults, tagged paint alpha and palette storage/use/reopening.
+Reviewed captures show readable forms. Its initial failure reproduced a modal
+shortcut conflict: the editor retained Command-A while New Drawing was open.
+The existing menu now releases its shortcuts during document dialogs; the fixed
+workflow passes. Both final Release builds pass without compiler warnings.
+
+The local control fixture could read native fields but omitted SwiftUI buttons
+from its in-process accessibility traversal; it is replaced by native XCTest.
+Full-app simulator checks stop before the forms because its Metal adapter lacks
+the Float32 filtering required by the shared SDR renderer. The original GPU
+error was captured directly; longer startup waits did not solve it. No reduced
+precision renderer or simulator-specific application path is added.
+
+The physical M4 iPad then reproduced a separate startup failure. The captured
+original error rejects the SDR composition pipeline because wgpu's iPad
+`Rgba32Float` format omits blending, despite advertising `FLOAT32_BLENDABLE`.
+Its Float32 format filtering also used a macOS-only condition. The narrow fix
+in the already-vendored Metal capability table includes blending and uses the
+existing device filtering query for R32/RG32/RGBA32 Float formats. Apple's
+[capability tables](https://developer.apple.com/metal/capabilities/) support both
+changes. Texture precision and shared rendering/publication paths are unchanged;
+see [vendor provenance](../../vendor/README.md).
+
+After the fix, the same physical device opens the native New Drawing form with
+P3/U16/transparent defaults; its capture is reviewed. The isolated Debug app also
+completes the existing 2K predicted-ink workload (ten-second warmup, five-second
+measurement), with visible ink, Navigator and layer thumbnails, no frame errors,
+no rejected input and no recorded workload failure. This is a startup/painting
+smoke check, not sustained performance or physical Pencil acceptance. The final
+Mac Metal bridge suite still passes all 56 checks, and both final Release builds
+pass without warnings.
+
+The physical XCTest workflow cannot install its extra runner because the device
+already has the three apps allowed by its free development profile. No app is
+removed to make room. Full UIKit form/palette interaction remains unqualified;
+the reviewed form and shared-owner results do not close that gap. Both artist
+review binaries and drawings are preserved; only the separate performance-test
+app is updated. Main was fetched without incoming changes for this grouped
+milestone.
+
+Profile/depth changes, retained photo import/editing, inspection, ICC/export
+workflows, managed displays and physical SDR acceptance remain in phase 2 scope.
 
 ## Native provider acceptance
 

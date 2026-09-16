@@ -246,12 +246,6 @@ workspace customization: XCTest starts pinch-out near the full canvas element's
 corners, which otherwise lie beneath docked controls. This simulator check does
 not establish physical finger/Pencil, cancellation or performance acceptance.
 
-For RGB draft ownership, run `tests/property-slider-input.swift` with
-`CAPY_PROPERTY_CASE=brush-color` through the same local script. Switching between
-foreground and background replaces the old numeric fields and rejects their late
-callbacks; ordinary updates within one paint slot preserve an unfinished draft.
-The fixture checks both shared Apple policies without simulator startup.
-
 `tests/canvas-modifiers.swift` is a standalone UIKit scene application built
 with the production Shared/iOS sources, Rust bridge and bundled filters. Its
 eighty groups cover mouse/Pencil modifier flags, stale control flags, interruption,
@@ -293,6 +287,25 @@ and default-button delivery for all four RGB spaces without a renderer or
 simulator. It covers unchanged precision, alpha edits, extended RGB values and
 invalid drafts. Modal dismissal and UIKit delivery remain separate UI checks.
 
+The Color panel and brush-color popup expose **Edit Color…** and **Palettes…**.
+Paint entry uses the same tagged form, captures its foreground/background target,
+and rejects publication into a replacement document. Palette creation, naming,
+swatch storage and removal use the shared workspace library; previews never
+replace the retained color definition. The former inline RGB sliders are removed.
+
+New Drawing exposes shared presets, dimensions, background and independent
+working-space/bit-depth choices. Optional preset/default changes use shared
+validation before creating the document on the file worker. The focused
+`tests/color-workflows.swift` owner check exercises validation/retry/cancellation,
+all four tagged palette spaces, document adoption and fresh-owner persistence
+with temporary storage and Metal. Run it through `test-project-files.sh`.
+`EditorLaunchTests/testNativeSDRCreationAndPalettes` is the separate native-control
+workflow; owner checks alone do not qualify AppKit/UIKit control delivery.
+Full-app SDR tests require a Metal adapter with Float32 filtering and blending.
+The current iPad simulator lacks Float32 filtering and cannot run these workflows;
+use supported physical hardware for rendering-dependent iPad tests. Isolated
+UIKit component tests that do not construct this renderer remain useful.
+
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-slider-input.swift
 cargo test -p layer-apple property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms -- --test-threads=1
@@ -309,8 +322,9 @@ an Okhsv circle, HSV square or HLS triangle; overlapping foreground/background
 swatches; transparent paint; Swap; two alternate shape buttons; and a curved
 OKLCH/HSB/HLS readout that toggles to RGB. Rust owns the layout, conversion,
 readout text, hue memory, hit regions and drag clamping. Both hosts use shared
-RGBA8 fields and hue-guide stops, retaining separate field/guide images across
-marker changes. Native clips, markers and controls remain at display resolution.
+RGBA8 fields and hue guides converted from the document space, retaining separate
+field/guide images across marker changes and invalidating them when the gamut
+changes. Native clips, markers and controls remain at display resolution.
 Wheel painting follows Web's rounded destination edges, with the field/guide
 raster sized to those physical bounds to avoid extra interpolation. Swatch
 selection borders sit behind their paint interiors. Each styled swatch has a
@@ -402,7 +416,10 @@ Settings and committed workspace layouts now persist in private Application
 Support files. Settings propagate across live owners; each restored scene keeps
 its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
 failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
-project format. Both targets support custom canvas dimensions and PNG export. GPU export
+project format. New Drawing supports shared presets, sRGB/Display P3/Adobe RGB/
+ProPhoto working spaces, independent 8/16-bit backing and white/transparent
+backgrounds. The existing PNG export path remains sRGB/8-bit until the profiled
+export workflow is integrated. GPU export
 readback and PNG encoding run on the file worker. Unsaved artwork also receives
 private recovery copies. Use **File → Recovered Drawings…** to open one; copies
 are offered after restart and retain unsaved status until you explicitly save.

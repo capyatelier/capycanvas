@@ -24,6 +24,7 @@ struct Environment {
     queue: wgpu::Queue,
     viewport: [u32; 2],
     brush: layer_core::BrushSnapshot,
+    new_options: layer_ui::NewDocumentOptions,
 }
 enum Payload {
     Save {
@@ -168,6 +169,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                     queue: gpu.queue().clone(),
                     viewport: session.state().camera.viewport,
                     brush: session.engine().configured_brush().clone(),
+                    new_options: session.state().settings.new_document.defaults,
                 }),
                 candidate: None,
             }
@@ -312,23 +314,28 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
 /// fd == -1 prepares a new blank drawing. Other fds remain caller-owned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32) -> i32 {
-    unsafe { prepare_project(task, fd, layer_ui::DEFAULT_DOCUMENT_EXTENT) }
+    unsafe { prepare_project(task, fd, Ok(None)) }
 }
 /// # Safety
-/// Worker only; the task must be an unused open task. Dimensions follow shared policy.
+/// Worker only; the task must be an unused open task. Options is NUL-terminated
+/// UTF-8 NewDocumentOptions JSON, valid until this call returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_new(
     task: *const CapyProjectTask,
-    width: u32,
-    height: u32,
+    options: *const c_char,
 ) -> i32 {
-    unsafe { prepare_project(task, -1, [width, height]) }
+    let options = unsafe { read_title(options) }.and_then(|text| {
+        serde_json::from_str(text).map(Some).map_err(|e| e.to_string())
+    });
+    unsafe { prepare_project(task, -1, options) }
 }
-unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2]) -> i32 {
+unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32,
+    options: Result<Option<layer_ui::NewDocumentOptions>, String>) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else {
         return -1;
     };
     task.perform(|payload| {
+        let options = options?;
         let Payload::Open {
             environment,
             candidate,
@@ -346,7 +353,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2
             ..Default::default()
         };
         let project = if fd == -1 {
-            layer_ui::new_drawing(extent[0], extent[1])?
+            options.unwrap_or(environment.new_options).project()?
         } else if fd < -1 {
             return Err("Missing project input".into());
         } else {

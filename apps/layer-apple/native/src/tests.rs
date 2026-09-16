@@ -76,7 +76,7 @@ fn assert_project_document(actual: &layer_core::Document, expected: &layer_core:
 }
 
 #[test]
-fn hls_raster_ffi_validates_buffer_and_matches_shared_pixels() {
+fn color_raster_ffi_validates_buffer_and_matches_shared_spaces() {
     let mut bytes = [23; 16];
     unsafe {
         for (side, hue, count) in [
@@ -86,41 +86,43 @@ fn hls_raster_ffi_validates_buffer_and_matches_shared_pixels() {
             (u32::MAX, 0., usize::MAX),
         ] {
             assert_eq!(
-                capy_apple_color_field(side, hue, 2, false, bytes.as_mut_ptr(), count),
+                capy_apple_color_field(side, hue, 2, c"Srgb".as_ptr(), false, bytes.as_mut_ptr(), count),
                 0
             );
             assert_eq!(bytes, [23; 16]);
         }
         assert_eq!(
-            capy_apple_color_field(2, 60., 2, false, std::ptr::null_mut(), 16),
+            capy_apple_color_field(2, 60., 2, c"Srgb".as_ptr(), false, std::ptr::null_mut(), 16),
             0
         );
         assert_eq!(
-            capy_apple_color_field(2, 60., 2, false, bytes.as_mut_ptr(), 16),
+            capy_apple_color_field(2, 60., 2, c"Srgb".as_ptr(), false, bytes.as_mut_ptr(), 16),
             1
         );
     }
     let mut reference = [0; 16];
     assert!(layer_ui::render_hls_field(2, 60., &mut reference));
     assert_eq!(bytes, reference);
-    for shape in 0..3 {
-        let mut bytes = vec![0; 64 * 64 * 4];
-        assert_eq!(
-            unsafe { capy_apple_color_field(64, 0., shape, true, bytes.as_mut_ptr(), bytes.len()) },
-            1
-        );
-        let mut expected = vec![0; bytes.len()];
-        assert!(layer_ui::render_hue_guide(
-            64,
-            color_shape(shape).unwrap(),
-            &mut expected
-        ));
-        assert_eq!(bytes, expected);
-        assert_eq!(
-            unsafe { capy_apple_color_field(64, 0., 3, true, bytes.as_mut_ptr(), bytes.len()) },
-            0
-        );
-        assert_eq!(bytes, expected);
+    for space in layer_core::color::RgbSpace::ALL {
+        let name = serde_json::to_value(space).unwrap();
+        let name = CString::new(name.as_str().unwrap()).unwrap();
+        for shape in 0..3 {
+            for guide in [false, true] {
+                let mut bytes = vec![0; 64 * 64 * 4];
+                assert_eq!(unsafe { capy_apple_color_field(64, 42., shape, name.as_ptr(), guide, bytes.as_mut_ptr(), bytes.len()) }, 1);
+                let mut expected = vec![0; bytes.len()];
+                assert!(if guide {
+                    layer_ui::render_hue_guide(64, color_shape(shape).unwrap(), space, &mut expected)
+                } else {
+                    layer_ui::render_color_field(64, color_shape(shape).unwrap(), 42., space, layer_core::color::RgbSpace::Srgb, &mut expected)
+                });
+                assert!(bytes == expected, "{space:?}/{shape}/{guide}: shared display pixels");
+                for (invalid_shape, invalid_space) in [(3, name.as_ptr()), (shape, c"Unknown".as_ptr()), (shape, std::ptr::null())] {
+                    assert_eq!(unsafe { capy_apple_color_field(64, 42., invalid_shape, invalid_space, guide, bytes.as_mut_ptr(), bytes.len()) }, 0);
+                    assert!(bytes == expected, "Invalid requests must leave pixels unchanged");
+                }
+            }
+        }
     }
 }
 
@@ -194,14 +196,14 @@ fn compact_color_resources_and_circle_picking_use_shared_shapes() {
     }
     let mut bytes = vec![0; 128 * 128 * 4];
     assert_eq!(
-        unsafe { capy_apple_color_field(128, 264., 0, false, bytes.as_mut_ptr(), bytes.len()) },
+        unsafe { capy_apple_color_field(128, 264., 0, c"Srgb".as_ptr(), false, bytes.as_mut_ptr(), bytes.len()) },
         1
     );
     let mut expected = vec![0; bytes.len()];
     assert!(layer_ui::render_okhsv_disc(128, 264., &mut expected));
     assert_eq!(bytes, expected);
     assert_eq!(
-        unsafe { capy_apple_color_field(128, 264., 3, false, bytes.as_mut_ptr(), bytes.len()) },
+        unsafe { capy_apple_color_field(128, 264., 3, c"Srgb".as_ptr(), false, bytes.as_mut_ptr(), bytes.len()) },
         0
     );
     assert_eq!(
@@ -480,6 +482,12 @@ impl Drop for ProjectJob {
     }
 }
 impl ProjectJob {
+    fn create(&self, extent: [u32; 2]) -> i32 {
+        let options = CString::new(serde_json::to_string(&layer_ui::NewDocumentOptions {
+            extent, ..Default::default()
+        }).unwrap()).unwrap();
+        unsafe { capy_project_new(self.0, options.as_ptr()) }
+    }
     fn new(app: &App, opening: bool) -> Self {
         if !opening {
             let pending: Vec<_> = unsafe { &*app.0 }
@@ -761,14 +769,14 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
             Some(native_renderer());
         app.draw_frame();
         let invalid = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_new(invalid.0, 0, 47) }, -1);
+        assert_eq!(invalid.create([0, 47]), -1);
         assert_eq!(
             unsafe { &*app.0 }.host.session.engine().document().width,
             2048
         );
         let new = ProjectJob::new(&app, true);
         assert_eq!(
-            unsafe { capy_project_new(new.0, 63, 47) },
+            new.create([63, 47]),
             0,
             "{:?}",
             new.error()

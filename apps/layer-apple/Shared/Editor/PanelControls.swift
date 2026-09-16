@@ -73,21 +73,19 @@ struct PanelControls: View {
         case "tool_settings": ToolSettingsControls(store: store)
         // Match the shared panel's fit-to-viewport wheel while retaining its
         // readable minimum size and scrolling for smaller/customized panels.
-        case "color_wheel": ColorPanel(store: store).frame(maxHeight: maximumHeight)
+        case "color_wheel":
+            VStack(alignment: .leading, spacing: 8) {
+                ColorPanel(store: store)
+                PaintColorControls(store: store)
+            }.frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes
         case "brush_color":
-            let slot = store.state["colors"]["paint_slot"].string
             BrushColorButton(store: store, label: item["label"].string)
-            ForEach(0..<3, id: \.self) { component in
-                NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value, completion in
-                    guard slot == store.state["colors"]["paint_slot"].string else { completion(nil); return }
-                    store.edit(["type": "color", "action": ["op": "rgba_component", "index": component, "value": value]], completion: completion)
-                }.id(slot)
-            }
+            PaintColorControls(store: store)
         default: Text(item["label"].string).fontWeight(.bold)
         }
     }

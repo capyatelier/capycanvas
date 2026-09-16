@@ -31,7 +31,7 @@ int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filter
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
-int32_t capy_project_new(const CapyProjectTask *task, uint32_t width, uint32_t height);
+int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
@@ -58,7 +58,7 @@ char *capy_apple_color_resources(float size, uint32_t shape);
 /* Stateless cached field or hue guide: square, straight sRGB RGBA8.
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.
    No session access or retained pointers; safe on the UI thread. */
-int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, bool guide, uint8_t *rgba, size_t count);
+int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, const char *rgb_space, bool guide, uint8_t *rgba, size_t count);
 /* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
  * 5 incremental update (full models or workspace/camera presentation),
  * 6 workspace session capture/transition/adoption (no database I/O),

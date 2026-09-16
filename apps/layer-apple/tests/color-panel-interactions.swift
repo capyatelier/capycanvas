@@ -92,7 +92,7 @@ import SwiftUI
                 try require(
                     bytes.withUnsafeMutableBytes {
                         capy_apple_color_field(
-                            side, Float(model["wheel_components"][0].number), 0, false,
+                            side, Float(model["wheel_components"][0].number), 0, "Srgb", false,
                             $0.bindMemory(to: UInt8.self).baseAddress, $0.count)
                     } == 1, "Field bytes failed")
                 let field = "field-\(name).rgba"

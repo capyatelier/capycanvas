@@ -1,4 +1,4 @@
-# wgpu Wayland color pass-through
+# wgpu platform fixes
 
 These are the published `wgpu`, `wgpu-hal` and `wgpu-types` 30.0.1 crates,
 upstream revision `40f4a34ebaf56f9a046231f54125ad046239d3f3`. The crate archives'
@@ -14,11 +14,11 @@ Registry archive SHA-256 values from the previous workspace lockfile:
 | wgpu-hal | `b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58` |
 | wgpu-types | `99dad6f1fbdbbdb4c278a6508b059d44688f5cebddf78d005a46a31340269286` |
 
-The local patch exposes `SurfaceColorSpace::PassThrough` and its capability bit,
+The Wayland patch exposes `SurfaceColorSpace::PassThrough` and its capability bit,
 maps them to `VK_COLOR_SPACE_PASS_THROUGH_EXT`, and rejects the new choice on
 backends that cannot provide it. `Auto` behavior is unchanged. The Vulkan mapping
 round-trip test includes pass-through. `wgpu-color-passthrough.patch` records every
-source change relative to the published crates.
+Wayland source change relative to the published crates.
 
 The GTK host uses this to own an explicit Wayland image description with the
 piecewise sRGB curve or an equivalent ICC profile. The driver's legacy sRGB
@@ -27,6 +27,19 @@ description is ambiguous and Mutter 50.4 interprets it as gamma 2.2. The
 defines pass-through as the way for a Wayland application to own that description.
 wgpu still owns swapchain creation, acquisition, synchronization and presentation.
 
-No other platform host enables this path. Remove the patch and these snapshots
-when an upstream release supplies equivalent pass-through support. Do not replace
-the explicit description with a compositor-specific gamma adjustment.
+No other platform host enables this path. Do not replace the explicit description
+with a compositor-specific gamma adjustment.
+
+`wgpu-metal-float32.patch` corrects the Metal format capabilities independently.
+The adapter advertises `FLOAT32_BLENDABLE`, but its `Rgba32Float` format omitted
+blending on iPadOS; enabling adapter-specific formats therefore rejected the
+SDR composition pipeline on a physical M4 iPad. The format now includes blending,
+and R32/RG32/RGBA32 Float filtering/resolve follow the existing device capability
+query instead of a macOS-only condition. This agrees with Apple's
+[Metal feature tables](https://developer.apple.com/metal/capabilities/), including
+the `supports32BitFloatFiltering` qualification for older iPad GPU families.
+Devices without that capability still report it unavailable. No texture
+precision, publication, rendering or presentation algorithm is changed.
+
+Remove each patch when an upstream release supplies its equivalent fix, and
+remove these snapshots when neither patch remains necessary.

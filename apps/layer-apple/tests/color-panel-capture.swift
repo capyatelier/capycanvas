@@ -120,7 +120,7 @@ enum ColorPanelCaptures {
                                     var bytes = Data(count: fieldSide * fieldSide * 4)
                                     let result = bytes.withUnsafeMutableBytes {
                                         capy_apple_color_field(UInt32(fieldSide), Float(model["wheel_components"][0].number),
-                                            shapeID.rawValue, false, $0.bindMemory(to: UInt8.self).baseAddress, $0.count)
+                                            shapeID.rawValue, "Srgb", false, $0.bindMemory(to: UInt8.self).baseAddress, $0.count)
                                     }
                                     precondition(result == 1)
                                     fieldFile = "field-\(name).rgba"

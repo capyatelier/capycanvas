@@ -18,8 +18,20 @@ startup and prepared-document constructors use native integer backing with
 Float32 processing. P3/U8 and ProPhoto/U16 exact save/recovery/history and GPU
 replacement pass on Mac Metal for both Apple policies. See the
 [scoped acceptance record](apple-handoff.md#native-sdr-foundation).
-**Continue with the host workflows in step 3**, then display integration and
-physical acceptance. Profiled export and device performance are not closed.
+The next checkpoint adds complete New Drawing options/presets/defaults, tagged
+paint entry, workspace palettes and document-space wheel previews. Shared,
+Swift/Metal owner and full Mac UI checks pass; see the
+[workflow record](apple-handoff.md#sdr-creation-and-paint-workflows) for current
+device coverage. **Continue with the remaining host workflows in step 3**, then
+display integration and physical acceptance. Profiled export and device
+performance are not closed.
+
+The physical M4 startup check exposed and fixed a vendored wgpu Metal Float32
+capability mismatch; startup and short synthetic painting now pass. The simulator
+still lacks required Float32 filtering. Physical XCTest's extra runner is blocked
+by the device's free-profile app limit; preserve the installed artist apps.
+Use fast shared/native-owner checks during implementation and group remaining
+device interaction checks, instead of repeating full-app simulator failures.
 
 ## Implement in this order
 

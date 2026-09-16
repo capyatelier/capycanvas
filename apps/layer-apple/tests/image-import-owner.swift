@@ -97,7 +97,7 @@ import UniformTypeIdentifiers
             }
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 NativeProjectTask.io.async {
-                    do { try task.read(from: nil, extent: [64, 64]); done.resume() }
+                    do { try task.read(from: nil, options: JSON(["extent": [64, 64], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])); done.resume() }
                     catch { done.resume(throwing: error) }
                 }
             }

@@ -228,6 +228,14 @@ final class EditorLaunchTests: XCTestCase {
         checkShortcutConflictAndEditorEffect(in: app)
     }
 
+    @MainActor func testNativeSDRCreationAndPalettes() throws {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"color","action":{"op":"definition","color":{"space":"ProPhoto","rgba":[0.12345678,0.23456789,0.34567891,0.654321]}}},{"type":"invoke","command":"new_document"}]"#
+        app.launch()
+        checkNativeSDRCreationAndPalettes(in: app)
+    }
+
     @MainActor func testNewDrawingAndExportCancellation() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

@@ -5,7 +5,9 @@ struct ColorPanel: View {
     @StateObject private var resources = ColorWheelResources()
     @FocusState private var readoutFocused: Bool
     private var model: JSON { store.snapshot["color_panel"] }
-    private var context: String { model["shape"].string + store.state["colors"]["paint_slot"].string }
+    private var context: String {
+        "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.state["colors"]["paint_slot"].string)"
+    }
     private var captureState: String? {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["CAPY_COLOR_PROBE"] == "1" else { return nil }

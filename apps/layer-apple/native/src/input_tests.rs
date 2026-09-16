@@ -74,7 +74,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
             app.action(json!({"type":"set_color","rgba":[0,0,1,1]}));
             app.draw_until_idle();
             let project = ProjectJob::new(&app, true);
-            assert_eq!(unsafe { capy_project_new(project.0, 2048, 1536) }, 0);
+            assert_eq!(project.create([2048, 1536]), 0);
             let adopted = unsafe {
                 if recovered {
                     capy_apple_project_recover(app.0, project.0)

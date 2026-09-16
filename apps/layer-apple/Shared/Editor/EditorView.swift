@@ -187,7 +187,7 @@ struct MenuItems: View {
                         .help(item["hint"].string)
                         .accessibilityIdentifier(item["action"]["type"].string == "invoke"
                             ? "command-" + item["action"]["command"].string : "menu-action-" + item["label"].string)
-                        .keyboardShortcut(usesShortcuts && store.snapshot["preferences"].isNull
+                        .keyboardShortcut(usesShortcuts && store.snapshot["preferences"].isNull && !store.projectFiles.blocksEditor
                             ? menuShortcut(item["bindings"][0]) : nil)
                 }
             }

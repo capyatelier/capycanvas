@@ -285,8 +285,10 @@ impl crate::Adapter for super::Adapter {
                 read_write_tier2_if | Tfc::STORAGE_WRITE_ONLY | Tfc::COLOR_ATTACHMENT | msaa_count
             }
             Tf::Rgba32Float => {
-                let mut flags =
-                    read_write_tier2_if | Tfc::STORAGE_WRITE_ONLY | Tfc::COLOR_ATTACHMENT;
+                let mut flags = read_write_tier2_if
+                    | Tfc::STORAGE_WRITE_ONLY
+                    | Tfc::COLOR_ATTACHMENT
+                    | Tfc::COLOR_ATTACHMENT_BLEND;
                 if pc.format_rgba32float_all {
                     flags |= all_caps
                 } else if pc.msaa_apple7 {
@@ -730,6 +732,11 @@ impl super::CapabilitiesQuery {
             MTLLanguageVersion::Version1_0
         };
 
+        let supports_float_filtering = os_type == super::OsType::Macos
+            || (available!(macos = 11.0, ios = 14.0, tvos = 16.0, visionos = 1.0)
+                && device_class_responds_to(device, sel!(supports32BitFloatFiltering))
+                && device.supports32BitFloatFiltering());
+
         Self {
             msl_version,
             // macOS 10.11 doesn't support read-write resources
@@ -758,10 +765,7 @@ impl super::CapabilitiesQuery {
             function_specialization: Self::supports_any(device, FUNCTION_SPECIALIZATION_SUPPORT),
             depth_clip_mode: Self::supports_any(device, DEPTH_CLIP_MODE),
             texture_cube_array: Self::supports_any(device, TEXTURE_CUBE_ARRAY_SUPPORT),
-            supports_float_filtering: os_type == super::OsType::Macos
-                || (available!(macos = 11.0, ios = 14.0, tvos = 16.0, visionos = 1.0)
-                    && device_class_responds_to(device, sel!(supports32BitFloatFiltering))
-                    && device.supports32BitFloatFiltering()),
+            supports_float_filtering,
             format_depth24_stencil8: os_type == super::OsType::Macos
                 && device.isDepth24Stencil8PixelFormatSupported(),
             format_depth32_stencil8_filter: os_type == super::OsType::Macos,
@@ -795,11 +799,10 @@ impl super::CapabilitiesQuery {
             format_r32_all: false,
             // All devices support r32's write capability
             format_r32_no_write: false,
-            // iOS support r32float's write capability, macOS support r32float's all capabilities
+            // Float32 filtering/resolve follow the device, including supported iPads.
             format_r32float_no_write_no_filter: false,
-            // Only iOS doesn't support r32float's filter  capability
-            format_r32float_no_filter: os_type != super::OsType::Macos,
-            format_r32float_all: os_type == super::OsType::Macos,
+            format_r32float_no_filter: !supports_float_filtering,
+            format_r32float_all: supports_float_filtering,
             format_rgba8_srgb_all: Self::supports_any(device, RGBA8_SRGB),
             format_rgba8_srgb_no_write: !Self::supports_any(device, RGBA8_SRGB),
             format_rgb10a2_unorm_all: Self::supports_any(device, RGB10A2UNORM_ALL),
@@ -813,20 +816,17 @@ impl super::CapabilitiesQuery {
             format_rgb9e5_filter_only: os_type == super::OsType::Macos,
             format_rg32_color: true,
             format_rg32_color_write: true,
-            // Only macOS support rg32float's all capabilities
-            format_rg32float_all: os_type == super::OsType::Macos,
+            format_rg32float_all: supports_float_filtering,
             // All devices support rg32float's color + blend capabilities
             format_rg32float_color_blend: true,
-            // Only iOS doesn't support rg32float's filter
-            format_rg32float_no_filter: os_type != super::OsType::Macos,
+            format_rg32float_no_filter: !supports_float_filtering,
             format_rgba32int_color: true,
             // All devices support rgba32uint and rgba32sint's color + write capabilities
             format_rgba32int_color_write: true,
             format_rgba32float_color: true,
             // All devices support rgba32float's color + write capabilities
             format_rgba32float_color_write: true,
-            // Only macOS support rgba32float's all capabilities
-            format_rgba32float_all: os_type == super::OsType::Macos,
+            format_rgba32float_all: supports_float_filtering,
             // https://developer.apple.com/documentation/metal/mtlpixelformat/depth16unorm
             format_depth16unorm: available!(macos = 10.12, ios = 13.0, tvos = 13.0, visionos = 1.0),
             // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=12

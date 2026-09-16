@@ -79,6 +79,7 @@ impl MetalHost {
     }
 
     pub(crate) fn stop(&mut self, host: &mut NativeHost, message: String) {
+        eprintln!("CapyCanvas GPU stopped: {message}");
         // Retire capture/encoder resources on a worker. Their completion can
         // wait, but already captured immutable rasters remain saveable.
         let suspension = host.suspend_renderer();

@@ -129,6 +129,7 @@ private struct WorkspaceDialog: View {
         VStack(alignment: .leading, spacing: 14) {
             if store.state["customization"]["control"].string == "brush_color" {
                 ColorPanel(store: store).frame(maxWidth: 320)
+                PaintColorControls(store: store)
             }
             HStack { Spacer(); Button("Done", role: .cancel) { action("close_control") }.keyboardShortcut(.cancelAction) }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("toolbar-control-popup")

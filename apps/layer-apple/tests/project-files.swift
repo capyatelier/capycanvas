@@ -55,14 +55,14 @@ import ImageIO
             var saveLocation: URL? = target
             var openLocation: URL? = target
             var choices = 0
-            var creationExtent: [UInt32]? = [63, 47]
+            var creationOptions: JSON? = JSON(["extent": [63, 47], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])
             var beforeOpen: (() -> Void)?
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(
                 open: { choices += 1; beforeOpen?(); $0(openLocation) },
                 save: { _, _, callback in choices += 1; callback(saveLocation) },
                 create: { spec, callback in
                     precondition(spec["extent"][0].uint == 2048 && spec["maximum"].uint == 8192)
-                    callback(creationExtent)
+                    callback(creationOptions)
                 },
                 export: platform == 0 ? { staging, callback in
                     choices += 1
@@ -190,8 +190,8 @@ import ImageIO
             // A command queued ahead of URL delivery may make Open unavailable
             // before its request reaches Rust. Reject it as a document operation
             // and retire the URL reservation so the next Open remains usable.
-            let extent = creationExtent
-            creationExtent = nil
+            let extent = creationOptions
+            creationOptions = nil
             store.invoke("new_document")
             store.projectFiles.openURL(target)
             _ = await withCheckedContinuation { continuation in
@@ -202,7 +202,7 @@ import ImageIO
             }
             precondition(store.failure == nil && store.projectFiles.error?.contains("unavailable during this interaction") == true,
                 "A rejected external Open belongs to the document alert, not a canvas failure")
-            creationExtent = extent; store.projectFiles.error = nil
+            creationOptions = extent; store.projectFiles.error = nil
             let retryEpoch = store.state["document_file"]["epoch"].uint
             store.projectFiles.openURL(target)
             try await wait("External Open reservation survived a rejected command") {
@@ -228,7 +228,7 @@ import ImageIO
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(store.state["layers"].array.count == 2 && store.state["document_file"]["epoch"].uint == epoch + 1)
             let createdEpoch = store.state["document_file"]["epoch"].uint
-            creationExtent = nil
+            creationOptions = nil
             try await invoke("new_document")
             precondition(store.state["document_file"]["epoch"].uint == createdEpoch, "Cancelled size choice must keep the drawing")
             let png = root.appendingPathComponent("export-\(platform).png")

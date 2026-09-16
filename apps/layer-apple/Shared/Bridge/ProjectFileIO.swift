@@ -27,9 +27,9 @@ final class NativeProjectTask: @unchecked Sendable {
             }) { [self] descriptor in try self.check(capy_project_write(self.handle, descriptor)) }
         }
     }
-    func read(from url: URL?, extent: [UInt32]? = nil) throws {
+    func read(from url: URL?, options: JSON? = nil) throws {
         guard let url else {
-            if let extent { try check(capy_project_new(handle, extent[0], extent[1])) }
+            if let options { try check(try options.encoded().withCString { capy_project_new(handle, $0) }) }
             else { try check(capy_project_read(handle, -1)) }
             return
         }

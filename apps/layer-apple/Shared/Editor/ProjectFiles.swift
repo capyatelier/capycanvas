@@ -16,7 +16,9 @@ import UIKit
     @Published var picker: Picker?
     @Published var cancelling = false
     @Published var creating = false
-    private var creationCompletion: (([UInt32]?) -> Void)?
+    @Published var creationError: String?
+    @Published var creationSaving = false
+    private var creationCompletion: ((JSON?) -> Void)?
     private var exportPreparing = false
     private weak var store: EditorStore?
     private var requestID: UInt64?
@@ -35,7 +37,7 @@ import UIKit
     struct Dialogs {
         var open: (@escaping (URL?) -> Void) -> Void
         var save: (String, UTType, @escaping (URL?) -> Void) -> Void
-        var create: ((JSON, @escaping ([UInt32]?) -> Void) -> Void)? = nil
+        var create: ((JSON, @escaping (JSON?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
     }
     private let dialogs: Dialogs?
@@ -68,12 +70,12 @@ import UIKit
             destination = URL(string: document["location"]["uri"].string)
             save(as: document["location"].isNull) { [weak self] saved in self?.finish(saved) }
         case "new":
-            let completed: ([UInt32]?) -> Void = { [weak self] extent in
+            let completed: (JSON?) -> Void = { [weak self] options in
                 guard let self else { return }
-                if let extent { open(nil, extent: extent) } else { finish() }
+                if let options { open(nil, options: options) } else { finish() }
             }
             if let create = dialogs?.create { create(newDocumentSpec, completed) }
-            else { creationCompletion = completed; creating = true }
+            else { creationError = nil; creationCompletion = completed; creating = true }
         case "export": exportPNG(name: document["name"].string)
         case "open":
             if let url = externalOpen?.url { externalOpen = nil; open(url) }
@@ -168,10 +170,32 @@ import UIKit
             }
         }
     }
-    var newDocumentSpec: JSON { store?.catalog["new_document"] ?? JSON() }
-    func created(_ extent: [UInt32]?) {
-        let completion = creationCompletion; creationCompletion = nil; creating = false
-        completion?(extent)
+    var newDocumentSpec: JSON {
+        (store?.catalog["new_document"] ?? JSON()).replacing("creation",
+            with: store?.snapshot["document_options"]["creation"] ?? JSON())
+    }
+    func created(_ choice: NewDrawingChoice?) {
+        guard !creationSaving, creationCompletion != nil else { return }
+        func complete(_ options: JSON?) {
+            let completion = creationCompletion; creationCompletion = nil; creating = false
+            completion?(options)
+        }
+        guard let choice else { complete(nil); return }
+        let name = choice.presetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty || choice.useAsDefaults else { complete(choice.options); return }
+        guard let store else { creationError = "The canvas session is unavailable"; return }
+        var settings = store.state["settings"]["new_document"]
+        if choice.useAsDefaults { settings = settings.replacing("defaults", with: choice.options) }
+        if !name.isEmpty {
+            settings = settings.replacing("presets", with: JSON(settings["presets"].array.map(\.raw)
+                + [["name": name, "options": choice.options.raw]]))
+        }
+        creationSaving = true
+        store.edit(["type": "new_document_settings", "settings": settings.raw]) { [weak self] error in
+            guard let self else { return }
+            creationSaving = false; creationError = error
+            if error == nil { complete(choice.options) }
+        }
     }
     private func save(as copy: Bool, completion: @escaping (Bool) -> Void) {
         if !copy, let destination { write(destination, completion: completion); return }
@@ -258,12 +282,12 @@ import UIKit
             }
         }
     }
-    private func open(_ url: URL?, extent: [UInt32]? = nil) {
+    private func open(_ url: URL?, options: JSON? = nil) {
         let recovery = recovering
         task(opening: true) { [weak self] task in
             NativeProjectTask.io.async {
                 do {
-                    try task.read(from: url, extent: extent)
+                    try task.read(from: url, options: options)
                     DispatchQueue.main.async {
                         guard let self else { return }
                         if self.cancelled { self.finish(); return }
@@ -368,7 +392,9 @@ struct ProjectFilesModifier: ViewModifier {
                 }
             } message: { if let error = files.error { Text(error) } }
             .sheet(isPresented: $files.creating, onDismiss: { files.created(nil) }) {
-                NewDrawingForm(spec: files.newDocumentSpec) { files.created($0) }.modifier(EditorPopupPresentation())
+                NewDrawingForm(spec: files.newDocumentSpec, error: files.creationError, busy: files.creationSaving) {
+                    files.created($0)
+                }.interactiveDismissDisabled(files.creationSaving).modifier(EditorPopupPresentation())
             }
             #if os(iOS)
             // Files may deliver its URL after SwiftUI dismisses this sheet.

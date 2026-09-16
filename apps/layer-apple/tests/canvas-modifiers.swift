@@ -241,7 +241,7 @@ private final class ContactEvent: UIEvent {
             }
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 NativeProjectTask.io.async {
-                    do { try task.read(from: nil, extent: [128, 128]); done.resume() }
+                    do { try task.read(from: nil, options: JSON(["extent": [128, 128], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])); done.resume() }
                     catch { done.resume(throwing: error) }
                 }
             }

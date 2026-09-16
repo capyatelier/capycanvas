@@ -180,11 +180,13 @@ pub extern "C" fn capy_apple_color_resources(size: f32, shape: u32) -> *mut c_ch
 /// Stateless display-encoded wheel field. No editor, GPU or file access.
 /// # Safety
 /// `rgba` must point to `count` writable bytes exclusively borrowed for this call.
+/// `rgb_space` is a NUL-terminated shared RGB-space name valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_color_field(
     side: u32,
     hue: f32,
     shape: u32,
+    rgb_space: *const c_char,
     guide: bool,
     rgba: *mut u8,
     count: usize,
@@ -200,19 +202,15 @@ pub unsafe extern "C" fn capy_apple_color_field(
     {
         return 0;
     }
+    if rgb_space.is_null() { return 0; }
+    let Ok(name) = unsafe { CStr::from_ptr(rgb_space) }.to_str() else { return 0; };
+    let Ok(space) = serde_json::from_value(serde_json::Value::String(name.into())) else { return 0; };
+    let Some(shape) = color_shape(shape) else { return 0; };
     let pixels = unsafe { std::slice::from_raw_parts_mut(rgba, count) };
-    i32::from(match (color_shape(shape), guide) {
-        (Some(shape), true) => layer_ui::render_hue_guide(side, shape, pixels),
-        (Some(layer_ui::ColorShape::Circle), false) => {
-            layer_ui::render_okhsv_disc(side, hue, pixels)
-        }
-        (Some(layer_ui::ColorShape::Square), false) => {
-            layer_ui::render_hsv_field(side, hue, pixels)
-        }
-        (Some(layer_ui::ColorShape::Triangle), false) => {
-            layer_ui::render_hls_field(side, hue, pixels)
-        }
-        _ => false,
+    i32::from(if guide {
+        layer_ui::render_hue_guide(side, shape, space, pixels)
+    } else {
+        layer_ui::render_color_field(side, shape, hue, space, layer_core::color::RgbSpace::Srgb, pixels)
     })
 }
 /// # Safety

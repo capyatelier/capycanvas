@@ -30,7 +30,7 @@ struct ColorWheelDrawing: View {
             func point(_ value: JSON) -> CGPoint { CGPoint(x: value[0].number * side, y: value[1].number * side) }
             let center = point(geometry["center"])
             if let image = field.image(side: pixels,
-                hue: Float(model["wheel_components"][0].number), shape: shape) {
+                hue: Float(model["wheel_components"][0].number), shape: shape, rgbSpace: model["rgb_space"].string) {
                 var clipped = graphics
                 if shape == .circle {
                     let radius = geometry["disc_radius"].number * side
@@ -48,7 +48,7 @@ struct ColorWheelDrawing: View {
             let radius = (geometry["outer"].number + geometry["inner"].number) * side / 2
             let ring = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
                 width: radius * 2, height: radius * 2))
-            if let image = guide.image(side: pixels, hue: 0, shape: shape, guide: true) {
+            if let image = guide.image(side: pixels, hue: 0, shape: shape, rgbSpace: model["rgb_space"].string, guide: true) {
                 var clipped = graphics
                 clipped.clip(to: ring.strokedPath(StrokeStyle(lineWidth: (geometry["outer"].number - geometry["inner"].number) * side)))
                 clipped.draw(Image(decorative: image, scale: 1).interpolation(.low),
@@ -88,14 +88,16 @@ final class ColorWheelResources: ObservableObject {
 final class ColorFieldImageCache: ObservableObject {
     private var key: Key?
     private var cached: CGImage?
-    private struct Key: Equatable { let side: UInt32; let hue: Float; let shape: ColorWheelShape; let guide: Bool }
-    func image(side: CGFloat, hue: Float, shape: ColorWheelShape, guide: Bool = false) -> CGImage? {
+    private struct Key: Equatable { let side: UInt32; let hue: Float; let shape: ColorWheelShape; let space: String; let guide: Bool }
+    func image(side: CGFloat, hue: Float, shape: ColorWheelShape, rgbSpace: String, guide: Bool = false) -> CGImage? {
         guard side.isFinite, side >= 1, side <= 2048, hue.isFinite else { return nil }
-        let next = Key(side: UInt32(side.rounded()), hue: guide ? 0 : hue, shape: shape, guide: guide)
+        let next = Key(side: UInt32(side.rounded()), hue: guide ? 0 : hue, shape: shape, space: rgbSpace, guide: guide)
         if key == next { return cached }
         var bytes = Data(count: Int(next.side) * Int(next.side) * 4)
         guard bytes.withUnsafeMutableBytes({ buffer in
-            capy_apple_color_field(next.side, next.hue, shape.rawValue, guide, buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count)
+            rgbSpace.withCString {
+                capy_apple_color_field(next.side, next.hue, shape.rawValue, $0, guide, buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count)
+            }
         }) == 1, let provider = CGDataProvider(data: bytes as CFData),
             let space = CGColorSpace(name: CGColorSpace.sRGB),
             let image = CGImage(width: Int(next.side), height: Int(next.side),

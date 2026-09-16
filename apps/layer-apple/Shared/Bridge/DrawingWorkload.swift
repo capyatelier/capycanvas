@@ -56,7 +56,8 @@ import Foundation
         let extent = plan.extent
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             NativeProjectTask.io.async {
-                do { try job.read(from: nil, extent: [extent, extent]); continuation.resume() }
+                do { try job.read(from: nil, options: JSON(["extent": [extent, extent],
+                    "color": ["space": "Srgb", "depth": "U8"], "background": "White"])); continuation.resume() }
                 catch { continuation.resume(throwing: error) }
             }
         }

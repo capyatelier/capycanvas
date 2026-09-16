@@ -899,7 +899,7 @@ fn display_rgb(space: RgbSpace, display: RgbSpace, rgb: [f32; 3]) -> [f32; 3] {
 
 /// Opaque sRGB pixels for hosts that cache the hue guide instead of using a
 /// native conic gradient. The host clips its antialiased ring silhouette.
-pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
+pub fn render_hue_guide(side: u32, shape: ColorShape, space: RgbSpace, rgba: &mut [u8]) -> bool {
     if side == 0
         || (side as usize)
             .checked_mul(side as usize)
@@ -910,6 +910,7 @@ pub fn render_hue_guide(side: u32, shape: ColorShape, rgba: &mut [u8]) -> bool {
     }
     let geometry = ColorWheelGeometry::new(side as f32).unwrap();
     let mut state = ColorState::default();
+    state.set_rgb_space(space).unwrap();
     state.apply(ColorAction::Shape { shape }).unwrap();
     let stops = state.wheel_hue_stops();
     for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -1936,27 +1937,30 @@ mod tests {
         }
         let side = 101;
         let mut bytes = vec![0; side * side * 4];
-        for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
-            assert!(render_hue_guide(side as u32, shape, &mut bytes));
-            let mut state = ColorState::default();
-            state.apply(ColorAction::Shape { shape }).unwrap();
-            for (x, y, hue) in [(95, 50, 150.), (50, 95, 240.), (5, 50, 330.), (50, 5, 60.)] {
-                let hue = hue + if shape == ColorShape::Circle { 24. } else { 0. };
-                let expected = state.wheel_hue_color(hue);
-                let pixel = &bytes[(y * side + x) * 4..][..4];
-                // Shared guide interpolation is within one byte of the exact
-                // hue curve; RGBA8 rounding adds at most another half byte.
-                for c in 0..3 {
-                    assert!((pixel[c] as f32 - expected[c] * 255.).abs() <= 1.501);
+        for space in RgbSpace::ALL {
+            for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
+                assert!(render_hue_guide(side as u32, shape, space, &mut bytes));
+                let mut state = ColorState::default();
+                state.set_rgb_space(space).unwrap();
+                state.apply(ColorAction::Shape { shape }).unwrap();
+                for (x, y, hue) in [(95, 50, 150.), (50, 95, 240.), (5, 50, 330.), (50, 5, 60.)] {
+                    let hue = hue + if shape == ColorShape::Circle { 24. } else { 0. };
+                    let expected = state.wheel_hue_color(hue);
+                    let pixel = &bytes[(y * side + x) * 4..][..4];
+                    // Shared guide interpolation is within one byte of the exact
+                    // hue curve; RGBA8 rounding adds at most another half byte.
+                    for c in 0..3 {
+                        assert!((pixel[c] as f32 - expected[c] * 255.).abs() <= 1.501);
+                    }
+                    assert_eq!(pixel[3], 255);
                 }
-                assert_eq!(pixel[3], 255);
             }
         }
         let mut invalid = [23; 16];
         assert!(!render_hsv_field(2, f32::NAN, &mut invalid));
         assert!(!render_hsv_field(3, 0., &mut invalid));
-        assert!(!render_hue_guide(0, ColorShape::Circle, &mut invalid));
-        assert!(!render_hue_guide(3, ColorShape::Circle, &mut invalid));
+        assert!(!render_hue_guide(0, ColorShape::Circle, RgbSpace::Srgb, &mut invalid));
+        assert!(!render_hue_guide(3, ColorShape::Circle, RgbSpace::Srgb, &mut invalid));
         assert_eq!(invalid, [23; 16]);
     }
     #[test]

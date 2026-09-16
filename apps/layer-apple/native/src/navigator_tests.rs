@@ -142,7 +142,7 @@ fn live_navigator_uses_current_document_camera_and_display_scale_without_bitmaps
                 .canvas_preview_pending()
         );
         let project = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_new(project.0, 600, 300) }, 0);
+        assert_eq!(project.create([600, 300]), 0);
         assert_eq!(
             unsafe {
                 capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr())

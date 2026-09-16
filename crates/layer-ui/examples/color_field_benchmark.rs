@@ -17,7 +17,7 @@ fn main() {
                     let hue = black_box((step % 360) as f32);
                     let pixels = black_box(&mut pixels);
                     assert!(if guide {
-                        layer_ui::render_hue_guide(side, shape, pixels)
+                        layer_ui::render_hue_guide(side, shape, layer_core::color::RgbSpace::Srgb, pixels)
                     } else {
                         match shape {
                             layer_ui::ColorShape::Circle => {
