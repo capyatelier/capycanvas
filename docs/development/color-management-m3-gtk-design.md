@@ -104,10 +104,15 @@ pending requests; never queue unbounded profile jobs. Reuse the compiled present
 shader. Proof changes invalidate the viewing transform only, not source/composite
 caches. No per-stroke compilation and no full-resolution proof copy.
 
-The initial LUT candidate is tetrahedral Float32, 65³ in encoded working RGB,
-with RGB appearance plus a gamut-distance channel (4.2 MiB). Measure interpolation
-before freezing resolution/domain; allow 129³ (32.8 MiB) if necessary. A pending
-and active LUT plus generation scratch must fit 128 MiB CPU and 80 MiB GPU.
+The LUT is tetrahedral Float32, 65³ in encoded working RGB, refined to 129³
+when the independent off-grid probes require it. Measurement rejected interpolating
+the discontinuous gamut score: nine ProPhoto/CMYK cases failed even at 129³.
+Instead store RGB appearance and both continuous round-trip distances, and evaluate
+the classifier after interpolation. All 36 CMYK preview cases then pass unchanged
+tolerances. This costs 5.24 MiB at 65³ or 40.95 MiB at 129³. Revise the GPU bound
+to 96 MiB for atomic replacement of active/pending caches; CPU active, pending and
+generation scratch remain bounded to 128 MiB. Upload initialized Float32 samples
+directly into a shader storage buffer to avoid an extra full-size packing copy.
 Extended linear composition must be handled explicitly before lookup. Source
 storage, exact editing and export retain the existing precision contract.
 

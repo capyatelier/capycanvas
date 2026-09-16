@@ -469,6 +469,37 @@ mod tests {
     }
 
     #[test]
+    fn proof_metadata_rejects_invalid_policy_and_profile_references_before_payloads() {
+        use crate::color::{ColorProfile, ProofRecipe};
+        let mut project = source_fixture();
+        project.document.proof = Some(ProofRecipe::new("Lab paper".into(),
+            ColorProfile::Icc(vec![19; 1024].into())));
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        for mutate in [
+            |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["profile"] = serde_json::json!({"Embedded": 999}),
+            |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["name"] = "".into(),
+            |v: &mut serde_json::Value| v["tiled_sources"]["proof"]["name"] = "x".repeat(1025).into(),
+            |v: &mut serde_json::Value| {
+                v["tiled_sources"]["proof"]["simulate_paper"] = true.into();
+                v["tiled_sources"]["proof"]["simulate_black_ink"] = false.into();
+            },
+            |v: &mut serde_json::Value| {
+                v["tiled_sources"]["proof"]["conversion"]["intent"] = "AbsoluteColorimetric".into();
+                v["tiled_sources"]["proof"]["conversion"]["black_point_compensation"] = true.into();
+            },
+        ] {
+            let invalid = rewrite_manifest(&bytes, mutate);
+            let length = u64::from_le_bytes(invalid[12..20].try_into().unwrap()) as usize;
+            let error = Project::read(&invalid[..52 + length], Default::default()).unwrap_err();
+            assert!(!error.contains("incomplete") && !error.contains("I/O"), "{error}");
+        }
+        let mut invalid = project.clone();
+        invalid.document.proof.as_mut().unwrap().profile = ColorProfile::Icc(Arc::from([]));
+        assert!(invalid.write(&mut Vec::new()).unwrap_err().contains("proof"));
+    }
+
+    #[test]
     fn rasterized_image_role_roundtrips_and_rejects_wrong_document_interpretation() {
         use crate::color::{ColorProfile, source::SourceKind};
         let mut project = source_fixture();

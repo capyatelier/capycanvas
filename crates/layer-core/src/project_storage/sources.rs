@@ -3,7 +3,7 @@
 use super::*;
 use crate::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 enum ProfileReference {
     Builtin(RgbSpace),
     Embedded(usize),
@@ -46,6 +46,8 @@ pub(super) struct SourceIndex {
     images: Vec<ImageRecord>,
     layers: Vec<LayerSourceRecord>,
     profiles: Vec<ProfileRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proof: Option<crate::color::ProofRecipe<ProfileReference>>,
 }
 impl SourceIndex {
     pub(super) fn collect(
@@ -58,6 +60,18 @@ impl SourceIndex {
         let mut images = BTreeMap::new();
         let mut profiles = BTreeMap::new();
         let mut payloads = Vec::new();
+        let mut intern = |profile: &ColorProfile| match profile {
+            ColorProfile::Builtin(space) => ProfileReference::Builtin(*space),
+            ColorProfile::Icc(bytes) => {
+                let digest: [u8; 32] = Sha256::digest(bytes).into();
+                ProfileReference::Embedded(*profiles.entry(digest).or_insert_with(|| {
+                    let id = payloads.len();
+                    payloads.push(bytes.clone());
+                    id
+                }))
+            }
+        };
+        result.proof = document.proof.as_ref().map(|recipe| recipe.clone().with_profile(intern(&recipe.profile)));
         for layer in &document.layers {
             let Some(source) = &layer.source else {
                 continue;
@@ -65,19 +79,7 @@ impl SourceIndex {
             let image = *images
                 .entry(Arc::as_ptr(source) as usize)
                 .or_insert_with(|| {
-                    let profile = match &source.interpretation.profile {
-                        ColorProfile::Builtin(space) => ProfileReference::Builtin(*space),
-                        ColorProfile::Icc(bytes) => {
-                            let digest: [u8; 32] = Sha256::digest(bytes).into();
-                            ProfileReference::Embedded(*profiles.entry(digest).or_insert_with(
-                                || {
-                                    let id = payloads.len();
-                                    payloads.push(bytes.clone());
-                                    id
-                                },
-                            ))
-                        }
-                    };
+                    let profile = intern(&source.interpretation.profile);
                     let tiles = source
                         .tiles
                         .iter()
@@ -143,7 +145,7 @@ impl SourceIndex {
     ) -> Result<u64, String> {
         if self.images.len() > limits.layers
             || self.layers.len() > limits.layers
-            || self.profiles.len() > self.images.len()
+            || self.profiles.len() > self.images.len() + usize::from(self.proof.is_some())
         {
             return Err("Oversized source index".into());
         }
@@ -169,6 +171,13 @@ impl SourceIndex {
             return Err("Unused source image".into());
         }
         let mut profiles = BTreeSet::new();
+        if let Some(recipe) = &self.proof {
+            recipe.validate()?;
+            if let ProfileReference::Embedded(id) = recipe.profile {
+                if id >= self.profiles.len() { return Err("Missing embedded proof profile".into()); }
+                profiles.insert(id);
+            }
+        }
         let mut source_blobs = BTreeSet::new();
         let mut bytes = 0u64;
         for image in &self.images {
@@ -260,6 +269,13 @@ impl SourceIndex {
             profiles.push(bytes.into());
         }
         let mut images = Vec::new();
+        document.proof = self.proof.map(|recipe| {
+            let profile = match recipe.profile {
+                ProfileReference::Builtin(space) => ColorProfile::Builtin(space),
+                ProfileReference::Embedded(id) => ColorProfile::Icc(profiles[id].clone()),
+            };
+            recipe.with_profile(profile)
+        });
         for image in self.images {
             images.push(Arc::new(SourceImage {
                 resolution: image.resolution,

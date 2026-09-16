@@ -16,7 +16,7 @@ pub use output::{OutputStatistics, WorkingEncoder};
 pub use profiles::{gray_profile, profile_bytes, profile_channels};
 pub use working::WorkingDecoder;
 mod proof;
-pub use proof::{ProofSample, ProofTransform};
+pub use proof::{ProofLut, ProofSample, ProofTransform};
 
 type FloatTransform<const N: usize> = CompiledTransform<N, 4>;
 

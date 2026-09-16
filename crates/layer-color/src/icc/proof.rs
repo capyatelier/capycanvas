@@ -3,6 +3,8 @@ use super::*;
 use layer_core::color::ProofRecipe;
 mod black;
 mod lut;
+mod view_lut;
+pub use view_lut::ProofLut;
 mod pcs;
 use pcs::*;
 
@@ -12,6 +14,9 @@ pub struct ProofSample {
     pub xyz: [f64; 3],
     /// Values above 5 indicate output-gamut loss after inverse-table correction.
     pub gamut_distance: f64,
+    // Preserve the continuous distances when resampling. The classifier itself
+    // is discontinuous at repeat distance 5 and cannot be interpolated safely.
+    pub gamut_roundtrips: [f64; 2],
 }
 
 pub struct ProofTransform {
@@ -105,6 +110,7 @@ impl ProofTransform {
         Ok(ProofSample {
             xyz,
             gamut_distance,
+            gamut_roundtrips: [first, second],
         })
     }
 }

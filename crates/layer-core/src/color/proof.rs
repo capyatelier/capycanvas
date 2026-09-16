@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProofRecipe {
+pub struct ProofRecipe<P = ColorProfile> {
     pub name: String,
-    pub profile: ColorProfile,
+    pub profile: P,
     pub conversion: ConversionOptions,
     pub simulate_paper: bool,
     pub simulate_black_ink: bool,
@@ -23,6 +23,18 @@ impl ProofRecipe {
             },
             simulate_paper: false,
             simulate_black_ink: true,
+        }
+    }
+}
+
+impl<P> ProofRecipe<P> {
+    pub fn with_profile<Q>(self, profile: Q) -> ProofRecipe<Q> {
+        ProofRecipe {
+            name: self.name,
+            profile,
+            conversion: self.conversion,
+            simulate_paper: self.simulate_paper,
+            simulate_black_ink: self.simulate_black_ink,
         }
     }
 

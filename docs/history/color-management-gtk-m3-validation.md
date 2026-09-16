@@ -98,3 +98,30 @@ The shared run passed 78 core and 64 color tests; optional independent/device
 fixtures remain explicitly ignored in the ordinary suite. The proof reference
 test was run separately and passed. No render-path or UI performance acceptance
 is implied by this numerical checkpoint.
+
+## Saved recipe and cached-view checkpoint
+
+Native projects now embed the optional proof recipe through the existing binary
+profile index. Identical source/proof profile bytes share one payload and one
+restored Arc. Recipe edits use ordinary undo/redo and dirty checkpoints without
+invalidating the artwork composite. Both depths pass exact save/reopen/re-save,
+profile deduplication, undo and unchanged raster digests. Malformed references,
+oversized/empty names and conflicting simulation policy fail before payload reads.
+The shared suite passes 80 core and 65 color tests (5 optional fixture tests ignored).
+
+The derived view uses 65³ or 129³ tetrahedral Float32 samples with three appearance
+components and two independent gamut round-trip distances. Interpolating the final
+discontinuous gamut score failed nine ProPhoto/CMYK cases; retaining the distances
+resolves all nine without changing thresholds. All 108 cache builds pass for
+three targets, four spaces, three intent/BPC choices and three simulation states.
+This is not yet the full cache intent/BPC/reference corpus. Cache sizes are
+5,492,500 or 42,933,780 bytes. Typical 65³ cold builds take 200–300 ms; 129³ builds
+take roughly 1.8–2.3 s on this host. Logs: `lut-distances.log` and
+`lut-rgb-distances.log`; command: the `layer-color` release example `proof_lut`
+with the three profile paths recorded above. The design records the revised
+96 MiB GPU cache budget needed for atomic replacement.
+
+Fresh pre-render-integration native 24/45/60 MP navigation runs also pass using
+the saved baseline executable and the same 4K/200%/120 Hz flags. Artifacts are
+`baseline/navigation-{24mp,45mp,60mp}*`, including `/usr/bin/time -v` records.
+Detailed distributions and final comparisons remain outstanding.

@@ -1250,6 +1250,10 @@ pub struct Document {
     pub height: u32,
     pub color: color::DocumentColor,
     pub resolution: Option<ImageResolution>,
+    /// Saved independently of delivery, with binary profile bytes deduplicated
+    /// by the project source/profile index. Temporary view toggles live in UI.
+    #[serde(skip)]
+    pub proof: Option<color::ProofRecipe>,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
@@ -1290,6 +1294,7 @@ impl Document {
             height,
             color: color::DocumentColor::default(),
             resolution: None,
+            proof: None,
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {
@@ -1349,6 +1354,17 @@ impl Document {
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
             Edit::SetColor { color, layers } => self.apply_color_edit(color, layers)?,
+            Edit::SetProof(recipe) => {
+                if let Some(recipe) = &recipe {
+                    recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid proof recipe"))?;
+                    if let color::ColorProfile::Icc(bytes) = &recipe.profile
+                        && (bytes.is_empty() || bytes.len() > color::source::MAX_PROFILE_BYTES)
+                    {
+                        return Err(DocumentError::InvalidLayerOperation("Invalid proof profile size"));
+                    }
+                }
+                Edit::SetProof(std::mem::replace(&mut self.proof, recipe))
+            }
             Edit::SetRaster { target, revision } => {
                 let raster = self
                     .target_raster_mut(target)
@@ -1580,6 +1596,8 @@ impl Document {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
+    /// Metadata only; no raster conversion or composite invalidation.
+    SetProof(Option<color::ProofRecipe>),
     /// One atomic interpretation/backing change. Structure and properties stay
     /// intact; all native color and scalar replacements must be host-backed.
     SetColor {
@@ -1633,7 +1651,7 @@ impl Edit {
 
     fn requires_history_admission(&self, document: &Document) -> bool {
         match self {
-            Self::SetColor { .. } => true,
+            Self::SetColor { .. } | Self::SetProof(_) => true,
             Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
             Self::InsertLayer { layer, .. } => layer.source.is_some(),
             Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some()),
@@ -1697,7 +1715,7 @@ impl Edit {
     /// Guide-only edits affect presentation, never committed raster pixels.
     pub fn changes_image(&self) -> bool {
         match self {
-            Self::SetRulers(_) => false,
+            Self::SetRulers(_) | Self::SetProof(_) => false,
             Self::Batch(edits) => edits.iter().any(Self::changes_image),
             _ => true,
         }
@@ -1749,6 +1767,12 @@ impl HistoryEntry {
                 Edit::SetSelection(selection) => serialized(selection),
                 Edit::SetRulers(rulers) => serialized(rulers),
                 Edit::SetReferences(ids) => serialized(ids),
+                Edit::SetProof(recipe) => recipe.as_ref().map_or(0, |recipe| {
+                    recipe.name.len().saturating_add(match &recipe.profile {
+                        color::ColorProfile::Builtin(_) => 0,
+                        color::ColorProfile::Icc(bytes) => bytes.len(),
+                    })
+                }),
                 _ => 0,
             })
         }
