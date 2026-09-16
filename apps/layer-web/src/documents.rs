@@ -45,19 +45,6 @@ impl WebApp {
             .await
         }))
     }
-    pub fn inspect_profile(&self, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
-        if bytes.length() as usize > layer_color::MAX_ICC_BYTES {
-            return Err(js("ICC profile exceeds 16 MiB"));
-        }
-        let profile = layer_core::color::ColorProfile::Icc(bytes.to_vec().into());
-        let channels = layer_color::profile_channels(&profile).map_err(js)?;
-        let name = layer_color::profile_description(&profile).map_err(js)?;
-        serialize(&layer_ui::ExportProfile {
-            profile,
-            channels,
-            name,
-        })
-    }
     pub fn export_form(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::ExportForm::new(self.session.engine().document()))
     }

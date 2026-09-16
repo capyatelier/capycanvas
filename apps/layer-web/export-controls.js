@@ -35,6 +35,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;error.textContent="";}
       catch(e){error.textContent=String(e);}
     }));
+    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(e){error.textContent=String(e);}}));
     const selected=()=>app.export_validate({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
       size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
@@ -87,7 +88,7 @@ export function importProfile(app,element) {
   return new Promise((resolve,reject)=>{
     const input=element("input");input.type="file";input.accept=".icc,.icm";input.hidden=true;document.body.append(input);
     input.oncancel=()=>{input.remove();resolve(null);};
-    input.onchange=async()=>{try{const file=input.files[0];if(!file){resolve(null);return;}if(file.size>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");resolve(app.inspect_profile(new Uint8Array(await file.arrayBuffer())));}catch(e){reject(e);}finally{input.remove();}};
+    input.onchange=async()=>{try{const file=input.files[0];if(!file){resolve(null);return;}if(file.size>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");resolve(await app.profile_library("import",undefined,new Uint8Array(await file.arrayBuffer())));}catch(e){reject(e);}finally{input.remove();}};
     input.click();
   });
 }
@@ -100,6 +101,34 @@ export function chooseSourceProfile({app,dialog,element,button}) {
     ["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].forEach((name,i)=>{const option=element("option","",name);option.value=i;select.append(option);});form.append(select);
     const error=element("p","error-message");form.append(error);
     form.append(button("Import ICC Profile…",async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;error.textContent="";}catch(e){error.textContent=String(e);}}));
+    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;select.append(option);select.value=option.value;}catch(e){error.textContent=String(e);}}));
     const footer=element("footer");footer.append(button("Cancel",()=>finish(null)),button("Use Profile",()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
+  });
+}
+
+export function chooseProfileLibrary({app,element,button,manage=false}) {
+  return new Promise(resolve=>{
+    const root=element("dialog","document-dialog profile-library"),form=element("form"),list=element("div"),error=element("p","error-message");
+    form.method="dialog";let result=null,closed=false;
+    const finish=value=>{result=value;root.close();};
+    root.addEventListener("close",()=>{closed=true;root.remove();resolve(result);},{once:true});
+    form.append(element("h2","","Color Profile Library"),element("p","","Imported profiles are stored as exact copies. Removing an entry leaves original files and profiles embedded in drawings or export presets intact."),list,error);
+    const done=button("Done",()=>finish(null));
+    const run=async action=>{
+      const inputs=[...form.querySelectorAll('button')];inputs.forEach(b=>b.disabled=true);error.textContent="";
+      try{await action();}catch(e){if(!closed)error.textContent=String(e);}finally{if(!closed)inputs.forEach(b=>b.disabled=false);}
+    };
+    const refresh=async()=>{
+      const entries=await app.profile_library("list");if(closed)return;
+      list.replaceChildren();if(!entries.length)list.append(element("p","","No imported profiles"));
+      for(const entry of entries){
+        const row=element("section","profile-entry"),actions=element("div","document-size");
+        row.append(element("h3","",entry.name),element("p","",entry.issue??`${entry.channels} · ${entry.bytes} bytes · ${entry.id.slice(0,12)}`));
+        if(!manage&&!entry.issue)actions.append(button("Use Profile",()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
+        actions.append(button("Remove",()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
+      }
+    };
+    form.append(button("Import ICC Profile…",()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
+    form.onsubmit=e=>e.preventDefault();root.append(form);document.body.append(root);root.showModal();run(refresh);
   });
 }

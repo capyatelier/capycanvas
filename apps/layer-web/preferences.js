@@ -1,6 +1,7 @@
+import {chooseProfileLibrary} from './export-controls.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
-export function createPreferences({ element, button, icon, numberField, panelFrame, dispatch, view }) {
+export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view }) {
   const dialog = document.getElementById("settings");
   const send = (action) => dispatch({ type: "preferences", action });
   const close = () => dispatch({ type: "close_settings" });
@@ -236,6 +237,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget });
         }
       }
+      if(page.id==="color")node.append(button("Manage Color Profiles…",()=>chooseProfileLibrary({app,element,button,manage:true})));
       if (page.id === "shortcuts") {
         shortcutSearch = element("input", "preferences-search"); shortcutSearch.type = "search";
         shortcutSearch.id = "shortcuts-search"; shortcutSearch.placeholder = "Search shortcuts";

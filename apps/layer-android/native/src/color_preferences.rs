@@ -60,3 +60,21 @@ pub extern "system" fn Java_art_capycanvas_Native_exportPresets(
         }
     }
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_inspectProfileSummary(
+    mut env: JNIEnv,
+    _: JClass,
+    bytes: JByteArray,
+) -> jni::sys::jstring {
+    let result = (|| {
+        if env.get_array_length(&bytes).map_err(error)? as usize > layer_color::MAX_ICC_BYTES {
+            return Err("ICC profile exceeds 16 MiB".into());
+        }
+        let profile = layer_core::color::ColorProfile::Icc(
+            env.convert_byte_array(bytes).map_err(error)?.into(),
+        );
+        serde_json::to_string(&serde_json::json!({"name":layer_color::profile_description(&profile)?,"channels":layer_color::profile_channels(&profile)?})).map_err(error)
+    })();
+    crate::android::string(&mut env, result)
+}

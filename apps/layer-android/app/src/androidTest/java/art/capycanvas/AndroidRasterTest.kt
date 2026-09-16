@@ -239,6 +239,49 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
+        val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
+        png("profile-library.png",wide);open(File(files,"profile-library.png"))
+        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
+        val profile=form.getJSONArray("profiles").objects().first{it.getJSONObject("profile").has("Icc")}
+        val array=profile.getJSONObject("profile").getJSONArray("Icc");val bytes=ByteArray(array.length()){array.getInt(it).toByte()}
+        runBlocking {
+            ProfileStore.import(activity,bytes);ProfileStore.import(activity,bytes)
+            val entries=ProfileStore.list(activity);assertEquals(1,entries.size)
+            val id=entries[0].getString("id");val file=File(ColorPreferencesStore.directoryForTest,"color-profiles/$id.icc")
+            assertArrayEquals(bytes,file.readBytes())
+            assertEquals(array.toString(),ProfileStore.get(activity,id).getJSONObject("profile").getJSONArray("Icc").toString())
+            file.writeBytes(byteArrayOf(1,2,3));assertTrue(ProfileStore.list(activity)[0].has("issue"))
+            try {ProfileStore.get(activity,id);fail("Corrupt profile was accepted")}catch(e:Exception){assertTrue(e.message.orEmpty().contains("changed"))}
+            ProfileStore.import(activity,bytes)
+            val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+            val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(0).getJSONObject(1).toString()).put("profile",profile)
+            val saved=ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Embedded library copy","recipe" to recipe))
+            ProfileStore.remove(activity,id)
+            assertTrue(ProfileStore.list(activity).isEmpty())
+            assertEquals(array.toString(),ColorPreferencesStore.presets(activity,color,obj("type" to "get","index" to saved.getInt("index"))).getJSONObject("recipe").getJSONObject("profile").getJSONObject("profile").getJSONArray("Icc").toString())
+            ProfileStore.import(activity,bytes)
+        }
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("export_document")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Saved Profiles…").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Saved Profiles…").performScrollTo().performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Use Profile").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Use Profile").performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Color Profile Library").fetchSemanticsNodes().isEmpty()}
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        DocumentController.nativeFileJobsForTest=true
+        compose.runOnUiThread {host.dispatch(obj("type" to "open_settings","page" to "color"))}
+        compose.onNodeWithText("Manage Color Profiles…").performScrollTo().performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Remove").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Remove").performClick()
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("No imported profiles").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithTag("profile-library-done").performClick()
+        compose.runOnUiThread {host.dispatch(obj("type" to "close_settings"))}
+        assertNull(host.failure)
+    }
+
     @Test fun exportPresetsPersistAndRestoreEveryDeliveryChoice() {
         val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
         val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}

@@ -95,7 +95,7 @@ function runtimeFixture(t, changes = {}) {
     "color-controls.js": "export function colorButton() {}",
     "effects.js": "import {colorButton} from './color-controls.js'; export function createEffectPanels() {}",
     "tooltips.js": "export function installTooltips() {}",
-    "preferences.js": "export function createPreferences() {}",
+    "preferences.js": "import {chooseProfileLibrary} from './export-controls.js'; export function createPreferences() {}",
     "gpu.js": "export function showGpuNotice() {}",
     "customization.js": "import {colorButton} from './color-controls.js'; export function createCustomization() {}",
     "pkg/layer_web.js": "export default new URL('layer_web_bg.wasm', import.meta.url);",

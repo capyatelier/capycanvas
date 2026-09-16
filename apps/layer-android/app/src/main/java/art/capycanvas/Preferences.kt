@@ -84,6 +84,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     ?: "page:" + getString("page")
 
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
+    var profilesOpen by remember { mutableStateOf(false) }
+    if(profilesOpen) ProfileLibraryDialog({profilesOpen=false})
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val paneFocus = remember { FocusRequester() }
@@ -175,6 +177,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                                         }
                                     }
                                 }
+                                if(model.getString("page")=="color")TextButton({profilesOpen=true}){Text("Manage Color Profiles…")}
                                 model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
                                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
                                 }

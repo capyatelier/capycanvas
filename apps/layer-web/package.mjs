@@ -85,7 +85,7 @@ export function fingerprintAssets(directory) {
   let documents = read(join(directory, "documents.js"));
   for (const path of ["export-controls.js", "histogram.js","document-color.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
   publish("documents.js", documents);
-  publish("preferences.js");
+  publish("preferences.js", replaceRequired(read(join(directory, "preferences.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
   publish("gpu.js");
   publish("customization.js", replaceRequired(read(join(directory, "customization.js")), "from './color-controls.js'", `from "./${names["color-controls.js"]}"`));
   publish("numeric.js");

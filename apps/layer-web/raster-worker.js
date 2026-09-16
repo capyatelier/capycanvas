@@ -8,6 +8,7 @@ async function execute({id,request}) {
     let result;
     switch(request.operation) {
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
         const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));
         const prepared=wasm.raster_worker_export_presets(request.metadata,bytes??new Uint8Array());
@@ -109,14 +110,49 @@ async function recovery(mode, operation) {
   }); } finally { database.close(); }
 }
 
-async function colorPreferences(mode,operation) {
+async function colorPreferences(mode,operation,storeName="values") {
   const database=await new Promise((resolve,reject)=>{
-    const request=indexedDB.open("capy-color-preferences",1);
-    request.onupgradeneeded=()=>request.result.createObjectStore("values");
+    const request=indexedDB.open("capy-color-preferences",2);
+    request.onupgradeneeded=()=>{for(const name of ["values","profiles"])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name);};
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });
   try{return await new Promise((resolve,reject)=>{
-    const transaction=database.transaction("values",mode,{durability:"strict"}),request=operation(transaction.objectStore("values"));
+    const transaction=database.transaction(storeName,mode,{durability:"strict"}),request=operation(transaction.objectStore(storeName));
     transaction.oncomplete=()=>resolve(request.result);transaction.onabort=()=>reject(transaction.error||request.error||new Error("Color preferences were not saved"));transaction.onerror=()=>{};
   });}finally{database.close();}
+}
+
+const profileDigest=async bytes=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(b=>b.toString(16).padStart(2,"0")).join("");
+async function profileLibrary({operation,id},bytes) {
+  const store=(mode,op)=>colorPreferences(mode,op,"profiles");
+  const read=async id=>{
+    if(!/^[a-f0-9]{64}$/.test(id??""))throw new Error("Select an imported profile");
+    const data=await store("readonly",s=>s.get(id));
+    if(!data)throw new Error("Profile is no longer in the library");
+    if(data.length>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");
+    if(await profileDigest(data)!==id)throw new Error("Profile changed in storage; remove or reimport it");
+    return data;
+  };
+  if(operation==="get")return wasm.raster_worker_inspect_profile(await read(id),true);
+  if(operation==="remove"){
+    if(!/^[a-f0-9]{64}$/.test(id??""))throw new Error("Select an imported profile");
+    await store("readwrite",s=>s.delete(id));return true;
+  }
+  if(operation==="import"){
+    if(!bytes||bytes.length>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");
+    wasm.raster_worker_inspect_profile(bytes,false);const id=await profileDigest(bytes);
+    const keys=await store("readonly",s=>s.getAllKeys());let total=bytes.length;
+    const other=keys.filter(key=>key!==id);
+    for(const key of other)total+=(await store("readonly",s=>s.get(key))).length;
+    if(other.length>=128||total>64*1024*1024)throw new Error("The profile library limit is 128 profiles and 64 MiB");
+    await store("readwrite",s=>s.put(bytes,id));return wasm.raster_worker_inspect_profile(bytes,true);
+  }
+  if(operation!=="list")throw new Error("Unknown profile library action");
+  const keys=await store("readonly",s=>s.getAllKeys()),entries=[];let total=0;
+  for(const id of keys.slice(0,128)){
+    let bytes=0;
+    try{const data=await read(id);bytes=data.length;total+=bytes;if(total>64*1024*1024)throw new Error("Library exceeds 64 MiB; remove unused profiles");entries.push({...wasm.raster_worker_inspect_profile(data,false),id,bytes});}
+    catch(error){entries.push({id,bytes,name:`Unavailable profile ${id.slice(0,12)}`,issue:String(error)});}
+  }
+  return entries.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
 }

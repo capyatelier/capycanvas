@@ -253,3 +253,43 @@ export async function checkExportPresets({evaluate}) {
   await click('Cancel');await wait('!layerApp.state().document_file.busy');
   console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed');
 }
+
+export async function checkProfileLibrary({evaluate}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  await evaluate(`window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([sdrPhotoBytes],'profile-library.png')}}];`);
+  await invoke('open_document');await idle();
+  const report=await evaluate(`(async()=>{
+    window.libraryBytes=new Uint8Array(layerApp.app.export_form().profiles.find(p=>p.profile.Icc).profile.Icc);
+    window.libraryId=[...new Uint8Array(await crypto.subtle.digest('SHA-256',libraryBytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const before=await layerApp.app.profile_library('list');
+    const profile=await layerApp.app.profile_library('import',undefined,libraryBytes);await layerApp.app.profile_library('import',undefined,libraryBytes);
+    const entries=await layerApp.app.profile_library('list');
+    const exact=JSON.stringify((await layerApp.app.profile_library('get',libraryId)).profile.Icc)===JSON.stringify(profile.profile.Icc);
+    await new Promise((resolve,reject)=>{const open=indexedDB.open('capy-color-preferences',2);open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result,tx=db.transaction('profiles','readwrite');tx.objectStore('profiles').put(new Uint8Array([1,2,3]),libraryId);tx.oncomplete=()=>{db.close();resolve()};tx.onabort=()=>reject(tx.error)}});
+    const corrupt=(await layerApp.app.profile_library('list')).find(p=>p.id===libraryId).issue;
+    let rejected=false;try{await layerApp.app.profile_library('get',libraryId)}catch(e){rejected=String(e).includes('changed')}
+    await layerApp.app.profile_library('import',undefined,libraryBytes);
+    const recipe={...layerApp.app.export_form().recipes[0][1],profile};const saved=await layerApp.app.export_presets({type:'save',name:'Library ownership '+Date.now(),recipe});
+    await layerApp.app.profile_library('remove',libraryId);
+    const retained=JSON.stringify((await layerApp.app.export_presets({type:'get',index:Number(saved.index)})).recipe.profile.profile.Icc)===JSON.stringify(profile.profile.Icc);
+    await layerApp.app.export_presets({type:'remove',index:Number(saved.index)});await layerApp.app.profile_library('import',undefined,libraryBytes);
+    return{exact,corrupt:!!corrupt,rejected,retained,count:entries.filter(e=>e.id===libraryId).length};
+  })()`);
+  assert.deepEqual(report,{exact:true,corrupt:true,rejected:true,retained:true,count:1});
+  await invoke('export_document');await wait(`!!document.querySelector('select[aria-label="Output profile"]')`);await click('Saved Profiles…');
+  await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
+  await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
+  await wait(`!document.querySelector('.profile-library[open]')`);
+  const chosen=await evaluate(`document.querySelector('select[aria-label="Output profile"]').selectedOptions[0].textContent`);assert.match(chosen,/ProPhoto/i);
+  await click('Cancel');await idle();
+  await evaluate(`layerApp.dispatch({type:'open_settings',page:'color'})`);
+  await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Manage Color Profiles…').click()`);
+  await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
+  await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
+  await wait(`![...document.querySelectorAll('.profile-library .profile-entry')].some(e=>e.textContent.includes(libraryId.slice(0,12)))`);
+  await evaluate(`[...document.querySelectorAll('.profile-library button')].find(b=>b.textContent==='Done').click();layerApp.dispatch({type:'close_settings'});`);
+  console.log('ICC library exact bytes/dedup, corruption rejection/repair, independent embedded preset ownership, saved-profile export picker and Preferences management passed');
+}

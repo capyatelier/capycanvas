@@ -1,4 +1,4 @@
-import {importProfile} from './export-controls.js';
+import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // A comparison owns one immutable candidate. Cancel drains its work before the
 // document request is released; Apply publishes that exact prepared result.
 export async function chooseDocumentColor({app,dialog,element,button,gpuOperation,request,id}) {
@@ -25,7 +25,7 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
       const apply=button(source?(rasterize?"Rasterize":"Apply Profile"):"Apply",()=>{accepted=true;finish(true);},"suggested-action");apply.disabled=true;
       const cancel=button("Cancel",()=>{control?.cancel();finish(null);});
       const invalidate=()=>{candidate?.free();candidate=null;apply.disabled=true;comparison.replaceChildren();status.textContent="Preview the complete result before applying.";};
-      if(profile){const load=button("Import ICC Profile…",async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){status.textContent=String(error);}});inputs.push(load);form.append(load);}
+      if(profile){const load=button("Import ICC Profile…",async()=>{try{const imported=await importProfile(app,element);if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){status.textContent=String(error);}});const saved=button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;profiles.push(imported.profile);const option=element("option","",imported.name);option.value=profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(error){status.textContent=String(error);}});inputs.push(load,saved);form.append(load,saved);}
       inputs.forEach(node=>node.onchange=invalidate);
       const prepare=()=>{
         if(running)return;invalidate();control?.free();control=app.capture_control();

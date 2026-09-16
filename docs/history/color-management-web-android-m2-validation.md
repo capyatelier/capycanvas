@@ -423,3 +423,35 @@ Validation:
 Remaining feature work: reusable ICC profile-library management and flattened
 conversion copies. Broader correction/effect/display qualification and the final
 tablet navigation/memory benchmark still precede the user-test handoff.
+
+## Reusable ICC profile library — 2026-09-16
+
+Export and source-profile controls offer saved profiles as well as file import;
+Preferences → Color exposes library management. Imports store exact app-owned ICC
+copies under SHA-256 identities, deduplicate repeated imports, enforce 128-entry /
+64 MiB aggregate and 16 MiB per-profile limits, and verify stored bytes before use.
+Unavailable/corrupt entries show an explicit issue and can be removed or reimported.
+Deleting an entry affects neither original files nor profiles embedded in documents
+or export presets. Android uses atomic private files; Web uses a dedicated
+IndexedDB object store with strict transactions and an origin-wide lock. Listing
+returns profile metadata, and all ICC parsing is on the file worker. Web's former
+synchronous owner-side ICC inspection was removed.
+
+Validation:
+
+- `tablet-native-profile-library.log`: exact bytes/dedup, storage corruption
+  detection and reimport, independent preset ownership, real export profile
+  picker and Preferences library removal passed (6.206 s).
+- `tablet-web-profile-library.log`: prior SDR/output-preview/preset workflows plus
+  exact ICC bytes/dedup, corruption rejection/repair, independent preset
+  ownership, saved-profile picker and Preferences management passed.
+- The Web test found that the first worker handoff detached the caller's input
+  buffer. The public API now transfers a private copy, and repeated import of
+  the same caller-owned bytes passes. This was fixed before the passing run.
+- `android-profile-library-build.log`, `android-profile-library-tests-build.log`,
+  `web-profile-library-build.log`, `package-profile-library.log`: ARM64/Wasm builds
+  and all 13 production Web packaging tests passed.
+
+Flattened conversion copies remain the final feature gap. Broader workflows and
+viewing agreement, then the fresh tablet navigation/memory benchmark, still need
+qualification before final deployment and user testing.
