@@ -42,6 +42,9 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
     await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));};
       set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});
       if(${resize}){set('Pixel size','Fit');d.querySelector('input[aria-label="Maximum width"]').value='257';d.querySelector('input[aria-label="Maximum height"]').value='257';set('Resolution metadata','Ppi');d.querySelector('input[aria-label="Pixels per inch"]').value='300';}})()`);
+    if(resize){await click('Preview Output');await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')`);
+      assert.deepEqual(await evaluate(`(()=>{const canvas=document.querySelector('canvas[aria-label="Output preview"]');return[canvas.width,canvas.height]})()`),[257,129]);
+      assert.ok(await evaluate(`document.querySelector('dialog[open]').textContent.includes('excludes JPEG compression artifacts')`));}
     await click('Choose File…');await wait('!layerApp.state().document_file.busy');
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   };
@@ -94,6 +97,9 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   await evaluate(`[...document.querySelectorAll('.histogram-dialog button')].find(b=>b.textContent==='Close').click()`);
   const cancelled=await evaluate(`(async()=>{const c=layerApp.app.capture_control();c.cancel();try{await layerApp.app.histogram(c);return false}catch(e){return String(e).toLowerCase().includes('cancel')}finally{c.free()}})()`);
   assert.ok(cancelled);
+  await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+  await click('Preview Output');await click('Cancel');await wait('!layerApp.state().document_file.busy');
+  assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   const fileCount=await evaluate('sdrFiles.size');
   await evaluate(`window.sdrCancelObserver=new MutationObserver(()=>{const b=document.querySelector('.file-progress button');if(b){b.click();sdrCancelObserver.disconnect();}});sdrCancelObserver.observe(document.body,{childList:true,subtree:true});`);
   await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);await click('Choose File…');await wait('!layerApp.state().document_file.busy');

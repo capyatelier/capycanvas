@@ -3,7 +3,6 @@
 use super::{output::Rows, *};
 use layer_core::color::{OutputEncoding, RgbSpace};
 
-
 fn reduce(
     source: [u32; 2],
     bounds: [u32; 2],
@@ -69,20 +68,13 @@ impl SnapshotRenderer {
     ) -> Result<(SnapshotPreview, layer_color::OutputStatistics), String> {
         let mut preview = None;
         let statistics = self.write_rows(target, options, matte, |extent, actual, read| {
-            // Use the encoder's actual profile, including canonical grayscale
-            // profiles. Previewing the metadata as a tag would miss conversion.
-            let decoder = layer_color::WorkingDecoder::new(actual, space, Default::default())?;
-            let mut encoded = vec![0; extent[0] as usize * actual.pixel_bytes()];
-            preview = Some(reduce(extent, bounds, space, |y, pixels| {
-                read(y, &mut encoded)?;
-                decoder.decode_pixels(&encoded, pixels)?;
-                for pixel in pixels {
-                    for c in 0..3 {
-                        pixel[c] *= pixel[3];
-                    }
-                }
-                Ok(())
-            })?);
+            let (extent, pixels) =
+                layer_color::preview_encoded_rows(extent, bounds, space, actual, read)?;
+            preview = Some(SnapshotPreview {
+                extent,
+                space,
+                pixels,
+            });
             Ok(())
         })?;
         Ok((

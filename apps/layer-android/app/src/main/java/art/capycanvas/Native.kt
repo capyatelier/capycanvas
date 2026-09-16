@@ -62,6 +62,7 @@ internal object Native {
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)
     @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long
+    @JvmStatic external fun inspectionOutput(task: Long, recipe: String): Array<Any>
     @JvmStatic external fun inspectionHistogram(task: Long): String
     @JvmStatic external fun projectExportOptions(task: Long, recipe: String)
     @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long, cancel: Long = 0): Long

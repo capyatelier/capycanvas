@@ -125,3 +125,58 @@ pub extern "system" fn Java_art_capycanvas_Native_documentInfo(
             .and_then(|rows| serde_json::to_string(&rows).map_err(error)),
     )
 }
+
+/// Consumes one immutable inspection job on IO, like histogram capture.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    recipe: jni::objects::JString,
+) -> jni::sys::jobjectArray {
+    let job = unsafe { Box::from_raw(handle as *mut Inspection) };
+    let result = (|| {
+        let recipe: layer_ui::ExportRecipe =
+            serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
+        recipe.validate()?;
+        let (before,after,stats)=std::thread::Builder::new().name("capy-output-preview".into()).stack_size(8*1024*1024).spawn(move || {
+            let extent=recipe.size.extent([job.project.document.width,job.project.document.height])?;
+            let mut renderer=job.gpu.capture(job.project,job.background,job.time,Default::default(),job.control).map_err(error)?;
+            let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
+            renderer.set_output_extent(extent)?;
+            let (after,statistics)=renderer.preview_output([512,384],layer_core::color::RgbSpace::Srgb,&recipe.interpretation(),recipe.encoding,recipe.background.matte())?;
+            Ok::<_,String>((before,after,serde_json::json!({"extent":extent,"clipped_channels":statistics.clipped_channels}).to_string()))
+        }).map_err(error)?.join().map_err(|_|"Output preview worker failed".to_string())??;
+        let result = env
+            .new_object_array(3, "java/lang/Object", jni::objects::JObject::null())
+            .map_err(error)?;
+        let stats = env.new_string(stats).map_err(error)?;
+        env.set_object_array_element(&result, 0, stats)
+            .map_err(error)?;
+        for (i, preview) in [before, after].iter().enumerate() {
+            let bytes = env
+                .byte_array_from_slice(&preview_bytes(preview)?)
+                .map_err(error)?;
+            env.set_object_array_element(&result, i as i32 + 1, bytes)
+                .map_err(error)?;
+        }
+        Ok(result.into_raw())
+    })();
+    match result {
+        Ok(result) => result,
+        Err(e) => {
+            fail(&mut env, Err(e));
+            std::ptr::null_mut()
+        }
+    }
+}
+pub(crate) fn preview_bytes(
+    preview: &layer_render_wgpu::snapshot::SnapshotPreview,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(8 + preview.pixels.len() * 4);
+    for v in preview.extent {
+        bytes.extend_from_slice(&v.to_le_bytes())
+    }
+    bytes.extend(preview.srgb_bytes()?);
+    Ok(bytes)
+}

@@ -473,6 +473,30 @@ class AndroidRasterTest {
             native { Native.documentComplete(it, id, false, "null") }
             assertEquals(0L, file.length())
         } finally { Native.projectFree(outputTask); Native.captureFree(outputControl) }
+        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
+        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(0).getJSONObject(1).toString())
+            .put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(128,128)),"enlarge" to false)))
+        for(cancelled in listOf(false,true)) {
+            val flag=Native.captureControl();if(cancelled)Native.captureCancel(flag)
+            val task=native {Native.inspectionTask(it,flag)}
+            try {
+                val result=Native.inspectionOutput(task,recipe.toString())
+                if(cancelled)fail("Cancelled output preview succeeded")
+                val image=result[2] as ByteArray;val header=ByteBuffer.wrap(image).order(ByteOrder.LITTLE_ENDIAN)
+                assertEquals(128,header.int);assertEquals(96,header.int)
+                assertTrue(image.drop(8).all{(it.toInt() and 255)==255})
+            }catch(e:Exception){if(!cancelled)throw e;assertTrue(e.message.orEmpty().contains("cancel",ignoreCase=true))}
+            finally{Native.captureFree(flag)}
+        }
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("export_document")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("Preview Output").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Preview Output").performScrollTo().performClick()
+        compose.waitUntil(60_000) {compose.onAllNodesWithContentDescription("Output preview").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        DocumentController.nativeFileJobsForTest=true
+        assertEquals(epoch,native {state(it).getJSONObject("document_file").getLong("epoch")})
         native { Native.dispatch(it, obj("type" to "invoke", "command" to "histogram").toString()) }
         compose.runOnUiThread { host.documentChanged() }
         compose.onNodeWithText("Histogram").assertIsDisplayed()

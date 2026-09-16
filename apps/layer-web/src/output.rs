@@ -39,6 +39,7 @@ struct OutputMetadata {
     resolution: Option<layer_core::ImageResolution>,
     recipe: ExportRecipe,
     original: Option<String>,
+    preview: bool,
 }
 
 #[wasm_bindgen]
@@ -91,7 +92,9 @@ impl WebApp {
         id: u32,
         value: JsValue,
         control: &WebCaptureControl,
+        preview: Option<bool>,
     ) -> Result<js_sys::Promise, JsValue> {
+        let preview = preview.unwrap_or(false);
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
         recipe.validate().map_err(js)?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
@@ -119,6 +122,7 @@ impl WebApp {
                     .map_err(js)?,
                 recipe,
                 original: None,
+                preview,
             };
             let mut capture = gpu
                 .capture(
@@ -129,6 +133,16 @@ impl WebApp {
                     control.clone(),
                 )
                 .map_err(js)?;
+            let before = if preview {
+                Some(
+                    capture
+                        .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
+                        .await
+                        .map_err(js)?,
+                )
+            } else {
+                None
+            };
             let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
             let original = if extent == metadata.extent
                 && metadata.recipe.encoding.conversion == Default::default()
@@ -204,7 +218,14 @@ impl WebApp {
                 .await;
             }
             cancelled(&control)?;
-            result
+            let result = result?;
+            if let Some(before) = before {
+                let previews = js_sys::Array::new();
+                previews.push(&preview_value(&before)?);
+                previews.push(&js_sys::Reflect::get(&result, &js("preview"))?);
+                js_sys::Reflect::set(&result, &js("previews"), &previews)?;
+            }
+            Ok(result)
         }))
     }
 }
@@ -274,32 +295,49 @@ pub async fn raster_worker_output(
         position: 0,
         length: 0,
     };
-    let write = |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
-        match recipe.format {
-            ExportFormat::Png => layer_color::photo::write_png_rows(
-                output,
-                extent,
-                target,
-                metadata.resolution,
-                rows,
-            ),
-            ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
-                output,
-                extent,
-                target,
-                metadata.resolution,
-                rows,
-            ),
-            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
-                output,
-                extent,
-                target,
-                metadata.resolution,
-                recipe.jpeg_quality,
-                rows,
-            ),
-        }
-    };
+    let mut preview = None;
+    let write =
+        |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
+            if metadata.preview {
+                let (extent, pixels) = layer_color::preview_encoded_rows(
+                    extent,
+                    [512, 384],
+                    layer_core::color::RgbSpace::Srgb,
+                    target,
+                    rows,
+                )?;
+                preview = Some(layer_render_wgpu::snapshot::SnapshotPreview {
+                    extent,
+                    pixels,
+                    space: layer_core::color::RgbSpace::Srgb,
+                });
+                return Ok(());
+            }
+            match recipe.format {
+                ExportFormat::Png => layer_color::photo::write_png_rows(
+                    output,
+                    extent,
+                    target,
+                    metadata.resolution,
+                    rows,
+                ),
+                ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
+                    output,
+                    extent,
+                    target,
+                    metadata.resolution,
+                    rows,
+                ),
+                ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
+                    output,
+                    extent,
+                    target,
+                    metadata.resolution,
+                    recipe.jpeg_quality,
+                    rows,
+                ),
+            }
+        };
     let clipped = if let Some(original) = metadata.original {
         let project = raster_project::unpack(&original, buffers, true).await?;
         let source = project
@@ -353,5 +391,22 @@ pub async fn raster_worker_output(
         .map_err(js)?
         .clipped_channels
     };
-    serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))
+    let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))?;
+    if let Some(preview) = preview {
+        js_sys::Reflect::set(&result, &js("preview"), &preview_value(&preview)?)?;
+    }
+    Ok(result)
+}
+
+fn preview_value(
+    preview: &layer_render_wgpu::snapshot::SnapshotPreview,
+) -> Result<JsValue, JsValue> {
+    let value = js_sys::Object::new();
+    js_sys::Reflect::set(&value, &js("extent"), &serialize(&preview.extent)?)?;
+    js_sys::Reflect::set(
+        &value,
+        &js("pixels"),
+        &js_sys::Uint8Array::from(preview.srgb_bytes().map_err(js)?.as_slice()),
+    )?;
+    Ok(value.into())
 }

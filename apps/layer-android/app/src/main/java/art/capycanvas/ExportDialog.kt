@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -25,6 +26,15 @@ import org.json.JSONObject
     var ppi by remember { mutableStateOf("300") }
     var quality by remember { mutableStateOf("90") }
     val scope = rememberCoroutineScope()
+    val preview = remember { OutputPreview(host) }
+    DisposableEffect(preview) { onDispose { preview.close() } }
+    LaunchedEffect(recipe?.toString(),fit,width,height,resolution,ppi,quality) { preview.invalidate() }
+    fun selectedRecipe():JSONObject = JSONObject(recipe!!.toString()).apply {
+        put("jpeg_quality",quality.toIntOrNull() ?: error("Enter a JPEG quality from 1 to 100"))
+        put("size",if(fit)obj("Fit" to obj("bounds" to JSONArray(listOf(width.toIntOrNull(),height.toIntOrNull())),"enlarge" to false))else "Original")
+        put("resolution",if(resolution=="Ppi")obj("Ppi" to (ppi.toIntOrNull() ?: error("Enter a resolution")))else resolution)
+    }
+    fun dismiss() = preview.close(onDismiss)
     LaunchedEffect(Unit) {
         try {
             form = JSONObject(host.withNative { Native.query(it, obj("type" to "export_form").toString()) })
@@ -32,15 +42,12 @@ import org.json.JSONObject
         } catch (e: Exception) { error = e.message }
     }
     fun change(key: String, value: Any) { recipe = JSONObject(recipe!!.toString()).put(key, value) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Export image") },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
-        confirmButton = { TextButton(enabled = recipe != null, modifier = Modifier.testTag("export-choose-file"), onClick = {
+    AlertDialog(onDismissRequest = ::dismiss, title = { Text("Export image") },
+        dismissButton = { TextButton(::dismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(enabled = recipe != null && !preview.busy, modifier = Modifier.testTag("export-choose-file"), onClick = {
             scope.launch {
                 try {
-                    val selected = JSONObject(recipe!!.toString())
-                    selected.put("jpeg_quality", quality.toIntOrNull() ?: error("Enter a JPEG quality from 1 to 100"))
-                    selected.put("size", if (fit) obj("Fit" to obj("bounds" to JSONArray(listOf(width.toIntOrNull(), height.toIntOrNull())), "enlarge" to false)) else "Original")
-                    selected.put("resolution", if (resolution == "Ppi") obj("Ppi" to (ppi.toIntOrNull() ?: error("Enter a resolution"))) else resolution)
+                    val selected = selectedRecipe()
                     host.withNative { Native.query(it, obj("type" to "export_validate", "recipe" to selected).toString()) }
                     onChoose(selected)
                 } catch (e: Exception) { error = e.message ?: "Invalid export choices" }
@@ -50,7 +57,7 @@ import org.json.JSONObject
             Column(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Export a profiled copy. The editable drawing stays unchanged.")
                 val value = recipe; val model = form
-                if (value != null && model != null) {
+                if (value != null && model != null && !preview.busy) {
                     val recipes = model.getJSONArray("recipes")
                     ColorChoice("Destination", (0 until recipes.length()).map { it.toString() to recipes.getJSONArray(it).getString(0) }, destination) {
                         destination = it; recipe = JSONObject(recipes.getJSONArray(it.toInt()).getJSONObject(1).toString())
@@ -81,7 +88,13 @@ import org.json.JSONObject
                     if (fit) { OutlinedTextField(width, { width = it }, label = { Text("Maximum width") }, singleLine = true); OutlinedTextField(height, { height = it }, label = { Text("Maximum height") }, singleLine = true) }
                     ColorChoice("Resolution metadata", listOf("Master" to "Keep original", "Ppi" to "Pixels per inch", "Omit" to "Omit"), resolution) { resolution = it }
                     if (resolution == "Ppi") OutlinedTextField(ppi, { ppi = it }, label = { Text("Pixels per inch") }, singleLine = true)
+                    TextButton({try{preview.prepare(selectedRecipe())}catch(e:Exception){error=e.message}}){Text("Preview Output")}
                 } else if (error == null) CircularProgressIndicator()
+                if(preview.busy)Text("Preparing complete output comparison…")
+                preview.images.forEachIndexed {index,image->Text(if(index==0)"Artwork" else "Output");Image(image,if(index==0)"Artwork preview" else "Output preview",Modifier.fillMaxWidth().heightIn(max=180.dp))}
+                if(preview.images.isNotEmpty())Text("sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")
+                if(preview.clipped>0)Text("Some colors exceed the output gamut and will be clipped.")
+                preview.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         })

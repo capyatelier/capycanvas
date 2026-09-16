@@ -338,3 +338,51 @@ Validation:
 Remaining: flattened conversion copies, output comparison previews, persistent
 named export presets/profile library, broader correction/effect and display
 qualification, and the final tablet navigation/memory benchmark and handoff.
+
+## Output comparisons — 2026-09-16
+
+Export now offers Artwork/Output comparisons on Web and Android. The output
+preview consumes the actual encoded integer rows after output resizing, profile,
+depth, matte and dither, interprets them using the actual encoder profile, then
+reduces for the sRGB presentation. JPEG compression artifacts are explicitly
+excluded in the dialog. The shared encoded-row preview consumer is also used by
+GTK's existing snapshot preview, eliminating a separate tablet approximation.
+The editable master is never changed. Preview dismissal drains its private job;
+worker cancellation and temporary-file cleanup use the existing capture control.
+Browser output comparison reuses the bounded Float32/OPFS output transport and
+removes its temporary capture after the comparison, without producing an image
+file. Android uses an immutable inspection snapshot on IO.
+
+Validation:
+
+- `tablet-native-output-preview.log`: real Android histogram/output-preview
+  integration passed (11.046 s), including exact white output at the resized
+  128×96 extent, cancelled preview, actual export comparison UI and unchanged
+  document epoch; existing histogram and export-cancellation checks also passed.
+- `tablet-web-output-preview.log`: full SDR/source-policy/export/inspection
+  workflow passed with the actual resized 257×129 output comparison, explicit
+  JPEG-preview limitation, cancellation while preparing, and exact PNG/TIFF
+  U16 source/profile output unchanged.
+- `shared-output-preview-serial.log`: all 13 GPU snapshot regressions passed
+  with `cargo test -p layer-render-wgpu snapshot::tests:: -- --nocapture --test-threads=1`
+  (60.91 s), including preview agreement with delivered samples, profile/matte/
+  resize/dither, exact identity and hidden RGB, capture budgets and cancellation.
+- `android-output-preview-build.log`, `android-output-preview-tests-build.log`,
+  `web-output-preview-build.log`, `gtk-output-preview-check.log`,
+  `package-output-preview.log`: ARM64/Wasm builds, GTK check and all 13 production
+  browser packaging tests passed.
+
+The initial concurrent GPU test run crashed with SIGSEGV. Its core dump identifies
+`libvulkan.so.1` in `loader_get_icd_and_device` →
+`terminator_SetDebugUtilsObjectNameEXT` → wgpu-hal command-buffer object naming.
+The precise cause of that native loader failure is unknown; it is not reported
+as a fixed application defect or a color assertion failure. The complete same
+suite passed sequentially. Evidence is retained in
+`shared-output-preview-regressions.log` and
+`shared-output-preview-parallel-crash.log`; subsequent workstation GPU validation
+uses the documented sequential invocation. Tablet Vulkan and Chrome WebGPU
+integration runs did not exhibit this crash.
+
+Remaining feature work: persistent named export presets/profile library and
+flattened conversion copies, followed by broader workflow/display checks and the
+final tablet navigation/memory benchmark and user-test handoff.

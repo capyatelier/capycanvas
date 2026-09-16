@@ -1,7 +1,8 @@
 // The shared recipe describes a delivery copy, independent of the master.
-export function chooseExport({app,dialog,element,button}) {
+export async function chooseExport({app,dialog,element,button,gpuOperation,id}) {
+  let control,running,closed=false;
   const model=app.export_form();
-  return dialog("Export image",(form,finish)=>{
+  try { const result=await dialog("Export image",(form,finish)=>{
     let recipe=structuredClone(model.recipes[0][1]);
     const field=(label,node)=>{const root=element("label","document-size",label);node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
     const select=(label,choices)=>{const node=element("select");for(const[id,name]of choices){const option=element("option","",name);option.value=id;node.append(option);}return field(label,node);};
@@ -31,16 +32,37 @@ export function chooseExport({app,dialog,element,button}) {
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;error.textContent="";}
       catch(e){error.textContent=String(e);}
     }));
-    const footer=element("footer");footer.append(button("Cancel",()=>finish(null)),button("Choose File…",()=>{
-      if(!form.reportValidity())return;
-      try {
-        finish(app.export_validate({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
-          encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
-          size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:false}},
-          resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value}));
-      }catch(e){error.textContent=String(e);}
-    },"suggested-action"));form.append(footer);form.onsubmit=e=>e.preventDefault();
+    const selected=()=>app.export_validate({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
+      encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
+      size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:false}},
+      resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
+    const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
+    const invalidate=()=>{comparison.replaceChildren();status.textContent="";};
+    form.addEventListener("input",invalidate,true);form.addEventListener("change",invalidate,true);
+    const cancel=button("Cancel",()=>{control?.cancel();finish(null);});
+    const choose=button("Choose File…",()=>{if(!form.reportValidity())return;try{finish(selected());}catch(e){error.textContent=String(e);}},"suggested-action");
+    const preview=button("Preview Output",()=>{
+      if(running||!form.reportValidity())return;
+      let recipe;try{recipe=selected();}catch(e){error.textContent=String(e);return;}
+      invalidate();control?.free();control=app.capture_control();status.textContent="Preparing complete output comparison…";error.textContent="";
+      const inputs=[...form.querySelectorAll('input,select,button')].filter(node=>node!==cancel);inputs.forEach(node=>node.disabled=true);
+      running=(async()=>{
+        try{
+          const output=await gpuOperation(()=>app.export_image(id,recipe,control,true));
+          if(closed||control.cancelled())return;
+          output.previews.forEach((image,index)=>{const figure=element("figure"),canvas=element("canvas");[canvas.width,canvas.height]=image.extent;
+            canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?"Output preview":"Artwork preview");
+            figure.append(canvas,element("figcaption","",index?"Output":"Artwork"));comparison.append(figure);});
+          status.textContent="sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts."+(output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
+        }catch(e){if(!closed&&!control.cancelled())error.textContent=String(e);}
+        finally{running=null;if(!closed)inputs.forEach(node=>node.disabled=false);}
+      })();
+    });
+    footer.append(cancel,preview,choose);form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
   });
+  closed=true;control?.cancel();await running;return result;
+  }finally{control?.free();}
+
 }
 
 export function importProfile(app,element) {

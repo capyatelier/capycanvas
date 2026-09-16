@@ -36,3 +36,30 @@ pub fn encode_working_rows(
     })?;
     Ok(statistics)
 }
+
+/// Decode the actual delivered integer rows before reducing for display. Profile,
+/// matte, resize and dither have already been applied by the output row producer.
+/// This intentionally excludes lossy codec compression artifacts.
+pub fn preview_encoded_rows(
+    extent: [u32; 2],
+    bounds: [u32; 2],
+    space: RgbSpace,
+    actual: &SourceInterpretation,
+    mut read: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<([u32; 2], Vec<[f32; 4]>), String> {
+    let decoder = crate::WorkingDecoder::new(actual, space, Default::default())?;
+    let mut preview = crate::AreaPreview::new(extent, bounds)?;
+    let mut bytes = vec![0; extent[0] as usize * actual.pixel_bytes()];
+    let mut pixels = vec![[0.; 4]; extent[0] as usize];
+    for y in 0..extent[1] {
+        read(y, &mut bytes)?;
+        decoder.decode_pixels(&bytes, &mut pixels)?;
+        for p in &mut pixels {
+            for c in 0..3 {
+                p[c] *= p[3];
+            }
+        }
+        preview.push(&pixels)?;
+    }
+    preview.finish()
+}

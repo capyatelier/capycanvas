@@ -62,7 +62,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                 } else withContext(Dispatchers.IO) { JSONObject(Native.colorWork(task, choice?.toString() ?: "null")) }
                 if (!closing) {
                     clipped = result.optLong("clipped_channels"); addsLayer = result.optBoolean("adds_layer"); sourceProfile = result.optString("source_profile")
-                    if (!history) previews = withContext(Dispatchers.IO) { listOf(false, true).map { bitmap(if (source) Native.sourcePreview(task, it) else Native.colorPreview(task, it)) } }
+                    if (!history) previews = withContext(Dispatchers.IO) { listOf(false, true).map { comparisonBitmap(if (source) Native.sourcePreview(task, it) else Native.colorPreview(task, it)) } }
                     ready = true
                 }
             } catch (e: Exception) { if (!closing) error = e.message ?: "Could not prepare color change"; release() }
@@ -81,16 +81,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             finally { busy = false; if (closing) finishCancel() }
         }
     }
-    private fun bitmap(bytes: ByteArray): ImageBitmap {
-        val data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        val width = data.int; val height = data.int
-        val colors = IntArray(width * height) {
-            val r = data.get().toInt() and 255; val g = data.get().toInt() and 255
-            val b = data.get().toInt() and 255; val a = data.get().toInt() and 255
-            (a shl 24) or (r shl 16) or (g shl 8) or b
-        }
-        return Bitmap.createBitmap(colors, width, height, Bitmap.Config.ARGB_8888).asImageBitmap()
-    }
+
 }
 
 @Composable internal fun DocumentColorDialog(host: CanvasHost, request: JSONObject) {
@@ -145,3 +136,14 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             }
         })
 }
+
+internal fun comparisonBitmap(bytes: ByteArray): ImageBitmap {
+        val data = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val width = data.int; val height = data.int
+        val colors = IntArray(width * height) {
+            val r = data.get().toInt() and 255; val g = data.get().toInt() and 255
+            val b = data.get().toInt() and 255; val a = data.get().toInt() and 255
+            (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        return Bitmap.createBitmap(colors, width, height, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }

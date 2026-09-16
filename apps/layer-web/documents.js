@@ -125,7 +125,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
         if(r.type==="new"||r.type==="open")await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
-        const recipe=r.type==="export"?await chooseExport({app,dialog,element,button}):null;
+        const recipe=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r,recipe);
         if(recipe){
