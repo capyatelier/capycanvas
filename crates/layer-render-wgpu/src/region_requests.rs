@@ -86,7 +86,7 @@ impl RegionRequests {
         );
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
-            t.begin(&r.device, &mut encoder);
+            t.begin(&r.device, &r.queue, &mut encoder);
         }
         if !matches!(request.source, RegionSource::Composite)
             && self
@@ -224,7 +224,7 @@ impl RegionRequests {
         encoder.submit(&r.queue);
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
-            t.submitted();
+            t.submitted(&r.queue);
         }
         let ready = readback.clone();
         let tx = self.tx.clone();

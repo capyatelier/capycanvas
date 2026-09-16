@@ -1,5 +1,5 @@
 //! Optional GPU queue spans for native presenters. Three nonblocking slots;
-//! timestamps bracket submitted GPU work, including gaps between submissions.
+//! Queue spans bracket submitted work; encoded spans stay in the drawing submission.
 //! This is neither CPU work time nor drawable presentation/input latency.
 use std::{
     collections::VecDeque,
@@ -154,9 +154,10 @@ impl GpuFrameTimer {
             skipped: 0,
         }
     }
-    /// Pair every successful begin with end, including an aborted render attempt.
-    /// Saturation drops the observation; it never waits for a readback slot.
-    pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: u64) -> bool {
+    /// Encode markers in an existing drawing submission. CPU encoding time is
+    /// outside this span, and timing adds no start/end queue submissions.
+    /// Pair a successful begin with end_encoded and submitted.
+    pub(crate) fn begin_encoded(&mut self, encoder: &mut wgpu::CommandEncoder, frame: u64) -> bool {
         self.requested += 1;
         let slot = if self.active.is_none() {
             self.slots
@@ -172,34 +173,50 @@ impl GpuFrameTimer {
         };
         slot.busy.store(true, Ordering::Release);
         self.active = Some((index, frame));
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("frame GPU start"),
-        });
-        self.marker
-            .as_ref()
-            .unwrap()
-            .write(&mut encoder, &slot.query, 0);
-        queue.submit([encoder.finish()]);
+        self.marker.as_ref().unwrap().write(encoder, &slot.query, 0);
         true
     }
-    pub fn end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    pub(crate) fn end_encoded(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some((index, _)) = self.active {
+            self.marker
+                .as_ref()
+                .unwrap()
+                .write(encoder, &self.slots[index].query, 1);
+        }
+    }
+    pub(crate) fn submitted(&mut self, queue: &wgpu::Queue) {
         let Some((index, frame)) = self.active.take() else {
             return;
         };
-        let slot = &self.slots[index];
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("frame GPU end"),
-        });
-        self.marker
-            .as_ref()
-            .unwrap()
-            .write(&mut encoder, &slot.query, 1);
-        queue.submit([encoder.finish()]);
+        let slot = &mut self.slots[index];
         let done = slot.gpu_done.clone();
         queue.on_submitted_work_done(move || {
             done.store(true, Ordering::Release);
         });
-        self.slots[index].awaiting_resolve = Some(frame);
+        slot.awaiting_resolve = Some(frame);
+    }
+    /// Optional host queue spans also include gaps between drawing/presentation
+    /// submissions. Saturation drops the observation rather than waiting.
+    pub fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: u64) -> bool {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("frame GPU start"),
+        });
+        if !self.begin_encoded(&mut encoder, frame) {
+            return false;
+        }
+        queue.submit([encoder.finish()]);
+        true
+    }
+    pub fn end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.active.is_none() {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("frame GPU end"),
+        });
+        self.end_encoded(&mut encoder);
+        queue.submit([encoder.finish()]);
+        self.submitted(queue);
     }
     /// Resolve only after the marker submission has completed. On Metal,
     /// resolving counters in the marker's command buffer returned stale values.
@@ -294,6 +311,44 @@ impl GpuFrameTimer {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_span_excludes_cpu_delay_before_the_drawing_is_submitted() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut timer = GpuFrameTimer::new(&device, &queue);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(timer.begin_encoded(&mut encoder, 42));
+        // This deliberate CPU stall must not become a reported GPU spike.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        timer.end_encoded(&mut encoder);
+        queue.submit([encoder.finish()]);
+        timer.submitted(&queue);
+        for _ in 0..2 {
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(5)),
+                })
+                .unwrap();
+            timer.poll(&device, &queue);
+        }
+        let mut samples = [GpuFrameSample::default(); 1];
+        assert_eq!(timer.take_into(&mut samples), 1);
+        assert_eq!(samples[0].frame, 42);
+        assert_eq!(samples[0].status, 1);
+        assert!(
+            samples[0].elapsed_ns > 0 && samples[0].elapsed_ns < 100_000_000,
+            "CPU encoding delay entered the GPU span: {:?}",
+            samples[0]
+        );
+        assert_eq!(timer.stats().pending, 0);
+    }
 
     #[test]
     fn hardware_spans_keep_identity_bound_pending_and_reuse_completed_slots() {

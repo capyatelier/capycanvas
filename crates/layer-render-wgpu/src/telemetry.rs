@@ -1,136 +1,101 @@
-//! Optional GPU timestamps with three reusable asynchronous readback slots.
-//! Dropping a sample is preferable to delaying the drawing queue.
+//! Visible diagnostics encode bounded, nonblocking timestamps with the drawing.
+use crate::frame_timing::{GpuFrameSample, GpuFrameTimer};
 use layer_render::{RendererTelemetry, TimingSamples};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-struct Slot {
-    query: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    busy: Arc<AtomicBool>,
+use std::sync::Mutex;
+
+#[derive(Default)]
+struct GpuSamples {
+    timer: Option<GpuFrameTimer>,
+    samples: TimingSamples,
 }
+
 pub(super) struct Telemetry {
     pub enabled: bool,
     pub cpu: TimingSamples,
-    gpu: Arc<Mutex<TimingSamples>>,
-    slots: Vec<Slot>,
-    active: Option<usize>,
-    period: f32,
+    gpu: Mutex<GpuSamples>,
+    supported: bool,
 }
 impl Telemetry {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         Self {
             enabled: false,
             cpu: TimingSamples::default(),
-            gpu: Arc::default(),
-            slots: Vec::new(),
-            active: None,
-            period: if device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-                queue.get_timestamp_period()
-            } else {
-                0.
-            },
+            gpu: Mutex::default(),
+            supported: device.features().contains(wgpu::Features::TIMESTAMP_QUERY)
+                && queue.get_timestamp_period() > 0.,
         }
     }
-    pub fn begin(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        self.active = None;
-        if !self.enabled || self.period == 0. {
+    // Mark the drawing itself without separate start/end queue submissions.
+    pub fn begin(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        if !self.enabled || !self.supported {
             return;
         }
-        if self.slots.is_empty() {
-            for _ in 0..3 {
-                self.slots.push(Slot {
-                    query: device.create_query_set(&wgpu::QuerySetDescriptor {
-                        label: Some("renderer timing"),
-                        ty: wgpu::QueryType::Timestamp,
-                        count: 2,
-                    }),
-                    resolve: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("timestamp resolve"),
-                        size: 256,
-                        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                        mapped_at_creation: false,
-                    }),
-                    read: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("timestamp readback"),
-                        size: 16,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    busy: Arc::new(AtomicBool::new(false)),
-                });
-            }
-        }
-        if let Some((i, slot)) = self
-            .slots
-            .iter()
-            .enumerate()
-            .find(|(_, s)| !s.busy.load(Ordering::Acquire))
-        {
-            slot.busy.store(true, Ordering::Release);
-            self.active = Some(i);
-            let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("renderer timestamp start"),
-                timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
-                    query_set: &slot.query,
-                    beginning_of_pass_write_index: Some(0),
-                    end_of_pass_write_index: None,
-                }),
-            });
+        let gpu = self.gpu.get_mut().unwrap();
+        let timer = gpu
+            .timer
+            .get_or_insert_with(|| GpuFrameTimer::new(device, queue));
+        timer.poll(device, queue);
+        timer.begin_encoded(encoder, 0);
+    }
+    pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = &mut self.gpu.get_mut().unwrap().timer {
+            timer.end_encoded(encoder);
         }
     }
-    pub fn end(&self, encoder: &mut wgpu::CommandEncoder) {
-        let Some(i) = self.active else {
-            return;
-        };
-        let slot = &self.slots[i];
-        {
-            let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("renderer timestamp end"),
-                timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
-                    query_set: &slot.query,
-                    beginning_of_pass_write_index: None,
-                    end_of_pass_write_index: Some(1),
-                }),
-            });
+    pub fn submitted(&mut self, queue: &wgpu::Queue) {
+        if let Some(timer) = &mut self.gpu.get_mut().unwrap().timer {
+            timer.submitted(queue);
         }
-        encoder.resolve_query_set(&slot.query, 0..2, &slot.resolve, 0);
-        encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.read, 0, 16);
     }
-    pub fn submitted(&mut self) {
-        let Some(i) = self.active.take() else {
-            return;
-        };
-        let slot = &self.slots[i];
-        let buffer = slot.read.clone();
-        let busy = slot.busy.clone();
-        let samples = self.gpu.clone();
-        let period = self.period;
-        slot.read.map_async(wgpu::MapMode::Read, .., move |result| {
-            if result.is_ok() {
-                if let Ok(bytes) = buffer.get_mapped_range(..) {
-                    let begin = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-                    let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                    if begin > 0
-                        && end > begin
-                        && let Ok(mut samples) = samples.lock()
-                    {
-                        samples.push((end - begin) as f32 * period / 1_000_000.);
+    pub fn snapshot(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> RendererTelemetry {
+        let samples = self
+            .gpu
+            .try_lock()
+            .map(|mut gpu| {
+                // Panel queries also retire the final observation after drawing
+                // sleeps. The host/event loop supplies ordinary device polling.
+                if let Some(timer) = &mut gpu.timer {
+                    timer.poll(device, queue);
+                    let mut ready = [GpuFrameSample::default(); 256];
+                    let count = timer.take_into(&mut ready);
+                    for sample in &ready[..count] {
+                        if sample.status == 1 {
+                            gpu.samples.push(sample.elapsed_ns as f32 / 1_000_000.);
+                        }
                     }
                 }
-                buffer.unmap();
-            }
-            busy.store(false, Ordering::Release);
-        });
-    }
-    pub fn snapshot(&self) -> RendererTelemetry {
+                gpu.samples.clone()
+            })
+            .unwrap_or_default();
         RendererTelemetry {
             cpu: self.cpu.clone(),
-            gpu: self.gpu.try_lock().map(|g| g.clone()).unwrap_or_default(),
-            gpu_timestamps: self.period > 0.,
+            gpu: samples,
+            gpu_timestamps: self.supported,
             ..Default::default()
         }
+    }
+
+    /// Benchmark-only synchronization; ordinary diagnostics never wait.
+    #[cfg(test)]
+    pub fn completed_snapshot(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> RendererTelemetry {
+        for _ in 0..2 {
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(crate::READBACK_TIMEOUT),
+                })
+                .unwrap();
+            self.snapshot(device, queue);
+        }
+        self.snapshot(device, queue)
     }
 }

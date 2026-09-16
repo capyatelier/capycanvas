@@ -211,7 +211,9 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                 let mut moved = final_sample;
                 moved[0] += 45.;
                 moved[1] += 20.;
-                moved[7] += 10_000_000.;
+                // Cross the bounded sensor wait before correcting the down
+                // sample, so even stateful brushes must rebuild persistent ink.
+                moved[7] += 80_000_000.;
                 moved[8] = 2.;
                 send(&moved, &[0, 0], 0);
                 app.draw_frame();

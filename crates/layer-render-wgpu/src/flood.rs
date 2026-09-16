@@ -853,7 +853,7 @@ mod tests {
                 let start = std::time::Instant::now();
                 let mut encoder =
                     crate::submission::CommandEncoder::new(&r.device, &Default::default());
-                timing.begin(&r.device, &mut encoder);
+                timing.begin(&r.device, &r.queue, &mut encoder);
                 let region = flood
                     .encode(
                         &r.device,
@@ -868,7 +868,7 @@ mod tests {
                     .unwrap();
                 timing.end(&mut encoder);
                 let submitted = encoder.submit(&r.queue);
-                timing.submitted();
+                timing.submitted(&r.queue);
                 timing.cpu.push(start.elapsed().as_secs_f32() * 1000.);
                 r.device
                     .poll(wgpu::PollType::Wait {
@@ -885,7 +885,7 @@ mod tests {
                     );
                 }
             }
-            let stats = timing.snapshot();
+            let stats = timing.completed_snapshot(&r.device, &r.queue);
             for (name, samples) in [
                 ("CPU", &stats.cpu),
                 ("GPU", &stats.gpu),

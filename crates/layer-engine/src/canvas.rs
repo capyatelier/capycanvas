@@ -6,8 +6,8 @@
 
 use crate::brush::{DabGenerator, dabs_cover_point, damage_for_dabs, lock_dab_tail};
 use crate::feedback::{
-    FeedbackConfigError, InstantFeedbackConfig, PredictionState, TipSource, estimate_tip,
-    finalized_count, surface_distance,
+    FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PredictionState,
+    TipSource, estimate_tip, finalized_count, surface_distance,
 };
 use crate::input::{
     InputConsumer, PenEvent, PenPhase, PressureCurve, SampleFlags, StrokeBuilder, ToolKind,
@@ -972,8 +972,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !active.feedback.enabled {
             return;
         }
+        let real = self.builder.real_points();
+        // A driver may never resolve its estimated sensor values. Give updates
+        // the maximum feedback window, but never keep replaying the whole stroke
+        // while waiting. Retain the tokens: late corrections rebuild persistent
+        // ink through the existing correction path.
+        let estimate_cutoff = real.last().map_or(0, |point| {
+            point
+                .elapsed_micros
+                .saturating_sub(MAX_FINALIZATION_LAG_MICROS)
+        });
+        let before_estimate_window =
+            real.partition_point(|point| point.elapsed_micros < estimate_cutoff);
         let count = finalized_count(
-            self.builder.real_points(),
+            real,
             self.finalized_real_points,
             active.feedback.finalization_lag_micros,
         )
@@ -983,7 +995,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .filter(|e| e.stroke == active.id)
                 .map(|e| e.index)
                 .min()
-                .unwrap_or(usize::MAX),
+                .unwrap_or(usize::MAX)
+                .max(before_estimate_window),
         );
         while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
@@ -2938,6 +2951,109 @@ mod tests {
         assert!(!engine.can_undo());
         engine.render_frame().unwrap();
         assert!(engine.document().layers[0].raster.is_empty());
+    }
+
+    #[test]
+    fn unresolved_estimates_bound_the_preview_and_preserve_late_corrections() {
+        for platform_prediction in [false, true] {
+            let (mut input, consumer) = input_queue(8);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("unresolved estimates", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_platform_prediction: platform_prediction,
+                    ..InstantFeedbackConfig::default()
+                })
+                .unwrap();
+            let mut down = event(1, PenPhase::Down, 8.);
+            down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+            // A driver may mark every sample as awaiting sensor updates without
+            // ever delivering a correction. Reproduce two seconds at 240 Hz.
+            for index in 0..481 {
+                let sample = PenEvent {
+                    sequence: index + 1,
+                    timestamp_ns: down.timestamp_ns + index * 4_166_667,
+                    phase: if index == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    surface_position: Point {
+                        x: 8. + (index as f32 * 0.07).sin() * 6.,
+                        y: 16.,
+                    },
+                    ..down
+                };
+                input.push(sample).unwrap();
+                input
+                    .push(PenEvent {
+                        timestamp_ns: sample.timestamp_ns + 8_000_000,
+                        phase: PenPhase::Move,
+                        flags: SampleFlags::PREDICTED,
+                        ..sample
+                    })
+                    .unwrap();
+                engine
+                    .render_frame_for(sample.timestamp_ns, sample.timestamp_ns + 8_000_000)
+                    .unwrap();
+                assert!(
+                    engine.builder.real_points().len() - engine.finalized_real_points <= 13,
+                    "unresolved estimates must not make preview work grow with stroke length"
+                );
+            }
+            assert_eq!(engine.estimates.len(), 481, "keep late correction tokens");
+            assert!(!engine.backend().persistent.is_empty());
+            let correction = PenEvent {
+                flags: SampleFlags::CORRECTION,
+                pressure: 0.2,
+                ..down
+            };
+            engine.backend_mut().saw_reset = false;
+            input.push(correction).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.builder.real_points()[0].pressure, 0.2);
+            assert_eq!(engine.metrics().corrected_input_samples, 1);
+            assert!(
+                engine.backend().saw_reset,
+                "rebuild corrected persistent ink"
+            );
+
+            input
+                .push(PenEvent {
+                    sequence: 482,
+                    timestamp_ns: down.timestamp_ns + 2_010_000_000,
+                    phase: PenPhase::Up,
+                    flags: SampleFlags::PRIMARY,
+                    ..down
+                })
+                .unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
+            assert_eq!(stroke.points.len(), 482);
+            assert_eq!(stroke.points[0].pressure, 0.2);
+            let mut replay = Vec::new();
+            DabGenerator::generate(stroke, &mut replay);
+            assert_eq!(engine.backend().persistent, replay);
+            assert!(engine.backend().preview.is_empty());
+            let raster = engine.document().layers[0].raster.identity();
+            assert!(engine.undo().unwrap());
+            assert!(engine.document().layers[0].raster.is_empty());
+            assert!(
+                !engine.undo().unwrap(),
+                "corrections must not add history steps"
+            );
+            assert!(engine.redo().unwrap());
+            assert_eq!(engine.document().layers[0].raster.identity(), raster);
+        }
     }
 
     #[test]

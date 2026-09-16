@@ -33,7 +33,20 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
         app.draw_frame();
         app.stroke();
         app.draw_frame();
-        let stats = app.request(2, json!({"type":"renderer_stats"})).unwrap();
+        // Querying the visible panel must eventually deliver real GPU samples,
+        // including the final stroke after drawing has gone idle.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let stats = loop {
+            unsafe { &*app.0 }.host.session.engine().backend().0.as_ref().unwrap()
+                .device().poll(wgpu::PollType::Poll).unwrap();
+            let stats = app.request(2, json!({"type":"renderer_stats"})).unwrap();
+            if metric(&stats, "GPU · ms")["value"].as_str().unwrap().split(" / ")
+                .all(|v| v.parse::<f32>().is_ok_and(|v| v.is_finite() && v > 0.)) {
+                break stats;
+            }
+            assert!(std::time::Instant::now() < deadline, "GPU diagnostics did not deliver drawing samples: {stats}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         assert_eq!(stats["rows"].as_array().unwrap().len(), 7);
         assert!(!stats["samples"].as_array().unwrap().is_empty());
         assert!(stats["samples"].as_array().unwrap().len() <= 120);

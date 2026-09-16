@@ -49,7 +49,8 @@ struct PanelControls: View {
                 }
         }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .modifier(PanelBodyMeasurement(panel: panel["id"].string))
+            .modifier(PanelBodyMeasurement(panel: panel["id"].string,
+                kind: scrollable && panel["id"].string != "color" ? .scroll : .fixed))
     }
     @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {

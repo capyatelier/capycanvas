@@ -137,9 +137,12 @@ real shared SwiftUI headers and the corresponding live Chrome editor, without
 system-menu automation. Complete visual parity remains open; this focused
 workflow does not establish full editor acceptance.
 
-Native panel controls report intrinsic body heights and tab widths to the shared
-Rust `measure_panels` action. Rust fits floating panels and tab groups, caps their
-height and honors manual sizing. Measurements use the mounted controls before
+Native panel controls report intrinsic body heights, fixed controls, scrolling
+row heights and tab widths to the shared Rust `measure_panels` action. Dragged
+panels preserve their visible size past workspace edges, then Rust applies the
+shared floating release budget and useful scrolling minimum in one history step.
+Compact Color content stays whole. Rust also fits tab groups and honors manual
+sizing. Measurements use the mounted controls before
 scroll clipping; lightweight copies measure inactive tab labels without mounting
 extra Navigator, thumbnail or filter content. Inactive bodies retain their last
 measurement until mounted again. Drawer bodies keep their separate width and
@@ -149,8 +152,9 @@ adding workspace history or storage writes.
 
 The direct check uses actual SwiftUI geometry in an invisible AppKit host for
 both Apple presets. It checks natural floating sizes, width reflow, tab fitting,
-control visibility, workspace Undo, growing layer content and settled measurement
-publication. UIKit pixels and sustained resizing performance require their own
+control visibility, workspace Undo, growing layer content, settled measurement
+publication, frozen drag previews and fitted scrolling releases with Undo/Redo.
+UIKit pixels and sustained resizing performance require their own
 validation:
 
 ```sh
@@ -985,7 +989,12 @@ on both targets.
 The opt-in iPad `testNativeFilesProjectRoundTrip` uses a fresh UUID supplied as
 `CAPY_FILE_TEST_TOKEN` in the test runner environment. It creates a matching
 folder in On My iPad, saves generated artwork, reopens it after restarting the
-editor, and exports a PNG. Retain the token with ignored local evidence. After
+editor, and exports a PNG. Painting runs through enabled native menus after Metal
+is ready; the reopened drawing must retain three layers and matching sampled
+pixels. The current simulator run also verifies the delivered PNG separately:
+all 3,145,728 pixels retain the opaque blue artwork at 2048×1536. This establishes
+local Files delivery, not physical or cloud-provider acceptance. Evidence is in
+`artifacts/apple-files-artwork-v1/`. Retain the token with ignored local evidence. After
 reviewing the result, run `testNativeFilesProjectRoundTripCleanup` with the same
 token to remove that folder through Files. Cleanup verifies the expected two
 items before deletion. Routine tests skip both native provider checks unless

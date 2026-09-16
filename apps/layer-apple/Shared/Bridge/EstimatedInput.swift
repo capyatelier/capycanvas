@@ -1,10 +1,10 @@
 import Foundation
 
 /// Numeric observations only. No platform touch/event object survives its
-/// callback. The opaque source index is combined with the original timestamp
-/// so driver reuse cannot redirect an old update to a newer contact.
+/// callback. UIKit supplies a unique, monotonically increasing update index;
+/// callback timestamps are not part of that identity. Keep the observation
+/// timestamp in the saved record when applying delayed sensor values.
 struct EstimatedInput {
-    struct Key: Hashable { let index: UInt64; let timestamp: TimeInterval }
     struct Sample {
         let contact: UInt64
         let token: UInt64
@@ -14,13 +14,13 @@ struct EstimatedInput {
         var expected: UInt64
         var metadata: [UInt64] { [token, expected == 0 ? 0 : 1] }
     }
-    private(set) var pending: [Key: Sample] = [:]
+    private(set) var pending: [UInt64: Sample] = [:]
     private var nextToken: UInt64 = 0
     private(set) var expired: UInt64 = 0
     let capacity: Int
     init(capacity: Int = 4096) { self.capacity = max(1, capacity) }
 
-    mutating func capture(key: Key?, contact: UInt64, revision: UInt64, scale: CGFloat,
+    mutating func capture(key: UInt64?, contact: UInt64, revision: UInt64, scale: CGFloat,
                           record: [Double], expected: UInt64) -> (metadata: [UInt64], released: Sample?) {
         guard let key else { return ([0, 0], nil) }
         if pending[key]?.contact == contact, let update = correct(key: key, record: record, expected: expected) {
@@ -43,7 +43,7 @@ struct EstimatedInput {
         return (sample.metadata, released)
     }
 
-    mutating func correct(key: Key, record: [Double], expected: UInt64) -> Sample? {
+    mutating func correct(key: UInt64, record: [Double], expected: UInt64) -> Sample? {
         guard var sample = pending[key] else { return nil }
         // UITouch.Properties: force=1, azimuth=2, altitude=4, location=8, roll=16.
         // Only previously estimated fields may change; contact phase and the

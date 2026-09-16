@@ -10,19 +10,86 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
-## Recovery and navigation milestone
+## Resolved iPad Pencil prediction stall
+
+The physical cause is now reproduced from the user's captured Pencil input.
+The verified live-stream recorder contains a 14.12-second stroke with 3,390 real
+samples, all awaiting sensor updates, and **zero raw UIKit update callbacks**.
+The engine let the earliest unresolved estimate hold the committed prefix at
+zero, so prediction repainted the growing stroke on every frame. The iPadOS
+prediction switch cannot avoid that shared preview work. The earlier
+index-matching cleanup did not fix this physical failure; no update callbacks
+arrived for it to match. Earlier builds are not established smooth baselines.
+
+The shared engine now bounds the sensor wait with its existing maximum feedback
+window (50 ms). It retains correction tokens and uses the existing persistent
+stroke rebuild for late updates. No prediction mode, brush fidelity or sensor
+correction support is removed. A regression test fails before the change and
+passes afterward; all 53 engine tests pass. The native Metal sensor oracle also
+passes for G-Pen, Pencil, watercolor and smudge on both Apple policies after
+moving its correction beyond that window, including exact Undo/Redo.
+
+Actual-input replay at regular 120 Hz reduces total preview dabs from 5,335,713
+to 48,752 and bounds the unfinished tail at 13 samples. Replaying the captured
+frame schedule on Mac Metal reduces prediction-enabled CPU-plus-GPU frame p99
+from 1,392.12 to 30.54 ms. That schedule retains the original stalls and large
+input batches; it is causal before/after evidence, not iPad cadence acceptance.
+The full physical trace, decoded samples, replay sources/binaries and results
+are under `artifacts/apple-lag-stream-v3/`. See [performance observations](../../apps/layer-apple/PERFORMANCE.md#captured-pencil-root-cause-and-bounded-preview--2026-09-15).
+
+The user confirms **smooth drawing in both cases** on the corrected iPad Release:
+Stroke Prediction enabled, with iPadOS Prediction off and on. This closes the
+reported physical lag blocker. Both Apple Release builds pass without warnings;
+the temporary iPad recorder has been replaced with the production app and the
+latest artwork preserved. Normal review launches have tracing disabled.
+The Mac review app is also updated, with its recovery drawings preserved and
+its Recovered Drawings screen verified.
+Builds, exact owned-process identities, artwork backups and the direct user
+acceptance are under `artifacts/apple-prediction-bounded-v1/`. The overall Apple
+goal remains incomplete; the bounded fix does not claim unmeasured sensor modes
+or complete the remaining provider/window/feature acceptance.
+
+## Physical drawing and panel parity milestone
 
 The user's direction remains to finish blockers with simple solutions and
 minimal simulator dependence. Most feature implementation and requested visual
 changes are published. Do not turn every open acceptance item into another
 implementation, callback test or full-suite rerun.
 
-| Remaining blocker | Next completion evidence |
+| Area | Status and remaining evidence |
 | --- | --- |
-| Sustained Mac 90 Hz / iPad 120 Hz | A measured cause and effective fix for presentation gaps, followed by the existing workload matrix and ten-minute acceptance. No fidelity reductions. |
-| Physical input | Pencil/tablet sensors, real shortcuts and interruption. No hardware keyboard is connected to the iPad; inconclusive injected keys are not application defects or physical acceptance. |
-| Documents and lifecycle | Remaining representative provider, physical unsaved-recovery, scene/window and interruption workflows. Preserve the native results below instead of repeating shared permutations. |
-| Final parity | Resolve perceptible differences or missing actions in the existing inventory and qualify both Release apps. The overall goal remains incomplete. |
+| Mac 90 Hz / iPad 120 Hz performance | User accepts smooth drawing with rare measured misses. The captured iPad prediction stall is fixed and directly rechecked with both prediction-source settings. Retain the measured short/sustained distributions; strict p99 misses alone no longer block release. No further cadence experiment is justified without visible stutter or a substantive slowdown. |
+| Physical input | Direct drawing, pressure, Undo/Redo, iPad palm rejection and two-finger navigation pass by user report on both hosts, using Pencil and an XP-Pen 14-inch Ultra. Remaining sensor/shortcut/interruption checks should address specific unverified behavior. No hardware keyboard is connected to the iPad; inconclusive injected keys are not application defects. |
+| Documents and lifecycle | Physical unsaved background/return passes on both hosts. Review artwork is preserved. Representative provider, process recovery, scene/window and interruption coverage remains scoped separately. Preserve the native results below instead of repeating shared permutations. |
+| Final parity | Floating-panel parity passes focused checks. GPU diagnostics show numbers on both hosts, and the resulting investigation's separate prediction lag blocker is closed by physical user confirmation. Resolve concrete missing behavior in the existing inventory. The overall goal remains incomplete. |
+
+GPU diagnostics now reuse the shared asynchronous timer, replacing duplicate
+empty-pass timing. Nonempty timestamp markers stay within the existing drawing
+submission, avoiding two extra submissions and excluding CPU encoding delay.
+The regression reproduces the blank value before the fix and passes afterward,
+including results after drawing stops. Hardware timer tests (including a 200 ms
+CPU pause), all four native Navigator/Diagnostics tests, both Release builds and
+the WebAssembly check pass. The user confirms GPU values on both physical hosts.
+
+The earlier supplied-input probes did not reproduce the user's Pencil failure
+and are not physical acceptance of that path. The final raw capture and direct
+recheck above close it. Detailed failed attempts and measurements remain in
+[performance observations](../../apps/layer-apple/PERFORMANCE.md). Keep that causal
+evidence instead of repeating timing or simulator experiments. The completed
+physical review's drawings are backed up locally; both original artist app
+descriptors are unchanged.
+
+The current floating-panel parity change enables Apple's use of the existing
+shared frozen-preview and release-sizing policy. Mounted native controls now
+report scrollable height, fixed controls and actual row height through the
+existing measurement action. A pre-fix regression reproduces Apple's edge
+clamping; all 400 shared UI tests pass afterward. The invisible AppKit fixture
+passes both Apple policies, including native measurements, frozen preview,
+fitted scrolling release and one-step Undo/Redo. This is local geometry and
+shared-policy validation; both current Release builds pass without warnings.
+The existing native motion fixture also passes both policies: moving hit targets,
+tab clips, resize handles and live Navigator geometry retain their identities.
+Evidence is `artifacts/apple-floating-panel-parity-v1/`.
 
 The painted-recovery workflow now fills through enabled native menus, backgrounds
 and returns to the same editor scene, verifies unchanged sampled artwork and
@@ -69,6 +136,22 @@ Both-theme component captures and all twenty-two existing assembled Mac canvas
 groups pass in their respective scopes. Neither is claimed as a cadence fix.
 Current warning-free Release build metadata is under
 `artifacts/apple-layer-thumbnail-followup-v1/restored/`.
+
+The subsequent local Files workflow passes on the existing iPad simulator:
+native menu painting, Save As, process restart, Open with three layers and
+matching sampled artwork, PNG export and picker cancellation. The actual
+delivered PNG retains all 3,145,728 opaque blue pixels at 2048×1536. Captures
+are reviewed; the passing workflow has no runtime warnings and its build has
+no compiler warnings. Evidence is `artifacts/apple-files-artwork-v1/simulator-v4`
+and `png-check.json` in that root. This is UIKit local-provider evidence, not
+physical or cloud-provider acceptance. Earlier fixture failures concern Files'
+changed accessibility labels, not application behavior. No runtime change is
+needed, and the passed round trip should not be repeated for cleanup or docs.
+The separate cleanup also passes (`simulator-v6`), removes the verified two-item
+folder through Files and leaves no generated provider folder. Both owned test
+processes are stopped.
+These test/documentation changes accompany the prediction, diagnostics and
+floating-panel parity milestone.
 
 The narrower Layers observation experiment is reverted after smaller-workload
 captures revealed absent thumbnails; the rebuilt Mac comparison shows the

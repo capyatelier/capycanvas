@@ -75,6 +75,16 @@ import SwiftUI
                 && measured("sizes")["content_height"].number > 20 && geometry.navigators.count == 1
         }
         precondition(store.snapshot["panel_measurements"].array.allSatisfy { $0["tab_width"].number >= 36 })
+        try await wait("Native scrolling measurements") {
+            measured("layers")["scroll"]["unit_height"].number >= 40
+                && measured("layers")["scroll"]["fixed_height"].number > 24
+                && !measured("brushes")["scroll"].isNull
+        }
+        precondition(measured("color")["scroll"].isNull, "The compact color picker must retain its full natural size")
+        try await action(["type": "customize", "action": ["type": "set_control_visible", "panel": "layers", "control": "layers", "visible": false]])
+        try await wait("Hiding the rows removes their scrolling measurements") { measured("layers")["scroll"].isNull }
+        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await wait("Undo restores the measured rows") { measured("layers")["scroll"]["unit_height"].number >= 40 }
         try await float("sizes", x: 320)
         let sizes = measured("sizes")["content_height"].number
         try await action(["type": "customize", "action": ["type": "set_control_visible", "panel": "sizes", "control": "size_presets", "visible": false]])
@@ -124,6 +134,32 @@ import SwiftUI
             try await Task.sleep(for: .milliseconds(5))
         }
         precondition(store.state["revision"].uint == revision, "Settled measurements must not create a publication loop")
-        print("PASS: platform \(platform), intrinsic label/body measurement, floating/tab fit, width reflow, control visibility/history, growing layer content, one Navigator, transient revalidation and settled publication")
+
+        // Native geometry supplies facts; the ordinary shared drag transaction
+        // freezes the preview and fits a long scroller once, when released.
+        let source = group("brushes")["bounds"].rect
+        let beforeDrag = store.state["workspace"]["layout"].stableKey
+        func drag(_ phase: String, _ point: CGPoint) async throws {
+            try await action(["type": "drag_workspace", "item": ["kind": "panel", "panel": "brushes"],
+                "phase": phase, "position": [point.x, point.y], "viewport": [1200, 900], "tabs": []])
+        }
+        try await drag("down", CGPoint(x: source.minX + 24, y: source.minY + 12))
+        try await drag("move", CGPoint(x: 600, y: 899))
+        try await wait("Floating preview keeps the visible sidebar size") {
+            let preview = store.workspaceMotion.position(group("brushes")["id"].uint).rect
+            return abs(preview.width - source.width) < 0.02 && abs(preview.height - source.height) < 0.02
+        }
+        try await drag("up", CGPoint(x: 600, y: 899))
+        try await wait("Long floating panel fits the shared scrolling budget") {
+            let bounds = group("brushes")["bounds"].rect
+            return group("brushes")["floating"].bool && bounds.height <= 400
+                && bounds.height >= 180 && bounds.maxY <= 900
+        }
+        let afterDrag = store.state["workspace"]["layout"].stableKey
+        try await action(["type": "invoke", "command": "undo_workspace"])
+        try await wait("One Undo restores the docked panel") { store.state["workspace"]["layout"].stableKey == beforeDrag }
+        try await action(["type": "invoke", "command": "redo_workspace"])
+        try await wait("One Redo restores the fitted float") { store.state["workspace"]["layout"].stableKey == afterDrag }
+        print("PASS: platform \(platform), native tab/body/scroll measurements, floating/tab fit, width reflow, visibility/history, one Navigator, stable publication, frozen drag preview and fitted release with one-step history")
     }
 }

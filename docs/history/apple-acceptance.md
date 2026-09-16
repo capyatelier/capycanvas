@@ -71,6 +71,23 @@ display capability and refresh rate; a report evaluated at 90 Hz cannot establis
 Do not substitute build success, simulator tests, timings from the other
 platform, averages or reduced brush fidelity for acceptance.
 
+The user's 2026-09-15 performance clarification accepts perceptually smooth
+drawing with rare measured misses. The 90 Hz Mac and 120 Hz iPad targets remain;
+a failing presentation p99 alone is no longer a release blocker. Retain the
+full timing distributions and sustained-workload results, and verify actual
+drawing responsiveness, visible stutter, input correctness and thermal behavior.
+Historical strict-cadence failures below remain measurements, not claims that
+the revised perceptual acceptance has passed.
+
+The user subsequently passed direct physical review on both devices: slow and
+fast strokes, light/heavy pressure and Undo/Redo work well with Pencil and an
+XP-Pen 14-inch Ultra tablet. iPad palm rejection and two-finger zoom/rotation
+also pass. Both hosts retain unsaved artwork across app switching and resume
+drawing normally. Reviewed captures retain the artwork and matching thumbnails.
+The reported missing Diagnostics GPU milliseconds is a separate confirmed bug
+being fixed; this pass does not establish unmeasured sensor modes, process-crash
+recovery or a new sustained benchmark.
+
 Provide reproducible build/install/test commands and evidence for functionality,
 visuals, persistence, lifecycle and performance. Pull other ports' changes,
 integrate them, validate both Apple targets, and commit/push completed major
@@ -107,6 +124,26 @@ bars are not acceptable. The 2026-09-13 productivity review supersedes the
 blanket Liquid Glass request and the earlier native row-menu experiment.
 Native styling does not take precedence over readability, fast interaction or
 maintainability. Settings and the macOS system menu bar retain platform patterns.
+
+## Captured Pencil prediction stall — 2026-09-15
+
+A raw physical capture finally establishes the failure: all 3,390 real samples
+in the user's stroke await sensor updates, no UIKit update callbacks arrive,
+and the earliest unresolved estimate prevents any persistent-prefix progress.
+Prediction rerenders the entire growing stroke. The shared engine now bounds
+that sensor hold to its existing 50 ms maximum preview window, retains tokens
+and honors late corrections through the existing persistent-ink rebuild.
+
+Actual-input replay reduces preview work by over 99%; Mac Metal replay of the
+captured frame schedule reduces frame p99 from 1,392.12 to 30.54 ms. These are
+causal before/after results, not iPad presentation acceptance. The regression
+fails before and passes after; all 53 engine tests and the four-brush native
+sensor pixel/history oracle on both Apple policies pass. Both Release builds
+pass without warnings. The production iPad app replaces the temporary recorder
+in place with the latest artwork preserved. The user confirms smooth Pencil
+drawing with Stroke Prediction enabled, both with iPadOS Prediction off and on.
+The reported lag blocker is closed; the overall Apple goal remains incomplete.
+See the [full evidence and limits](../../apps/layer-apple/PERFORMANCE.md#captured-pencil-root-cause-and-bounded-preview--2026-09-15).
 
 ## Settings text and shared tile hashing — 2026-09-15
 

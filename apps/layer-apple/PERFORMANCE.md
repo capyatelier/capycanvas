@@ -1,7 +1,8 @@
 # Apple performance observations
 
 The iPad and Mac use the same optional recorder, serial render owner and Rust
-GPU timer. Ordinary launches leave recording and timestamp submissions disabled.
+GPU timer. Ordinary launches leave trace recording disabled. Visible Diagnostics
+collects renderer timings independently of that optional recorder.
 The native CAMetalLayer subclass observes the drawables acquired by wgpu and
 uses Metal's `addPresentedHandler` and `presentedTime` to record actual display
 presentation. A display-link tick or completed Rust call is not a presentation.
@@ -16,6 +17,145 @@ instrumentation overhead remain required on both platforms. Following the user's
 Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
+
+On 2026-09-15 the user accepted smooth drawing with rare measured misses.
+The refresh targets remain, but presentation p99 exceeding one refresh interval
+is no longer an automatic release blocker. Historical strict-cadence failures
+below retain their original measurements. Final acceptance combines them with direct
+physical drawing, responsiveness, visible-stutter and thermal checks. It does
+not permit reduced brush fidelity or conceal rejected input and renderer errors.
+
+The user subsequently reports smooth, accurate drawing with pressure variation
+and working Undo/Redo on both physical hosts, using Pencil and an XP-Pen
+14-inch Ultra tablet. iPad palm rejection and two-finger zoom/rotation pass, as
+does unsaved background/return followed by another stroke on both hosts. These
+are direct physical observations; they do not replace the retained sustained
+measurements. Evidence is `artifacts/apple-physical-input-review-v1/`.
+
+That review exposed empty GPU values in Diagnostics. Replacing the duplicate
+empty-pass timer with the shared asynchronous timer restored numbers on both
+hosts, but the user then reported iPad GPU spikes into hundreds of milliseconds
+and visible lag even with Diagnostics hidden. That candidate is not accepted.
+The updated artwork is preserved in `artifacts/apple-diagnostics-regression-v1/`.
+
+A focused Release probe on the physical iPad uses a private copy of the affected
+2048×1536 drawing and Rough G-Pen at 120.7 px. With timing disabled/enabled/disabled,
+480 supplied-input frames per case have input-plus-frame CPU p99 of
+11.25/6.02/5.15 ms and maxima below 14 ms; the enabled GPU p50/p95/p99 is
+2.08/2.94/3.28 ms. Thermal state is nominal. This isolates the renderer and does
+not reproduce the reported stalls; it does not establish full-editor or physical
+Pencil acceptance. A separate bounded Mac GPU probe of delayed sensor updates
+also does not reproduce the stall.
+
+The timer is revised to encode its nonempty timestamp markers in the existing
+drawing submission, removing two extra queue submissions per measured frame
+and excluding CPU encoding before submission from GPU time. It retains the
+shared three-slot nonblocking readback implementation, lazy allocation and
+visibility gating. Optional whole-frame recording retains its explicit queue
+span. Both timer hardware tests and all four native Navigator/Diagnostics checks
+pass, including final results after drawing stops and a 200 ms artificial CPU
+encoding delay excluded from the GPU span. Both Release builds and the shared
+WebAssembly check pass without compiler warnings. The same physical iPad probe with encoded markers passes all four cases;
+Rough G-Pen GPU p50/p95/p99 is 0.96/1.36/1.54 ms, while input-plus-frame
+p99 is 6.92 ms and maximum is 13.36 ms. Thermal state remains nominal. Lower
+GPU numbers reflect changed measurement boundaries, not a claimed doubling of
+drawing speed. A 600-second review trace contains no new input and cannot
+reproduce the reported failure. A further probe with the full editor and native
+display link mounted records 2,330 drawing frames, no renderer errors or dropped
+trace records, nominal thermal state, owner-frame CPU p99/max 9.30/10.14 ms,
+and Rough G-Pen GPU p99 2.37 ms. It uses supplied contacts and an isolated document;
+one UIKit appearance-transition warning belongs to the private fixture's root
+controller replacement. No severe stall is reproduced. Both revised review apps
+are restored with the original drawings; live Pencil verification remains open.
+
+## Recurrent physical Pencil stall — 2026-09-15
+
+The user confirms lag after the revised timer restart. The actual Pencil trace
+under `artifacts/apple-diagnostics-recurrence-v1/` records 1,234 real batches,
+1,185 predicted batches and zero correction batches. Owner-frame p99 is
+481.19 ms; drawable-acquisition p99 is 445.78 ms. Continuous presentation
+interval p99/max is 509.80/620.84 ms, with nominal thermal state and no renderer
+errors. These are unacceptable visible stalls, independent of the relaxed
+rare-refresh-miss criterion. Diagnostics reports 190,850 dabs across 301 frames
+and GPU p99 144.18 ms. The earlier synthetic probes did not cover the failing
+physical update path and must not be used as acceptance of this build.
+
+The candidate simplifies Pencil update correlation to UIKit's unique monotonic
+index, removing an extra timestamp condition that can discard delayed updates.
+A stranded estimate can keep the growing active stroke in the replaceable
+preview. Original sample time/phase and partial property updates remain intact.
+A bounded Mac Metal reproduction uses the same 720-point, 120.7 px Rough G-Pen
+stroke with correction deliveries present or absent. Corrected input produces
+4,549 preview dabs and frame p99 3.06 ms; dropped corrections produce 162,943
+preview dabs and frame p99 173.86 ms. This establishes the cost of unresolved
+estimates, not the exact callback values of the failing physical session: the
+live trace records accepted correction batches, not raw UIKit callbacks.
+The focused UIKit callback fixture fails on the old implementation when the
+update's timestamp differs; all four groups pass on physical iPad with the fix.
+It verifies partial/final updates, preserved original observation time, retired
+indices and clean completion. The corrected Release build has zero warnings and
+is restored with the original review artwork. The live drawing and trace are
+preserved. Physical Pencil acceptance remains open.
+
+## Captured Pencil root cause and bounded preview — 2026-09-15
+
+The user reports that disabling Stroke Prediction removes lag, while enabling
+it lags with iPadOS Prediction either on or off. The earlier index-matching fix
+did not resolve the physical problem. Two subsequent capture attempts failed
+before export and are excluded. The replacement recorder was verified writing
+a growing local file while the app stayed open, then captured the user's full
+14.12-second Pencil stroke: 3,390 real samples, 4,611 predicted samples and no
+correction callbacks. All real samples were awaiting sensor updates; the raw
+UIKit expected-property mask was force/roll for 3,389 samples and roll for the
+terminal sample. No raw update callback arrived, so timestamp matching cannot
+explain this capture. The reason for absent OS updates is not established.
+
+The 29,426-event trace has zero dropped records, nominal thermal state, no
+renderer errors and no missing presentation callbacks. Owner-frame p99 is
+798.52 ms, drawable-acquisition p99 is 796.44 ms and continuous presentation p99
+is 833.97 ms; CPU prepare p99 is 2.00 ms. Actual-input engine replay proves that
+`finalized_real_points` stays zero for the entire contact. Each prediction frame
+therefore regenerates and rerenders the full growing stroke. This unbounded
+preview is the application defect, regardless of whether the OS later resolves
+its estimated sensor values.
+
+The shared engine now limits unresolved samples' preview retention to the
+existing 50 ms maximum feedback window. It keeps correction tokens and honors
+late updates using the existing persistent-ink rebuild. The regression test
+fails before the change and passes afterward, including both prediction-source
+settings, late pressure correction, exact finished dabs and one-step history.
+All 53 engine tests pass. The native Metal final-sensor oracle now delays the
+partial correction to 80 ms; G-Pen, Pencil, watercolor and smudge pass on both
+Apple policies, including backing/composited pixels and exact Undo/Redo.
+
+| Actual-input replay | Before | After |
+| --- | ---: | ---: |
+| Regular 120 Hz: maximum unfinished real samples | 3,389 | 13 |
+| Regular 120 Hz: total preview dabs | 5,335,713 | 48,752 |
+| Regular 120 Hz: maximum preview dabs per frame | 6,010 | 194 |
+| Captured frame schedule: total preview dabs | 164,400 | 5,833 |
+| Captured frame schedule: Metal frame p50, ms | 14.62 | 0.91 |
+| Captured frame schedule: Metal frame p95, ms | 1,006.37 | 9.65 |
+| Captured frame schedule: Metal frame p99, ms | 1,392.12 | 30.54 |
+| Captured frame schedule: Metal frame maximum, ms | 1,590.66 | 41.34 |
+
+These replays use recorded numeric samples, tokens, timestamps and receipt times.
+The Metal comparison runs on Mac, renders 202 frames using the captured admission
+schedule and waits for GPU completion; its times include CPU and GPU work. The
+retained 72% view and brush settings are reconstructed, not raw camera telemetry.
+The original stalled schedule still batches large quantities of input. With
+prediction disabled, control p99 is 27.15/25.67 ms before/after. These comparisons
+isolate the runaway preview; they do not establish iPad presentation acceptance.
+
+Private evidence is under `artifacts/apple-lag-stream-v3/`; the production Release
+build and restored review app are tracked in `artifacts/apple-prediction-bounded-v1/`.
+Both Apple Release builds pass without warnings. The production iPad review app
+is restored in place at Recovered Drawings with its artwork preserved, temporary
+numeric recorder removed and tracing disabled. The user confirms **smooth drawing
+in both cases** with Stroke Prediction enabled and iPadOS Prediction off/on. This
+closes the reported physical stall. No failed recording or synthetic-only pass
+is counted as physical acceptance; broader sustained measurements retain their
+original scope.
 
 ## Remaining short workload profiles — 2026-09-15
 
@@ -1638,9 +1778,9 @@ commands and review staged source before pushing.
   pass performs a tiny storage write; empty passes produced zero counters on
   Metal. Counter resolution is deferred until the marker submission completes:
   resolving within that submission returned stale values on the tested Mac.
-  Both marker work and extra submissions contribute profiler overhead. The older
-  renderer telemetry also rejects zero counters; its empty-pass approach still
-  needs migration and is not used for these Apple reports.
+  Both marker work and extra submissions contribute profiler overhead. Visible
+  renderer Diagnostics now reuses this timer around drawing submissions;
+  the optional recorder brackets the wider frame. Their spans remain distinct.
 - Actual `presentedTime` values determine presentation intervals and lateness
   against the display link's target. Zero presentation time means skipped or
   unpresented, not zero latency. Missing callbacks are reported separately.

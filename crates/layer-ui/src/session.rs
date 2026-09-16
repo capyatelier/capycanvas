@@ -1346,7 +1346,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 floating: (whole && source_floating).then_some(source_id),
                 preview: (matches!(
                     self.state.platform,
-                    Platform::Gtk | Platform::Web | Platform::Android
+                    Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
                 ) && whole
                     && source_floating)
                     .then_some(source_bounds),
@@ -1415,7 +1415,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // has no visible panel size, so it keeps the measured/default size.
             let preserve_size = matches!(
                 self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android
+                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
             ) && !drag.source_is_icon
                 && !(drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
@@ -1442,7 +1442,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             drag.torn_off = true;
             drag.preview = matches!(
                 self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android
+                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
             )
             .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
@@ -9541,7 +9541,13 @@ mod tests {
 
     #[test]
     fn floating_preview_crosses_edges_without_resizing_and_finishes_fitted() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+        ] {
             let viewport = [1200., 900.];
             let mut app = session();
             app.set_platform(platform);
@@ -9643,7 +9649,13 @@ mod tests {
 
     #[test]
     fn tear_off_preserves_visible_panel_size_but_icons_use_content_size() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+        ] {
             let viewport = [1200., 900.];
             for icon in [false, true] {
                 let mut app = session();
@@ -9719,7 +9731,13 @@ mod tests {
     #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+        ] {
             let mut app = session();
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {

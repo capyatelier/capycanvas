@@ -4,7 +4,7 @@ use crate::input::{PenEvent, SampleFlags, ToolKind};
 use layer_core::{Point, StrokePoint};
 use std::collections::VecDeque;
 
-const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
+pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 

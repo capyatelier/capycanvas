@@ -53,11 +53,16 @@ expecting updates are retained. See Apple's [estimated properties](https://devel
 and [update callback](https://developer.apple.com/documentation/uikit/uiresponder/touchesestimatedpropertiesupdated(_:)) documentation.
 
 `EstimatedInput` retains numeric fields, original scale, camera revision and
-contact identity. A source index plus original timestamp guards against reused
-indices; a local token identifies the shared-engine observation. Partial updates
+contact identity. UIKit’s unique, monotonically increasing `estimationUpdateIndex`
+identifies the observation, following Apple’s [correlation contract](https://developer.apple.com/documentation/uikit/uitouch/estimationupdateindex).
+A later callback’s timestamp must not prevent an update from matching. The saved
+observation retains its original timestamp; a local token identifies it in the
+shared engine. Partial updates
 cannot overwrite already resolved fields. Corrections keep the original time
 and phase and survive pen-up. Repeated terminal observations share the token.
-Blur releases retained tokens and clears native contact ownership before the
+`tests/pencil-estimates.swift` exercises the actual UIKit callbacks with changed
+callback timestamps, partial/final updates and a retired index. It runs from app
+launch without depending on a restored scene. Blur releases retained tokens and clears native contact ownership before the
 shared interruption policy. Cancellation removes that stroke's estimates.
 
 The C ABI's optional token/expecting pairs leave existing pointer callers
@@ -68,7 +73,10 @@ layer offset and pressure curve, so later camera or brush-setting changes do
 not reinterpret it. Stationary airbrush samples derived from an estimate and
 repeated terminal copies follow the same correction.
 
-Pending input stays in the existing replaceable brush tail where possible.
+Pending input stays in the existing replaceable brush tail for at most the
+shared maximum feedback window (50 ms of real input). An unresolved estimate
+must not keep the entire growing stroke in the preview. Tokens remain retained
+for later corrections after that ink becomes persistent.
 Watercolor material-update boundaries follow the original real observations,
 independent of sensor latency. Correcting persistent ink rebuilds the original
 stroke, including stateful pigment/smudge work. A committed correction amends
@@ -94,8 +102,7 @@ xcrun swiftc apps/layer-apple/Shared/Bridge/EstimatedInput.swift \
   apps/layer-apple/tests/estimated-input.swift -o /tmp/capy-estimated-input
 /tmp/capy-estimated-input
 cargo test -p layer-core corrections_preserve_history
-cargo test -p layer-engine estimated_
-cargo test -p layer-engine repeated_terminal_estimates
+cargo test -p layer-engine
 cargo test -p layer-apple estimated_input_abi -- --test-threads=1
 ```
 

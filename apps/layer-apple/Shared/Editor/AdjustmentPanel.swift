@@ -45,6 +45,7 @@ struct AdjustmentPanel: View {
                                 }.foregroundStyle(palette["text"].opacity(0.55)).padding(8)
                             }
                             AdjustmentRow(store: store, previews: store.filterPreviews, choice: choice)
+                                .modifier(PanelBodyMeasurement(panel: "adjustments", part: "row-unit", kind: .unit, spacing: 2))
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(projection)) } action: { rect in
                                     let token = projection + ":" + choice["id"].string
                                     if rect.intersects(CGRect(origin: .zero, size: viewport.size)) {
@@ -55,7 +56,7 @@ struct AdjustmentPanel: View {
                                 .id(choice["id"].string)
                         }
                         if choices.isEmpty { Text(picker["empty_label"].string).foregroundStyle(palette["text"].opacity(0.55)).padding(8) }
-                    }.modifier(PanelBodyMeasurement(panel: "adjustments", part: "choices"))
+                    }.modifier(PanelBodyMeasurement(panel: "adjustments", part: "choices", kind: .scroll))
                 }.coordinateSpace(name: projection).accessibilityIdentifier("filter-list")
             }
         }.padding(6)
