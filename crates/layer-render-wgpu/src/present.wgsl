@@ -12,8 +12,8 @@ struct Camera {
 struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
-struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32> }
-@group(0) @binding(5) var<uniform> cache: DisplayCache;
+struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
+@group(0) @binding(5) var<storage, read> cache: DisplayCache;
 
 // Coordinates of mip-cell centers. The final cell can represent less than a
 // full footprint; preserve its actual position instead of stretching the image.
@@ -37,6 +37,15 @@ fn coarse_point(p: vec2<f32>) -> vec4<f32> {
     return mix(mix(textureLoad(coarse, vec2<i32>(low), 0), textureLoad(coarse, vec2<i32>(i32(high.x), i32(low.y)), 0), t.x),
         mix(textureLoad(coarse, vec2<i32>(i32(low.x), i32(high.y)), 0), textureLoad(coarse, vec2<i32>(high), 0), t.x), t.y);
 }
+fn detail_coordinate(p: vec2<u32>) -> vec2<i32> {
+    if cache.grid.z == 0u { return vec2<i32>(p); }
+    let page = p / 256u;
+    let entry = cache.pages[page.y * cache.info.w + page.x];
+    if entry == 0u { return vec2<i32>(-1); }
+    let width = cache.grid.x / 256u;
+    let origin = vec2((entry-1u) % width, (entry-1u) / width) * 256u;
+    return vec2<i32>(origin + p % 256u);
+}
 fn detail_point(p: vec2<f32>) -> vec4<f32> {
     if cache.info.z == 0u { return coarse_point(p); }
     let extent = camera.offset_document.zw;
@@ -45,11 +54,14 @@ fn detail_point(p: vec2<f32>) -> vec4<f32> {
     let low = vec2<u32>(floor(q));
     let high = min(low+1u, vec2<u32>(ceil(extent / scale))-1u);
     if any(low < cache.window.xy) || any(high >= cache.window.zw) { return coarse_point(p); }
-    let a = low % cache.grid.xy;
-    let b = high % cache.grid.xy;
+    let a = detail_coordinate(low);
+    let b = detail_coordinate(vec2(high.x, low.y));
+    let c = detail_coordinate(vec2(low.x, high.y));
+    let d = detail_coordinate(high);
+    if a.x < 0 || b.x < 0 || c.x < 0 || d.x < 0 { return coarse_point(p); }
     let t = fract(q);
-    return mix(mix(textureLoad(canvas, vec2<i32>(a), 0), textureLoad(canvas, vec2<i32>(i32(b.x), i32(a.y)), 0), t.x),
-        mix(textureLoad(canvas, vec2<i32>(i32(a.x), i32(b.y)), 0), textureLoad(canvas, vec2<i32>(b), 0), t.x), t.y);
+    return mix(mix(textureLoad(canvas, a, 0), textureLoad(canvas, b, 0), t.x),
+        mix(textureLoad(canvas, c, 0), textureLoad(canvas, d, 0), t.x), t.y);
 }
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     if cache.info.x == 0u { return textureSampleLevel(canvas, canvas_sampler, p / camera.offset_document.zw, 0.); }

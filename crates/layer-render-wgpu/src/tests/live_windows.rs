@@ -93,7 +93,8 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     close(&pixels(&r), &expected);
                     assert!(r.metrics().image_window_submissions > before + 1);
                     assert!(r.metrics().image_window_peak_bytes <= CAP + 96 * layers.len() as u64);
-                    assert!(r.scene.as_ref().unwrap().image_cache_bytes() < full_cache);
+                    assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0,
+                        "completed filter windows must release temporary pixels");
                     eprintln!(
                         "{space:?} {depth:?} clipped={clipped} group={group}: full cache={full_cache}, retained window={}, peak window={}, cap={CAP}",
                         r.scene.as_ref().unwrap().image_cache_bytes(),
@@ -102,6 +103,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     // A second partial window frame cannot reuse a previous
                     // window as if it held the entire document.
                     let mut scene = r.scene.take().unwrap();
+                    let composed = r.metrics().composited_pixels;
                     let mut encoder =
                         submission::CommandEncoder::new(&r.device, &Default::default());
                     scene
@@ -120,6 +122,8 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     r.uploads.finish(&encoder);
                     encoder.submit(&r.queue);
                     r.scene = Some(scene);
+                    assert!(r.metrics().composited_pixels - composed < u64::from(extent[0]) * u64::from(extent[1]),
+                        "releasing temporary pixels must preserve damage metadata");
                     close(&pixels(&r), &expected);
                     // Returning to the ordinary cache must repopulate all of it.
                     r.native_edit.as_mut().unwrap().image_pixel_bytes = u64::MAX;

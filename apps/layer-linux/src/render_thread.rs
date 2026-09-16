@@ -128,6 +128,7 @@ pub struct RenderWorker {
     telemetry_enabled: bool,
     commands: mpsc::Sender<Command>,
     replies: mpsc::Receiver<Reply>,
+    failure: Arc<std::sync::OnceLock<String>>,
     in_flight: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
@@ -166,6 +167,8 @@ impl RenderWorker {
     ) -> Result<Self, String> {
         let (commands, receiver) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
+        let failure = Arc::new(std::sync::OnceLock::new());
+        let worker_failure = failure.clone();
         let clock = Arc::new(crate::wayland::FrameClock::default());
         let worker_clock = clock.clone();
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -201,9 +204,16 @@ impl RenderWorker {
                         .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "GPU worker panicked".into()))
                 });
+                if let Err(error) = &result {
+                    // Optional result polls may consume Reply::Error. Keep the
+                    // cause available for every subsequent readiness check and
+                    // record it before disconnecting pending command sends.
+                    eprintln!("Canvas GPU worker failed: {error}");
+                }
                 // Resolve abandoned producers before the session observes loss.
                 drop(receiver);
                 if let Err(error) = result {
+                    let _ = worker_failure.set(error.clone());
                     let _ = reply.send(Reply::Error(error));
                     // GTK may already be idle. Schedule, never invoke inline
                     // on the worker when the main context is temporarily free.
@@ -232,6 +242,7 @@ impl RenderWorker {
             telemetry_enabled: false,
             commands,
             replies,
+            failure,
             in_flight,
             thread: Some(thread),
             color,
@@ -305,6 +316,10 @@ impl RenderWorker {
         self.startup.brush_ready && !self.startup_needs_update(document, brush, transform)
     }
     pub(super) fn ready(&mut self) -> Result<bool, String> {
+        if let Some(error) = self.failure.get() {
+            self.snapshot_gpu = None;
+            return Err(error.clone());
+        }
         while let Ok(reply) = self.replies.try_recv() {
             if let Some(id) = self.awaiting_color_adoption {
                 match reply {

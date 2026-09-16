@@ -34,6 +34,11 @@ is not the next step.
 The budgets below are the original declaration and historical comparison basis.
 Their regeneration latency thresholds remain future targets; the current
 navigation requirement above supersedes the former 100/200 ms cold-view allowance.
+The user's later 4K memory-policy direction also supersedes fixed byte ceilings:
+use available memory when it is needed for 120 Hz interaction, preserve precision,
+and let less important content yield memory first. Do not allocate the entire
+admission allowance or spend memory that brings no interactive benefit. See the
+4K gesture/memory-policy checkpoint at the end of this document.
 
 ## Declared reference envelope
 
@@ -1988,3 +1993,195 @@ is 40 MiB over the single-document 1 GiB steady gate and requires a focused chec
 The exact CPU sample cache stays at its 512 MiB ceiling; upload scratch/staging
 peaks at 8 MiB. Logs, environment, GPU samples, command/executable provenance and
 `/usr/bin/time` output use `photo-expanded-navigation-resource-multiple*`.
+
+## 4K gesture failure and memory-policy correction — 2026-09-15
+
+The user reported a stopped GPU worker while pinching/rotating a 61 MP photograph
+on a 4K monitor at 200% scale in a nonmaximized window. The corrected native
+fixture uses a 9504×6336 source and `LAYER_TEST_MONITOR=3840x2160@120`,
+`LAYER_TEST_SCALE=2`, `LAYER_NAVIGATION_MAXIMIZE=0`. `GDK_SCALE=2` alone did not
+establish Wayland output scale: that initial probe had a 1200×900 render surface
+and is not evidence for the reported configuration.
+
+With actual Mutter scale 2, the render surface is 2400×1800. The reproduced
+worker error requested 660,933,728 display bytes against the fixed 637,534,208-byte
+(608 MiB) component limit. Optional result polls could consume the detailed
+worker error, leaving only "GPU worker stopped". The worker now retains and logs
+the cause. The navigation fixture now asserts successful gestures and a live
+renderer throughout; its earlier `>100 presentations` check could falsely pass
+following a late worker failure. The reproduction's old test exit code is thus
+not a pass: the recorded error and 817/960 camera publications show the failure.
+
+The bounded fallback now packs visible tiles into an atlas, omits rotated-view
+corners outside the sampling halo, and allows optional completed mips to yield
+space. Float32 storage and full-resolution filter evaluation are unchanged.
+Growing the atlas copies valid pixels on the GPU instead of recomputing them.
+Replacement temporarily overlaps the old/new bounded atlas allocations; this
+peak is distinct from its 608 MiB steady component limit. Thirteen fallback
+GPU checks pass, including 4K/61 MP planning, arbitrary-angle Float32 pixel
+comparison, edits, exact undo/recovery, and preserving pixels during growth.
+The compared reference uses complete Float32 bilinear sampling: dense hardware
+bilinear weights are quantized and are not a bit-precision oracle at arbitrary
+rotation angles.
+
+The first atlas native run at 3840×2160, scale 2, completes all 960 requests without
+stopping the renderer. It exposes the remaining performance problem: five worker
+frames exceed 8.33 ms; three regenerate 17–21 million pixels, taking 38–55 ms.
+GTK frame handling stays below 0.14 ms. Fullscreen zoom can exhaust the small
+cache, evict mip levels and trigger full-resolution recomposition with no artwork
+change. Artifacts: `navigation-crash-61mp-scaled*`, `navigation-atlas-61mp-4k*`,
+and `navigation-atlas-preserve-gpu-tests.log` under the final-performance directory.
+These are diagnostic observations, not a completed 120 Hz qualification.
+
+### Latest user direction supersedes fixed memory ceilings
+
+The user explicitly directed use of available RAM/VRAM for interactive work,
+spilling less important/inactive content down the memory hierarchy when needed,
+and avoiding extra memory that does not help reach 120 Hz. Future tabs must fit
+this ownership model. The original 1/2 GiB single-document and 3/4 GiB
+multiple-document targets above are now historical comparison points, not hard
+acceptance caps. Precision and preservation requirements are unchanged.
+
+The implementation admits a complete Float32 display pyramid from the
+Vulkan driver's current device-local heap budget minus usage, leaving most
+headroom for editing, GTK and other documents. The allowance is not an allocation
+target: only the actual document's completed pixels/mips are allocated. A 61 MP
+Float32 pyramid needs about 1.2 GiB; available VRAM makes unchanged navigation a
+sampling operation instead of repeated filter evaluation. Smaller documents use
+proportionately less storage. Devices without a suitable reported allowance
+retain the bounded path. This is display residency, separate from exact source,
+paint, undo and archive ownership; it does not implement tabs or disk spilling.
+
+Vulkan defines the reported budget and usage as changing estimates, not
+reservations: [VkPhysicalDeviceMemoryBudgetPropertiesEXT](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceMemoryBudgetPropertiesEXT.html).
+Linux admission is read-only and queries the existing Vulkan device; `ash` is
+already wgpu's Rust Vulkan binding and introduces no C build dependency. Other
+platform host admission remains unimplemented pending approval. Measured resource
+and navigation results for this policy must follow before claiming qualification.
+
+### Complete-display native result
+
+The complete-display implementation passes 14 display-cache GPU tests, including
+Float32 equality against the bounded path with a physical filter, edits, and zero
+navigation recomposition/source misses. GPU executable SHA-256:
+`fa0063ae235fdf1dc113f651c635d48b63b9ee87499992e432db723b9c1f8d3c`.
+The native executable is
+`373f06c00786d89c2cc5ff5b6ba3b6e1fa7427aede57cb954570f863e8b0319a`;
+source bytes and hashes are retained in `navigation-complete-provenance.json`
+and `navigation-complete-source/` (base commit `9f7abe15`).
+
+Repeatable command, after building/capturing the release test executable:
+
+```bash
+LAYER_TEST_SCALE=2 LAYER_TEST_MONITOR=3840x2160@120 \
+LAYER_NAVIGATION_PHOTO=61mp LAYER_NAVIGATION_COMPLETE=1 \
+bash tools/performance/gtk-raster.sh "$GTK_TEST_EXECUTABLE" \
+  workspace::tests::native_navigation::native_large_photo_navigation \
+  artifacts/color-m2/final-performance/navigation-complete-61mp-4k
+python3 tools/performance/photo-navigation-report.py \
+  artifacts/color-m2/final-performance/navigation-complete-61mp-4k.json
+```
+
+Measured 3840×2160 at actual scale 2; 960 requests over eight seconds, all matched
+to presentation, zero discarded/unmatched requests and zero missed refresh slots.
+All camera frames retain identical composition/source-miss counters: **zero
+recomposited pixels and zero source decoding**. The complete display occupies
+1,226.16 MiB (1.197 GiB), versus approximately 608 MiB for the constrained atlas.
+Only the actual pyramid is allocated, not the driver's available allowance.
+
+| Metric | Constrained atlas | Complete display |
+| --- | ---: | ---: |
+| Worker CPU p99 / maximum | 4.218 / 54.959 ms | 0.510 / 1.443 ms |
+| Worker GPU p99 / maximum | 5.824 / 56.454 ms | 1.003 / 1.941 ms |
+| CPU / GPU frames over 8.333 ms | 5 / 5 | 0 / 0 |
+| Presented requests / requested | 936 / 960 | 960 / 960 |
+| Missed refresh slots | 24 | 0 |
+| GTK frame handler maximum | 0.134 ms | 0.094 ms |
+
+This confirms the cache/refill cause of the reported fullscreen stalls and
+sustains 120 Hz presentation in this run. It does **not** establish an 8.333 ms
+input-to-present bound: request-to-present p99 is 11.545 ms, maximum 13.224 ms.
+The existing phase-aligned native scheduler is a separate source of delay. Do not
+substitute frame cadence or worker GPU time for that latency. Native physical
+input/calibrated-display and other-platform qualification remain separate.
+The environment snapshot records the workstation and competing GPU activity;
+these are private-compositor runs on the shared development workstation.
+
+
+### Integrated resource and recovery checkpoint
+
+The portable JPEG/CMM build plus complete display passes the full renderer suite:
+249 passed, zero failed, 26 optional hardware/performance checks ignored
+(`navigation-complete-all-gpu-tests.log`, 398.97 s). The current private GTK runs
+pass injected GPU failure/recovery, repeated retrieval of the original error,
+managed canvas/GTK artwork agreement, and native document files. The runnable
+release GTK application also builds. Correctness-suite durations are not latency
+measurements. Exact commands and results are in `navigation-complete-gtk-checks.json`.
+
+The same build completes the expanded 24/45/60 MP and three-document fixtures,
+including live adjustments/masks, concurrent saving/export/painting, repeated
+histograms, blur, archive reopening and exact paint/mask undo/redo comparisons.
+The captured CLI executable is SHA-256
+`26cda9120ddf8bfd009484cea57eea3f14264dafbdb538ce5c13fe7b05d1ffea`.
+
+| Retained workload | Process RSS high-water | Final process RSS | Conservative combined GPU reservation peak |
+| --- | ---: | ---: | ---: |
+| 24 MP | 904.03 MiB | 904.03 MiB | 1,079 MiB |
+| 45 MP | 1,306.82 MiB | 1,256.49 MiB | 1,632 MiB |
+| 60 MP | 1,514.41 MiB | 1,382.16 MiB | 1,928 MiB |
+| 24 + 45 + 60 MP | 2,834.53 MiB | 2,704.84 MiB | 3,935 MiB |
+
+GPU reservation includes allocator slack/staging and shared capture workers;
+other retained devices' peaks are summed conservatively. It excludes
+unreported driver-private allocations. Final active-device reservations are
+951/1440/1864 MiB for 24/45/60 MP, with live allocations 691.30/1240.89/1552.89 MiB.
+The three-document case retains complete displays on all three renderers: it is
+a resource stress fixture, not implemented inactive-tab eviction. The CPU exact
+sample cache remains at or below 512 MiB, and upload scratch/staging at 8 MiB.
+Use the larger of in-process VmHWM and `/usr/bin/time` high-water measurements;
+those sources differ on the 24 MP run (925724 versus 885976 KiB). Raw records,
+environment and commands are `photo-expanded-navigation-complete-*` and
+`navigation-complete-resource-session.log`.
+
+These totals quantify the cost of predictable navigation under the revised
+memory policy. The allowance is one quarter of reported remaining device-local
+headroom; only the required display pyramid is allocated. Admission is currently
+a snapshot, not a global reservation or runtime pressure manager. A complete
+texture must also fit the device's maximum texture dimensions; otherwise the
+bounded atlas remains in use. RAM/disk demotion of inactive documents is future
+work. No claim of that hierarchy follows from a successful memory benchmark.
+
+Dirty photo regeneration remains explicitly deferred. The resource fixture's
+sliders, blur and full histograms still take tens to hundreds of milliseconds
+(or seconds for histograms). Concurrent painting also records isolated frame
+misses. Those observations are retained, not labeled as successful 120 Hz edit
+regeneration. Unchanged navigation is the current latency target.
+
+### Windowed presentation follow-up
+
+The first current 2400×1800, scale-2 native windowed run preserves all artwork
+and performs zero source decoding/recomposition, but presents only 935/960
+requests, with 25 missed refresh slots and a 192.691 ms request-to-present maximum.
+Worker CPU/GPU maxima remain 1.267/1.535 ms. Thus the crash fix and fast render
+work pass, while this run does not qualify presentation cadence. The fullscreen
+960/960 result above must not hide it. Artifacts are
+`navigation-complete-gtk-61mp-window*`.
+
+An isolated repeat trips the zero-recomposition assertion before writing its
+report (`navigation-complete-61mp-window-repeat.log`). The fixture now writes
+its report before that assertion so a future failure preserves the counters.
+This unexpected work is under investigation; it is not silently waived as noise.
+
+
+The diagnostic repeats preserve the evidence. One presents 960/960 requests
+with zero missed slots, CPU/GPU maxima 1.564/0.812 ms. Two others present 937/933,
+with 23/27 missed slots; their CPU/GPU render maxima remain below 1.71 ms.
+The counter change is **only source misses, 950 → 1900**; composited pixels
+remain exactly 120434688 and storage 1285724992 bytes. Inspection identifies
+the cold layer-thumbnail scan on the same GTK GPU worker: it reads the 950
+source tiles outside the timed canvas frame. Thus the global zero-source-work
+assertion also includes this separate job. The completed display itself does
+not regenerate. Batching that background scan remains a focused follow-up.
+Reports are `navigation-final-61mp-window*`; executable hashes are retained in
+`navigation-final-executables.json`. The final texture-dimension guard passes
+all 15 display tests (`navigation-final-display-tests.log`, 24.65 s).

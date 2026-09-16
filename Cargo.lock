@@ -1129,6 +1129,7 @@ dependencies = [
 name = "layer-render-wgpu"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "crc32fast",
  "futures-channel",
  "layer-color",

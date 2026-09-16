@@ -16,6 +16,9 @@ pub(crate) struct NativeEdit {
     pub(crate) color_cache_bytes: u64,
     pub(crate) display_dense_bytes: u64,
     pub(crate) display_cache_bytes: u64,
+    /// Additional complete-display allowance, admitted from device headroom.
+    /// Zero keeps the bounded visible-tile path.
+    pub(crate) display_complete_bytes: u64,
     /// Provisional ceiling for live physical-filter pixel allocations, separate
     /// from source, paint and composite residency. Host release qualification
     /// must establish the combined workload budget as well.
@@ -67,6 +70,12 @@ impl NativeEdit {
             color_cache_bytes: 256 * 1024 * 1024,
             display_dense_bytes: crate::live_display::DENSE_BYTES,
             display_cache_bytes: crate::live_display::CACHE_BYTES,
+            display_complete_bytes: {
+                #[cfg(target_os = "linux")]
+                { crate::display_memory::complete_budget(&r.device) }
+                #[cfg(not(target_os = "linux"))]
+                { 0 }
+            },
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
             transfer,
             colors,

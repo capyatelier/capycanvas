@@ -139,6 +139,7 @@ impl Scene {
             }
             Ok(())
         })();
+        self.images.release_window_pixels();
         self.image_window = None;
         result
     }

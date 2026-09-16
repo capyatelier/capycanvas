@@ -158,9 +158,9 @@ impl ViewportPresenter {
                     binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(48),
+                        min_binding_size: std::num::NonZeroU64::new(64),
                     },
                     count: None,
                 },
@@ -261,8 +261,8 @@ impl ViewportPresenter {
             display_geometry: None,
             plain_display: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("dense display geometry"),
-                size: 48,
-                usage: wgpu::BufferUsages::UNIFORM,
+                size: 64,
+                usage: wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             }),
             document_extent: [0; 2],

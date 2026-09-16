@@ -172,6 +172,14 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     );
     assert!(w.snapshot_gpu().is_err(), "failed owners cannot start new capture jobs");
     {
+        let mut gpu = w.gpu.borrow_mut();
+        let renderer = gpu.as_mut().unwrap().session.renderer_mut();
+        let cause = renderer.ready().unwrap_err();
+        assert!(cause.contains("Validation Error"), "lost worker cause: {cause}");
+        assert_eq!(renderer.ready().unwrap_err(), cause,
+            "optional result polls must not consume the worker failure");
+    }
+    {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
         assert_eq!(session.engine().checkpoint(), checkpoint);

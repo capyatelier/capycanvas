@@ -106,13 +106,23 @@ existing `--photo` worker fixture instead.
 The native counterpart is the ignored GTK test
 `workspace::tests::native_navigation::native_large_photo_navigation`. Build the
 release test executable first, then run it alone with `gtk-raster.sh` and
-`LAYER_NAVIGATION_PHOTO=24mp`, `45mp` or `60mp`. It maximizes the editor on the
+`LAYER_NAVIGATION_PHOTO=24mp`, `45mp`, `60mp` or `61mp` (9504×6336). It maximizes the editor on the
 private 1600×1000@120 display and records the actual canvas viewport. It generates
 960 camera requests on an absolute 120 Hz schedule through the shared gesture
 API and GTK change/wake path, without waiting for each render. This measures
 software camera-request-to-presentation, not physical input delivery. The native
 source has five pointwise adjustments and 32 paint layers; unlike the offscreen
 fixture it has no painted stroke or adjustment mask.
+
+For the high-DPI large-photo case, set `LAYER_TEST_MONITOR=3840x2160@120` and
+`LAYER_TEST_SCALE=2`. The harness applies and verifies the private Mutter monitor's
+scale; `GDK_SCALE` alone is insufficient on Wayland. Set
+`LAYER_NAVIGATION_MAXIMIZE=0` for a 1200×900 logical window (2400×1800 physical at
+scale 2). `LAYER_NAVIGATION_COMPLETE=1` additionally requires zero recomposited
+pixels and zero source-tile misses throughout navigation, qualifying the complete
+display-pyramid path on devices with sufficient reported memory headroom. The
+fixture fails if any gesture is rejected or the GPU worker stops. Reports include
+actual monitor scale, viewport, per-frame composition counters and display bytes.
 
 `tools/performance/photo-navigation-report.py REPORT.json` matches exact camera
 matrices and frame IDs to Wayland presentation feedback. It reports unmatched

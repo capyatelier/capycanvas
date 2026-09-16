@@ -5,7 +5,10 @@ use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, sou
 use std::sync::Arc;
 
 fn photo(extent: [u32; 2]) -> layer_core::Project {
-    let mut project = new_drawing(extent[0], extent[1]).unwrap();
+    let mut project = new_drawing(1, 1).unwrap();
+    // Imported photographs may exceed the New Drawing dialog's size ceiling.
+    project.document.width = extent[0];
+    project.document.height = extent[1];
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: IntegerDepth::U16,
@@ -85,11 +88,16 @@ fn native_large_photo_navigation() {
         "24mp" => [6000, 4000],
         "45mp" => [8192, 5504],
         "60mp" => [8192, 7324],
-        _ => panic!("LAYER_NAVIGATION_PHOTO must be 24mp, 45mp or 60mp"),
+        "61mp" => [9504, 6336],
+        _ => panic!("LAYER_NAVIGATION_PHOTO must be 24mp, 45mp, 60mp or 61mp"),
     };
     let app = native_test_app("art.capycanvas.PhotoNavigation");
     let w = Workspace::with_project(&app, Some((photo(extent), None)));
-    w.window.maximize();
+    if std::env::var("LAYER_NAVIGATION_MAXIMIZE").as_deref() == Ok("0") {
+        w.window.set_default_size(1200, 900);
+    } else {
+        w.window.maximize();
+    }
     w.window.present();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -166,7 +174,10 @@ fn native_large_photo_navigation() {
                     scale / camera.zoom,
                     angle - camera.rotation,
                 );
+                assert!(change.is_ok(), "navigation failed: {change:?}");
                 w.changed(change);
+                assert!(!w.gpu.borrow().as_ref().unwrap().session.rendering_suspended(),
+                    "GPU worker stopped during {phase}, repeat {repeat}, step {step}");
                 requests.push(serde_json::json!({
                     "phase": phase, "repeat": repeat, "step": step,
                     "requested_ns": requested_ns,
@@ -178,11 +189,14 @@ fn native_large_photo_navigation() {
     }
     tick.remove();
     pump(300);
+    assert!(!w.gpu.borrow().as_ref().unwrap().session.rendering_suspended());
     assert_eq!(
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &original
     );
     let stats = stats.lock().unwrap();
+    let unchanged_work = stats.camera_work.first().is_some_and(|work|
+        stats.camera_work.iter().all(|frame| frame[1] == work[1] && frame[3] == work[3]));
     assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
     assert!(
         stats
@@ -195,6 +209,8 @@ fn native_large_photo_navigation() {
         "extent": extent, "space": "ProPhoto", "depth": 16, "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "requests": requests, "camera_views": stats.camera_views,
+        "camera_work": stats.camera_work,
+        "monitor_scale": w.area.scale_factor(),
         "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
         "worker_thread_cpu": stats.thread_cpu, "worker_gpu": stats.gpu,
         "frame_handler_cpu": stats.frame_handler_cpu,
@@ -206,6 +222,11 @@ fn native_large_photo_navigation() {
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
+    // Preserve the evidence for a failed zero-work assertion as well as passes.
+    if std::env::var("LAYER_NAVIGATION_COMPLETE").as_deref() == Ok("1") {
+        assert!(unchanged_work,
+            "complete display navigation must not recompose or decode source tiles");
+    }
     w.window.destroy();
     pump(100);
 }

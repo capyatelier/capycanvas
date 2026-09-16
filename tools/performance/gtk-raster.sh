@@ -18,7 +18,7 @@ raster_run_dir=$(mktemp -d /tmp/capy-gtk-raster.XXXXXX)
 mkdir -p "$(dirname "$raster_report")"
 export XDG_RUNTIME_DIR="$raster_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
-export WAYLAND_DISPLAY=capy-raster-validation
+export WAYLAND_DISPLAY=layer-bench-raster
 export GDK_BACKEND=wayland GSK_RENDERER="${GSK_RENDERER:-vulkan}" GTK_A11Y=none
 # Native file tests drive the in-process GTK chooser. Portal dialogs live in a
 # different process and cannot be exercised by those widget signal assertions.
@@ -30,7 +30,7 @@ export CAPY_RECOVERY_DIR="$raster_run_dir/recovery"
 export LAYER_PACING_REPORT="$raster_report.json"
 unset DISPLAY
 env -u G_DEBUG mutter --headless --wayland --no-x11 \
-    --virtual-monitor=1600x1000@120 --wayland-display="$WAYLAND_DISPLAY" \
+    --virtual-monitor="${LAYER_TEST_MONITOR:-1600x1000@120}" --wayland-display="$WAYLAND_DISPLAY" \
     >"$raster_report-mutter.log" 2>&1 &
 raster_compositor_pid=$!
 trap 'kill "$raster_compositor_pid" 2>/dev/null || true; wait "$raster_compositor_pid" 2>/dev/null || true' EXIT
@@ -40,6 +40,10 @@ for ((attempt=0; attempt<100; attempt++)); do
     sleep .1
 done
 [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]
+if [[ ${LAYER_TEST_SCALE:-1} != 1 ]]; then
+    gdbus wait --session --timeout 10 org.gnome.Mutter.DisplayConfig
+    gjs "$(dirname "$raster_script")/display-scale.js" "$LAYER_TEST_SCALE"
+fi
 cd "$(dirname "$raster_script")/../../apps/layer-linux"
 G_DEBUG=fatal-criticals "$raster_binary" "$raster_filter" --ignored --test-threads=1 \
     --nocapture 2>&1 | tee "$raster_report.log"

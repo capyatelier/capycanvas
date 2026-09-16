@@ -61,6 +61,8 @@ mod layer_tests;
 mod present;
 mod artwork;
 mod display_mips;
+#[cfg(target_os = "linux")]
+mod display_memory;
 mod live_display;
 mod region_requests;
 mod region_sources;

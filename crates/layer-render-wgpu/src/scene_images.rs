@@ -170,6 +170,14 @@ pub(super) struct ImageStages {
     pub mask_pixels: u64,
 }
 impl ImageStages {
+    /// Windowed filters rebuild their images for every dependency window. Once
+    /// that window completes, retain only metadata used to classify future
+    /// artwork damage; its temporary pixels have no reusable owner.
+    pub(super) fn release_window_pixels(&mut self) {
+        self.stages.clear();
+        self.scratch.clear();
+        self.backdrops.clear();
+    }
     pub(super) fn metadata_changed(&self, layers: &[Layer], background: [f32; 4]) -> bool {
         self.background != background
             || self.metadata.len() != layers.len()
