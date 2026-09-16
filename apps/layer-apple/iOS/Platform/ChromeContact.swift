@@ -5,10 +5,6 @@ extension View {
     func editorChromeContact(_ action: @escaping (CGPoint) -> Void) -> some View {
         background(EditorContact(action: action))
     }
-    func editorContextAction(_ action: @escaping () -> Void) -> some View {
-        highPriorityGesture(LongPressGesture(minimumDuration: 0.5, maximumDistance: 10)
-            .onEnded { _ in action() })
-    }
 }
 
 private struct EditorContact: UIViewRepresentable {

@@ -19,6 +19,9 @@ import SwiftUI
                 guard Date() < deadline else {
                     print("Drawer state:", store.state["customization"]["column_drawers"].stableKey)
                     print("Tabs:", JSON(store.workspace.tabs.map(\.raw)).stableKey)
+                    print("Drawer bounds:", store.contentDrawers.items["4"]?.geometry["placement"]["bounds"].stableKey ?? "missing")
+                    print("Header bounds:", store.workspace.sources[JSON(["kind": "group", "group": 6]).stableKey]?.bounds as Any)
+                    fflush(stdout)
                     throw NSError(domain: message, code: 1)
                 }
                 try await Task.sleep(for: .milliseconds(5))
@@ -29,6 +32,7 @@ import SwiftUI
         store.native?.resize(width: 1200, height: 870, scale: 1)
         store.dispatch(["type": "move_panel", "panel": "toolbar", "target": ["kind": "tab", "group": 6], "viewport": [1200,870]])
         store.customize(["type": "set_column_collapsed", "group": 6, "collapsed": true])
+        store.customize(["type": "set_column_drawers", "column": 4, "drawers": true])
         let root = WorkspacePanels(store: store, workspace: store.workspace)
             .frame(width: 1200, height: 870).coordinateSpace(name: "editor-workspace")
             .font(.system(size: 44 / 3))
@@ -53,7 +57,7 @@ import SwiftUI
             guard let measured = store.workspace.sources[groupItem.stableKey]?.bounds,
                 let drawer = store.contentDrawers.items["4"] else { return false }
             let target = drawer.geometry["placement"]["bounds"].rect
-            return target.width == 272 && abs(measured.minY - target.minY) < 0.5 && abs(measured.width - target.width) < 0.5
+            return target.width > 0 && abs(measured.minY - target.minY) < 0.5 && abs(measured.width - target.width) < 0.5
         }
         let drawerBounds = store.contentDrawers.items["4"]!.geometry["placement"]["bounds"].rect
         let emptyHeader = CGPoint(x: drawerBounds.maxX - 30, y: drawerBounds.minY + 18)

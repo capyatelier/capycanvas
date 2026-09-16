@@ -10,7 +10,6 @@ import SwiftUI
     let tabSlide: WorkspaceTabSlide
     var tabFrames: [String: WorkspaceTabFrame] = [:]
     private weak var store: EditorStore?
-    var editor: EditorStore? { store }
     private var shownPanel: String?
     private var configurationHeight = 0.0
     private var geometryKey = ""
@@ -258,12 +257,7 @@ struct WorkspaceDrag: ViewModifier {
     @Environment(\.workspaceGesturesEnabled) private var enabled
     @Environment(\.workspaceLayer) private var layer
     @Environment(\.workspaceClip) private var clip
-    @ViewBuilder func body(content: Content) -> some View {
-        if !enabled, let context, let store = workspace.editor {
-            content.modifier(WorkspaceContext(store: store, target: context, openOnTap: openOnTap, doubleClick: doubleClick))
-        } else { retained(content) }
-    }
-    private func retained(_ content: Content) -> some View {
+    func body(content: Content) -> some View {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: WorkspaceSources.self,
                 value: enabled ? [sourceID: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip),
@@ -279,7 +273,7 @@ struct WorkspaceDrag: ViewModifier {
                         at: CGPoint(x: source.bounds.minX, y: source.bounds.maxY))
                 }
             }
-        }, isEnabled: openOnTap)
+        }, isEnabled: enabled && openOnTap)
     }
 }
 struct WorkspaceRootDrag: ViewModifier {

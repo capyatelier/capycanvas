@@ -9,8 +9,8 @@ presentation. A display-link tick or completed Rust call is not a presentation.
 The iOS Simulator SDK does not expose drawable IDs or presentation callbacks;
 simulator runs omit these events and cannot establish presentation acceptance.
 
-Baseline and current ten-minute 4K watercolor sessions are recorded on each
-physical platform below.
+Retained ten-minute 4K watercolor and ink sessions are recorded on each
+physical platform below, with their measured source revisions.
 Complete workload-matrix results, physical input-to-pixel evidence and calibrated
 instrumentation overhead remain required on both platforms. Following the user's
 2026-09-11 clarification, current Mac validation targets **90 Hz (11.11 ms)**;
@@ -156,6 +156,46 @@ in both cases** with Stroke Prediction enabled and iPadOS Prediction off/on. Thi
 closes the reported physical stall. No failed recording or synthetic-only pass
 is counted as physical acceptance; broader sustained measurements retain their
 original scope.
+
+## Sustained memory and idle review — 2026-09-16
+
+Read-only reanalysis of the retained `fb81ebe` ten-minute `layered-4k` pair
+confirms completed measurement/postlude, nominal thermal samples, no rejected
+input or renderer errors, and no missing/zero measured presentation callbacks.
+Long intervals are 909/49,837 (1.824%) on Mac and 727/66,919 (1.086%) on iPad.
+Those counts alone do not fail the user's revised perceptual criterion and do
+not justify reopening scheduling experiments. They are not fresh-build results.
+
+The recorded footprint growth slows rather than remaining constant:
+
+| Measured window | Mac growth, MiB | iPad growth, MiB |
+| --- | ---: | ---: |
+| 0–120 seconds | 80.44 | 63.23 |
+| 120–240 seconds | 85.53 | 72.47 |
+| 240–360 seconds | 77.64 | 95.13 |
+| 360–480 seconds | 52.59 | 46.48 |
+| 480–600 seconds | 22.58 | 3.48 |
+
+Whole-interval growth remains 326.47/291.28 MiB. The recorder adds 30.59/34.27 MiB
+of event payload during measurement, within its 74.52 MiB reservation; payload
+bytes are not a physical allocation attribution. The shared history implementation
+is unchanged from the recorded source and already caps retained history at 256
+entries and 512 MiB of additional accounted data. These facts do not identify
+every allocation or prove indefinite stability, but they do not establish an
+unbounded leak or justify a new memory-retention workaround.
+
+Across the ten-second postlude's memory samples, footprint drops 60.64 MiB on
+Mac and 156.30 MiB on iPad. Each host records only two more canvas-owner frames;
+the display link sleeps 49.2/40.8 ms after measurement ends, and neither records
+canvas-owner frames during the final five seconds. This qualifies that recorded
+idle transition, not a longer recorder-off idle/resume or storage-growth test.
+
+Retain these scoped results for final acceptance. Short profiles containing the
+reverted Layers observation experiment and the fixed-minimum-cadence ink
+candidate remain separately labeled. Final source-qualified workload coverage,
+recorder-off resource behavior, instrumentation overhead and physical
+input-to-pixel measurement remain open. No new benchmark or product change was
+made for this review. Evidence is `artifacts/apple-performance-closure-v1/`.
 
 ## Remaining short workload profiles — 2026-09-15
 

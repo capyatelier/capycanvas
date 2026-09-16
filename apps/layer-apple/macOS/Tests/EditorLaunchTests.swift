@@ -58,6 +58,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testRegionSelectionAndFill() { checkRegionSelectionAndFill(in: editorCaptureApplication()) }
 
+    @MainActor func testNativeRegionRefinement() throws { try checkNativeRegionRefinement(in: editorCaptureApplication()) }
+
     @MainActor func testSelectionInversion() { checkSelectionInversion(in: editorCaptureApplication()) }
 
     @MainActor func testRulerWorkflow() {

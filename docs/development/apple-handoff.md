@@ -14,9 +14,12 @@ Use the [current release checklist](apple-release-checklist.md) for the remainin
 gates and feature closure map. The older milestone sections below retain their
 original evidence and limits; their remaining-work paragraphs are not separate
 new test plans. A fresh shared-model enumeration confirms the current 63-command
-scope with no command-list drift. The fetch before this follow-up matched the
-previous milestone, `3d00463`. This milestone groups prediction/Settings fixes,
-link error reporting and local document failure/retry acceptance.
+scope with no command-list drift. The input-cleanup/native-acceptance milestone
+groups the context-handler removals and Mac refinement/transform checks below;
+its evidence and publication verification are under
+`artifacts/apple-context-cleanup-v1/`. The preceding milestone `7672213` groups
+prediction/Settings fixes, link error reporting and local document failure/retry
+acceptance; the remote main revision was verified. Its predecessor is `3d00463`.
 
 The closure audit also reproduces and fixes silently rejected Help links. A small
 shared SwiftUI completion helper surfaces the error through the existing error
@@ -53,6 +56,94 @@ was discarded after it failed to reach the links; direct rejection/retry UI
 acceptance remains open. This is a test limitation, not a new browser-delivery
 defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
 review apps are retained for the outstanding physical XP-Pen check.
+
+## Sustained performance evidence review
+
+The retained ten-minute physical 4K ink pair has no rejected input, renderer
+errors or missing/zero measured presentations, with nominal thermal samples.
+Rare long intervals (Mac 1.824%, iPad 1.086%) alone no longer block acceptance.
+The memory curves slow late in the run, release footprint after pen-up and show
+canvas idle within 50 ms on both hosts. The shared history budget is unchanged
+from the recorded source. No memory workaround or scheduling experiment is
+justified by these observations. They retain their original source scope;
+source-qualified final profiles, recorder-off resource/idle-resume behavior,
+instrumentation overhead and physical latency evidence remain separate. See
+[the detailed review](../../apps/layer-apple/PERFORMANCE.md#sustained-memory-and-idle-review--2026-09-16)
+and `artifacts/apple-performance-closure-v1/`. No new hardware run accompanied
+this read-only review.
+
+## Drawing-tool coverage reconciliation
+
+All 34 current brush presets map to retained passing native workflows: thirty
+painting/erasing presets and four Blend/Liquify presets. The Mac cases verify
+mouse artwork and one-step Undo/Redo; the UIKit cases verify native selection,
+scrolling and size editing. The current catalog matches those retained results.
+The existing Apple bridge suite also passes dynamic catalog-wide reachability
+and numeric setting edits on both policies; the inventory contains 317 brush
+setting routes across 19 numeric IDs. This closes the unspecified catalog/setting
+reconciliation item without repeating a broad UI sweep. It does not claim new
+physical Pencil, sensor or interruption acceptance. The 90 total tool entries
+include root/group selections and non-brush subtools, whose remaining cases stay
+in their own checklist rows. Evidence is `artifacts/apple-tool-coverage-review-v1/`.
+
+## Native refinement and transform acceptance
+
+The remaining Mac native refinement case passes through actual fields, scrolling,
+menus, canvas clicks and file panels. Ten cases cover Fill/Auto select expansion,
+contraction and smoothing plus leaking/closed-gap Fill. Exported pixels and Undo
+are exact; Redo also restores the softened result for both tools. Representative
+captures are reviewed. No runtime change was needed. The first fixture failure
+targeted a field below the scroll viewport; the existing reveal helper resolves
+it. Evidence is `artifacts/apple-native-refinement-v1/mac-v2/`, with one passing
+workflow, no failures/skips and no compiler warnings. Retained responsiveness/QoS
+warnings do not establish a performance result. UIKit refinement and physical
+pen delivery remain open under the release checklist; this passing Mac workflow
+does not require a routine rerun.
+
+The existing Mac transform workflow now covers all four mouse corner handles,
+verifying scale/position, the fixed opposite corner, independent artwork samples,
+Apply and one-step Undo/Redo. All four captures are reviewed. Its edge, rotation,
+modifier and cancellation cases also pass. `mac-v3` passes one workflow with no
+failures/skips and no compiler warnings; its app executable is identical to the
+refinement run, with only the test bundle changed. Physical tablet/Pencil and
+interrupted contacts remain separate. These tests join the input-cleanup
+milestone; neither review app was replaced.
+
+## Title-bar input cleanup
+
+The cleanup removes the item-level context gesture from Customize
+Title Bar. Its native root already owns secondary click, touch/pen holds and
+same-contact dragging; the extra UIKit SwiftUI long press did not classify the
+device. No replacement input path is added. The mounted actual header passes
+AppKit mouse/tablet checks for all three sizes on both Apple policies, including
+secondary click, held-menu continuation, narrow overflow, cancellation, keyboard
+movement and exact layout history. All twelve shared surface/device combinations
+pass, including touch on the header-editor surface. Both Release builds pass
+without warnings. Physical Pencil and UIKit recognition remain separately scoped.
+Evidence is `artifacts/apple-header-single-input-v1/`. This joins the workspace
+cleanup below; the installed review apps are unchanged.
+
+## Workspace context input cleanup
+
+Both places that disable workspace gestures also disable hit testing: covered
+groups during panel expansion and retained closing drawers. Their fallback
+context-menu branch was therefore unreachable. Removing it also removes the
+duplicate tap-menu model/query and obsolete UIKit long press/AppKit right-click
+overlay. Interactive sources retain the native workspace root; header context
+menus retain the existing native presenter and stale-request guards. Disabled
+sources publish no hit geometry and have no tap gesture. Chrome contact observers
+remain, in accurately named platform files; the Xcode project is regenerated.
+
+Existing checks pass for drawer geometry/reorder/reopen/closing retirement,
+twelve AppKit mouse/tablet groups on both Apple policies, and two native menu
+loading/action/late-reply teardown groups. The first drawer check also fails
+against the published source: it assumed individual-panel drawers, while the
+current preset opens whole columns. The focused fixtures now explicitly select
+drawer mode, matching the existing full-app workflow, and compare measured
+header width with current shared geometry. No runtime workaround was added.
+Both final Release builds pass without compiler warnings. Evidence is
+`artifacts/apple-context-cleanup-v1/`; physical UIKit recognition retains its
+existing scope, and the review drawings/apps are preserved.
 
 ## Prediction Settings follow-up
 

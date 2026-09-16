@@ -126,6 +126,11 @@ import SwiftUI
                 try await wait("Editor restored") { source("item") != nil }
             }
             let item = source("item")!, point = center(item)
+            try await send(.rightMouseDown, point); try await send(.rightMouseUp, point)
+            try await wait("Native secondary-click menu") { !header.menu.isNull }
+            try require(header.selected == item.value["value"].uint && layout() == initial && !header.contact.dragging,
+                "The native secondary-click handler must select the item and open its menu without changing the arrangement")
+            header.closeMenu(); try await drain()
             let generation = header.contact.generation
             try await send(.leftMouseDown, point); try await send(.leftMouseUp, point)
             try require(header.selected == item.value["value"].uint,
@@ -139,7 +144,7 @@ import SwiftUI
             try await action(["type":"invoke", "command":"redo_workspace"])
             try require(layout() == arranged, "Redo restores the whole edit")
             try await action(["type":"invoke", "command":"undo_workspace"])
-            note("PASS platform \(platform), \(size): native mouse/pen bank, held context, detach/reentry, Cancel, keyboard and Done history")
+            note("PASS platform \(platform), \(size): native mouse/pen bank, held context, secondary click, detach/reentry, Cancel, keyboard and Done history")
         }
         window.setContentSize(CGSize(width: 640, height: 480))
         store.native?.resize(width: 640, height: 480, scale: 1)
