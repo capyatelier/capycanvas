@@ -262,6 +262,11 @@ impl ColorState {
         Ok(())
     }
     pub fn view(&self) -> ColorPanelView {
+        self.view_in(RgbSpace::Srgb)
+    }
+    /// Display values only; picker coordinates and portable definitions retain
+    /// their document/source spaces.
+    pub fn view_in(&self, display: RgbSpace) -> ColorPanelView {
         let geometry = ColorWheelGeometry::new(1.).unwrap();
         let components = self.components();
         let names = match self.space {
@@ -272,7 +277,7 @@ impl ColorState {
             rgb_space: self.rgb_space,
             definition: self.definition(),
             outside_document_gamut: !self.definition().in_gamut(self.rgb_space).unwrap(),
-            outside_display_gamut: !self.definition().in_gamut(RgbSpace::Srgb).unwrap(),
+            outside_display_gamut: !self.definition().in_gamut(display).unwrap(),
             space: self.space,
             shape: self.wheel_shape(),
             other_shapes: self.other_shapes(),
@@ -283,16 +288,16 @@ impl ColorState {
             readout_description: self.readout_description(),
             wheel_marker: self.wheel_marker(&geometry),
             wheel_components: self.wheel_components(),
-            wheel_hue_color: self.wheel_hue_color(self.wheel_components()[0]),
+            wheel_hue_color: self.wheel_hue_color_in(self.wheel_components()[0], display),
             wheel_hue_marker: self.wheel_hue_marker(&geometry, self.wheel_components()[0]),
             wheel_hue_start_degrees: self.wheel_hue_start_degrees(),
             geometry,
-            hue_color: self.preview_rgb(hue_color(components[0])),
-            hue_stops: std::array::from_fn(|i| self.preview_rgb(hue_color(i as f32 * 60.))),
+            hue_color: display_rgb(self.rgb_space, display, hue_color(components[0])),
+            hue_stops: std::array::from_fn(|i| display_rgb(self.rgb_space, display, hue_color(i as f32 * 60.))),
             hue_start_degrees: ColorWheelGeometry::HUE_START_DEGREES,
             hue_marker: geometry.hue_marker(components[0]),
             field_marker: self.marker(&geometry),
-            marker_color: self.preview(self.definition())[..3].try_into().unwrap(),
+            marker_color: self.preview_in(self.definition(), display)[..3].try_into().unwrap(),
             components: std::array::from_fn(|i| ColorComponentView {
                 label: self.labels()[i],
                 name: names[i],
@@ -303,12 +308,12 @@ impl ColorState {
                 (
                     ColorSlot::Foreground,
                     "Foreground color",
-                    self.preview(self.foreground),
+                    self.preview_in(self.foreground, display),
                 ),
                 (
                     ColorSlot::Background,
                     "Background color",
-                    self.preview(self.background),
+                    self.preview_in(self.background, display),
                 ),
                 (ColorSlot::Transparent, "Transparent paint", [0.; 4]),
             ]
@@ -419,9 +424,6 @@ impl ColorState {
             self.picker_rgba()[..3].try_into().unwrap(),
             fallback,
         )
-    }
-    fn preview_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
-        display_rgb(self.rgb_space, RgbSpace::Srgb, rgb)
     }
     pub fn wheel_hue_color(&self, hue: f32) -> [f32; 3] {
         self.wheel_hue_color_in(hue, RgbSpace::Srgb)
@@ -900,6 +902,9 @@ fn display_rgb(space: RgbSpace, display: RgbSpace, rgb: [f32; 3]) -> [f32; 3] {
 /// Opaque sRGB pixels for hosts that cache the hue guide instead of using a
 /// native conic gradient. The host clips its antialiased ring silhouette.
 pub fn render_hue_guide(side: u32, shape: ColorShape, space: RgbSpace, rgba: &mut [u8]) -> bool {
+    render_hue_guide_in(side, shape, space, RgbSpace::Srgb, rgba)
+}
+pub fn render_hue_guide_in(side: u32, shape: ColorShape, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
     if side == 0
         || (side as usize)
             .checked_mul(side as usize)
@@ -912,13 +917,19 @@ pub fn render_hue_guide(side: u32, shape: ColorShape, space: RgbSpace, rgba: &mu
     let mut state = ColorState::default();
     state.set_rgb_space(space).unwrap();
     state.apply(ColorAction::Shape { shape }).unwrap();
-    let stops = state.wheel_hue_stops();
+    let mut stops = std::borrow::Cow::Borrowed(state.wheel_hue_stops());
+    if display != RgbSpace::Srgb {
+        // Re-evaluate in the destination gamut, before any sRGB clipping.
+        for stop in stops.to_mut() {
+            stop.color = state.wheel_hue_color_in(stop.offset * 360., display);
+        }
+    }
     for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let point = [
             (index % side as usize) as f32 + 0.5,
             (index / side as usize) as f32 + 0.5,
         ];
-        // Use the same encoded-sRGB gradient stops as the browser. Evaluating
+        // Interpolate encoded display gradient stops. Evaluating
         // the perceptual hue conversion at every pixel stalls panel resizing.
         let offset = state.wheel_hue_at(&geometry, point) / 360.;
         let upper = stops

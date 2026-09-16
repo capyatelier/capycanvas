@@ -63,7 +63,7 @@ final class NativeProjectTask: @unchecked Sendable {
         guard capy_project_preview(handle, after, &preview) == 0, let pixels = preview.pixels,
             preview.width > 0, preview.height > 0, preview.width <= 512, preview.height <= 384,
             preview.count == Int(preview.width * preview.height * 4),
-            let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let space = CGColorSpace(name: CGColorSpace.displayP3),
             let provider = CGDataProvider(data: Data(bytes: pixels, count: preview.count) as CFData),
             let image = CGImage(width: Int(preview.width), height: Int(preview.height), bitsPerComponent: 8, bitsPerPixel: 32,
                 bytesPerRow: Int(preview.width) * 4, space: space,

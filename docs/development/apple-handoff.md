@@ -553,7 +553,58 @@ Evidence and initial failures are retained under
 `artifacts/apple-profiled-export-v1/` (`mac-ui-v5.xcresult`). Physical iPad delivery
 remains unqualified.
 Artist review apps and drawings remain untouched. Next are managed display
-integration and grouped physical SDR/provider/61 MP performance acceptance.
+integration (now recorded below) and grouped physical SDR/provider/61 MP performance acceptance.
+
+## Managed SDR canvas and controls
+
+Apple now uses one Display P3 SDR viewing contract for the Metal canvas and
+Navigator, color wheel/markers, paint and palette swatches, tagged color forms,
+gradients, thumbnails, filter previews and document/export comparisons. Shared
+Rust transforms produce matching values; native images and SwiftUI colors carry
+P3 tags. SwiftUI artwork canvases use extended linear compositing to preserve
+P3 colors outside sRGB and blend transparency consistently. Document definitions,
+integer backing, exact samples and export encoders keep their existing contracts.
+
+The Metal surface explicitly requests P3 SDR, with EDR disabled. Core Animation
+maps tagged contents to the current display, including standard-gamut screens;
+there is no per-monitor document conversion or second rendering path. The
+vendored backend also now tags sRGB explicitly: a nil CAMetalLayer color space
+disables color matching. A separate adoption bug retained presentation shaders
+for the previous working space. Presentation now rebuilds that conversion only
+when the renderer's working space changes, covering New/Open/recovery and color
+history. Every new Apple renderer configures P3 UI bytes before preview jobs.
+The unused sRGB hue-stop JSON transport is removed; native wheel layout now
+publishes only geometry and caches it by panel size.
+
+Settings → Color reports the SDR viewing space, current Mac screen/profile or
+iPad display gamut and system conversion policy. Mac screen/backing changes
+refresh display observations and repaint; iPad gamut/scale traits update the
+native canvas. No user calibration or document-profile change is required.
+Apple documents the contracts for
+[Metal layer color matching](https://developer.apple.com/documentation/quartzcore/cametallayer/colorspace)
+and [extended linear SwiftUI compositing](https://developer.apple.com/documentation/swiftui/colorrenderingmode/extendedlinear).
+
+Shared color/snapshot tests and four Metal viewing tests pass. Focused native
+color/history/preview checks also pass. The Swift/Metal fixture verifies actual
+P3 swatch pixels and linear alpha, and captures real canvas texture output across
+all four working spaces on both Apple policies. Color values agree within two
+8-bit levels; layer/comparison tags, resizing, layer replacement and unchanged
+saved bytes pass. This is GPU output evidence, not screen-presentation timing or
+physical iPad acceptance. Evidence is `artifacts/apple-managed-display-v1/`.
+The first capture fixture used an occluded window, so acquisition was skipped;
+the standalone layer avoids that dependency. A later snapshot readback on the
+same queue establishes completion before inspecting canvas pixels. Disabling
+only the working-space refresh reproduces the bad P3 output (zero matching
+pixels), while the fixed build passes all eight cases. Production AppKit screen
+observation passes on the one connected display; moves between different
+physical profiles remain unqualified. A too-small
+editor fixture was also corrected to use a normal viewport and Fit Canvas.
+Neither correction adds a runtime path.
+
+Both Release builds pass without compiler warnings. Artist review apps and
+drawings remain untouched. Physical color appearance, provider/background
+workflows and 61 MP/sustained SDR performance remain open; the overall release
+checklist still applies.
 
 ## Native provider acceptance
 

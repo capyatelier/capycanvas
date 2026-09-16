@@ -41,8 +41,11 @@ the [correction record](apple-handoff.md#retained-photo-corrections-and-masks).
 Profiled export/presets and the ICC library now use the shared snapshot/CMM and
 file worker, with exact source output and both-policy owner checks; see the
 [export record](apple-handoff.md#profiled-export-and-icc-library) for native/device
-coverage. **Continue with managed display integration in step 4**, then grouped
-physical SDR acceptance. Device performance and provider delivery are not closed.
+coverage. Managed SDR canvas and controls now share explicit Display P3 tags and
+shared transforms, including working-space adoption and native display observation;
+see the [display record](apple-handoff.md#managed-sdr-canvas-and-controls).
+**Continue with provider/background workflows in step 4 and grouped physical SDR
+acceptance.** Device performance and provider delivery are not closed.
 
 The physical M4 startup check exposed and fixed a vendored wgpu Metal Float32
 capability mismatch; startup and short synthetic painting now pass. The simulator

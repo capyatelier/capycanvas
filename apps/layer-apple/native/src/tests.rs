@@ -119,7 +119,7 @@ fn color_raster_ffi_validates_buffer_and_matches_shared_spaces() {
         );
     }
     let mut reference = [0; 16];
-    assert!(layer_ui::render_hls_field(2, 60., &mut reference));
+    assert!(layer_ui::render_color_field(2, layer_ui::ColorShape::Triangle, 60., layer_core::color::RgbSpace::Srgb, DISPLAY_SPACE, &mut reference));
     assert_eq!(bytes, reference);
     for space in layer_core::color::RgbSpace::ALL {
         let name = serde_json::to_value(space).unwrap();
@@ -130,9 +130,9 @@ fn color_raster_ffi_validates_buffer_and_matches_shared_spaces() {
                 assert_eq!(unsafe { capy_apple_color_field(64, 42., shape, name.as_ptr(), guide, bytes.as_mut_ptr(), bytes.len()) }, 1);
                 let mut expected = vec![0; bytes.len()];
                 assert!(if guide {
-                    layer_ui::render_hue_guide(64, color_shape(shape).unwrap(), space, &mut expected)
+                    layer_ui::render_hue_guide_in(64, color_shape(shape).unwrap(), space, DISPLAY_SPACE, &mut expected)
                 } else {
-                    layer_ui::render_color_field(64, color_shape(shape).unwrap(), 42., space, layer_core::color::RgbSpace::Srgb, &mut expected)
+                    layer_ui::render_color_field(64, color_shape(shape).unwrap(), 42., space, DISPLAY_SPACE, &mut expected)
                 });
                 assert!(bytes == expected, "{space:?}/{shape}/{guide}: shared display pixels");
                 for (invalid_shape, invalid_space) in [(3, name.as_ptr()), (shape, c"Unknown".as_ptr()), (shape, std::ptr::null())] {
@@ -145,28 +145,30 @@ fn color_raster_ffi_validates_buffer_and_matches_shared_spaces() {
 }
 
 #[test]
-fn compact_color_resources_and_circle_picking_use_shared_shapes() {
-    assert!(capy_apple_color_resources(127., 0).is_null());
-    assert!(capy_apple_color_resources(f32::NAN, 0).is_null());
-    assert!(capy_apple_color_resources(226., 3).is_null());
+fn compact_color_layout_and_circle_picking_use_shared_shapes() {
+    assert!(capy_apple_color_layout(127.).is_null());
+    assert!(capy_apple_color_layout(f32::NAN).is_null());
     // A circular field includes its horizontal rim, outside the HSV square.
     assert_eq!(capy_apple_color_hit(80., 50., 100., 0), 2);
     assert_eq!(capy_apple_color_hit(80., 50., 100., 1), 0);
-    for (shape_id, shape) in [
+    for shape in [
         layer_ui::ColorShape::Circle,
         layer_ui::ColorShape::Square,
         layer_ui::ColorShape::Triangle,
     ]
-    .into_iter()
-    .enumerate()
     {
-        let pointer = capy_apple_color_resources(226., shape_id as u32);
+        let pointer = capy_apple_color_layout(226.);
         assert!(!pointer.is_null());
         let resources: Value =
             unsafe { serde_json::from_slice(CStr::from_ptr(pointer).to_bytes()).unwrap() };
         unsafe { capy_apple_string_free(pointer) };
         let layout = layer_ui::ColorPanelLayout::new(226.).unwrap();
-        assert_eq!(resources["layout"], serde_json::to_value(layout).unwrap());
+        // Direct f32 JSON is shorter than Value's widened f64 spelling, but
+        // reconstructs the same radius. The remaining layout uses whole points.
+        assert_eq!(resources["readout_radius"].as_f64().unwrap() as f32, layout.readout_radius);
+        let mut expected = serde_json::to_value(layout).unwrap();
+        expected["readout_radius"] = resources["readout_radius"].clone();
+        assert_eq!(resources, expected);
         for platform in [0, 1] {
             let app = App::new(platform);
             app.action(json!({"type":"color","action":{"op":"shape","shape":shape}}));
@@ -174,19 +176,6 @@ fn compact_color_resources_and_circle_picking_use_shared_shapes() {
             assert_eq!(view["shape"], serde_json::to_value(shape).unwrap());
             let mut state = layer_ui::ColorState::default();
             state.apply(layer_ui::ColorAction::Shape { shape }).unwrap();
-            let stops = resources["hue_stops"].as_array().unwrap();
-            assert_eq!(stops.len(), state.wheel_hue_stops().len());
-            for (actual, expected) in stops.iter().zip(state.wheel_hue_stops()) {
-                assert!((actual["offset"].as_f64().unwrap() - expected.offset as f64).abs() < 1e-6);
-                for channel in 0..3 {
-                    assert!(
-                        (actual["color"][channel].as_f64().unwrap()
-                            - expected.color[channel] as f64)
-                            .abs()
-                            < 1e-6
-                    );
-                }
-            }
             app.action(json!({"type":"color","action":{"op":"pick_wheel","part":"field","point":[0.65,0.45],"size":1}}));
             state
                 .apply(layer_ui::ColorAction::PickWheel {
@@ -218,7 +207,7 @@ fn compact_color_resources_and_circle_picking_use_shared_shapes() {
         1
     );
     let mut expected = vec![0; bytes.len()];
-    assert!(layer_ui::render_okhsv_disc(128, 264., &mut expected));
+    assert!(layer_ui::render_color_field(128, layer_ui::ColorShape::Circle, 264., layer_core::color::RgbSpace::Srgb, DISPLAY_SPACE, &mut expected));
     assert_eq!(bytes, expected);
     assert_eq!(
         unsafe { capy_apple_color_field(128, 264., 3, c"Srgb".as_ptr(), false, bytes.as_mut_ptr(), bytes.len()) },

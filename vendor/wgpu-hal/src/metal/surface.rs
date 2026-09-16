@@ -290,8 +290,11 @@ impl crate::Surface for super::Surface {
             wgt::SurfaceColorSpace::Auto => {
                 unreachable!("wgpu-core resolves `Auto` before configuring the surface")
             }
-            // Reset to the layer's default, which treats contents as sRGB.
-            wgt::SurfaceColorSpace::Srgb => None,
+            // A nil CAMetalLayer color space disables color matching. Tag sRGB
+            // explicitly so the compositor converts to the current display.
+            wgt::SurfaceColorSpace::Srgb => {
+                Some(unsafe { objc2_core_graphics::kCGColorSpaceSRGB })
+            }
             wgt::SurfaceColorSpace::ExtendedSrgbLinear => {
                 Some(unsafe { objc2_core_graphics::kCGColorSpaceExtendedLinearSRGB })
             }

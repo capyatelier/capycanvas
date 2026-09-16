@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ColorPanel: View {
     @ObservedObject var store: EditorStore
-    @StateObject private var resources = ColorWheelResources()
+    @StateObject private var resources = ColorPanelLayoutCache()
     @FocusState private var readoutFocused: Bool
     private var model: JSON { store.snapshot["color_panel"] }
     private var context: String {
@@ -21,7 +21,7 @@ struct ColorPanel: View {
     var body: some View {
         GeometryReader { allocation in
             let side = max(128, min(allocation.size.width, allocation.size.height))
-            let layout = resources.layout(side: side, shape: ColorWheelShape(model["shape"].string))
+            let layout = resources.layout(side: side)
             let palette = EditorPalette(source: store.state["palette"])
             ZStack(alignment: .topLeading) {
                 ColorWheelDrawing(model: model, bounds: layout["wheel"])
@@ -128,7 +128,7 @@ private struct ColorPanelButtonStyle: ButtonStyle {
 private struct ColorPaintPreview: View {
     let rgba: JSON
     var body: some View {
-        Canvas { graphics, size in
+        Canvas(colorMode: .extendedLinear) { graphics, size in
             for row in 0..<Int(ceil(size.height / 5)) {
                 for column in 0..<Int(ceil(size.width / 5)) {
                     let level = Double((row + column) % 2 == 0 ? 140 : 204) / 255

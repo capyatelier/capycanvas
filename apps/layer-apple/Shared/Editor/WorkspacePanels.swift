@@ -174,7 +174,7 @@ private struct WorkspaceTile: View {
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.state["brush"]["color"], drawerOpen: drawerOpen) {
+                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.paintPreview, drawerOpen: drawerOpen) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
                     store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
                 }

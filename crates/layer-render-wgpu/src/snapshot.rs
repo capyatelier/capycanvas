@@ -730,10 +730,14 @@ impl SnapshotPreview {
     /// Bounded UI transport only; premultiplied extended working values never
     /// pass through this 8-bit presentation conversion during editing or export.
     pub fn srgb_bytes(&self) -> Result<Vec<u8>, String> {
+        self.encoded_bytes(layer_core::color::RgbSpace::Srgb)
+    }
+    /// Straight-alpha UI bytes; the host must tag the image with `space`.
+    pub fn encoded_bytes(&self, space: layer_core::color::RgbSpace) -> Result<Vec<u8>, String> {
         let target = SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: layer_core::color::IntegerDepth::U8,
-            profile: layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::Srgb),
+            profile: layer_core::color::ColorProfile::Builtin(space),
             profile_assumed: false,
         };
         let encoder = layer_color::WorkingEncoder::new(self.space, &target, Default::default())?;

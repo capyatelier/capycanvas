@@ -1,5 +1,7 @@
 //! Native Metal presentation. Accessed only on the session's serial owner.
 use layer_host::NativeHost;
+use layer_render::CanvasRenderer;
+use layer_render_wgpu::SdrSurfaceColor;
 use layer_render_wgpu::{
     GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
 };
@@ -19,6 +21,7 @@ struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
+    working_space: layer_core::color::RgbSpace,
 }
 
 #[derive(Default)]
@@ -40,7 +43,8 @@ fn error(e: impl std::fmt::Display) -> String {
 impl MetalHost {
     /// Each device records failures separately; a retired callback cannot stop
     /// its replacement. All session changes still happen on the serial owner.
-    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, renderer: WgpuRasterizer) -> Result<(), String> {
+    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, mut renderer: WgpuRasterizer) -> Result<(), String> {
+        renderer.configure_ui_previews(crate::DISPLAY_SPACE).map_err(error)?;
         let failure = Arc::new(OnceLock::new());
         let lost = failure.clone();
         renderer.device().set_device_lost_callback(move |reason, message| {
@@ -218,12 +222,16 @@ impl MetalHost {
         {
             config.format = format;
         }
+        // Metal advertises P3 SDR for its native formats on both Apple hosts.
+        // The compositor handles destination-profile changes without touching artwork.
+        config.color_space = SdrSurfaceColor::DisplayP3.surface_color_space();
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::for_renderer(gpu, config.format);
+        let presenter = ViewportPresenter::for_surface(gpu, config.format, SdrSurfaceColor::DisplayP3).map_err(error)?;
         self.surface = Some(Surface {
             surface,
             config,
             presenter,
+            working_space: gpu.document_color().space,
         });
         host.error = None;
         host.dirty = true;
@@ -321,6 +329,10 @@ impl MetalHost {
             .0
             .as_ref()
             .ok_or("Missing Metal renderer")?;
+        if surface.working_space != gpu.document_color().space {
+            surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, SdrSurfaceColor::DisplayP3).map_err(error)?;
+            surface.working_space = gpu.document_color().space;
+        }
         if [view.width_px, view.height_px] != [surface.config.width, surface.config.height] {
             surface.config.width = view.width_px;
             surface.config.height = view.height_px;

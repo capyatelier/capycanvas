@@ -5,7 +5,7 @@ struct BrushColorButton: View {
     let label: String
     var body: some View {
         Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
-            ColorSwatch(rgba: store.state["brush"]["color"])
+            ColorSwatch(rgba: store.paintPreview)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
                 .background(EditorPalette(source: store.state["palette"])["button"].opacity(13 / 255),

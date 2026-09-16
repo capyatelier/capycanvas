@@ -84,7 +84,7 @@ import SwiftUI
                 let scale = CGFloat(bitmap.pixelsWide) / width
                 try bitmap.representation(using: .png, properties: [:])!.write(
                     to: directory.appendingPathComponent("native-\(name).png"))
-                let resourcePointer = capy_apple_color_resources(Float(width), 0)!
+                let resourcePointer = capy_apple_color_layout(Float(width))!
                 let resources = try JSON.decode(String(cString: resourcePointer))
                 capy_apple_string_free(resourcePointer)
                 let side = UInt32(ceil(wheel.width))
@@ -102,7 +102,7 @@ import SwiftUI
                         "name": name, "platform": 0, "width": width, "height": width, "scale": scale, "theme": theme,
                         "shape": "circle", "readout": model["readout"].string, "slot": "foreground",
                         "palette": store.state["palette"].raw, "model": model.raw, "resources": resources.raw,
-                        "field_file": field, "field_side": side,
+                        "preview_space": "DisplayP3", "field_file": field, "field_side": side,
                         "frames": geometry.frames.mapValues {
                             ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height]
                         }, "interaction": ["target": target, "pressed": pressed],

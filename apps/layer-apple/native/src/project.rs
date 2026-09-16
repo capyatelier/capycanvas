@@ -481,6 +481,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         let mut gpu = WgpuRasterizer::from_wgpu_native_staged(
             environment.adapter, environment.device, environment.queue, project.document.color,
         ).map_err(|e| e.to_string())?;
+        gpu.configure_ui_previews(crate::DISPLAY_SPACE).map_err(|e| e.to_string())?;
         gpu.finish_startup_cache();
         let mut programs = Vec::new();
         for effect in project

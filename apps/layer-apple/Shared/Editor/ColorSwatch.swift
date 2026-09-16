@@ -3,7 +3,7 @@ import SwiftUI
 struct ColorSwatch: View {
     let rgba: JSON
     var body: some View {
-        Canvas { graphics, size in
+        Canvas(colorMode: .extendedLinear) { graphics, size in
             for row in 0..<Int(ceil(size.height / 5)) {
                 for column in 0..<Int(ceil(size.width / 5)) {
                     let level = (row + column) % 2 == 0 ? 0.8 : 0.55
@@ -15,6 +15,7 @@ struct ColorSwatch: View {
     }
 }
 extension JSON {
-    var paintColor: Color { Color(.sRGB, red: self[0].number, green: self[1].number, blue: self[2].number,
+    /// Encoded Display P3 preview values from the shared viewing transform.
+    var paintColor: Color { Color(.displayP3, red: self[0].number, green: self[1].number, blue: self[2].number,
         opacity: self[3].isNull ? 1 : self[3].number) }
 }

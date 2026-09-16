@@ -279,8 +279,15 @@ so removal and color/position edits work immediately after insertion. Undoing a
 single-point removal selects the restored point. Effect colors and gradient stops
 use the shared tagged color form, preserving the original space and exact values
 through unchanged and alpha-only edits. Use Color publishes one history edit;
-Cancel discards the draft. Shared transforms supply sRGB previews and gradient
-ramps interpolated in the document's encoded RGB space.
+Cancel discards the draft. Shared transforms supply Display P3 previews and gradient
+ramps interpolated in the document's encoded RGB space. The canvas, Navigator,
+color controls and preview images share that tagged SDR viewing contract; the
+OS converts to the current display profile. SwiftUI artwork canvases composite
+in extended linear space, preserving P3 chroma and linear alpha. Settings →
+Color → Display Details reports the host's observed screen and conversion policy.
+`bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/managed-display.swift`
+checks native swatches and actual Metal output through document-space changes,
+resizes and layer replacement, while preserving saved artwork.
 
 `bash apps/layer-apple/scripts/test-color-input.sh` checks real AppKit text entry
 and default-button delivery for all four RGB spaces without a renderer or

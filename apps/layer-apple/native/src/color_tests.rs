@@ -239,3 +239,24 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
         }
     }
 }
+
+#[test]
+fn apple_display_previews_keep_p3_chroma_without_changing_paint_definitions() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let definition = json!({"space":"DisplayP3","rgba":[1.,0.5,0.,0.5]});
+        app.action(json!({"type":"color","action":{"op":"definition","color":definition}}));
+        let state = app.state();
+        let snapshot = app.request(3, Value::Null).unwrap();
+        let panel = &snapshot["color_panel"];
+        assert_eq!(panel["marker_color"], json!([1.,0.5,0.]));
+        assert_eq!(panel["swatches"][0]["rgba"], json!([1.,0.5,0.,0.5]));
+        assert_eq!(panel["outside_display_gamut"], false);
+        assert_eq!(panel["outside_document_gamut"], true);
+        assert_eq!(app.state()["colors"], state["colors"]);
+        assert_eq!(state["colors"]["foreground"], definition);
+        let colors = &unsafe { &*app.0 }.host.session.state().colors;
+        assert!(colors.view().outside_display_gamut, "An sRGB fallback still reports the actual lost gamut");
+        assert_ne!(colors.view().marker_color, colors.view_in(DISPLAY_SPACE).marker_color);
+    }
+}

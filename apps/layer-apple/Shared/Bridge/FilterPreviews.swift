@@ -26,7 +26,7 @@ final class NativeFilterPreviews: @unchecked Sendable {
         let width = Int(info.width), height = Int(info.height), stride = Int(info.stride)
         guard width > 0, width <= 512, height > 0, height <= 128 * ids.count,
             height % ids.count == 0, stride == width * 4, info.count == stride * height,
-            let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+            let space = CGColorSpace(name: CGColorSpace.displayP3) else { return nil }
         let rowHeight = height / ids.count, rowBytes = stride * rowHeight
         var images: [String: CGImage] = [:]
         for (index, id) in ids.enumerated() {

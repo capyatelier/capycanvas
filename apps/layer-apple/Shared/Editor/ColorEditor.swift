@@ -16,7 +16,7 @@ struct ManagedColorButton: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(.primary.opacity(0.3), lineWidth: 1))
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
-                .help(preview["in_gamut"].bool ? label : "Outside the sRGB preview gamut. The stored color is preserved.")
+                .help(preview["in_gamut"].bool ? label : "Outside the Display P3 preview gamut. The stored color is preserved.")
                 .sheet(isPresented: $editing) {
                     ColorEditor(value: value, documentSpace: documentSpace) { change($0); editing = false }
                 }
@@ -32,7 +32,7 @@ struct ColorEditor: View {
     let use: (JSON) -> Void
     init(value: JSON, documentSpace: String, use: @escaping (JSON) -> Void) {
         _form = State(initialValue: ColorUI.resolve(["type": "form", "request": [
-            "color": value.raw, "document_space": documentSpace, "display_space": "Srgb", "model": "document_rgb"]]))
+            "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "model": "document_rgb"]]))
         self.use = use
     }
     private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw]) }
@@ -51,7 +51,7 @@ struct ColorEditor: View {
                     if !form["preview"].isNull {
                         ColorSwatch(rgba: form["preview"]["rgba"]).frame(height: 48).accessibilityHidden(true)
                         if !form["preview"]["in_gamut"].bool {
-                            Text("Outside the sRGB preview gamut. The stored color is preserved.").font(.caption)
+                            Text("Outside the Display P3 preview gamut. The stored color is preserved.").font(.caption)
                         }
                     }
                     ForEach(0..<4, id: \.self) { i in

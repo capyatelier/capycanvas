@@ -25,8 +25,8 @@ pub(super) struct Preview { pub extent: [u32; 2], pub pixels: Vec<u8> }
 pub(super) fn compare(gpu: &SnapshotGpu, projects: [(&Project, [f32; 4]); 2], time: f32, control: CaptureControl) -> Result<Vec<Preview>, String> {
     projects.into_iter().map(|(project, background)| {
         let mut snapshot = gpu.capture(project.clone(), background, time, Default::default(), control.clone()).map_err(|e| e.to_string())?;
-        let preview = snapshot.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
-        Ok(Preview { extent: preview.extent, pixels: preview.srgb_bytes()? })
+        let preview = snapshot.preview_document([512, 384], crate::DISPLAY_SPACE)?;
+        Ok(Preview { extent: preview.extent, pixels: preview.encoded_bytes(crate::DISPLAY_SPACE)? })
     }).collect()
 }
 impl Task {
@@ -91,7 +91,9 @@ impl Task {
                 if Instant::now() >= deadline { return Err("Color canvas preparation timed out".into()); }
                 std::thread::sleep(Duration::from_millis(2));
             }
-            self.renderer = Some(canvas.take_ready().map_err(|e| e.to_string())?);
+            let mut renderer = canvas.take_ready().map_err(|e| e.to_string())?;
+            renderer.configure_ui_previews(crate::DISPLAY_SPACE).map_err(|e| e.to_string())?;
+            self.renderer = Some(renderer);
         }
         Ok(())
     }

@@ -76,6 +76,12 @@ struct SettingsView: View {
                         }
                     }
                     if model["page"].string == "color" {
+                        Section("Display Details") {
+                            LabeledContent("Canvas and color previews", value: "Display P3 · SDR")
+                            LabeledContent("Screen", value: store.displayDetails.screen)
+                            LabeledContent("Display conversion", value: store.displayDetails.destination)
+                            Text("The system converts tagged colors for this display, including sRGB screens. Document and export colors are independent of the screen.").font(.caption).foregroundStyle(.secondary)
+                        }
                         Button("Manage Color Profiles…") { profiles = true }
                             .accessibilityIdentifier("settings-color-profiles")
                     }

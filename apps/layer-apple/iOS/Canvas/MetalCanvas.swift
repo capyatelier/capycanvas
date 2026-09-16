@@ -27,6 +27,11 @@ final class CanvasView: UIView {
     init(store: EditorStore) {
         self.store = store
         super.init(frame: .zero)
+        registerForTraitChanges([UITraitDisplayGamut.self, UITraitDisplayScale.self]) { (view: CanvasView, _: UITraitCollection) in
+            view.setNeedsLayout()
+            view.store.native?.redraw()
+            view.wake()
+        }
         isMultipleTouchEnabled = true
         isOpaque = true
         backgroundColor = .clear
@@ -38,7 +43,7 @@ final class CanvasView: UIView {
         metal.isOpaque = true
         metal.framebufferOnly = true
         metal.presentsWithTransaction = false
-        metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        metal.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
@@ -100,8 +105,14 @@ final class CanvasView: UIView {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
+        guard let window, bounds.width > 0, bounds.height > 0 else { return }
+        contentScaleFactor = window.screen.scale
         measureWorkspaceBottom()
+        let details = DisplayDetails(screen: traitCollection.displayGamut == .P3 ? "Wide color (P3)" : "Standard color (sRGB)",
+            destination: "iPadOS color management")
+        DispatchQueue.main.async { [weak store] in
+            if store?.displayDetails != details { store?.displayDetails = details }
+        }
         let extent = CGSize(width: (bounds.width * contentScaleFactor).rounded(), height: (bounds.height * contentScaleFactor).rounded())
         guard extent != drawableExtent || !attached else { return }
         drawableExtent = extent
@@ -110,7 +121,7 @@ final class CanvasView: UIView {
         metal.drawableSize = extent
         let width = UInt32(extent.width), height = UInt32(extent.height)
         store.native?.observeDisplay(width: width, height: height, scale: Float(contentScaleFactor),
-            maximumRefreshRate: window?.screen.maximumFramesPerSecond ?? 0)
+            maximumRefreshRate: window.screen.maximumFramesPerSecond)
         if !attached {
             store.native?.attach(metal, width: width, height: height, scale: Float(contentScaleFactor))
             attached = true

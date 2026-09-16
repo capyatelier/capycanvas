@@ -44,7 +44,7 @@ char *capy_color_profile_inspect(const uint8_t *bytes, size_t count, bool summar
 char *capy_export_presets(int32_t input_fd, int32_t output_fd, const char *request_json, const char *color_json); /* worker; host atomically publishes changed output */
 char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker only */
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
-/* Worker only; borrowed straight sRGB RGBA8 until the next mutation/free. */
+/* Worker only; borrowed straight Display P3 RGBA8 until the next mutation/free. */
 int32_t capy_project_preview(const CapyProjectTask *task, bool after, CapyProjectPreview *output);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
@@ -59,16 +59,16 @@ void capy_project_free(CapyProjectTask *task);
 /* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
    either the shared numeric response or {"error": ...}. */
 char *capy_apple_numeric(const char *json);
-/* Stateless shared tagged-color forms, sRGB display previews and gradient
+/* Stateless shared tagged-color forms, previews in the requested display space and gradient
    samples. Owned JSON result; same error and lifetime rules as numeric. */
 char *capy_apple_color_ui(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Shape: 0 circle,
    1 square, 2 triangle. Result: 0 miss/invalid, 1 hue ring, 2 field. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);
-/* Shared logical layout and static hue stops. Owned JSON, NULL for invalid input.
-   Cache by size/shape; release with capy_apple_string_free. */
-char *capy_apple_color_resources(float size, uint32_t shape);
-/* Stateless cached field or hue guide: square, straight sRGB RGBA8.
+/* Shared logical panel layout. Owned JSON, NULL for invalid input.
+   Cache by size; release with capy_apple_string_free. */
+char *capy_apple_color_layout(float size);
+/* Stateless cached field or hue guide: square, straight Display P3 RGBA8.
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.
    No session access or retained pointers; safe on the UI thread. */
 int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, const char *rgb_space, bool guide, uint8_t *rgba, size_t count);
@@ -81,7 +81,7 @@ int32_t capy_apple_color_field(uint32_t side, float hue, uint32_t shape, const c
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);
 /* Nonblocking owner poll. The owned atlas is independent of the editor; decode
    and free on a worker. All info pointers are borrowed until previews_free.
-   Pixels are straight sRGB RGBA8, with equal-height rows in filters JSON order. */
+   Pixels are straight Display P3 RGBA8, with equal-height rows in filters JSON order. */
 typedef struct CapyFilterPreviews CapyFilterPreviews;
 typedef struct {
     uint64_t request;

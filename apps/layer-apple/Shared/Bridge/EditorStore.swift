@@ -8,6 +8,7 @@ import SwiftUI
     private let ui = EditorSnapshotState()
     private(set) var colorPreferences = ColorPreferencesStore(root: nil)
     let camera = CameraReadout()
+    @Published var displayDetails = DisplayDetails()
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
@@ -41,6 +42,9 @@ import SwiftUI
     lazy var histogram = HistogramController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
+    var paintPreview: JSON {
+        snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()
+    }
     var workspaceMotion: WorkspaceMotion { ui.workspace }
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared,

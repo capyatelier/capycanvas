@@ -36,6 +36,8 @@ pub struct PointerBatch<'a> {
 
 pub struct NativeHost {
     pub session: UiSession<Renderer>,
+    /// Configure before publishing UI; hosts tag these preview values to match.
+    pub ui_color_space: layer_core::color::RgbSpace,
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
@@ -62,6 +64,7 @@ impl NativeHost {
         session.set_platform(platform);
         Ok(Self {
             session,
+            ui_color_space: layer_core::color::RgbSpace::Srgb,
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,

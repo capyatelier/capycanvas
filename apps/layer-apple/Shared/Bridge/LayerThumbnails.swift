@@ -81,7 +81,7 @@ import CoreGraphics
             guard width > 0, height > 0, width <= 256, height <= 256 else { continue }
             let bytes = Data(image[3].array.map { UInt8(clamping: Int($0.uint)) })
             guard bytes.count == width * height * 4,
-                let provider = CGDataProvider(data: bytes as CFData), let space = CGColorSpace(name: CGColorSpace.sRGB),
+                let provider = CGDataProvider(data: bytes as CFData), let space = CGColorSpace(name: CGColorSpace.displayP3),
                 let bitmap = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
                     bytesPerRow: width * 4, space: space, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
                     provider: provider, decode: nil, shouldInterpolate: true, intent: .relativeColorimetric) else { continue }

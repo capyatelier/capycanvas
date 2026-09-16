@@ -1,6 +1,10 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
+
+/// SDR viewing contract shared by canvas, UI values and image transports.
+/// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
+const DISPLAY_SPACE: layer_core::color::RgbSpace = layer_core::color::RgbSpace::DisplayP3;
 mod project;
 pub use project::*;
 mod previews;
@@ -59,6 +63,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             _ => return None,
         };
         let mut host = NativeHost::new(platform).ok()?;
+        host.ui_color_space = DISPLAY_SPACE;
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
         })
@@ -162,16 +167,12 @@ fn color_shape(shape: u32) -> Option<layer_ui::ColorShape> {
         _ => None,
     }
 }
-/// Static wheel resources, fetched only when shape or allocation changes.
+/// Shared geometry, fetched only when the panel allocation changes.
 #[unsafe(no_mangle)]
-pub extern "C" fn capy_apple_color_resources(size: f32, shape: u32) -> *mut c_char {
+pub extern "C" fn capy_apple_color_layout(size: f32) -> *mut c_char {
     catch_unwind(|| {
-        let shape = color_shape(shape)?;
         let layout = layer_ui::ColorPanelLayout::new(size)?;
-        let mut state = layer_ui::ColorState::default();
-        state.apply(layer_ui::ColorAction::Shape { shape }).ok()?;
-        let json = serde_json::json!({"layout": layout, "hue_stops": state.wheel_hue_stops()});
-        CString::new(json.to_string()).ok().map(CString::into_raw)
+        CString::new(serde_json::to_string(&layout).ok()?).ok().map(CString::into_raw)
     })
     .ok()
     .flatten()
@@ -208,9 +209,9 @@ pub unsafe extern "C" fn capy_apple_color_field(
     let Some(shape) = color_shape(shape) else { return 0; };
     let pixels = unsafe { std::slice::from_raw_parts_mut(rgba, count) };
     i32::from(if guide {
-        layer_ui::render_hue_guide(side, shape, space, pixels)
+        layer_ui::render_hue_guide_in(side, shape, space, DISPLAY_SPACE, pixels)
     } else {
-        layer_ui::render_color_field(side, shape, hue, space, layer_core::color::RgbSpace::Srgb, pixels)
+        layer_ui::render_color_field(side, shape, hue, space, DISPLAY_SPACE, pixels)
     })
 }
 /// # Safety

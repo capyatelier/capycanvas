@@ -121,7 +121,7 @@ private struct CurveProperty: View {
     var body: some View {
         VStack(spacing: 6) {
             GeometryReader { geometry in
-                Canvas { context, size in
+                Canvas(colorMode: .extendedLinear) { context, size in
                     var grid = Path()
                     for i in 1...3 {
                         let fraction = CGFloat(i) / 4
@@ -242,7 +242,7 @@ private struct GradientProperty: View {
         let revision = fieldRevision
         VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
-                Canvas { context, size in
+                Canvas(colorMode: .extendedLinear) { context, size in
                     let width = max(1, size.width - 12)
                     let samples = ramp.array
                     let gradient = Gradient(stops: samples.enumerated().map { Gradient.Stop(color: $0.element["rgba"].paintColor, location: Double($0.offset) / Double(max(1, samples.count - 1))) })
@@ -316,8 +316,8 @@ private struct GradientProperty: View {
             }.buttonStyle(.plain)
         }.task(id: JSON([stops.map(\.raw), store.state["colors"]["rgb_space"].raw]).stableKey) {
             ramp = ColorUI.resolve(["type": "gradient", "stops": stops.map(\.raw),
-                "document_space": store.state["colors"]["rgb_space"].raw, "display_space": "Srgb"])
-            previews = ColorUI.resolve(["type": "preview", "colors": stops.map { $0["color"].raw }, "display_space": "Srgb"])
+                "document_space": store.state["colors"]["rgb_space"].raw, "display_space": "DisplayP3"])
+            previews = ColorUI.resolve(["type": "preview", "colors": stops.map { $0["color"].raw }, "display_space": "DisplayP3"])
             if !ramp["error"].isNull { store.failure = ramp["error"].string }
             if !previews["error"].isNull { store.failure = previews["error"].string }
         }.onChange(of: stops.map { $0["position"].number }) { previous, current in

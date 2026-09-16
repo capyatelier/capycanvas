@@ -29,7 +29,7 @@ final class MacCanvasView: NSView {
         super.init(frame: .zero)
         let metal = ObservedMetalLayer()
         metal.isOpaque = true
-        metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        metal.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
         // Assign first to host our Metal layer; AppKit must not draw its contents.
         layer = metal
         wantsLayer = true
@@ -70,6 +70,9 @@ final class MacCanvasView: NSView {
                     self.wake()
                 }
             })
+            windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.displayChanged() }
+            })
             if displayLink == nil {
                 let link = displayLink(target: self, selector: #selector(tick(_:)))
                 link.add(to: .main, forMode: .common)
@@ -78,7 +81,15 @@ final class MacCanvasView: NSView {
             needsLayout = true
         } else { stop() }
     }
-    override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); needsLayout = true }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        displayChanged()
+    }
+    private func displayChanged() {
+        needsLayout = true
+        store.native?.redraw()
+        wake()
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
@@ -97,10 +108,15 @@ final class MacCanvasView: NSView {
         }
         let scale = window.backingScaleFactor
         let next = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
-        guard next != extent || !attached else { return }
-        extent = next; layer.contentsScale = scale; layer.drawableSize = next
+        let details = DisplayDetails(screen: window.screen?.localizedName ?? "Unknown screen",
+            destination: window.screen?.colorSpace?.localizedName ?? "macOS color management")
+        DispatchQueue.main.async { [weak store] in
+            if store?.displayDetails != details { store?.displayDetails = details }
+        }
         store.native?.observeDisplay(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale),
             maximumRefreshRate: window.screen?.maximumFramesPerSecond ?? 0)
+        guard next != extent || !attached else { return }
+        extent = next; layer.contentsScale = scale; layer.drawableSize = next
         if !attached { store.native?.attach(layer, width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)); attached = true; frames.activate() }
         else { store.native?.resize(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)) }
         wake()

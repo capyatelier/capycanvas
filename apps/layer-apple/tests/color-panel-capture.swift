@@ -104,11 +104,11 @@ enum ColorPanelCaptures {
                                 precondition(store.failure == nil, store.failure ?? "")
                                 let wheel = geometry.panel["wheel"]!
                                 let shapeID = ColorWheelShape(shape)
-                                let resourcePointer = capy_apple_color_resources(Float(width), shapeID.rawValue)!
+                                let resourcePointer = capy_apple_color_layout(Float(width))!
                                 let resources = try JSON.decode(String(cString: resourcePointer))
                                 capy_apple_string_free(resourcePointer)
                                 for key in ["wheel", "foreground", "background", "transparent", "swap", "readout"] {
-                                    let expected = resources["layout"][key], actual = geometry.panel[key]!
+                                    let expected = resources[key], actual = geometry.panel[key]!
                                     for (a, b) in zip([actual.minX, actual.minY, actual.width, actual.height], expected.array.map(\.number)) {
                                         precondition(abs(a - b) <= 0.5, "\(key) placement differs from shared layout")
                                     }
@@ -136,7 +136,7 @@ enum ColorPanelCaptures {
                                 fixtures.append(JSON(["name": name, "platform": platform, "width": width, "height": width,
                                     "scale": scale, "theme": theme, "shape": shape, "readout": readout, "slot": slot,
                                     "palette": store.state["palette"].raw, "model": model.raw, "resources": resources.raw,
-                                    "field_file": fieldFile as Any? ?? NSNull(), "field_side": fieldSide,
+                                    "preview_space": "DisplayP3", "field_file": fieldFile as Any? ?? NSNull(), "field_side": fieldSide,
                                     "frames": geometry.panel.mapValues {
                                         ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height] }]))
                             }

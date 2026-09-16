@@ -83,7 +83,7 @@ private struct SavedColorRow: View {
                 TextField("Swatch name", text: $name).textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("color-swatch-name-\(swatch.paletteID)")
             }
-            if !preview["in_gamut"].bool { Text("Outside sRGB preview gamut").font(.caption) }
+            if !preview["in_gamut"].bool { Text("Outside Display P3 preview gamut").font(.caption) }
             HStack {
                 Button("Rename") { change(["op": "rename", "id": swatch.paletteID, "name": name]) }
                     .accessibilityIdentifier("color-swatch-rename-\(swatch.paletteID)")

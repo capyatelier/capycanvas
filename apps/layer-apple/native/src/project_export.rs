@@ -46,11 +46,11 @@ impl Task {
     pub(super) fn compare(&mut self, control: CaptureControl) -> Result<(), String> {
         let recipe = self.recipe.clone();
         let renderer = self.renderer(control)?;
-        let before = renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
-        let (after, statistics) = renderer.preview_output([512, 384], layer_core::color::RgbSpace::Srgb,
+        let before = renderer.preview_document([512, 384], crate::DISPLAY_SPACE)?;
+        let (after, statistics) = renderer.preview_output([512, 384], crate::DISPLAY_SPACE,
             &recipe.interpretation(), recipe.encoding, recipe.background.matte())?;
         self.previews = [before, after].into_iter().map(|p| {
-            Ok(color::Preview { extent: p.extent, pixels: p.srgb_bytes()? })
+            Ok(color::Preview { extent: p.extent, pixels: p.encoded_bytes(crate::DISPLAY_SPACE)? })
         }).collect::<Result<_, String>>()?;
         self.clipped = statistics.clipped_channels;
         Ok(())

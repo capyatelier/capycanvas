@@ -31,7 +31,7 @@ struct ExportForm: View {
                             .accessibilityLabel(index == 0 ? "Artwork preview" : "Output preview")
                     }
                     if !editor.previews.isEmpty {
-                        Text("sRGB preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
+                        Text("Display P3 preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
                         Text("Output: \(editor.details["output_extent"][0].uint) × \(editor.details["output_extent"][1].uint) pixels")
                             .accessibilityIdentifier("export-output-size")
                     }

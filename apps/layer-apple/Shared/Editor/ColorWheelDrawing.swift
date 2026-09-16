@@ -15,7 +15,7 @@ struct ColorWheelDrawing: View {
     @StateObject private var field = ColorFieldImageCache()
     @StateObject private var guide = ColorFieldImageCache()
     var body: some View {
-        Canvas { graphics, _ in
+        Canvas(colorMode: .extendedLinear) { graphics, _ in
             var graphics = graphics
             let side = bounds[2].number
             // Match Web Canvas's rounded destination edges. Rasterize at that
@@ -67,17 +67,16 @@ struct ColorWheelDrawing: View {
     }
 }
 
-final class ColorWheelResources: ObservableObject {
-    private var key: Key?
+final class ColorPanelLayoutCache: ObservableObject {
+    private var side: Float?
     private var cached = JSON()
-    private struct Key: Equatable { let side: Float; let shape: ColorWheelShape }
-    func layout(side: CGFloat, shape: ColorWheelShape) -> JSON {
-        let next = Key(side: Float(side), shape: shape)
-        if key == next { return cached }
-        guard let pointer = capy_apple_color_resources(next.side, shape.rawValue) else { return JSON() }
+    func layout(side: CGFloat) -> JSON {
+        let next = Float(side)
+        if self.side == next { return cached }
+        guard let pointer = capy_apple_color_layout(next) else { return JSON() }
         defer { capy_apple_string_free(pointer) }
         guard let result = try? JSON.decode(String(cString: pointer)) else { return JSON() }
-        key = next; cached = result["layout"]
+        self.side = next; cached = result
         return cached
     }
 }
@@ -99,7 +98,7 @@ final class ColorFieldImageCache: ObservableObject {
                 capy_apple_color_field(next.side, next.hue, shape.rawValue, $0, guide, buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count)
             }
         }) == 1, let provider = CGDataProvider(data: bytes as CFData),
-            let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let space = CGColorSpace(name: CGColorSpace.displayP3),
             let image = CGImage(width: Int(next.side), height: Int(next.side),
                 bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(next.side) * 4, space: space,
                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),

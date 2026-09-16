@@ -1,5 +1,12 @@
 import Foundation
 
+/// The OS owns destination-profile conversion. These are observations of the
+/// window's current screen, never document or export preferences.
+struct DisplayDetails: Equatable {
+    var screen = "Waiting for canvas"
+    var destination = "Unavailable"
+}
+
 /// Shared parsing and color transforms, independent of the renderer owner.
 enum ColorUI {
     static func resolve(_ request: [String: Any]) -> JSON {
@@ -13,6 +20,6 @@ enum ColorUI {
         } catch { return JSON(["error": error.localizedDescription]) }
     }
     static func preview(_ color: JSON) -> JSON {
-        resolve(["type": "preview", "colors": [color.raw], "display_space": "Srgb"])[0]
+        resolve(["type": "preview", "colors": [color.raw], "display_space": "DisplayP3"])[0]
     }
 }
