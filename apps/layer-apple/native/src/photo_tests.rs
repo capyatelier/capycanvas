@@ -49,6 +49,110 @@ fn source_samples(source: &SourceImage) -> Vec<Vec<u8>> {
     source.tiles.values().map(|t| t.decode().unwrap()).collect()
 }
 
+/// Run separately with CAPY_APPLE_PHOTO_JPEG pointing to a disposable
+/// 9504×6336 JPEG. Both policies run on this machine's Metal backend; this
+/// checks data integrity, not physical iPad input or presentation cadence.
+#[test]
+#[ignore = "61 MP Metal painting/save/device recovery; requires CAPY_APPLE_PHOTO_JPEG"]
+fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
+    use std::io::Seek;
+    use std::os::fd::AsRawFd;
+    use layer_core::raster::RasterPlane;
+
+    fn document(app: &App) -> layer_core::Document {
+        unsafe { &*app.0 }.host.session.engine().document().clone()
+    }
+    fn check(app: &App, expected: &layer_core::Document) {
+        let mut actual = document(app);
+        actual.revision = expected.revision;
+        assert_project_document(&actual, expected);
+    }
+
+    let path = std::env::var("CAPY_APPLE_PHOTO_JPEG").expect("Supply the 61 MP JPEG fixture");
+    let bytes = std::fs::read(&path).unwrap();
+    let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+    assert_eq!(decoded.extent, [9504, 6336]);
+    assert_eq!(decoded.interpretation.channels, SourceChannels::Rgb);
+    assert_eq!(decoded.interpretation.depth, IntegerDepth::U8);
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let owner = unsafe { &mut *app.0 };
+        owner.metal.install_renderer(&mut owner.host, native_renderer()).unwrap();
+        app.draw_until_idle();
+        {
+            let open = ProjectJob::new(&app, true);
+            read_bytes(&open, "Large-photo.jpg", &bytes);
+            adopt(&app, &open, true);
+        }
+        app.invoke("fit_canvas");
+        app.action(json!({"type":"select_brush","id":1}));
+        app.action(json!({"type":"set_color","rgba":[1.,0.,0.7,1./3.]}));
+        app.action(json!({"type":"set_brush_size","value":32}));
+        app.draw_until_idle();
+        let mut original = document(&app);
+        assert_eq!(original.color.space, RgbSpace::Srgb);
+        assert_eq!(original.color.depth, IntegerDepth::U8);
+        assert_eq!(original.layers.iter().find_map(|l| l.source.as_deref()), Some(&decoded));
+        let before = app.pixels();
+        app.stroke(); app.draw_until_idle();
+        let painted = document(&app);
+        // Undo restores artwork but never reuses an allocated contact ID.
+        original.allocate_stroke_id();
+        assert_eq!(original.next_stroke_id(), painted.next_stroke_id());
+        let ink = app.pixels();
+        assert_ne!(ink, before, "G-Pen must visibly paint the imported photograph");
+        let layer = painted.layers.iter().find(|l| l.source.is_some()).unwrap();
+        let (tiles, _) = raster_samples(&layer.raster);
+        assert!(!tiles.is_empty(), "Painting must publish native backing");
+        for (key, (descriptor, pixels)) in &tiles {
+            assert_eq!(key.plane, RasterPlane::Color);
+            assert_eq!(descriptor.bits_per_channel, 8);
+            let coordinate = key.coordinate.map(|x| u32::try_from(x).unwrap());
+            let source = decoded.tiles[&coordinate].decode().unwrap();
+            let mut untouched = 0;
+            for (paint, source) in pixels.chunks_exact(4).zip(source.chunks_exact(3)) {
+                assert_eq!(paint[3], 255, "Painting must retain photo opacity in every touched tile");
+                if paint[..3] == *source { untouched += 1; }
+            }
+            assert!(untouched > 256 * 256 / 2, "Each narrow-stroke tile must preserve its surrounding photo samples");
+        }
+        app.invoke("undo"); app.draw_until_idle(); check(&app, &original);
+        assert_eq!(app.pixels(), before);
+        app.invoke("redo"); app.draw_until_idle(); check(&app, &painted);
+        assert_eq!(app.pixels(), ink);
+        let file_path = std::env::temp_dir().join(format!("capy-61mp-{}-{platform}.capy", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&file_path).unwrap();
+        {
+            let save = ProjectJob::new(&app, false);
+            assert_eq!(unsafe { capy_project_write(save.0, file.as_raw_fd()) }, 0, "{:?}", save.error());
+            assert_eq!(unsafe { capy_project_begin_commit(save.0) }, 0);
+            assert_eq!(unsafe { capy_apple_project_saved(app.0, save.0, c"Painted.capy".as_ptr(), c"file:///Painted.capy".as_ptr()) }, 0);
+        }
+        file.rewind().unwrap();
+        {
+            let open = ProjectJob::new(&app, true);
+            assert_eq!(unsafe { capy_project_read(open.0, file.as_raw_fd(), c"Painted.capy".as_ptr()) }, 0, "{:?}", open.error());
+            adopt(&app, &open, true);
+        }
+        check(&app, &painted); assert_eq!(app.pixels(), ink);
+        assert_eq!(unsafe { capy_apple_test_gpu_fault(app.0, 0) }, 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !unsafe { &*app.0 }.host.session.rendering_suspended() {
+            assert_eq!(unsafe { capy_apple_frame(app.0, 3_000_000_000, 3_000_000_000, std::ptr::null_mut()) }, 0);
+            assert!(std::time::Instant::now() < deadline, "GPU loss callback did not arrive");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        check(&app, &painted);
+        let owner = unsafe { &mut *app.0 };
+        owner.metal.install_renderer(&mut owner.host, native_renderer()).unwrap();
+        app.draw_until_idle(); check(&app, &painted); assert_eq!(app.pixels(), ink);
+        assert!(!unsafe { &*app.0 }.host.session.rendering_suspended());
+        std::fs::remove_file(file_path).unwrap();
+        println!("PASS platform {platform}: 61 MP JPEG, G-Pen, opaque touched tiles with original samples, exact history/save/reopen and GPU loss/replacement");
+    }
+    assert_eq!(std::fs::read(path).unwrap(), bytes, "Original JPEG must remain unchanged");
+}
+
 #[test]
 fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
     for platform in [0, 1] {

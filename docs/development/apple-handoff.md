@@ -606,6 +606,38 @@ drawings remain untouched. Physical color appearance, provider/background
 workflows and 61 MP/sustained SDR performance remain open; the overall release
 checklist still applies.
 
+## SDR recovery and current review builds
+
+The production Swift recovery coordinator now passes retained 16-bit photo,
+paint, correction and mask recovery on Mac Metal with both Apple policies.
+P3/U8 and ProPhoto/U16 documents flush after workspace suspension without another
+drawable. A fresh owner preserves the previous archive during blank startup,
+restores it, and continues correction editing with exact Undo. Complete project
+metadata and compressed payload bytes match, allowing only the session revision
+to change. Tagged paint settings and the original source file also survive.
+This adds no production path; `tests/sdr-recovery.swift` exercises existing owners.
+
+The separate large-photo Metal regression also passes both policies: a tagged
+9504×6336 synthetic JPEG opens, receives translucent G-Pen ink without losing
+opacity or surrounding source samples in touched tiles, and retains exact
+artwork through Undo/Redo, worker save/reopen and actual GPU destruction/replacement.
+The original JPEG remains unchanged. This is 61 MP class data-integrity evidence,
+not a camera-photo benchmark, physical iPad execution or sustained performance.
+Initial fixture failures were a Rust borrow error, incorrect reuse of stroke IDs
+in the Undo expectation and an attempted private-field assignment; the corrected
+fixture uses the public allocation API. The final run has no compiler warnings.
+
+Both approved physical review apps now run Release `a2054398`. Before their
+in-place updates, artwork and workspace data were backed up and the owned
+processes identified. Nine iPad recovery drawings and four Mac recovery manifests
+are preserved; iPad files are byte-identical across installation and Mac recovery
+archives remain unchanged after fresh startup. The separate Mac artist app is
+untouched. Disposable ProPhoto/U16 documents open through ordinary warm OS URL
+delivery on both devices. Physical drawing, background/return and local
+Save As/reopen confirmation is pending. Evidence is
+`artifacts/apple-sdr-lifecycle-v1/`; local recovery checks do not establish actual
+iPad background expiration, file-provider delivery or sustained performance.
+
 ## Native provider acceptance
 
 The first Mac iCloud run reaches real native panels with disposable generated

@@ -374,6 +374,16 @@ checks that only a durable manual save clears the recovered document's dirty sta
 Save-before-recovery checks preserve the selected archive through both Mac saves
 and iPad staged exports, without requesting another Open location.
 
+`tests/sdr-recovery.swift` extends the production coordinator checks to P3/U8 and
+ProPhoto/U16 projects containing a retained 16-bit photo, integer paint, an
+Exposure correction and its mask. Both Apple policies pass a suspended-workspace
+flush without another drawable, release and fresh-owner restoration, tagged paint
+settings and continued correction editing/Undo. The entire manifest (apart from
+session revision) and compressed payload remain exact, as does the original photo.
+Run it with `test-project-files.sh` and `CAPY_TEST_ASSETS_APP` pointing to a built
+Mac app containing the production filter assets. This is Mac Metal owner evidence;
+physical background expiration and provider delivery remain separate checks.
+
 The hardware Rust renderer test covers explicit suspension, device destruction
 and an actual uncaptured validation error on both Apple presets. It verifies an
 unfinished contact is cancelled, retained sources and raster pixels reconstruct

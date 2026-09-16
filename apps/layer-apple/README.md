@@ -744,6 +744,20 @@ cargo test -p layer-apple tests::photo -- --test-threads=1
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/image-import-owner.swift
 ```
 
+The large-photo regression runs separately with a disposable, tagged sRGB
+9504×6336 JPEG:
+
+```sh
+CAPY_APPLE_PHOTO_JPEG=/path/to/photo.jpg cargo test -p layer-apple --lib \
+  large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery -- \
+  --ignored --nocapture --test-threads=1
+```
+
+It checks original source samples, opaque G-Pen paint tiles, exact Undo/Redo and
+save/reopen, then destroys and replaces the Metal device. Both policies execute
+on the local Mac; this is data-integrity coverage, not physical iPad acceptance
+or sustained presentation/latency measurement. The input JPEG is read-only.
+
 The native checks cover P3/U8 and ProPhoto/U16 source retention through painting,
 history and native save/reopen, interpretation retry, promotion policy, cancellation
 and stale document/target/device rejection. The Swift fixture uses temporary files

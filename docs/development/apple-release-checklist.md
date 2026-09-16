@@ -28,7 +28,15 @@ Profiled export/presets and the ICC library pass shared-snapshot, both-policy
 owner and native Mac form/file checks; see the [export record](apple-handoff.md#profiled-export-and-icc-library).
 Managed canvas/control integration now passes scoped shared and native Metal
 checks; see the [display record](apple-handoff.md#managed-sdr-canvas-and-controls).
-Next are provider/background workflows and physical SDR acceptance. Earlier
+The existing recovery coordinator also preserves full SDR source, paint,
+correction and mask data through a no-drawable flush and fresh-owner restore on
+Mac Metal with both Apple policies. Both physical review apps are updated with
+previous drawings preserved; see the [recovery record](apple-handoff.md#sdr-recovery-and-current-review-builds).
+Grouped physical drawing, background/return and local save/reopen is pending.
+A separate 9504×6336 synthetic-JPEG regression passes G-Pen photo preservation,
+exact history/save/reopen and GPU destruction/replacement on Mac Metal with both
+Apple policies. It does not qualify physical iPad or large-photo performance.
+Next are remaining provider/background workflows and physical SDR acceptance. Earlier
 passes remain scoped to their recorded sources; they do not qualify the entire
 new feature scope. See the [foundation record](apple-handoff.md#native-sdr-foundation).
 

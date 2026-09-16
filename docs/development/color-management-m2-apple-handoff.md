@@ -44,6 +44,13 @@ file worker, with exact source output and both-policy owner checks; see the
 coverage. Managed SDR canvas and controls now share explicit Display P3 tags and
 shared transforms, including working-space adoption and native display observation;
 see the [display record](apple-handoff.md#managed-sdr-canvas-and-controls).
+Retained source/paint/correction/mask recovery now passes the complete persistence
+barrier and fresh-owner restoration on Mac Metal with both Apple policies;
+the [recovery record](apple-handoff.md#sdr-recovery-and-current-review-builds)
+identifies the updated physical review apps and pending grouped device check.
+The 61 MP class synthetic-JPEG G-Pen, exact history/save/reopen and GPU-loss
+regression also passes both policies on Mac Metal. Physical iPad execution and
+large-photo performance remain unqualified.
 **Continue with provider/background workflows in step 4 and grouped physical SDR
 acceptance.** Device performance and provider delivery are not closed.
 
