@@ -165,6 +165,48 @@ class AndroidRasterTest {
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+
+    @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("photoWorkflow") == "true")
+        val photo = File(activity.filesDir, "photo-benchmark.jpg")
+        assertTrue("Copy the 61 MP test JPEG into the target app's files directory", photo.isFile)
+        fun send(action: JSONObject) { native { Native.dispatch(it, action.toString()) }; tick() }
+        fun histogram(): JSONObject {
+            val control = Native.captureControl()
+            try { return JSONObject(Native.inspectionHistogram(native { Native.inspectionTask(it, control) })).getJSONObject("histogram") }
+            finally { Native.captureFree(control) }
+        }
+        fun opaque(): String {
+            val h = histogram()
+            assertEquals("Painting must preserve the photo outside the stroke", 0L, h.getLong("transparent"))
+            assertEquals(9504L * 6336, h.getLong("pixels"))
+            return h.toString()
+        }
+        open(photo)
+        send(obj("type" to "invoke", "command" to "fit_canvas"))
+        val original = opaque()
+        send(obj("type" to "select_brush", "id" to 1))
+        send(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to "foreground",
+            "color" to obj("space" to "Srgb", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, 1.0 / 3))))))
+        stroke(0.0)
+        val painted = opaque()
+        assertNotEquals("G-Pen must actually change the photograph", original, painted)
+        val saved = manifest(save("large-photo-painted.capy"))
+        send(obj("type" to "invoke", "command" to "undo")); assertEquals(original, opaque())
+        send(obj("type" to "invoke", "command" to "redo")); assertEquals(painted, opaque())
+        open(File(files, "large-photo-painted.capy")); assertEquals(painted, opaque())
+        val reopened = manifest(save("large-photo-reopened.capy"))
+        assertEquals(saved.getJSONArray("blobs").toString(), reopened.getJSONArray("blobs").toString())
+        native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(10_000) { host.failure != null }
+        compose.runOnUiThread { host.restartCanvas() }
+        compose.waitUntil(120_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+        assertNull(host.failure)
+        assertEquals(painted, opaque())
+        assertNull(host.actionError)
+        println("61 MP JPEG: G-Pen, preserved opacity, exact undo/redo, native save/reopen and GPU replacement passed")
+    }
+
     @Test fun sixteenBitWideColorSurvivesSaveAndGpuReplacement() {
         val job = native { handle ->
             val (id, file) = request(handle, "new_document")

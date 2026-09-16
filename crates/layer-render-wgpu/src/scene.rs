@@ -1380,6 +1380,7 @@ impl Scene {
             return Ok(());
         }
         let mut composited = 0;
+        let mut display_tiles = 0;
         for tile in page_coordinates(dirty) {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
@@ -1426,6 +1427,15 @@ impl Scene {
                 r.live_display = Some(cache);
                 self.free(output);
                 result?;
+                display_tiles += 1;
+                if display_tiles == SOURCE_SLOTS {
+                    // Source uploads drain their own staging, but a paper-only
+                    // recovery frame (or resident paint) has no uploads. Bound
+                    // its command/driver storage as well: thousands of mip
+                    // passes otherwise remain live until the final submission.
+                    Self::submit_chunk(r, encoder, "bounded display composition")?;
+                    display_tiles = 0;
+                }
                 continue;
             }
             // The last effect already writes every pixel. Write directly into

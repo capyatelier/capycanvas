@@ -766,3 +766,58 @@ bounded fallback. Chrome flag changes require the pending user choice because
 they affect the whole browser and require restarting other tabs. No 120 Hz Web
 pass or actual input-to-photon claim is made. User confirmation is still required;
 this checkpoint does not declare the entire cross-platform milestone complete.
+
+## User-test corrections — 2026-09-16
+
+The user found that G-Pen strokes removed the original photograph from complete
+paint tiles in Web. A 4353×769 opaque fixture (more than the sixteen decoded
+source slots) reproduced 188,283 transparent pixels after a single stroke in
+`web-gpen-before.json/png`. With ordered uploads, the same fixture has zero
+transparent pixels (`web-gpen-after.json/png`).
+
+The Web-only `Queue::write_buffer` shortcut was not equivalent to the native
+staging path: cold neighborhood queries reuse scene uniform offsets while earlier
+source-to-paint initialization still refers to them. Queue writes execute before
+the submitted drawing commands, so later uniforms replaced the earlier values.
+The shared reusable staging belt now encodes copies at each actual point of use
+on all hosts. This follows [wgpu's queue ordering contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer).
+It changes neither integer backing nor Float32 processing. The controlled Web
+workflow passes exact undo/redo, native save/reopen, and GPU replacement
+(`web-gpen-complete-workflow.log`). The native equivalent checks U8/U16 and both
+in-place/candidate publication with cold source tiles (`native-gpen-regression.log`).
+The committed browser regression is `photo-paint.test.mjs`, also available via
+`node apps/layer-web/test.mjs --photo-paint`; its optional photo URL runs the same
+checks on the 61 MP JPEG.
+
+The Android report was from `art.capycanvas`, updated September 13, while the
+phase 2 build had been installed separately as `art.capycanvas.colorm2`. The normal
+package is now updated with `adb install -r`, preserving its existing data. No
+JPEG reader fallback or archive compatibility path was added: current Open
+already detects native archives versus photo signatures. The original JPEG in
+Downloads remains unchanged.
+
+The expanded Android test passed 61 MP import, G-Pen, opacity preservation,
+undo/redo and save/reopen, then crashed during forced GPU recovery. The symbolized
+trace enters Adreno render-pass construction from the first staged paper frame;
+Scudo reports a mapping allocation failure. Source upload submissions already
+bound cold-photo command memory, but paper/resident composition had no such
+boundary. Large display composition now drains every sixteen completed tiles,
+including frames with no source uploads. Normal camera-only frames do no
+composition and do not enter this path. The failing trace is retained in
+`android-61mp-recovery-crash.log` and the original run in
+`android-61mp-gpen-before-recovery-fix.log`. The same test passes after the fix
+in 52.665 seconds (`android-61mp-gpen-workflow.log`): no transparent pixels,
+matching histograms after undo/redo/reopen/recovery, and identical native blob
+manifests after reopening. All fifteen shared live-display GPU regressions pass
+(`display-recovery-bound-tests.log`).
+
+Chrome passes the full-size photo through save/reopen but still encounters
+memory pressure after replacing the GPU, with the composition bound alone
+(`web-61mp-gpen-before-device-retirement.log`). Browser recovery qualification
+remains open at this checkpoint.
+
+The user approved disabling Chrome's browser-wide
+`throttle-main-thread-to-60hz` flag. It was changed from Default to Disabled using
+`chrome://flags`, then activated with Chrome's Relaunch button. The Disabled
+selection persisted and all pre-existing user tabs remained present. Flag state
+is recorded in `chrome-throttle-disabled-after-relaunch.log`.

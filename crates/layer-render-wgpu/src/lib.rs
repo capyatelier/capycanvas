@@ -119,18 +119,15 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
     })
 }
 
-/// Native writes reuse staging resources. On web, Queue::write_buffer transfers
-/// Wasm bytes directly; mapped slices would allocate and copy through JS memory.
+/// Uploads are encoded at their point of use on every host. Queue::write_buffer
+/// runs before submitted commands, so it cannot replace ordered copies when
+/// source decoding, brush neighborhoods and publication reuse uniform offsets.
 struct Uploads {
-    #[cfg(not(target_arch = "wasm32"))]
     belt: wgpu::util::StagingBelt,
 }
 impl Uploads {
     fn new(device: &wgpu::Device, chunk_size: u64) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let _ = (device, chunk_size);
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
             belt: wgpu::util::StagingBelt::new(device.clone(), chunk_size),
         }
     }
@@ -146,46 +143,34 @@ impl Uploads {
     fn write_at(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         target: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
     ) -> Result<(), GpuRasterError> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = queue;
-            let size =
-                wgpu::BufferSize::new(bytes.len() as u64).ok_or(GpuRasterError::SizeOverflow)?;
-            // StagingBelt::write_buffer unwraps mapping failures. Allocate the
-            // same reusable slice and let device-loss errors reach the host.
-            let slice = self.belt.allocate(
-                size,
-                wgpu::BufferSize::new(wgpu::COPY_BUFFER_ALIGNMENT).unwrap(),
-            );
-            slice
-                .get_mapped_range_mut()
-                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?
-                .copy_from_slice(bytes);
-            encoder.copy_buffer_to_buffer(
-                slice.buffer(),
-                slice.offset(),
-                target,
-                offset,
-                size.get(),
-            );
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = encoder;
-            queue.write_buffer(target, offset, bytes);
-        }
+        let size =
+            wgpu::BufferSize::new(bytes.len() as u64).ok_or(GpuRasterError::SizeOverflow)?;
+        // StagingBelt::write_buffer unwraps mapping failures. Allocate the
+        // same reusable slice and let device-loss errors reach the host.
+        let slice = self.belt.allocate(
+            size,
+            wgpu::BufferSize::new(wgpu::COPY_BUFFER_ALIGNMENT).unwrap(),
+        );
+        slice
+            .get_mapped_range_mut()
+            .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?
+            .copy_from_slice(bytes);
+        encoder.copy_buffer_to_buffer(
+            slice.buffer(),
+            slice.offset(),
+            target,
+            offset,
+            size.get(),
+        );
         Ok(())
     }
     fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
-        #[cfg(not(target_arch = "wasm32"))]
         self.belt.finish_and_recall_on_submit(encoder);
-        #[cfg(target_arch = "wasm32")]
-        let _ = encoder;
     }
 }
 

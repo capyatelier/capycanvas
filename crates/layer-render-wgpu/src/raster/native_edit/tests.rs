@@ -174,6 +174,68 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
 }
 
 #[test]
+fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
+    use layer_core::color::{ColorProfile, source::*};
+    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for in_place in [false, true] {
+            let mut document = layer_core::Document::new("photo pen", 4353, 769);
+            document.color = DocumentColor {
+                space: RgbSpace::Srgb,
+                depth,
+            };
+            document.layers[1].visible = false;
+            let mut source = SourceBuilder::new(
+                [4353, 769],
+                SourceInterpretation {
+                    channels: SourceChannels::Rgb,
+                    depth: IntegerDepth::U8,
+                    profile: ColorProfile::Builtin(RgbSpace::Srgb),
+                    profile_assumed: false,
+                },
+                32 * 1024 * 1024,
+            )
+            .unwrap();
+            for _ in 0..769 {
+                source.push_row(&[70, 140, 210].repeat(4353)).unwrap();
+            }
+            document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+            let (mut input, mut live) = engine(document);
+            let r = live.backend_mut();
+            let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
+            r.native_edit = Some(NativeEdit::with_mode(r, transfer, in_place));
+            let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+            brush.color_rgba_linear = [1., 0., 0.7, 1. / 3.];
+            live.set_brush(brush).unwrap();
+            stroke(&mut live, &mut input, 1, 60.);
+            let stored = backing(&live.document().layers[0].raster);
+            let tile = &stored[&TileKey {
+                plane: RasterPlane::Color,
+                coordinate: [0, 0],
+            }];
+            let stride = usize::from(depth.bits() / 8) * 4;
+            let expected: Vec<u8> = match depth {
+                IntegerDepth::U8 => vec![70, 140, 210, 255],
+                IntegerDepth::U16 => [70u16, 140, 210, 255]
+                    .into_iter()
+                    .flat_map(|v| (v * 257).to_le_bytes())
+                    .collect(),
+            };
+            assert_eq!(
+                &tile[..stride],
+                expected,
+                "untouched corner {depth:?} in_place={in_place}"
+            );
+            for (i, pixel) in tile.chunks_exact(stride).enumerate() {
+                assert!(
+                    pixel[stride * 3 / 4..].iter().all(|v| *v == 255),
+                    "photo alpha lost at pixel {i}: {depth:?} in_place={in_place}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "60 MP GPU publication, exact save/history and device replacement; run alone"]
 fn native_60mp_source_transform_commits_and_preserves_history() {
     native_large_source_transform(false);

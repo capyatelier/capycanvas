@@ -31,6 +31,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { benchRaster } from "./raster-bench.test.mjs";
 import { checkRaster } from "./raster.test.mjs";
+import { checkPhotoPaint } from "./photo-paint.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -221,7 +222,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--raster-bench")) {
+  if (process.argv.includes("--photo-paint")) {
+    await checkPhotoPaint({call,evaluate,settle});
+    checkRasterErrors();
+  } else if (process.argv.includes("--raster-bench")) {
     await benchRaster({evaluate,settle});
     checkRasterErrors();
   } else if (process.argv.includes("--raster")) {
