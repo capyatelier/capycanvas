@@ -17,6 +17,110 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Remaining short workload profiles — 2026-09-15
+
+The three smaller profiles now complete on both physical hosts with the full
+default editor, unchanged brushes and 240 Hz synthetic input. Each has 45 measured
+seconds after warm-up and a completed postlude. GPU timing is disabled; no builds,
+UI tests or profiler run during measurement. The two physical hosts run some
+profiles concurrently; device installation briefly overlaps the first Mac run.
+
+| Host / profile | Long intervals / total | Interval p99, ms | CPU owner p99, ms |
+| --- | ---: | ---: | ---: |
+| Mac ink | 70 / 3,728 | 22.222 | 3.303 |
+| Mac predicted ink | 40 / 3,779 | 22.222 | 3.198 |
+| Mac watercolor | 50 / 3,745 | 22.222 | 6.059 |
+| iPad ink | 38 / 5,061 | 8.334 | 7.230 |
+| iPad predicted ink | 3 / 5,031 | 8.334 | 2.305 |
+| iPad watercolor | 89 / 4,962 | 16.667 | 9.133 |
+
+All six have nominal thermal state and no renderer errors, rejected input,
+overflow, missing callbacks or zero-time measured presentations. Mac's retained
+cadence problem also occurs in single-layer ink; it is not confined to 4K
+multilayer rendering. iPad's ink p99 fits its refresh budget, while watercolor's
+does not. Every run retains some longer intervals. Short-run memory growth is
+2.6–21.2 MiB for ink and 143–169 MiB for watercolor; these observations do not
+establish sustained memory behavior or attribute its cause.
+
+These results fill short-profile coverage, not sustained acceptance or physical
+input latency. They include the unpublished Layers observation experiment below.
+Review found absent layer thumbnails in both Mac ink captures, while watercolor
+and a short published-build comparison show previews. The observation change is
+reverted to the established revision refresh rather than adding another refresh
+path. The six measured binaries, hashes, reports and captures remain in ignored
+`artifacts/performance/remaining-workloads-v1/`; the restoration and visual check
+are under `artifacts/apple-layer-thumbnail-followup-v1/`. Both restored Release
+builds pass without warnings, and the short Mac comparison shows the painted
+layer preview and white Paper thumbnail. No cadence improvement
+is claimed from the restoration, and the six measurements are not relabeled as
+results from the restored source.
+
+## Editor composition and update scope — 2026-09-15
+
+The existing 45-second eight-layer 4K workload is compared with the normal Mac
+editor and with Zen activated through its normal header button during warm-up.
+GPU timestamps, compilers and UI tests are inactive during measurement. Both
+conditions retain the 2400 × 1740 drawable and 90 Hz display. These are short
+synthetic comparisons, not physical-input or sustained acceptance.
+
+| Mac condition | Long continuous intervals / total | Continuous interval p99, ms |
+| --- | ---: | ---: |
+| Published app, normal editor | 61 / 3,764 | 22.222 |
+| Published app, Zen | 19 / 3,767 | 11.111 |
+| Layer-hosting correction, normal editor | 48 / 3,745 | 22.222 |
+| Layer-hosting correction, Zen | 21 / 3,793 | 11.111 |
+| Narrower Layers observation, normal editor | 49 / 3,743 | 22.222 |
+
+Mac now assigns its Metal layer before enabling `wantsLayer`, following
+[AppKit's layer-hosting contract](https://developer.apple.com/documentation/appkit/nsview/wantslayer).
+The first candidate also includes the small Tool Settings heading style change.
+Neither is established as a cadence fix. All sampled unpainted paper pixels
+agree across the four original/candidate captures; no paper-loss bug is proven.
+
+The subsequent experiment changes the Layers panel's observation from the
+global editor revision to layer state. Rename and document replacement retain
+their existing invalidation. The final normal-editor run does not demonstrate
+a cadence benefit, and the thumbnail follow-up above subsequently reverts this
+change. Both experimental Release builds have zero compiler warnings. The existing
+row suite passes both Apple policies, and the Mac layer setup passes all
+twenty-two existing assembled canvas workflow groups.
+
+All five intervals and postludes complete with nominal thermal state and no
+renderer errors, rejected input, recorder overflow or missing/zero-time measured
+presentations. The Zen results justify investigating native editor composition,
+but do not identify a particular panel or establish an optimization. The current
+normal editor still misses the 90 Hz cadence requirement. No new scheduler,
+iPad workload or ten-minute rerun follows these negative implementation results.
+Evidence, retained baseline/candidate apps, captures and Release metadata are
+under ignored `artifacts/performance/editor-composition-v1/`.
+
+One focused Animation Hitches trace of that current Mac Release app records
+no OS-classified hitches. The app recorder still reports 35 long continuous
+intervals over the full 45-second workload; profiling makes this a diagnostic
+run, not clean cadence acceptance. Six of the sixteen long intervals within
+the profile contain no intermediate screen presentation. Seven contain an
+intermediate screen presentation associated with an app UI update. These are
+clock-aligned associations, not proof of a particular cause. The largest recorded
+app update is 2.166 ms, and the CPU samples do not establish an expensive panel
+or a large main-thread stall. Thumbnail queries already suppress unchanged
+snapshots in the Rust publication path. No publication/scheduling workaround
+follows. Both owned processes exit, and the workload/postlude complete without
+renderer errors, rejected input or missing measured presentation callbacks.
+The retained trace, exports and reproducible correlation are under ignored
+`artifacts/performance/editor-hitches-v1/`. Resume other concrete blockers until
+new evidence supports a specific performance change.
+
+A bounded recovery-observation experiment also fails to improve cadence.
+Replacing its broad `ObservableObject` publication with property observation
+records 63 long intervals out of 3,747, with a 22.222 ms p99. The retained
+pre-change run has 49 out of 3,743 and the same p99; this single comparison does
+not establish a regression. Both Release builds and the complete local recovery
+suite pass, but the source change is rejected and reverted. The original Mac
+executable is restored and iPad Release rebuilt without compiler warnings.
+Evidence and rejected source remain under ignored
+`artifacts/performance/recovery-observation-v1/`. No native recovery workflow
+is repeated for this discarded change.
+
 ## GPU endpoint correlation — 2026-09-15
 
 The optional recorder now retains the existing GPU marker endpoints and samples
@@ -58,6 +162,16 @@ per host does not calibrate total recording overhead or prove a cadence benefit;
 both cadence gates still fail. No renderer/scheduler workaround or ten-minute
 rerun follows. Resume feature/state acceptance rather than repeating these
 measurements without a new, actionable hypothesis.
+
+A read-only follow-up reuses these four traces to check delayed main-thread
+completion as an explanation for owner-pending denials. Neither timing-disabled
+run has a denial after recorded owner completion. With timing enabled, Mac has
+two such denials, only one between the admissions of long-interval endpoints;
+iPad has none. The counts reproduce the analyzer's original cadence failures.
+This does not support adding another admission gate or completion workaround.
+The script and per-event results are under ignored
+`artifacts/performance/input-state-followup-v1/`; no new workload or runtime
+change accompanies this analysis, and the root cause remains unproven.
 
 Evidence, source hashes, comparison reports, reproduction scripts and that
 investigation's Release metadata are under ignored

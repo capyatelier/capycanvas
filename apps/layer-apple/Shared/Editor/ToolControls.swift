@@ -105,7 +105,7 @@ struct ToolSettingsControls: View {
             ForEach(settings, id: \.settingID) { item in
                 let index = settings.firstIndex { $0.settingID == item.settingID } ?? 0
                 if !item["group"].string.isEmpty && (index == 0 || settings[index - 1]["group"].string != item["group"].string) {
-                    Text(item["group"].string).opacity(0.55).padding(.top, 6)
+                    Text(item["group"].string).fontWeight(.bold).padding(.vertical, 4)
                 }
                 NumberControl(store: store, label: item["label"].string, value: item["value"].number,
                     control: item["numeric"], identifier: "tool-" + item.settingID) { value, completion in

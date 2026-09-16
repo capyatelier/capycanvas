@@ -10,6 +10,91 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+## Recovery and navigation milestone
+
+The user's direction remains to finish blockers with simple solutions and
+minimal simulator dependence. Most feature implementation and requested visual
+changes are published. Do not turn every open acceptance item into another
+implementation, callback test or full-suite rerun.
+
+| Remaining blocker | Next completion evidence |
+| --- | --- |
+| Sustained Mac 90 Hz / iPad 120 Hz | A measured cause and effective fix for presentation gaps, followed by the existing workload matrix and ten-minute acceptance. No fidelity reductions. |
+| Physical input | Pencil/tablet sensors, real shortcuts and interruption. No hardware keyboard is connected to the iPad; inconclusive injected keys are not application defects or physical acceptance. |
+| Documents and lifecycle | Remaining representative provider, physical unsaved-recovery, scene/window and interruption workflows. Preserve the native results below instead of repeating shared permutations. |
+| Final parity | Resolve perceptible differences or missing actions in the existing inventory and qualify both Release apps. The overall goal remains incomplete. |
+
+The painted-recovery workflow now fills through enabled native menus, backgrounds
+and returns to the same editor scene, verifies unchanged sampled artwork and
+fill Undo/Redo, then restarts and opens Recovered Drawings. The restored pixels,
+three layers and visible 42% opacity pass on Mac and the existing iPad simulator:
+one workflow, no failures or skips on each. Both test builds have zero compiler
+warnings. Mac retains one main-thread responsiveness warning without an
+attributed application cause; UIKit has none. Final captures are reviewed.
+Evidence is `artifacts/apple-background-recovery-v1/mac-v3` and `simulator-v4`.
+Initial failures reflected the test undoing Deselect rather than Fill; Deselect
+is now performed after the history check. No application workaround was added.
+The earlier painted restart-only evidence remains under
+`artifacts/apple-recovery-artwork-v1/`; its simulator-v1 run exercised an older
+blank-layer check and is excluded from painted-content acceptance.
+
+The physical iPad's current Release app also preserves a generated saved drawing
+across an OS switch to Settings and back: same process, matching visible artwork,
+Navigator, three layers, thumbnails and camera, with unchanged source bytes.
+Settings values are untouched. The first capture preceded file readiness; the
+second background/return cycle uses the confirmed painted baseline in the same
+process. This is saved-document foreground recovery, not unsaved crash recovery
+or physical stroke interruption. Evidence is the `device/` directory in the same
+artifact root. The disposable app is removed, the original stopped runner
+restored, and both artist editor descriptors are unchanged.
+
+The physical title-bar reproduction is closed by the user's direct touch report:
+Space can be dragged from the bank into the bar, then onto the canvas, without
+moving the window. Evidence is `artifacts/apple-header-physical-final-v1/`.
+Keep the retained simulator top-edge failure separate. Physical XCTest was not
+retried; its automation-initialization failure remains unexplained.
+
+The existing simulator two-finger workflow also passes pinch-in, rotation,
+a fresh pinch-out, fixed window bounds, unchanged artwork history and Fit
+restoration. It hides panels through ordinary workspace customization so
+XCTest's corner-starting contacts reach the canvas. No input adapter change or
+test-only hit target is added. Evidence is
+`artifacts/apple-touch-navigation-v1/simulator-v2/`. Physical contacts and sensors
+remain separate. Owned Mac/simulator workflow apps and runners are stopped.
+
+Two small runtime changes accompany this grouped acceptance: Tool Settings
+headings use Web's bold text and four-point vertical spacing, and Mac assigns
+its Metal layer before enabling `wantsLayer`, following AppKit's hosting contract.
+Both-theme component captures and all twenty-two existing assembled Mac canvas
+groups pass in their respective scopes. Neither is claimed as a cadence fix.
+Current warning-free Release build metadata is under
+`artifacts/apple-layer-thumbnail-followup-v1/restored/`.
+
+The narrower Layers observation experiment is reverted after smaller-workload
+captures revealed absent thumbnails; the rebuilt Mac comparison shows the
+painted preview and white Paper thumbnail using the established revision refresh.
+The recovery-observation experiment is also reverted: it brought no measured
+cadence improvement. Rejected source and observations remain in ignored
+artifacts. No additional invalidation, scheduling or presentation workaround
+is retained. Earlier paper-loss interpretation in Zen was incorrect; sampled
+paper pixels match across those captures.
+
+Three missing short workload profiles complete on each physical host: ink,
+predicted ink and watercolor. All six finish without renderer errors, rejected
+input or missing measured presentations. Mac misses its cadence p99 in all
+three; iPad ink fits the interval at p99, while watercolor does not. Longer
+intervals remain in every run. These results include the subsequently reverted
+Layers experiment and are not relabeled as restored-source or sustained passes.
+See `artifacts/performance/remaining-workloads-v1/` and
+[the performance observations](../../apps/layer-apple/PERFORMANCE.md).
+The bounded Animation Hitches and GPU follow-ups establish no new cause; avoid
+another diagnostic run without a specific decision it can resolve.
+
+Repeated fixture work, inconclusive input injection and open-ended coverage
+expansion have been the major avoidable slowdown. Use focused local checks for
+implementation and group necessary native acceptance. The catalog audit covers
+all 63 commands on both hosts; it is not behavioral acceptance by itself.
+
 ## Current input-state milestone
 
 This batch fixes stale Mac modifiers from other editor
@@ -28,8 +113,8 @@ exited cleanly but lost its console output and remains unverified. The fixture
 now writes a result bound to a unique launch ID; the final physical run verifies
 all eighty groups directly from that report. The simulator pass precedes only
 this reporting change. Both disposable fixtures are removed, the original stopped iPad runner
-is restored, and both artist app descriptors are unchanged. The published base
-is `f3214d6`; the contact and color fixes form one milestone.
+is restored, and both artist app descriptors are unchanged. The contact and
+color milestone is published as `9cb252a`, following `f3214d6`.
 
 The shared color-control fix rejects an unfinished foreground RGB
 entry after the background paint slot is selected. The existing mounted-control

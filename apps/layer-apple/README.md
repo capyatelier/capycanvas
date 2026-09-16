@@ -232,6 +232,13 @@ Both shared Apple configurations run on Mac; these checks do not establish
 external OS event posting, OS menu navigation or UIKit/Pencil/tablet delivery.
 Group full-application UI runs at milestone boundaries.
 
+The focused iPad `EditorLaunchTests/testTwoFingerCanvasNavigation` workflow
+checks UIKit-delivered pinch-in, rotation, a fresh pinch-out, fixed window bounds,
+unchanged artwork history and Fit restoration. It hides panels through ordinary
+workspace customization: XCTest starts pinch-out near the full canvas element's
+corners, which otherwise lie beneath docked controls. This simulator check does
+not establish physical finger/Pencil, cancellation or performance acceptance.
+
 For RGB draft ownership, run `tests/property-slider-input.swift` with
 `CAPY_PROPERTY_CASE=brush-color` through the same local script. Switching between
 foreground and background replaces the old numeric fields and rejects their late
@@ -390,6 +397,12 @@ retaining history and working settings. Recovery preparation handles queued
 pen-up without a drawable; lifecycle success waits for durable publication.
 See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
 reproducible checks and remaining physical-device/performance acceptance.
+
+`EditorLaunchTests/testArtworkRecoveryAfterRestart` checks painted artwork,
+native background/return to the same scene, fill Undo/Redo, then process restart
+and reopening the private recovery copy. It compares sampled pixels and layer
+structure. Mac uses Hide/activate; UIKit uses Home/activate. This workflow does
+not establish physical pen interruption or memory-pressure termination.
 
 Both targets now project the live shared application menus. Keyboard Shortcuts
 supports search, alternate bindings, conflict replacement and resets; Settings

@@ -87,6 +87,77 @@ final class EditorLaunchTests: XCTestCase {
         checkHandAndEyedropper(in: editorCaptureApplication())
     }
 
+    @MainActor func testTwoFingerCanvasNavigation() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        // XCTest's pinch-out begins near opposite corners of the element's
+        // full bounds. Hide panels through ordinary workspace customization so
+        // both starting contacts reach the canvas beneath the editor chrome.
+        let panels = ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color",
+            "stats", "navigator", "properties", "adjustments", "layers"]
+        let actions: [[String: Any]] = [["type": "set_theme", "theme": "light"]] + panels.map {
+            ["type": "customize", "action": ["type": "set_panel_visible", "panel": $0, "visible": false]]
+        }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
+        let status = app.staticTexts["camera-status"]
+        func camera() -> (zoom: Int, rotation: Int) {
+            let parts = status.label.components(separatedBy: " · ")
+            guard parts.count == 2,
+                let zoom = Int(parts[0].replacingOccurrences(of: "%", with: "")),
+                let rotation = Int(parts[1].replacingOccurrences(of: "°", with: "")) else {
+                XCTFail("Missing camera readout: \(status.label)"); return (0, 0)
+            }
+            return (zoom, rotation)
+        }
+        let original = camera()
+        XCTAssertGreaterThan(original.zoom, 0)
+        let sample = CGPoint(x: 0.5, y: 0.55)
+        let paper = editorPixels(in: app, at: sample)
+        XCTAssertTrue(paper.prefix(3).allSatisfy { $0 == 255 })
+
+        // XCTest injects two actual UIKit contacts into the editor canvas.
+        // These are native delivery checks, not physical finger/sensor evidence.
+        canvas.pinch(withScale: 1.6, velocity: 1)
+        expectation(for: NSPredicate { _, _ in camera().zoom > original.zoom * 5 / 4 }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        let enlarged = camera()
+        canvas.rotate(.pi / 6, withVelocity: .pi / 2)
+        expectation(for: NSPredicate { _, _ in abs(camera().rotation - enlarged.rotation) >= 20 }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertLessThanOrEqual(abs(camera().rotation - enlarged.rotation), 40)
+        attachEditor(in: app, name: "two-finger-zoom-rotation")
+
+        // A fresh pair must work after the preceding contacts have ended.
+        let rotated = camera()
+        canvas.pinch(withScale: 0.7, velocity: -1)
+        expectation(for: NSPredicate { _, _ in camera().zoom < rotated.zoom * 4 / 5 }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(viewport.frame, originalFrame, "Navigation must leave the OS window fixed")
+        workspaceActivate(app.buttons["menu-Edit"])
+        for command in ["undo", "redo"] {
+            let button = app.buttons["command-" + command]
+            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            XCTAssertFalse(button.isEnabled, "Two-finger navigation must not paint or create artwork history")
+        }
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)).tap()
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectation(for: NSPredicate { _, _ in
+            let current = camera()
+            return current.zoom == original.zoom && current.rotation == original.rotation
+        }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(editorPixels(in: app, at: sample), paper)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "two-finger-fit-restored")
+    }
+
     @MainActor func testRegionSelectionAndFill() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkRegionSelectionAndFill(in: editorCaptureApplication())

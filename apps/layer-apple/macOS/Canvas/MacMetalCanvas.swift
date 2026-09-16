@@ -27,11 +27,12 @@ final class MacCanvasView: NSView {
     init(store: EditorStore) {
         self.store = store
         super.init(frame: .zero)
-        wantsLayer = true
         let metal = ObservedMetalLayer()
         metal.isOpaque = true
         metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+        // Assign first to host our Metal layer; AppKit must not draw its contents.
         layer = metal
+        wantsLayer = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityIdentifier("canvas")
