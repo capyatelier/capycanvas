@@ -515,7 +515,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::Histogram => platform == Platform::Gtk,
+            Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::RasterizeSource | Self::RepairSourceProfile | Self::DocumentProperties | Self::ImportImage | Self::PasteImage => platform == Platform::Gtk,
             Self::CustomizeWorkspaceUi => matches!(
                 platform,

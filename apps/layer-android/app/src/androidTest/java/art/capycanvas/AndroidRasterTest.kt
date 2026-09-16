@@ -237,6 +237,48 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun histogramCapturesCommittedDocumentAndCancelsIndependently() {
+        val epoch = native { state(it).getJSONObject("document_file").getLong("epoch") }
+        for (cancelled in listOf(true, false)) {
+            val control = Native.captureControl()
+            try {
+                if (cancelled) Native.captureCancel(control)
+                val task = native { Native.inspectionTask(it, control) }
+                try {
+                    val result = JSONObject(Native.inspectionHistogram(task))
+                    if (cancelled) fail("Cancelled histogram completed")
+                    val histogram = result.getJSONObject("histogram")
+                    assertEquals(2048L*1536L, histogram.getLong("pixels"))
+                    assertEquals(0L, histogram.getLong("transparent"))
+                    for (channel in histogram.getJSONArray("channels").objects()) {
+                        assertEquals(histogram.getLong("pixels"), channel.getLong("white"))
+                        assertEquals(0L, channel.getLong("above"))
+                    }
+                } catch (e: IllegalStateException) { if (!cancelled) throw e; assertTrue(e.message.orEmpty().contains("cancel", ignoreCase=true)) }
+            } finally { Native.captureFree(control) }
+        }
+        assertEquals(epoch, native { state(it).getJSONObject("document_file").getLong("epoch") })
+        val outputControl = Native.captureControl()
+        val id = native { request(it, "export_document").first }
+        Native.captureCancel(outputControl)
+        val outputTask = native { Native.projectExportTask(it, id, System.nanoTime(), outputControl) }
+        assertNotEquals(0L, outputTask)
+        try {
+            val file = File(files, "cancelled-output.png")
+            try {
+                Native.projectWork(outputTask, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(), 0, 0)
+                fail("Cancelled output completed")
+            } catch (e: IllegalStateException) { assertTrue(e.message.orEmpty().contains("cancel", ignoreCase=true)) }
+            native { Native.documentComplete(it, id, false, "null") }
+            assertEquals(0L, file.length())
+        } finally { Native.projectFree(outputTask); Native.captureFree(outputControl) }
+        native { Native.dispatch(it, obj("type" to "invoke", "command" to "histogram").toString()) }
+        compose.runOnUiThread { host.documentChanged() }
+        compose.onNodeWithText("Histogram").assertIsDisplayed()
+        compose.waitUntil(30_000) { compose.onAllNodesWithText("Current committed drawing").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Close").performClick()
+        assertNull(host.failure)
+    }
     @Test fun exactSnapshotsSurviveFilesGpuReplacementAndRecovery() {
         stroke(0.0)
         val first=save("first.capy")

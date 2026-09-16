@@ -1,8 +1,9 @@
+import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
 export function createDocuments({app,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
-  const active=new Set(),handles=new Map();
+  const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false;
   const pruneHandles=()=>{const current=app.state().document_file.location?.uri;for(const key of handles.keys())if(key!==current)handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
@@ -81,6 +82,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
     try {
+      if(request.kind.type==="histogram"){histogram.open();dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
       const r=request.kind.request,id=request.id;
       if(r.type==="confirm_close") {
@@ -110,9 +112,15 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
           const master=handles.get(app.state().document_file.location?.uri);
           if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
         }
-        let output;
-        const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe))).blob;
+        let output,control,progress;
         try {
+          if(recipe){
+            control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
+            progress.append(element("span","","Preparing image…"),button("Cancel",()=>{control.cancel();progress.firstChild.textContent="Cancelling…";}));document.body.append(progress);
+          }
+          const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
+          if(progress){progress.firstChild.textContent="Writing image…";progress.querySelector('button').disabled=true;}
+
           let success;
           if(target.handle) {
             const stream=await target.handle.createWritable();
@@ -123,7 +131,13 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await retireRecovery();
           }
-        } finally { if(output)await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]}); }
+        } catch(error) {
+          const wasCancelled=control?.cancelled();control?.cancel();
+          if(wasCancelled)throw new DOMException("Image export cancelled","AbortError");throw error;
+        } finally {
+          progress?.remove();control?.free();
+          if(output)try{await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]});}catch(error){message(`Temporary output cleanup failed: ${error}`);}
+        }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
       if(request.kind.type==="document") {

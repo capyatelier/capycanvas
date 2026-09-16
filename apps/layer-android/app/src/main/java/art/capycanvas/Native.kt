@@ -44,8 +44,13 @@ internal object Native {
     @JvmStatic external fun projectFree(task: Long)
     @JvmStatic external fun documentComplete(handle: Long, request: Int, success: Boolean, error: String)
     @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
+    @JvmStatic external fun captureControl(): Long
+    @JvmStatic external fun captureCancel(control: Long)
+    @JvmStatic external fun captureFree(control: Long)
+    @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long
+    @JvmStatic external fun inspectionHistogram(task: Long): String
     @JvmStatic external fun projectExportOptions(task: Long, recipe: String)
-    @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long): Long
+    @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long, cancel: Long = 0): Long
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */

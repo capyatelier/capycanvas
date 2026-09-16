@@ -4,7 +4,7 @@ mod encoded_bins;
 
 pub const BINS: usize = 256;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Channel {
     pub bins: Vec<u64>,
     /// Values outside the SDR range, before histogram bin clamping.
@@ -30,7 +30,7 @@ impl Channel {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Histogram {
     pub color: DocumentColor,
     /// Profile-encoded document RGB followed by linear relative luminance Y.
@@ -38,6 +38,7 @@ pub struct Histogram {
     /// Each nontransparent pixel counts once, regardless of partial coverage.
     pub pixels: u64,
     pub transparent: u64,
+    #[serde(skip)]
     luminance: [f64; 3],
 }
 impl Histogram {

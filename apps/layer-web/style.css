@@ -765,3 +765,11 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .color-library-row { display: flex; align-items: center; gap: 6px; margin-block: 6px; }
 .color-library-row input { width: 100px; flex: 1; min-width: 60px; }
 .color-library-swatch { width: 42px; height: 32px; font-size: 0; border: 1px solid currentColor; }
+
+.histogram-dialog { position:fixed; inset:6rem 1rem auto auto; margin:0; width:min(26rem,calc(100vw - 2rem)); box-sizing:border-box; border:1px solid var(--border); border-radius:12px; padding:1rem; background:var(--panel-bg,#292929); color:inherit; z-index:30; box-shadow:0 8px 30px #0006; }
+.histogram-dialog header { display:flex; align-items:center; justify-content:space-between; }
+.histogram-dialog h2 { margin:0; font-size:1.1rem; }
+.histogram-dialog canvas { width:100%; height:140px; }
+.histogram-dialog p { white-space:pre-line; font-size:.85rem; }
+.histogram-actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:.6rem 0; }
+.file-progress { position:fixed; bottom:1rem; left:50%; transform:translateX(-50%); display:flex; gap:1rem; align-items:center; padding:.6rem 1rem; border-radius:10px; background:var(--panel-bg,#292929); box-shadow:0 2px 15px #0006; z-index:50; }

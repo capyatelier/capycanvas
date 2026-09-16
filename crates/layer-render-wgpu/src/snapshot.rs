@@ -328,6 +328,23 @@ impl SnapshotRenderer {
         self.check_cancelled()?;
         Ok(result)
     }
+    #[cfg(target_arch = "wasm32")]
+    pub async fn histogram_async(
+        &mut self,
+    ) -> Result<layer_core::color::histogram::Histogram, GpuRasterError> {
+        let mut result = layer_core::color::histogram::Histogram::new(self.color());
+        let mut y = 0;
+        while y < self.extent[1] {
+            self.check_cancelled()?;
+            let (height, pixels) = self.read_band_async(y).await?;
+            result
+                .add(&pixels)
+                .map_err(|e| GpuRasterError::Color(e.into()))?;
+            y += height;
+        }
+        self.check_cancelled()?;
+        Ok(result)
+    }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
         self.control.check()
     }

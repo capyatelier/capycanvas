@@ -9,3 +9,6 @@ mod workspaces;
 
 #[cfg(target_os = "android")]
 mod documents;
+
+#[cfg(target_os = "android")]
+mod inspection;

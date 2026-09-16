@@ -158,3 +158,41 @@ source repair/rasterization/placement; document properties and full-resolution
 histogram controls; final display, correctness and large-photo 120 Hz navigation
 qualification. The apps are installed for integration testing, but are not yet
 handed over as completed milestone-2 builds.
+
+## Inspection and cancellable delivery checkpoint — 2026-09-15
+
+Both ports expose the shared point/3×3/5×5 sampler and a nonmodal histogram
+window. Inspection captures the complete committed composition at full
+resolution, excludes zero-alpha pixels and display overlays, and labels RGB as
+profile-encoded document coordinates and luminance as linear Y. RGB/luminance,
+log scale, endpoint and out-of-range counts are available. One cancellable job
+runs at a time; settled document revisions trigger replacement, stale results
+are labeled, and animated effects show the captured time explicitly. Closing
+the inspector or replacing its document cancels the private capture.
+
+Export now has visible progress and cancellation before destination publication.
+Cancellation handles are separate from worker-owned tasks; closing UI cannot
+mutably alias or free a running job. Browser temporary output is retired after
+publication, with cleanup failure reported separately from a successful export.
+
+Physical tablet validation:
+
+- `tablet-web-inspection-final.log`: complete SDR round trips and profiled output,
+  exact histogram totals/transparent exclusion, actual nonmodal window, canceled
+  histogram, and canceled export with no published file passed. The runner waits
+  for `performance.timeOrigin` to change after reload, then startup completion;
+  polling only the old page's startup state races navigation.
+- `sdr-sample-area.log`: shared sampler stale-result cancellation and preservation
+  of document/brush opacity passed for GTK, Web and Android.
+- `web-inspection-final-build.log`, `android-inspection-final-build.log`,
+  `shared-inspection-check.log`, and `package-inspection.log`: actual Wasm/ARM64
+  builds, shared host check and browser packaging passed.
+
+Remaining work still includes document color edits and comparisons, richer
+source operations, named delivery presets/profile management and final tablet
+memory/navigation qualification. No 120 Hz tablet claim is made yet.
+
+`tablet-native-inspection-final.log`: all four `AndroidRasterTest` tests passed
+on the physical tablet (37.405 s), including exact native SDR save/reopen and GPU
+replacement, profiled PNG/TIFF identity, source interpretation, full histogram
+counts/UI and canceled histogram/export with the master unchanged.

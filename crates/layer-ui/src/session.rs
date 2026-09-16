@@ -3874,9 +3874,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
-        // GTK is the first SDR integration host. Other hosts retain their existing
-        // controls until their integration is explicitly authorized and tested.
-        if self.state.platform == Platform::Gtk && self.layer_interaction.tool.picks_color() {
+        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android)
+            && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
                 [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]
                     .into_iter()
@@ -6854,10 +6853,11 @@ mod tests {
     }
 
     #[test]
-    fn gtk_sample_area_cancels_stale_results_and_keeps_document_and_opacity() {
+    fn sdr_host_sample_area_cancels_stale_results_and_keeps_document_and_opacity() {
         use layer_render::{ColorSample, ColorSampleArea, ColorSampleSource};
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
         let mut s = session();
-        s.set_platform(Platform::Gtk);
+        s.set_platform(platform);
         invoke(&mut s, CommandId::Eyedropper);
         let revision = s.engine.document().revision;
         let opacity = s.state.brush.opacity;
@@ -6882,6 +6882,7 @@ mod tests {
         assert_eq!(s.state.colors.rgba()[3], 1.);
         assert_eq!(s.state.brush.opacity, opacity);
         assert_eq!(s.engine.document().revision, revision);
+        }
     }
 
     #[test]

@@ -36,6 +36,7 @@ enum Payload {
         gpu: layer_render_wgpu::snapshot::SnapshotGpu,
         snapshot: Option<layer_ui::DocumentExport>,
         recipe: layer_ui::ExportRecipe,
+        control: layer_render_wgpu::snapshot::CaptureControl,
     },
     Open {
         environment: Option<Environment>,
@@ -186,6 +187,9 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         }
         None => {
             if let Some(source) = e.pending_photo.take() {
+                if source.interpretation.profile_assumed {
+                    return Err("Choose an image interpretation before opening".into());
+                }
                 let depth = e.photo_policy.editing_depth(source.interpretation.depth);
                 let name = e
                     .source_name
@@ -354,6 +358,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     gpu,
                     snapshot,
                     recipe,
+                    control,
                 } => {
                     recipe.validate()?;
                     let snapshot = snapshot.take().ok_or("Export already encoded")?;
@@ -369,7 +374,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                             snapshot.background,
                             snapshot.time,
                             Default::default(),
-                            Default::default(),
+                            control.clone(),
                         )
                         .map_err(error)?;
                     renderer.set_output_extent(extent)?;
@@ -518,6 +523,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
     handle: jlong,
     id: jint,
     now: jlong,
+    cancel: jlong,
 ) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
@@ -560,6 +566,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
                 gpu,
                 snapshot: Some(snapshot),
                 recipe: layer_ui::ExportRecipe::web_share(),
+                control: crate::inspection::control(cancel),
             },
         })) as jlong)
     })();

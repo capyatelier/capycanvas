@@ -7,6 +7,30 @@ use layer_ui::{ExportFormat, ExportRecipe};
 use std::io::{Seek, SeekFrom, Write};
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
+#[wasm_bindgen]
+pub struct WebCaptureControl {
+    inner: CaptureControl,
+}
+#[wasm_bindgen]
+impl WebCaptureControl {
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+    pub fn cancelled(&self) -> bool {
+        self.inner.is_cancelled()
+    }
+}
+
+fn cancelled(control: &CaptureControl) -> Result<(), JsValue> {
+    if control.is_cancelled() {
+        let error = js_sys::Error::new("Image operation cancelled");
+        error.set_name("AbortError");
+        Err(error.into())
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct OutputMetadata {
     token: String,
@@ -19,16 +43,58 @@ struct OutputMetadata {
 
 #[wasm_bindgen]
 impl WebApp {
-    pub fn export_image(&self, id: u32, value: JsValue) -> Result<js_sys::Promise, JsValue> {
+    pub fn capture_control(&self) -> WebCaptureControl {
+        WebCaptureControl {
+            inner: CaptureControl::default(),
+        }
+    }
+
+    pub fn histogram(&self, control: &WebCaptureControl) -> Result<js_sys::Promise, JsValue> {
+        self.session.require_document_snapshot_idle().map_err(js)?;
+        let project = self.session.capture_project_recovery().map_err(js)?;
+        let epoch = self.session.state().document_file.epoch;
+        let revision = project.document.revision;
+        let background = self.session.engine().view().background_rgba_linear;
+        let time = self.session.engine().animation_time();
+        let sampled_time = project.document.has_animated_effects().then_some(time);
+        let gpu = self
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or_else(|| js("Canvas unavailable"))?
+            .renderer
+            .snapshot_gpu();
+        let control = control.inner.clone();
+        Ok(future_to_promise(async move {
+            raster_project::wait_backing(&project).await?;
+            let mut renderer = gpu
+                .capture(
+                    project,
+                    background,
+                    time,
+                    Default::default(),
+                    control.clone(),
+                )
+                .map_err(js)?;
+            let result = renderer.histogram_async().await;
+            cancelled(&control)?;
+            serialize(
+                &serde_json::json!({"epoch":epoch,"revision":revision,"histogram":result.map_err(js)?,"sampled_time":sampled_time}),
+            )
+        }))
+    }
+
+    pub fn export_image(
+        &self,
+        id: u32,
+        value: JsValue,
+        control: &WebCaptureControl,
+    ) -> Result<js_sys::Promise, JsValue> {
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
         recipe.validate().map_err(js)?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
-        layer_color::WorkingEncoder::new(
-            snapshot.project.document.color.space,
-            &recipe.interpretation(),
-            recipe.encoding,
-        )
-        .map_err(js)?;
         let gpu = self
             .session
             .engine()
@@ -38,6 +104,7 @@ impl WebApp {
             .ok_or_else(|| js("Wait for the canvas"))?
             .renderer
             .snapshot_gpu();
+        let control = control.inner.clone();
         Ok(future_to_promise(async move {
             raster_project::wait_backing(&snapshot.project).await?;
             let mut metadata = OutputMetadata {
@@ -59,7 +126,7 @@ impl WebApp {
                     snapshot.background,
                     snapshot.time,
                     Default::default(),
-                    CaptureControl::default(),
+                    control.clone(),
                 )
                 .map_err(js)?;
             let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
@@ -128,7 +195,7 @@ impl WebApp {
                 .await
             }
             .await;
-            if result.is_err() {
+            if result.is_err() || control.is_cancelled() {
                 let _ = JsFuture::from(raster_worker::call(
                     "output-close",
                     &metadata.token,
@@ -136,6 +203,7 @@ impl WebApp {
                 )?)
                 .await;
             }
+            cancelled(&control)?;
             result
         }))
     }
