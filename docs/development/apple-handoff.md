@@ -10,6 +10,74 @@ all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
 120 Hz testing is deferred. The overall goal is **incomplete**.
 
+Use the [current release checklist](apple-release-checklist.md) for the remaining
+gates and feature closure map. The older milestone sections below retain their
+original evidence and limits; their remaining-work paragraphs are not separate
+new test plans. A fresh shared-model enumeration confirms the current 63-command
+scope with no command-list drift. The fetch before this follow-up matched the
+previous milestone, `3d00463`. This milestone groups prediction/Settings fixes,
+link error reporting and local document failure/retry acceptance.
+
+The closure audit also reproduces and fixes silently rejected Help links. A small
+shared SwiftUI completion helper surfaces the error through the existing error
+presentation. The mounted editor fails before the fix and passes afterward for
+both Apple policies: Website/Source Code rejection, retry success, completed
+requests and unchanged drawing state. This supplies native OpenURLAction results,
+without opening a browser or using Metal. It does not establish physical iPad
+browser delivery. The focused check and model audit are retained under
+`artifacts/apple-release-closure-v1/`. The review apps remain on the installed
+prediction build while its XP-Pen check is pending. Both final Release builds
+pass without compiler warnings in separate build directories. The closure work
+is grouped with the Settings/prediction follow-up.
+
+The next closure check passes local file failure/retry without a product change.
+The native Mac File menu, panels and sheets preserve the unsaved drawing, title,
+layers and sampled pixels when Open fails after Discard approval. Undo/Redo,
+another unsaved prompt, Cancel, successful valid-file retry and unchanged source
+files also pass. The existing Swift/Metal owner fixture adds matching unsaved
+failure/history/retry checks on both Apple policies. Evidence is
+`artifacts/apple-file-failure-v1/` (`mac-v3`, `owner-v2.log`); the initial fixture
+failures targeted a hidden duplicate menu item, treated Mac sheets as XCTest
+alerts, or retained the old location-choice count. No runtime workaround was
+added. The final test build has no compiler warnings; its single main-thread
+responsiveness warning remains unattributed and does not establish a performance
+failure or pass. Captures are reviewed, generated files are removed and test
+processes are stopped. The same running prediction review was brought forward
+without restarting it; the iPad was untouched. Physical UIKit picker, provider
+and interruption acceptance remain separate.
+
+Settings link handoffs now also report rejection inline and clear that message
+after a successful retry, while preserving native `Link` controls. Both final
+Release builds pass without warnings. The mounted Settings activation fixture
+was discarded after it failed to reach the links; direct rejection/retry UI
+acceptance remains open. This is a test limitation, not a new browser-delivery
+defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
+review apps are retained for the outstanding physical XP-Pen check.
+
+## Prediction Settings follow-up
+
+The shared preferences model hides Prediction amount (including its search
+result) on iPad while iPadOS prediction is selected. Unavailable native
+prediction displays off and disabled on Mac, while retaining the saved choice
+for a supported device. This changes presentation only, not the drawing engine.
+The existing prediction dependency/capability tests and both Release builds
+pass. The native snapshot transport confirms the iPad hidden row and Mac
+off/disabled switch. Updated review apps preserve the artwork; evidence is in
+`artifacts/apple-prediction-settings-v1/`. These fixes are grouped with the
+manual-lookahead follow-up; the preceding milestone is `3d00463`.
+
+The subsequent Mac report exposed a separate manual-lookahead bug: display
+timing capped 8/16/64 ms selections to the same next-refresh lead. The shared
+engine now uses the selected manual lookahead while native prediction retains
+its presentation target. Constant 400 px/s replay changes 16/64 ms from the old
+3.18 px lead to 6.37/25.49 px. All 54 engine tests pass. The native Mac Metal
+check exercises both pen and mouse through the C ABI and Settings action: a
+pixel 20 px ahead of the real cursor is painted at 64 ms, absent at 0 ms, then
+absent after pen-up, with exact Undo/Redo. This is supplied-input rendering
+evidence; direct XP-Pen confirmation of the updated app remains separate.
+Both Release builds pass without warnings. Updated review apps preserve the
+artwork. Evidence and app identities are in `artifacts/apple-mac-prediction-v1/`.
+
 ## Resolved iPad Pencil prediction stall
 
 The physical cause is now reproduced from the user's captured Pencil input.

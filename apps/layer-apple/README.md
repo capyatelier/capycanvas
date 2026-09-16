@@ -9,8 +9,9 @@ Zen clears the native window controls. The iPad keeps its in-app menus, sharing
 the same menu item implementation and Rust catalog/actions.
 Both platforms are required at every milestone, with separate functional,
 visual and hardware performance evidence. Shared changes must build on both.
-See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
-for the shared-code boundaries, milestone matrix and remaining work.
+See [the Apple goal](../../docs/history/apple-acceptance.md#goal) for scope and
+shared-code boundaries, and the [current release checklist](../../docs/development/apple-release-checklist.md)
+for remaining work. Historical milestone lists do not supersede later passes.
 
 Popup text uses opaque shared-theme surfaces, including the workspace pill.
 `EditorPopupSurface` pairs the shared text and panel colors for custom overlays;
@@ -27,17 +28,19 @@ Mac system menus retain AppKit appearance and accessibility behavior.
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
 watercolor baseline on each. Current validation targets 90 Hz on Mac and 120 Hz
 on iPad; the user deferred Mac 120 Hz testing until suitable hardware is available.
-CPU spikes, missing GPU observations and the remaining workload matrix leave
-performance acceptance open. Benchmark sessions use
-isolated storage; ordinary launches do not start synthetic input or recording.
+The user accepts smooth drawing with rare measured misses. The captured Pencil
+prediction stall is fixed and physically confirmed; Diagnostics GPU values work
+on both hosts. Complete sustained workload/resource and physical latency evidence
+remains open. Benchmark sessions use isolated storage; ordinary launches do not
+start synthetic input or recording.
 
 The shared render owner drains temporary native resources after each task. Frame
 admission defers work while the native drawable pool awaits presentation, with
 ticket invalidation across resize, surface replacement and platform resume.
 [Direct checks and ten-minute results](PERFORMANCE.md#owner-lifetime-and-presentation-admission--2026-09-12)
-cover both hosts. The measured Mac CPU budget passes, but both hosts still miss
-presentation deadlines and iPad retains acquisition stalls; full performance
-acceptance remains open.
+cover both hosts. Retained presentation misses are evaluated with the user's
+perceptual criterion; they are not alone a reason for further scheduling changes.
+See the current checklist before repeating historical performance experiments.
 
 Apple snapshot publication serializes the shared host models directly to UTF-8,
 avoiding the intermediate JSON tree on the render owner. Incremental workspace

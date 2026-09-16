@@ -123,15 +123,17 @@ struct EditorView<Canvas: View>: View {
             lastLinkRequest = id
             store.query(["type": "application_link", "link": request["kind"]["link"].raw]) { result in
                 guard let url = URL(string: result.string) else {
-                    store.dispatch(["type": "complete_request", "id": id, "error": "Could not open the link"])
+                    completeLink(id, accepted: false)
                     return
                 }
-                openURL(url) { accepted in
-                    store.dispatch(["type": "complete_request", "id": id,
-                        "error": accepted ? NSNull() : "Could not open the link" as Any])
-                }
+                openURL(url) { accepted in completeLink(id, accepted: accepted) }
             }
         }
+    }
+    private func completeLink(_ id: UInt64, accepted: Bool) {
+        let error = accepted ? nil : "Could not open the link"
+        store.dispatch(["type": "complete_request", "id": id, "error": error as Any? ?? NSNull()])
+        if let error { store.failure = error }
     }
 }
 

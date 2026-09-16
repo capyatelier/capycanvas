@@ -7,6 +7,14 @@ nanoseconds and phase. The original camera revision travels with each batch.
 Ordinary Mac mouse/tablet input continues through this path; no native event
 object, device serial or vendor identifier crosses the queue.
 
+Mac uses the shared engine predictor when Enable stroke prediction is on;
+the unavailable macOS prediction switch refers only to system-supplied samples.
+Manual Prediction amount controls engine lookahead even when the host supplies
+a display timestamp. Native iPadOS samples still use presentation timing.
+The cursor tracks real input, so predicted ink can extend ahead of it while
+moving. Existing turn, speed, distance and pen-lift limits still apply. Predicted
+ink is replaced by real samples and is never committed beyond the real endpoint.
+
 Both native canvas adapters register the shared input-interruption callback.
 On Mac it clears the captured contact and modifier state before lifecycle blur
 or renderer restart, so a missing mouse-up cannot block the next press.

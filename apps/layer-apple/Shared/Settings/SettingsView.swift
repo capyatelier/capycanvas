@@ -2,8 +2,10 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: EditorStore
+    @Environment(\.openURL) private var openURL
     @FocusState private var searching: Bool
     @State private var numberResets: [String: UInt64] = [:]
+    @State private var linkFailed = false
     private var model: JSON { store.snapshot["preferences"] }
     private var page: JSON { model["pages"].array.first { $0["id"].string == model["page"].string } ?? JSON() }
     var body: some View {
@@ -38,6 +40,10 @@ struct SettingsView: View {
             #if os(macOS)
             .frame(minWidth: 560)
             #endif
+            .environment(\.openURL, OpenURLAction { url in
+                openURL(url) { accepted in linkFailed = !accepted }
+                return .handled
+            })
     }
     @ViewBuilder private var detail: some View {
         if !model["query"].string.isEmpty {
@@ -68,6 +74,7 @@ struct SettingsView: View {
                         }
                     }
                     if !model["error"].isNull { Text(model["error"].string).foregroundStyle(.red) }
+                    if linkFailed { Text("Could not open the link").foregroundStyle(.red) }
                 }.formStyle(.grouped)
                     .onChange(of: model["reveal"].string, initial: true) { _, id in
                         if !id.isEmpty { scroll.scrollTo(id) }

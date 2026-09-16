@@ -1488,7 +1488,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 u64::from(active.feedback.prediction_horizon_micros).saturating_mul(1_000),
             )
         });
+        // Native samples follow display timing. Manual engine prediction must
+        // use the selected lookahead, not stop at the next display refresh.
         let requested_elapsed = presentation_timestamp_ns
+            .filter(|_| active.feedback.use_platform_prediction)
             .or(fallback_timestamp)
             .and_then(|timestamp| self.builder.elapsed_micros_at(timestamp))
             .unwrap_or_else(|| {
@@ -3617,6 +3620,91 @@ mod tests {
 
         let stroke = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(stroke.brush.diameter, BrushSnapshot::default().diameter);
+    }
+
+    #[test]
+    fn manual_prediction_amount_reaches_beyond_the_cursor_with_display_timing() {
+        let mut leads = Vec::new();
+        for horizon in [0, 8_000, 16_000, 64_000] {
+            let (mut input, consumer) = input_queue(8);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("manual prediction", 1024, 128),
+                consumer,
+                view(1024, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_platform_prediction: false,
+                    prediction_horizon_micros: horizon,
+                    ..Default::default()
+                })
+                .unwrap();
+            engine
+                .set_brush(BrushSnapshot {
+                    diameter: 4.,
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut last = event(1, PenPhase::Down, 100.);
+            // Constant 400 px/s motion with steady pressure, long enough for
+            // the lead filter to settle. The host supplies a display target.
+            for index in 0..101 {
+                last = PenEvent {
+                    timestamp_ns: 1_000_000_000 + index * 10_000_000,
+                    surface_position: Point {
+                        x: 100. + index as f32 * 4.,
+                        y: 16.,
+                    },
+                    phase: if index == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    sequence: index + 1,
+                    ..last
+                };
+                input.push(last).unwrap();
+                engine
+                    .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
+                    .unwrap();
+            }
+            let tip = engine.backend().preview.last().unwrap().center.x;
+            let lead = tip - last.surface_position.x;
+            eprintln!(
+                "manual={horizon}us cursor={} predicted_tip={tip} lead={lead}px engine_frames={}",
+                last.surface_position.x,
+                engine.metrics().engine_prediction_frames
+            );
+            leads.push(lead);
+            let mut up = last;
+            up.phase = PenPhase::Up;
+            up.timestamp_ns += 1_000_000;
+            input.push(up).unwrap();
+            engine
+                .render_frame_for(up.timestamp_ns, up.timestamp_ns + 8_000_000)
+                .unwrap();
+            let stroke = engine.completed_stroke.as_ref().unwrap();
+            assert_eq!(
+                stroke.points.last().unwrap().position,
+                last.surface_position
+            );
+            let mut replay = Vec::new();
+            DabGenerator::generate(stroke, &mut replay);
+            assert_eq!(engine.backend().persistent, replay);
+            assert!(engine.backend().preview.is_empty());
+        }
+        for (lead, expected) in leads.into_iter().zip([0., 3.2, 6.4, 25.6]) {
+            assert!(
+                (lead - expected).abs() < 0.25,
+                "Manual prediction should reach its selected time beyond real input: {lead} vs {expected}"
+            );
+        }
     }
 
     #[test]

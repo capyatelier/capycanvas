@@ -308,6 +308,16 @@ system-menu automation. The focused `testNewDrawingAndExportCancellation` UI
 check exercises the size form and native export cancellation separately.
 Physical file-provider delivery remains unverified.
 
+`testFailedProjectOpenPreservesArtwork` also passes through the native Mac File
+menu, panels and error sheets. After an unsaved Clear and approval to Discard,
+an invalid file leaves the current name, layers, sampled artwork and Undo/Redo
+intact. The next Open still prompts for unsaved changes; Cancel preserves them,
+and retrying the valid file restores its saved artwork. Both source files remain
+unchanged. The local Swift/Metal owner fixture verifies the same failed-Open,
+dirty-state, history and retry-cancellation contract on both Apple policies.
+These checks add local failure/retry coverage, not cloud-provider or physical
+UIKit picker acceptance. Evidence is `artifacts/apple-file-failure-v1/`.
+
 The recovery checks use actual Swift owners and the Metal bridge for both platform
 policies. They verify private file modes, cancelled capture, newest-revision flush
 under queued edits, stale removal, malformed-record isolation, failed-write retry,

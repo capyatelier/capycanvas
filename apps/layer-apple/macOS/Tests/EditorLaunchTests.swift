@@ -11,6 +11,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkNativeProjectRoundTrip(in: editorCaptureApplication())
     }
 
+    @MainActor func testFailedProjectOpenPreservesArtwork() throws {
+        try checkFailedProjectOpenPreservesArtwork(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeImageImport() throws {
         try checkNativeImageImport(in: editorCaptureApplication())
     }
