@@ -4,6 +4,89 @@ import AppKit
 #endif
 
 extension XCTestCase {
+    @MainActor func checkSettingsControls(in app: XCUIApplication) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"appearance"}}]"#
+        app.launch()
+        func page(_ id: String) {
+            let item = app.staticTexts["settings-page-" + id]
+            XCTAssertTrue(item.waitForExistence(timeout: 10)); workspaceActivate(item)
+        }
+        func reopen(_ id: String) {
+            workspaceActivate(app.buttons["settings-done"])
+            XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
+            workspaceActivate(app.buttons["settings-button"])
+            XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10)); page(id)
+        }
+        func choice(_ id: String) -> XCUIElement {
+            #if os(macOS)
+            return app.popUpButtons["preference-" + id]
+            #else
+            return app.buttons["preference-" + id]
+            #endif
+        }
+        func selected(_ id: String, _ label: String) {
+            expectation(for: NSPredicate(format: "value == %@ OR label ENDSWITH %@", label, label), evaluatedWith: choice(id))
+            waitForExpectations(timeout: 5)
+        }
+        func choose(_ id: String, _ label: String) {
+            let control = choice(id)
+            XCTAssertTrue(control.waitForExistence(timeout: 20)); XCTAssertTrue(control.isEnabled)
+            workspaceActivate(control)
+            #if os(macOS)
+            let option = app.menuItems[label].firstMatch
+            #else
+            let option = app.buttons[label].firstMatch
+            #endif
+            XCTAssertTrue(option.waitForExistence(timeout: 5)); workspaceActivate(option)
+            selected(id, label)
+        }
+        choose("theme", "Dark")
+        attachEditor(in: app, name: "settings-dropdown-dark")
+        choose("theme", "System")
+        choose("theme", "Light")
+        reopen("appearance"); selected("theme", "Light")
+
+        page("canvas")
+        for label in ["Outline and crosshair", "Crosshair", "No cursor", "Brush outline", "Dot"] {
+            choose("cursor", label)
+        }
+        reopen("canvas"); selected("cursor", "Dot")
+        attachEditor(in: app, name: "settings-dropdown-cursor")
+
+        #if os(macOS)
+        func enabled(_ element: XCUIElement, _ value: Bool) {
+            expectation(for: NSPredicate(format: "enabled == %@", NSNumber(value: value)), evaluatedWith: element)
+            waitForExpectations(timeout: 5)
+        }
+        func active(_ element: XCUIElement, _ value: Bool) {
+            expectation(for: NSPredicate(format: "value == %@", NSNumber(value: value)), evaluatedWith: element)
+            waitForExpectations(timeout: 5)
+        }
+        page("input")
+        // Grouped macOS forms expose switch labels as separate static text.
+        let master = app.switches.element(boundBy: 0)
+        let native = app.switches.element(boundBy: 1)
+        let amount = app.buttons["number-value-Prediction amount"]
+        XCTAssertTrue(master.waitForExistence(timeout: 10)); XCTAssertTrue(native.exists)
+        XCTAssertEqual(app.switches.count, 2)
+        active(master, true); active(native, false); enabled(native, false)
+        XCTAssertTrue(amount.exists); enabled(amount, true)
+        workspaceActivate(master); active(master, false); enabled(native, false); enabled(amount, false)
+        workspaceActivate(master); active(master, true); enabled(amount, true)
+        let originalAmount = amount.value as? String ?? ""
+        XCTAssertFalse(originalAmount.isEmpty)
+        workspaceActivate(app.buttons["number-increase-Prediction amount"])
+        expectation(for: NSPredicate(format: "value != %@", originalAmount), evaluatedWith: amount)
+        waitForExpectations(timeout: 5)
+        let editedAmount = amount.value as? String
+        reopen("input"); active(master, true); active(native, false); enabled(native, false)
+        XCTAssertEqual(amount.value as? String, editedAmount, "Done/reopen must retain the manual amount")
+        attachEditor(in: app, name: "settings-prediction-dependencies")
+        #endif
+        workspaceActivate(app.buttons["settings-done"])
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkSettingsTextState(in app: XCUIApplication, keyboardSelection: Bool = true) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"appearance"}}]"#
         app.launch()

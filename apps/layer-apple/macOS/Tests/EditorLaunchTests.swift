@@ -25,6 +25,7 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
     @MainActor func testSettingsTextState() { checkSettingsTextState(in: editorCaptureApplication()) }
     @MainActor func testSettingsChoicePresentation() { checkSettingsChoicePresentation(in: editorCaptureApplication()) }
+    @MainActor func testSettingsDropdownsAndPrediction() { checkSettingsControls(in: editorCaptureApplication()) }
 
     @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
 

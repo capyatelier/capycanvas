@@ -272,7 +272,7 @@ import UIKit
                             DispatchQueue.main.async {
                                 guard let self else { return }
                                 if let error { self.report(error) } else {
-                                    self.destination = recovery == nil ? url : nil; self.store?.layerThumbnails.reset()
+                                    self.destination = recovery == nil ? url : nil
                                     if let recovery { self.store?.recovery.didRestore(recovery) }
                                 }
                                 self.recovering = nil

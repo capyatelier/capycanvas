@@ -205,7 +205,21 @@ editor and recovery coordinator through the final acknowledgement, even if scene
 teardown releases the last UI reference before native preparation returns. Local
 checks on both Apple configurations verify that this flush finishes, releases
 its owner and leaves an archive that reopens with the accepted edits. The iPad uses
-the OS background-task allowance; a kill or allowance expiration before durable
+the OS background-task allowance. Its expiration handler ends that allowance
+synchronously on MainActor, as required by
+[UIKit's callback contract](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)).
+The same idempotent lease handles a later persistence completion without ending
+the task twice; expiration does not acknowledge a successful save. The focused
+check compiles the exact production helper against a synchronous UIKit-shaped
+boundary and covers both callback orders, failed/immediate completion, invalid
+identifiers and overlapping scenes. It fails before removal of the queued
+`Task` and passes afterward; it does not simulate actual OS expiration:
+
+```sh
+python3 apps/layer-apple/tests/background-expiration.py
+```
+
+A kill or allowance expiration before durable
 publication can still leave only the previous completed copy. Full physical
 expiration/interruption and sustained storage overhead remain acceptance work.
 
@@ -217,6 +231,9 @@ uses the shared renderer-replacement API to reconstruct the retained document.
 Callbacks from a retired device cannot stop its replacement. A nonblocking owner
 health check detects failures even after the display link becomes idle. Native
 thumbnail and filter-preview generations reset when renderer availability changes.
+Layer thumbnails also retire pending readbacks on document-epoch changes, even
+when the replacement renderer is already ready; this covers ordinary New/Open
+and direct document adoption in one publication path.
 Healthy native surface replacement retains the existing GPU.
 
 ## Ownership and files
@@ -237,6 +254,11 @@ a second workspace store.
 Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
 A failed local save retains the accepted in-memory edit and offers Retry Save.
+The native-owner fixture enumerates all Settings rows on both Apple policies.
+Every editable preference passes a value change, restoration in a fresh owner
+and exact durable Reset without changing unrelated settings; unavailable Mac
+native prediction is separately verified off and disabled. These are storage
+and bridge checks, not native widget or physical input acceptance.
 Workspaces remain independent after their initial copy. A live workspace's
 Duplicate operation captures its owning window's latest accepted
 state instead of copying a stale on-disk version. Switch to Window focuses that

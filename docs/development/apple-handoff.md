@@ -57,7 +57,67 @@ acceptance remains open. This is a test limitation, not a new browser-delivery
 defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
 review apps are retained for the outstanding physical XP-Pen check.
 
+## Settings and lifecycle acceptance
+
+Settings now has a complete row map: sixteen rows across five pages, eleven
+editable on iPad and ten on Mac with unsupported native prediction off/disabled.
+The existing persistence fixture passes every editable row's value change,
+fresh-owner restoration and exact durable Reset, plus its prior cross-owner and
+failed-save cases. Retained native text, numeric and image-choice XCTest results
+are verified without repeating their UI runs. This closes unspecified row-routing
+and storage coverage; broader text/keyboard behavior and Settings link rejection
+remain scoped separately.
+Evidence is `artifacts/apple-preference-coverage-v1/`. The connected iPad review
+process was verified unchanged before requesting the physical New Window,
+independent drawing/history and continued-input check; its reply is pending.
+
+The native Settings follow-up reproduces a UIKit cursor picker that does not
+open, including a direct touch at its visible control. Its custom icon labels
+are replaced with native image labels using the same assets, and the current
+selection is exposed to accessibility. All three theme and five cursor choices,
+including Done/reopen retention, now work on both hosts. Mac prediction enable,
+dependent controls, manual amount editing and Done/reopen also pass. Both final
+Release builds have zero compiler warnings. Evidence, captures and milestone
+publication verification are under `artifacts/apple-settings-dropdowns-v1/`.
+
+UIKit prediction-switch taps still fail to change the control in the simulator;
+their initial enabled/hidden state and native-owner dependency checks pass.
+The unreliable switch fixture is removed instead of adding an app workaround.
+A short physical iPad dependency check is pending. This limit does not reopen
+the user's physical smooth-drawing/prediction pass. The Settings, thumbnail and
+background-expiration fixes form one milestone following `d96a0a9`; review
+drawings and the installed physical review apps are preserved.
+
+The iPad background-expiration audit removes an unnecessary queued `Task` from
+the expiration handler. UIKit invokes this handler synchronously on MainActor;
+the existing lease now ends before it returns, and later persistence completion
+remains idempotent. The exact production helper fails the focused callback-order
+check before the change and passes all five groups afterward. That focused change
+builds for iPad without warnings; the later Settings follow-up rebuilds both
+current Releases. No app installation, simulator or physical OS
+expiration was used, so R4's physical expiration/interruption gate remains open.
+Evidence is `artifacts/apple-background-expiration-v1/`; reproduction and the
+API contract are in [Persistence](../../apps/layer-apple/PERSISTENCE.md#artwork-recovery).
+
 ## Sustained performance evidence review
+
+Current `d96a0a9` Mac Release ink/watercolor each complete ten measured minutes
+without rejected input, renderer errors or missing measured presentations.
+Long active intervals are 0.857%/0.939%, thermal samples are nominal and the
+canvas sleeps within about 50 ms after measurement. Memory/idle analysis and
+exact source/binary identities are retained under
+`artifacts/performance/final-d96a0a9/`. Both captures have blank layer thumbnails.
+The follow-up reproduces a pending preview readback surviving replacement of its
+document/renderer. Benchmark setup bypassed the reset in normal New/Open.
+The reset now belongs to shared document publication, and the file-dialog-specific
+call is removed. The regression fails before and passes on both Apple policies
+afterward; this is AppKit/Metal evidence, not physical UIKit. Both Release builds
+pass without warnings, and the short final Mac capture has correct painted and
+Paper thumbnails. Evidence is `artifacts/apple-thumbnail-epoch-v1/` and the
+retained regression is `apps/layer-apple/tests/layer-thumbnails.swift`.
+The ten-minute timings retain their pre-fix thumbnail limitation; the short
+capture is not a new sustained pass. Neither result justifies a scheduler
+experiment or completes R6. See the [current measurements](../../apps/layer-apple/PERFORMANCE.md#current-mac-ink-and-watercolor--2026-09-16).
 
 The retained ten-minute physical 4K ink pair has no rejected input, renderer
 errors or missing/zero measured presentations, with nominal thermal samples.

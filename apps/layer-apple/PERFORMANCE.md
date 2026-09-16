@@ -157,6 +157,59 @@ closes the reported physical stall. No failed recording or synthetic-only pass
 is counted as physical acceptance; broader sustained measurements retain their
 original scope.
 
+## Current Mac ink and watercolor — 2026-09-16
+
+The isolated Release built from `d96a0a9` completes 600 measured seconds each
+of `ink-predicted` and `wet-watercolor`, with ten-second warm-up and postlude.
+Both use the same executable, normal brush settings, 240 Hz synthetic input,
+the full editor and fresh private storage. The display reports 90 Hz. The
+recorder and optional GPU queue-span timing are enabled; no build, UI test or
+profiler runs during either measurement.
+
+| Mac profile | Long active intervals / total | Interval p99 / max, ms | CPU owner p99, ms | GPU queue-span p99, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Predicted ink, 2048² | 431 / 50,313 (0.857%) | 11.111 / 22.222 | 3.290 | 7.140 |
+| Wet Watercolor, 2048² | 473 / 50,381 (0.939%) | 11.111 / 33.334 | 5.743 | 11.216 |
+
+Both intervals have zero rejected input, renderer errors, dropped records,
+missing presentation callbacks and zero-time presentations. Each trace has one
+zero-time presentation before measurement. Watercolor skips nine GPU samples
+during measurement (twelve across the whole trace); no invalid GPU sample,
+failed poll or final pending sample is recorded. Queue spans include submission
+gaps and profiler work; they are not isolated GPU execution. Frame-admission to
+presentation p99 is 39.917/32.834 ms, which is not physical pen-to-pixel latency.
+These rare long intervals alone do not fail the user's perceptual criterion.
+
+Measured footprint grows 232.55/758.89 MiB, with maxima of 545.55/1,385.47 MiB.
+Growth in the final 120 seconds is 20.06/67.14 MiB; watercolor's first window
+grows 484.39 MiB. The curves are not monotonically flat and do not prove
+indefinite stability. The postlude releases 32.66/181.30 MiB. Both runs record
+nominal thermal state; they provide no fresh iPad evidence.
+Each run has two postlude canvas-owner frames, sleeps the display link after
+50.1/41.0 ms and records no canvas-owner frames in the final five seconds.
+The recorder reserves 74.52 MiB and appends 40.91/39.86 MiB of event payload
+during measurement; payload bytes do not attribute physical footprint growth.
+
+Both reviewed captures show the expected artwork and Navigator but blank layer
+thumbnails. A subsequent focused test reproduces stranded preview readbacks when
+the benchmark replaces its startup document: the cache retains a request owned
+by the retired renderer. Normal file-dialog New/Open already reset the cache.
+Moving that reset to coherent document publication, alongside renderer changes,
+removes the file-dialog-specific call and covers every replacement path. The
+regression fails before the change and passes for both Apple policies afterward;
+it mounts AppKit/Metal, not UIKit. Both Release builds pass without warnings.
+A short final Mac Release capture shows the painted/checkerboard active-layer
+thumbnail and white Paper thumbnail. Evidence is `artifacts/apple-thumbnail-epoch-v1/`.
+
+The ten-minute drawing measurements retain their pre-fix source and missing-
+thumbnail qualification. The short visual follow-up does not establish a
+post-fix sustained result or complete full-workspace performance acceptance.
+No scheduler or memory workaround follows these observations.
+Recorder-off resources, storage, idle/resume, instrumentation overhead, physical
+input latency and remaining platform/profile coverage are still open. Evidence
+is `artifacts/performance/final-d96a0a9/`, including source/binary hashes, summaries,
+captures and the supplemental memory/idle review.
+
 ## Sustained memory and idle review — 2026-09-16
 
 Read-only reanalysis of the retained `fb81ebe` ten-minute `layered-4k` pair
@@ -1180,6 +1233,13 @@ workspace or recovery copies. Ordinary launches have no workload timer.
 | `wet-watercolor` | 2048×2048 | 1 | Wet Watercolor / 320 px | On |
 | `layered-4k` | 4096×4096 | 8 | G-Pen / 24 px | On |
 | `wet-watercolor-4k` | 4096×4096 | 8 | Wet Watercolor / 320 px | On |
+
+The prediction column controls supplied native prediction batches, not the
+shared Stroke Prediction preference. Workload storage starts with default
+preferences: engine feedback is enabled with a 16 ms manual amount. Mac has no
+native prediction provider, so both ink profiles retain manual engine prediction;
+`ink` is not a master-prediction-off control. Supplied samples contain no pending
+sensor-correction tokens and do not reproduce the physical Pencil stall above.
 
 The 4K cases retain seven translucent full-document underpaint layers and the
 active paint layer. Setup creates the document through the shared project job

@@ -149,11 +149,15 @@ struct SettingsView: View {
         } else {
             Picker(row["title"].string, selection: Binding(get: { Int(kind["selected"].number) }, set: { edit(row, $0) })) {
                 ForEach(kind["options"].array.indices, id: \.self) { index in
-                    Label { Text(kind["options"][index].string) } icon: {
-                        if !kind["icons"][index].string.isEmpty { SharedIcon(name: kind["icons"][index].string) }
-                    }.tag(index)
+                    if kind["icons"][index].string.isEmpty {
+                        Text(kind["options"][index].string).tag(index)
+                    } else {
+                        Label(kind["options"][index].string,
+                            image: "icon-" + SharedIcon.assetKey(kind["icons"][index].string)).tag(index)
+                    }
                 }
             }.accessibilityIdentifier("preference-" + row["id"].string)
+                .accessibilityValue(kind["options"][Int(kind["selected"].number)].string)
         }
     }
 }

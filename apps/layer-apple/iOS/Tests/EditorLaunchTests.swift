@@ -31,6 +31,10 @@ final class EditorLaunchTests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkSettingsChoicePresentation(in: editorCaptureApplication())
     }
+    @MainActor func testSettingsDropdowns() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSettingsControls(in: editorCaptureApplication())
+    }
 
     @MainActor func testBlendAndLiquify() {
         XCUIDevice.shared.orientation = .landscapeLeft
