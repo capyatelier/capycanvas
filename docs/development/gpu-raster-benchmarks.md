@@ -135,6 +135,18 @@ requests, discarded feedback, refresh-slot gaps, phase-specific p95/p99/max,
 worker CPU/GPU time and GTK frame-handler time. Do not infer request latency from
 frame cadence alone, or ignore a failed phase in the whole-run aggregate. Keep
 builds and other performance workloads out of the measurement interval.
+The report excludes late-arriving startup feedback from navigation cadence,
+retains unmatched requests by phase, and separately reports first-request to
+first-navigation presentation, request-to-enqueue, and enqueue-to-present delay.
+The first-response measurement includes initial coalesced requests; the ordinary
+request-latency distribution can only contain requests matched to presentation.
+
+For scheduling investigations, `LAYER_NAVIGATION_PHASE_NS` selects the first
+request's offset from the current display-clock prediction. The clock continues
+to update from feedback; this is an initial offset, not a phase lock. Release
+**test executables only** accept `LAYER_PACING_LEAD_NS` to override the lead before
+predicted presentation. Production retains its three-quarter-refresh deadline.
+These controls compare scheduling without changing source pixels or rendering.
 
 | Scenario | Workload |
 | --- | --- |
@@ -208,8 +220,10 @@ wetness pages allocate lazily. This is the optimization claim the timings test;
 it is not a claim that a finite benchmark proves a globally optimal shader.
 
 The offscreen suite proves brush and composition execution headroom but does not
-include surface acquisition, compositor scheduling, or scanout. Product
-acceptance remains input-to-present p99 below 8.33 ms on each supported target.
+include surface acquisition, compositor scheduling, or scanout. The current GTK
+milestone-2 user scope requires smooth 120 Hz unchanged-photo navigation with
+input-to-present latency documented; the earlier strict p99 below 8.33 ms is a
+historical target. See the [scope and measured limits](../history/color-management-gtk-m2-performance.md).
 
 ## Run
 

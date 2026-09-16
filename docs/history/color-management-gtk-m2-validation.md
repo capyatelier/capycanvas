@@ -31,10 +31,14 @@ allowance itself is never allocated. Complete display admission remains a driver
 headroom snapshot, not a global pressure manager or inactive-tab disk hierarchy.
 
 Current camera CPU/GPU work fits 8.33 ms, including native-resolution Gaussian
-blur followed by display reduction. Strict native presentation qualification is
-still open: the first complete-display run presents 960/960 requests, but later
-runs retain scheduling/input-delivery gaps and request-to-present p99 above
-8.33 ms. These are reported separately from renderer time. Physical calibrated
+blur followed by display reduction. The user now requires **smooth 120 Hz
+navigation with latency documented**, superseding the historical strict 8.33 ms
+input-to-present gate. The first complete-display run presents 960/960 requests;
+later runs sustain the later navigation phases but retain first-interaction gaps.
+The controlled scheduling comparison records 29–45 ms to the first navigation
+presentation and production-deadline request-to-present p99 of 12.1–14.4 ms.
+The startup cause and a causal attribution for the reported latency regression
+remain unknown. These are reported separately from renderer time. Physical calibrated
 displays, unlike-monitor movement/spanning and other host/device qualification
 remain explicit gaps. Other platform host integration still requires approval.
 
@@ -51,12 +55,16 @@ integer16 identity remain separate guarantees.
 
 ## Independently checked prerequisites
 
-The milestone 1 archive/replay replacement is present: immutable compressed
+At the initial `e46f271` audit, the milestone 1 archive/replay replacement was
+present: immutable compressed
 256×256 raster revisions, affected-tile history, asynchronous capture, indexed
 project storage, GTK atomic publication, and failed-worker recovery. The
 historical research document's descriptions of linear8 painting and stroke
-archives do not describe this checkout. Current painting and physical effect
-boundaries use `Rgba8UnormSrgb`, with linear-premultiplied Float32 shader values.
+archives did not describe that checkout. Its painting and physical effect
+boundaries used `Rgba8UnormSrgb`, with linear-premultiplied Float32 shader values.
+Milestone 2 subsequently replaced those editing boundaries with Float32 working
+pixels and canonical integer8/integer16 backing; the following list is the
+initial audit, not a description of current deficiencies.
 
 Initial prerequisite audit (completed work and remaining limits are recorded
 in the implementation sections below):

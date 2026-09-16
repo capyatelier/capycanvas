@@ -143,7 +143,16 @@ fn native_large_photo_navigation() {
     // presentation delay. Requests use an absolute 120 Hz schedule, not a wait
     // for the previous render, so slow frames cannot throttle the workload.
     let tick = glib::timeout_add_local(Duration::from_millis(1), || glib::ControlFlow::Continue);
-    let start = Instant::now();
+    let input_phase_ns = std::env::var("LAYER_NAVIGATION_PHASE_NS")
+        .ok().map(|v| v.parse::<u64>().unwrap());
+    let start = if let Some(phase) = input_phase_ns {
+        let gpu = w.gpu.borrow();
+        let clock = &gpu.as_ref().unwrap().session.engine().backend().clock;
+        let now = glib::monotonic_time() as u64 * 1000;
+        assert!(phase < clock.period());
+        let due = clock.presentation(now) + 2 * clock.period() + phase;
+        Instant::now() + Duration::from_nanos(due.saturating_sub(now))
+    } else { Instant::now() };
     let mut requests = Vec::new();
     for (phase, fixed_scale) in [
         ("fit-pan-rotate", fit),
@@ -215,6 +224,7 @@ fn native_large_photo_navigation() {
         "camera_work": stats.camera_work,
         "monitor_scale": w.area.scale_factor(),
         "physical_filter": std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"),
+        "input_phase_ns": input_phase_ns,
         "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
         "worker_thread_cpu": stats.thread_cpu, "worker_gpu": stats.gpu,
         "frame_handler_cpu": stats.frame_handler_cpu,

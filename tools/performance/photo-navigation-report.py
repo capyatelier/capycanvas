@@ -24,12 +24,23 @@ def distribution(values):
 def summarize(report):
     cpu = {int(row[0]): row for row in report["worker_cpu"]}
     presented = {row[0]: row for row in report["canvas_presentation"]}
+    first_request = min(r["requested_ns"] for r in report["requests"])
+    # Feedback from a startup frame can arrive after Stats is cleared. Its old
+    # presentation timestamp must not turn pre-gesture idle time into missed
+    # navigation refreshes. Keep unmatched requests and the first response below.
+    measured_feedback = {
+        frame: p for frame, p in presented.items()
+        if frame in cpu and cpu[frame][4] >= first_request
+    }
     by_matrix = collections.defaultdict(list)
     for request in report["requests"]:
         by_matrix[tuple(request["matrix"])].append(request)
     phases = collections.defaultdict(list)
     matched = set()
     latency = []
+    enqueue_delay = []
+    queued_to_present = []
+    first_response = None
     for frame, matrix, _revision in report["camera_views"]:
         if frame not in cpu or frame not in presented or not presented[frame][3]:
             continue
@@ -45,8 +56,11 @@ def summarize(report):
         assert elapsed >= 0, "presentation/request clocks must share a monotonic origin"
         phases[request["phase"]].append(elapsed)
         latency.append(elapsed)
+        enqueue_delay.append((cpu[frame][4] - request["requested_ns"]) / 1e6)
+        queued_to_present.append((presented[frame][1] - cpu[frame][4]) / 1e6)
+        first_response = min(first_response or presented[frame][1], presented[frame][1])
         matched.add(request["requested_ns"])
-    feedback = sorted((p for p in presented.values() if p[3]), key=lambda p: p[1])
+    feedback = sorted((p for p in measured_feedback.values() if p[3]), key=lambda p: p[1])
     cadence = [(b[1] - a[1]) / 1e6 for a, b in zip(feedback, feedback[1:])]
     # Small compositor timestamp jitter around 8.333 ms is not a lost refresh.
     # Retain raw cadence percentiles as well as gaps rounded to reported slots.
@@ -61,9 +75,18 @@ def summarize(report):
         "requests": len(report["requests"]),
         "presented_requests": len(matched),
         "requests_without_matching_presentation": len(report["requests"]) - len(matched),
-        "discarded_feedback": sum(not p[3] for p in presented.values()),
+        "requests_without_matching_presentation_by_phase": dict(collections.Counter(
+            r["phase"] for r in report["requests"] if r["requested_ns"] not in matched
+        )),
+        "discarded_feedback": sum(not p[3] for p in measured_feedback.values()),
+        "feedback_outside_measured_frames": len(presented) - len(measured_feedback),
         "missed_refresh_slots": missed_slots,
+        "first_request_to_first_present_ms": (
+            (first_response - first_request) / 1e6 if first_response is not None else None
+        ),
         "request_to_present": distribution(latency),
+        "request_to_enqueue": distribution(enqueue_delay),
+        "enqueue_to_present": distribution(queued_to_present),
         "request_to_present_by_phase": {phase: distribution(v) for phase, v in phases.items()},
         "worker_cpu": distribution([r[3] for r in report["worker_cpu"]]),
         "worker_gpu": distribution([r[1] for r in report["worker_gpu"]]),

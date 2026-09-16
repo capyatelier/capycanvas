@@ -26,6 +26,22 @@ pub struct FrameClock {
     period_ns: AtomicU64,
 }
 impl FrameClock {
+    fn lead(period: u64) -> u64 {
+        // Test-only control for matched scheduling measurements. Production
+        // retains its drawing deadline; these measurements do not select a new
+        // production policy.
+        #[cfg(test)]
+        {
+            static OVERRIDE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+            if let Some(lead) = *OVERRIDE.get_or_init(||
+                std::env::var("LAYER_PACING_LEAD_NS").ok().map(|v| v.parse().unwrap()))
+            {
+                assert!(lead > 0 && lead < period);
+                return lead;
+            }
+        }
+        period * 3 / 4
+    }
     pub fn period(&self) -> u64 {
         match self.period_ns.load(Ordering::Relaxed) {
             n @ 1_000_000..=1_000_000_000 => n,
@@ -41,7 +57,7 @@ impl FrameClock {
         // Leave three quarters of a refresh for canvas work plus GTK's overlay and
         // compositor. Half was too short for live transforms with wet paint
         // and numeric controls updating, despite each renderer fitting 120Hz.
-        let base = phase.saturating_sub(period * 3 / 4);
+        let base = phase.saturating_sub(Self::lead(period));
         Some(if base > now {
             base
         } else {
@@ -60,7 +76,7 @@ impl FrameClock {
         if phase == 0 {
             return true;
         }
-        let drift = ((deadline + period * 3 / 4) % period).abs_diff(phase % period);
+        let drift = ((deadline + Self::lead(period)) % period).abs_diff(phase % period);
         drift.min(period - drift) <= period / 16
     }
     pub fn presentation(&self, now: u64) -> u64 {

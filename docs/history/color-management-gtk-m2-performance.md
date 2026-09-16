@@ -11,6 +11,10 @@ performance requirement is **120 Hz pan, zoom and rotation of unchanged large
 photographs**, including transitions that miss the current display detail cache.
 Keep frame creation, completed work and native GTK presentation measurements
 distinct. Existing warm navigation results alone do not qualify this requirement.
+The user's latest clarification is **smooth 120 Hz navigation, with measured
+input-to-presentation latency documented**. The historical strict p99 ≤ 8.33 ms
+input-to-present threshold is no longer a completion gate. Real interaction
+stalls still matter; the clarification does not excuse missed presentations.
 
 The user explicitly deferred optimization of dirty-pixel/image regeneration and
 the proposed resolution-aware preview pipeline. Adjustment/filter rebuilds,
@@ -25,11 +29,12 @@ Navigation reuses completed composition through bounded retained Float32 display
 mips and native detail. The checkpoints below remove repeated zoomed-out scene
 evaluation, seed native detail during existing composition and skip redundant
 mip work on camera-only detail misses. The measured offscreen pointwise-adjustment
-workload now fits 8.333 ms at all three photo sizes; native GTK request-to-present
-latency and navigation with costly physical filters remain unqualified. Filters always execute at their
-original resolution before display reduction. Broad final resource/correctness
-checks remain necessary; repeated optimization of deferred regeneration workloads
-is not the next step.
+workload fits 8.333 ms at all three photo sizes. Subsequent 4K/61 MP native runs
+also keep camera CPU/GPU work below 2.3 ms, including a full-resolution Gaussian
+filter's completed output. The last checkpoint documents native latency and the
+remaining first-interaction gap. Filters always execute at their original
+resolution before display reduction. Repeated optimization of deferred
+regeneration workloads is not the next step.
 
 The budgets below are the original declaration and historical comparison basis.
 Their regeneration latency thresholds remain future targets; the current
@@ -2267,3 +2272,91 @@ binary and current build. Both failed logs are retained as
 This unrelated existing fixture failure is not counted as a pass or changed in
 this patch; the dedicated test validates actual thumbnail publication/history
 without traversing that unrelated layout assertion. No drag behavior changed.
+
+## Smooth navigation scope and latency investigation — 2026-09-15
+
+The user selected **smooth 120 Hz navigation; document latency**, replacing the
+strict input-to-present p99 ≤ 8.33 ms completion gate. Dirty-image/filter
+regeneration optimization remains deferred. This checkpoint changes measurement
+and documentation; it does not change production pacing or pixel processing.
+
+The reason for the reported input-latency regression is **not established**.
+The code's three-quarter-refresh scheduling lead dates to `1beaf671` on
+2026-09-11, before milestone 2. It explains part of current waiting time, but is
+not a newly introduced deadline. Earlier 8.226 ms and later 12–14 ms p99 reports
+also differ in viewport and uncontrolled input phase; those are not a matched
+before/after attribution. The known cache-refill and cold-thumbnail stalls have
+separate reproduction and fixes above. Neither fix proves the cause of the
+remaining first-interaction gap.
+
+### Reporting correction
+
+Wayland feedback for startup frames can arrive after the test clears its stats.
+The earlier report counted their old presentation timestamps in navigation
+cadence, including idle time before the first request. The report now restricts
+cadence/discards to measured frames queued after navigation starts. It retains
+every requested gesture in the denominator, reports missing requests by phase,
+and separately measures the interval from the first request to the first
+navigation presentation. Thus dropping/coalescing initial requests cannot make
+the startup gap disappear from the evidence. Original raw reports and summaries
+remain; corrected summaries have the suffix `-scoped-summary.json`.
+
+Three deterministic report tests pass, covering late startup feedback, initial
+unpresented input, measured discards/gaps, and repeated camera poses. Reproduce:
+`python3 -m unittest discover -s tools/performance -p test_photo_navigation_report.py`.
+The corrected four prior thumbnail runs have 0/16/23/2 missed slots, versus
+3/19/27/4 previously reported. Presented request counts and latency percentiles
+are unchanged; first navigation presentation takes 34.795/35.754/44.470/28.845 ms.
+All unmatched requests in those runs occur in the first `fit-pan-rotate` phase.
+
+### Bounded deadline experiment
+
+Eight serial private-Mutter runs use the same captured executable, 61 MP
+ProPhoto16, 3840×2160 at scale 2, and 960 requests over eight seconds. Each pair
+starts at a nominal input offset of 0, 2, 4 or 6 ms from the then-current display
+prediction. Feedback continues to update that prediction. The test-only control
+compares the production-equivalent 6.25 ms lead with a 3 ms lead; production
+remains unchanged. There are no overlapping builds or other test workloads.
+
+| Initial offset | Lead before presentation | Presented / 960 | Missed slots after first navigation presentation | First navigation presentation | Request-to-present p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 ms | 6.25 ms | 956 | 2 | 29.802 ms | 13.004 ms |
+| 0 ms | 3 ms | 956 | 1 | 30.283 ms | 7.701 ms |
+| 2 ms | 6.25 ms | 950 | 6 | 44.641 ms | 14.351 ms |
+| 2 ms | 3 ms | 956 | 1 | 28.971 ms | 4.672 ms |
+| 4 ms | 6.25 ms | 951 | 5 | 45.475 ms | 13.202 ms |
+| 4 ms | 3 ms | 953 | 3 | 44.653 ms | 9.539 ms |
+| 6 ms | 6.25 ms | 952 | 4 | 43.491 ms | 12.087 ms |
+| 6 ms | 3 ms | 950 | 5 | 45.296 ms | 16.049 ms |
+
+All camera frames have zero recomposition and zero source misses. Across all
+eight runs, CPU maximum is 1.871 ms and GPU maximum is 2.161 ms. Every request
+in each later phase (`half`, `native`, `double`, continuous `zoom`) is presented:
+768/768 per run. This is sustained 120 Hz evidence for those later phases, not
+permission to remove first-use behavior from acceptance. Synthetic input delivery
+is late by up to 18–34 ms at startup. Its cause remains unresolved; these records
+do not distinguish GTK startup callbacks, driver work and other scheduling.
+
+With the production-equivalent lead, median request-to-enqueue delay is
+5.293–7.857 ms and median enqueue-to-present delay is 6.187–6.219 ms. The 3 ms
+lead reduces the latter to 2.940–2.960 ms, but worsens total p99 for the 6 ms
+input-offset case. It is therefore not selected as a production fix. The old
+deadline also protects GTK overlay and wet-paint/transform work; a navigation
+comparison alone does not qualify changing it for drawing.
+
+Reproduce the native command above with `LAYER_NAVIGATION_PHASE_NS=0` (then
+2000000/4000000/6000000) and `LAYER_PACING_LEAD_NS=6250000` (then 3000000).
+Raw records, summaries and exit codes are `navigation-phase-*` and
+`navigation-phase-runs.json` under `artifacts/color-m2/final-performance/`.
+The captured executable is `navigation-phase-gtk-tests`, SHA-256
+`53ea0656b732ce5d5d8eeed8f70e507d434f4415003647207ef2b82b7a55485f`.
+Its source starts at `5717d571` plus the test-only pacing and initial-phase
+controls; the committed controls retain that behavior. No production renderer
+or scheduler change follows from this experiment.
+
+The strict latency threshold is closed as a user-approved scope change, not a
+passed measurement. GTK completion still requires resolving or bounding the
+first-interaction interruption and closing the remaining correctness audit.
+Other hosts, calibrated physical displays, unlike-monitor movement/spanning,
+constrained-memory 120 Hz qualification and future inactive-tab spilling remain
+outside the demonstrated platform envelope.
