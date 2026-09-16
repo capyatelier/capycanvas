@@ -1,269 +1,226 @@
-//! The opaque C codec owns all libjpeg state. Its setjmp never crosses a Rust
-//! frame; callbacks catch panics and return an error before C raises one.
-use std::ffi::{c_char, c_int, c_void};
-use std::io::{Read, Write};
+//! Pure Rust JPEG codec. This backend buffers full images; enforce admission
+//! limits before allocating pixels, and account for retained compressed input.
+use super::*;
+use libjpeg_turbo_rs::{ColorSpace, Decoder, Encoder as JpegEncoder, PixelFormat, Subsampling};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::ptr::NonNull;
 
-#[repr(C)]
-#[derive(Default)]
-pub(super) struct Info {
-    pub width: u32,
-    pub height: u32,
-    pub channels: u32,
-    pub precision: u32,
-    pub adobe: u32,
-    pub transform: u32,
-    pub multiple_scans: u32,
-}
-type ReadFn = unsafe extern "C" fn(*mut c_void, *mut u8, usize) -> isize;
-type WriteFn = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> c_int;
-unsafe extern "C" {
-    fn capy_jpeg_decoder_new(
-        read: ReadFn,
-        io: *mut c_void,
-        info: *mut Info,
-        error: *mut c_char,
-    ) -> *mut c_void;
-    fn capy_jpeg_decoder_start(codec: *mut c_void, budget: usize, error: *mut c_char) -> c_int;
-    fn capy_jpeg_decoder_row(
-        codec: *mut c_void,
-        row: *mut u8,
-        size: usize,
-        error: *mut c_char,
-    ) -> c_int;
-    fn capy_jpeg_decoder_finish(codec: *mut c_void, error: *mut c_char) -> c_int;
-    fn capy_jpeg_decoder_free(codec: *mut c_void);
-    fn capy_jpeg_encoder_new(
-        write: WriteFn,
-        io: *mut c_void,
-        w: u32,
-        h: u32,
-        channels: c_int,
-        quality: c_int,
-        density_unit: c_int,
-        density_x: u32,
-        density_y: u32,
-        error: *mut c_char,
-    ) -> *mut c_void;
-    fn capy_jpeg_encoder_marker(
-        codec: *mut c_void,
-        marker: c_int,
-        bytes: *const u8,
-        size: usize,
-        error: *mut c_char,
-    ) -> c_int;
-    fn capy_jpeg_encoder_row(
-        codec: *mut c_void,
-        row: *const u8,
-        size: usize,
-        error: *mut c_char,
-    ) -> c_int;
-    fn capy_jpeg_encoder_finish(codec: *mut c_void, error: *mut c_char) -> c_int;
-    fn capy_jpeg_encoder_free(codec: *mut c_void);
-}
+pub(super) const MEMORY_ERROR: &str = "JPEG exceeds the codec memory budget; use a smaller image";
+const SCRATCH_BYTES: usize = 2 * 1024 * 1024;
 
-struct Io<T> {
-    value: T,
-    error: Option<String>,
-}
-fn callback<T, V>(io: &mut Io<T>, f: impl FnOnce(&mut T) -> std::io::Result<V>) -> Option<V> {
-    if io.error.is_some() {
-        return None;
-    }
-    match catch_unwind(AssertUnwindSafe(|| {
-        f(&mut io.value).map_err(|e| e.to_string())
-    })) {
-        Ok(Ok(value)) => Some(value),
-        Ok(Err(error)) => {
-            io.error = Some(error);
-            None
-        }
+fn io<T>(operation: impl FnOnce() -> std::io::Result<T>) -> Result<T, String> {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result.map_err(err),
         Err(payload) => {
-            // A custom I/O implementation may even panic with a payload whose
-            // destructor panics. Neither unwind may leave this C callback.
             std::mem::forget(payload);
-            io.error = Some("JPEG I/O callback panicked".into());
-            None
+            Err("JPEG I/O callback panicked".into())
         }
     }
-}
-unsafe extern "C" fn read<T: Read>(opaque: *mut c_void, out: *mut u8, len: usize) -> isize {
-    // Both pointers belong to the live codec call: Io is boxed, and C supplies
-    // its fixed writable input buffer. Read cannot outlive this callback.
-    let io = unsafe { &mut *opaque.cast::<Io<T>>() };
-    let out = unsafe { std::slice::from_raw_parts_mut(out, len) };
-    callback(io, |r| {
-        loop {
-            match r.read(out) {
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                result => return result,
-            }
-        }
-    })
-    .map_or(-1, |n| n as isize)
-}
-unsafe extern "C" fn write<T: Write>(opaque: *mut c_void, bytes: *const u8, len: usize) -> c_int {
-    let io = unsafe { &mut *opaque.cast::<Io<T>>() };
-    let bytes = unsafe { std::slice::from_raw_parts(bytes, len) };
-    c_int::from(callback(io, |w| w.write_all(bytes)).is_some())
-}
-fn message<T>(io: &mut Io<T>, bytes: &[u8; 512]) -> String {
-    io.error.take().unwrap_or_else(|| {
-        let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
-        if end == 0 {
-            "JPEG codec did not complete the requested operation".into()
-        } else {
-            String::from_utf8_lossy(&bytes[..end]).into_owned()
-        }
-    })
 }
 
-pub(super) struct Decoder<R> {
-    codec: NonNull<c_void>,
-    io: Box<Io<R>>,
-    failed: bool,
-    pub info: Info,
-}
-impl<R: Read> Decoder<R> {
-    pub fn new(input: R) -> Result<Self, String> {
-        let mut io = Box::new(Io {
-            value: input,
-            error: None,
-        });
-        let mut info = Info::default();
-        let mut error = [0u8; 512];
-        let codec = unsafe {
-            capy_jpeg_decoder_new(
-                read::<R>,
-                (&mut *io as *mut Io<R>).cast(),
-                &mut info,
-                error.as_mut_ptr().cast(),
-            )
-        };
-        let codec = NonNull::new(codec).ok_or_else(|| message(&mut io, &error))?;
-        Ok(Self {
-            codec,
-            io,
-            info,
-            failed: false,
-        })
-    }
-    fn call(&mut self, f: impl FnOnce(*mut c_void, *mut c_char) -> c_int) -> Result<(), String> {
-        if self.failed {
-            return Err("JPEG codec is unavailable after a failed operation".into());
+pub(super) fn read_bounded(mut input: impl Read, budget: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = io(|| {
+            loop {
+                match input.read(&mut buffer) {
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    result => break result,
+                }
+            }
+        })?;
+        if count == 0 {
+            return Ok(bytes);
         }
-        let mut error = [0u8; 512];
-        if f(self.codec.as_ptr(), error.as_mut_ptr().cast()) != 0 {
-            Ok(())
-        } else {
-            self.failed = true;
-            Err(message(&mut self.io, &error))
+        let needed = bytes
+            .len()
+            .checked_add(count)
+            .filter(|n| *n <= budget)
+            .ok_or(MEMORY_ERROR)?;
+        if needed > bytes.capacity() {
+            let capacity = needed.max(bytes.capacity().saturating_mul(2)).min(budget);
+            bytes
+                .try_reserve_exact(capacity - bytes.len())
+                .map_err(|_| MEMORY_ERROR)?;
         }
-    }
-    pub fn start(&mut self, budget: usize) -> Result<(), String> {
-        self.call(|c, e| unsafe { capy_jpeg_decoder_start(c, budget, e) })
-    }
-    pub fn row(&mut self, row: &mut [u8]) -> Result<(), String> {
-        self.call(|c, e| unsafe { capy_jpeg_decoder_row(c, row.as_mut_ptr(), row.len(), e) })
-    }
-    pub fn finish(&mut self) -> Result<(), String> {
-        self.call(|c, e| unsafe { capy_jpeg_decoder_finish(c, e) })
+        bytes.extend_from_slice(&buffer[..count]);
     }
 }
-impl<R> Drop for Decoder<R> {
-    fn drop(&mut self) {
-        // Destruction is safe even after an error, never uses I/O callbacks,
-        // and runs before the boxed I/O owner is released.
-        unsafe { capy_jpeg_decoder_free(self.codec.as_ptr()) }
+
+pub(super) fn decoder(
+    bytes: &[u8],
+    input_capacity: usize,
+    limits: DecodeLimits,
+) -> Result<Decoder<'_>, String> {
+    // Marker parsing retains selected metadata and coefficient/table snapshots.
+    let budget = limits
+        .codec_bytes
+        .checked_sub(
+            input_capacity
+                .saturating_mul(4)
+                .saturating_add(SCRATCH_BYTES),
+        )
+        .ok_or(MEMORY_ERROR)?;
+    let mut decoder = Decoder::new_with_limits(
+        bytes,
+        libjpeg_turbo_rs::DecodeLimits {
+            max_width: limits.dimension.min(32768) as usize,
+            max_height: limits.dimension.min(32768) as usize,
+            max_scans: 256,
+            max_memory: Some(budget as u64),
+            ..Default::default()
+        },
+    )
+    .map_err(err)?;
+    decoder.set_stop_on_warning(true);
+    decoder.set_dct_method(libjpeg_turbo_rs::DctMethod::IsLow);
+    Ok(decoder)
+}
+
+pub(super) fn channels(
+    decoder: &Decoder<'_>,
+    adobe: Option<u8>,
+) -> Result<(SourceChannels, PixelFormat), String> {
+    match decoder.jpeg_color_space() {
+        ColorSpace::Grayscale => Ok((SourceChannels::Gray, PixelFormat::Grayscale)),
+        ColorSpace::YCbCr | ColorSpace::Rgb => Ok((SourceChannels::Rgb, PixelFormat::Rgb)),
+        ColorSpace::Cmyk | ColorSpace::Ycck if matches!(adobe, Some(0 | 2)) => {
+            Ok((SourceChannels::Cmyk, PixelFormat::Cmyk))
+        }
+        ColorSpace::Cmyk | ColorSpace::Ycck => {
+            Err("This CMYK JPEG needs an explicit sample-polarity interpretation".into())
+        }
+        _ => Err("Unsupported JPEG color encoding".into()),
     }
 }
 
 pub(super) struct Encoder<W> {
-    codec: NonNull<c_void>,
-    io: Box<Io<W>>,
-    failed: bool,
+    output: W,
+    pixels: Vec<u8>,
+    extent: [usize; 2],
+    format: PixelFormat,
+    quality: u8,
+    resolution: Option<layer_core::ImageResolution>,
+    icc: Vec<u8>,
+    exif: Vec<u8>,
+    row: usize,
+    finished: bool,
+    budget: usize,
+    pixel_working_bytes: usize,
 }
 impl<W: Write> Encoder<W> {
     pub fn new(
         output: W,
-        [w, h]: [u32; 2],
+        extent: [u32; 2],
         channels: usize,
         quality: u8,
         resolution: Option<layer_core::ImageResolution>,
+        budget: usize,
     ) -> Result<Self, String> {
-        let (unit, [x, y]) = resolution
-            .map(layer_core::ImageResolution::jfif_density)
-            .transpose()?
-            .unwrap_or((0, [1, 1]));
-        let mut io = Box::new(Io {
-            value: output,
-            error: None,
-        });
-        let mut error = [0u8; 512];
-        let codec = unsafe {
-            capy_jpeg_encoder_new(
-                write::<W>,
-                (&mut *io as *mut Io<W>).cast(),
-                w,
-                h,
-                channels as c_int,
-                quality as c_int,
-                c_int::from(unit),
-                u32::from(x),
-                u32::from(y),
-                error.as_mut_ptr().cast(),
-            )
+        super::validate_extent(extent, 32768)?;
+        if !(1..=100).contains(&quality) {
+            return Err("JPEG quality must be between 1 and 100".into());
+        }
+        let format = match channels {
+            1 => PixelFormat::Grayscale,
+            3 => PixelFormat::Rgb,
+            4 => PixelFormat::Cmyk,
+            _ => return Err("Unsupported JPEG color encoding".into()),
         };
-        let codec = NonNull::new(codec).ok_or_else(|| message(&mut io, &error))?;
+        let extent = extent.map(|v| v as usize);
+        let len = extent[0]
+            .checked_mul(extent[1])
+            .and_then(|n| n.checked_mul(channels))
+            .ok_or(MEMORY_ERROR)?;
+        // Reserve estimated room for input, coding planes, entropy output and
+        // metadata injection copies, within the caller's available-memory budget.
+        let pixel_working_bytes = len
+            .checked_mul(8)
+            .and_then(|v| v.checked_add(SCRATCH_BYTES))
+            .ok_or(MEMORY_ERROR)?;
+        if pixel_working_bytes > budget {
+            return Err(MEMORY_ERROR.into());
+        }
+        if let Some(resolution) = resolution {
+            resolution.jfif_density()?;
+        }
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(len).map_err(|_| MEMORY_ERROR)?;
+        pixels.resize(len, 0);
         Ok(Self {
-            codec,
-            io,
-            failed: false,
+            output,
+            pixels,
+            extent,
+            format,
+            quality,
+            resolution,
+            icc: Vec::new(),
+            exif: Vec::new(),
+            row: 0,
+            finished: false,
+            budget,
+            pixel_working_bytes,
         })
     }
-    fn call(&mut self, f: impl FnOnce(*mut c_void, *mut c_char) -> c_int) -> Result<(), String> {
-        if self.failed {
-            return Err("JPEG codec is unavailable after a failed operation".into());
-        }
-        let mut error = [0u8; 512];
-        if f(self.codec.as_ptr(), error.as_mut_ptr().cast()) != 0 {
-            Ok(())
-        } else {
-            self.failed = true;
-            Err(message(&mut self.io, &error))
-        }
-    }
     pub fn profile(&mut self, profile: &[u8]) -> Result<(), String> {
-        const PAYLOAD: usize = 65519;
-        let count: u8 = profile
-            .len()
-            .div_ceil(PAYLOAD)
-            .try_into()
-            .map_err(|_| "JPEG ICC profile is too large")?;
-        for (index, chunk) in profile.chunks(PAYLOAD).enumerate() {
-            let mut data = Vec::with_capacity(chunk.len() + 14);
-            data.extend_from_slice(b"ICC_PROFILE\0");
-            data.extend_from_slice(&[index as u8 + 1, count]);
-            data.extend_from_slice(chunk);
-            self.marker(2, &data)?;
+        if profile.len() > crate::MAX_ICC_BYTES.min(255 * 65519) {
+            return Err("JPEG ICC profile is too large".into());
         }
+        self.check_metadata_budget(profile.len(), self.exif.len())?;
+        self.icc = profile.to_vec();
         Ok(())
     }
     pub fn marker(&mut self, marker: u8, data: &[u8]) -> Result<(), String> {
-        self.call(|c, e| unsafe {
-            capy_jpeg_encoder_marker(c, c_int::from(marker), data.as_ptr(), data.len(), e)
-        })
+        if marker != 1 || !data.starts_with(b"Exif\0\0") || data.len() > 65533 {
+            return Err("Unsupported JPEG output marker".into());
+        }
+        self.check_metadata_budget(self.icc.len(), data.len())?;
+        self.exif = data[6..].to_vec();
+        Ok(())
+    }
+    fn check_metadata_budget(&self, icc: usize, exif: usize) -> Result<(), String> {
+        // Retained metadata, marker construction and final output insertion can
+        // coexist. Profile bytes are not necessarily small relative to pixels.
+        let total = self
+            .pixel_working_bytes
+            .saturating_add(icc.saturating_mul(4))
+            .saturating_add(exif.saturating_mul(4));
+        if total > self.budget {
+            return Err(MEMORY_ERROR.into());
+        }
+        Ok(())
     }
     pub fn row(&mut self, row: &[u8]) -> Result<(), String> {
-        self.call(|c, e| unsafe { capy_jpeg_encoder_row(c, row.as_ptr(), row.len(), e) })
+        let len = self.extent[0] * self.format.bytes_per_pixel();
+        if self.finished || self.row >= self.extent[1] || row.len() != len {
+            return Err("Invalid JPEG output row".into());
+        }
+        self.pixels[self.row * len..(self.row + 1) * len].copy_from_slice(row);
+        self.row += 1;
+        Ok(())
     }
     pub fn finish(&mut self) -> Result<(), String> {
-        self.call(|c, e| unsafe { capy_jpeg_encoder_finish(c, e) })
-    }
-}
-impl<W> Drop for Encoder<W> {
-    fn drop(&mut self) {
-        unsafe { capy_jpeg_encoder_free(self.codec.as_ptr()) }
+        if self.finished {
+            return Err("JPEG codec is unavailable after a completed or failed operation".into());
+        }
+        self.finished = true;
+        if self.row != self.extent[1] {
+            return Err("Incomplete JPEG output".into());
+        }
+        let mut encoder =
+            JpegEncoder::new(&self.pixels, self.extent[0], self.extent[1], self.format)
+                .quality(self.quality)
+                .subsampling(Subsampling::S444)
+                .force_baseline(true)
+                .icc_profile(&self.icc);
+        if !self.exif.is_empty() {
+            encoder = encoder.exif_data(&self.exif);
+        }
+        if let Some(resolution) = self.resolution {
+            let (unit, [x, y]) = resolution.jfif_density()?;
+            encoder = encoder.density(unit, x, y);
+        }
+        let bytes = encoder.encode().map_err(err)?;
+        io(|| self.output.write_all(&bytes))
     }
 }

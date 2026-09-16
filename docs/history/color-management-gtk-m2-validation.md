@@ -6400,3 +6400,61 @@ and performance qualification: native Float32/integer-backed benchmark coverage,
 fresh fixed/parent/current comparisons, combined memory/admission limits and
 the named photo/multiple-document/background-job matrix. Display/device limits
 above must stay explicit. Other platform hosts still require user approval.
+
+## Portable JPEG/CMM integration checkpoint — 2026-09-15
+
+The concurrent migration in this worktree replaces the C JPEG shim and LittleCMS
+application dependency with `libjpeg-turbo-rs` 0.8.0 and `moxcms` 0.9.1. The user
+explicitly authorized committing that agent's changes. This is an integration
+checkpoint, not final GTK milestone-2 acceptance. See
+[portable-color.md](../development/portable-color.md) for the implementation's
+admission policy and unsupported operations.
+
+Current-source color validation passes all 63 tests across two invocations:
+`portable-color-final-all-tests.log` has 62 passes and one fixture-configuration
+failure (missing `LAYER_TEST_WORKING_PROFILES`); rerunning that exact test with
+`/usr/share/color/icc/colord` passes in
+`portable-color-final-installed-profiles.log`. The other fixture variables were:
+
+- `LAYER_TEST_CMYK_PROFILE=/usr/share/color/icc/krita/cmyk.icm`
+- `LAYER_TEST_CMYK_REFERENCE=$PWD/artifacts/color-m2/final-performance/portable-icc-reference`
+- `LAYER_TEST_JPEG_FIXTURES=$PWD/artifacts/color-m2/final-performance/portable-jpeg-fixtures`
+
+Commands: `cargo test -p layer-color --offline -- --include-ignored --test-threads=1 --nocapture`,
+then the exact `icc::description::tests::installed_working_profile_suggestions`
+test with `--ignored --exact --nocapture`. Do not omit the fourth fixture variable
+when repeating the complete suite. Prior combined runs pass 76 core, 395 UI and
+26 host tests (one unrelated host hardware test remains ignored).
+
+`/usr/bin/python3 tools/validation/jpeg_interchange.py verify
+artifacts/color-m2/final-performance/portable-jpeg-fixtures` independently decodes
+the exported JPEGs with Pillow 12.3.0. CMYK/YCCK maximum ink-code differences are
+0/1 and original profile bytes agree. The external Rust tests also cover
+progressive RGB/gray, EXIF orientation and 60 MP baseline/progressive admission.
+
+The recorded release integration binaries pass 13 GPU snapshot cases and nine
+GTK workflows: New/photo master, document color/history/copy, export resize and
+cancel, native document files, color preferences, source repair, rasterization,
+managed canvas/UI agreement, and wide-color GPU failure recovery. Their source
+hashes and binaries are recorded in `portable-gtk-integration-provenance.json`.
+Subsequent JPEG encoder metadata-admission checks, an example's Cargo test flag,
+and a documentation comment are covered by the final color run above; do not
+misdescribe the earlier GTK binary as byte-identical to this final source.
+
+Capability changes require explicit qualification:
+
+- Black point compensation is unavailable. Defaults are off, GTK switches are
+  disabled with a disclosure, and explicit adapter requests fail. Earlier BPC
+  acceptance evidence does not apply to this implementation.
+- Absolute-intent conversion between non-matrix profiles with different media
+  whites remains unsupported. Independent CMYK comparisons pass the declared
+  2% ink/linear-RGB tolerance across four intents; this is interoperability
+  evidence, not proof of imperceptible differences for arbitrary print profiles.
+- The Rust JPEG codec buffers complete images. Admission uses current memory
+  headroom and estimates; it is not streaming, a reservation against concurrent
+  jobs, or a whole-editor memory guarantee. CPU/GPU resource and operation-latency
+  qualification remains separate.
+
+All named logs/reference outputs are local under
+`artifacts/color-m2/final-performance/`. Other platform host integration remains
+outside the GTK approval boundary.

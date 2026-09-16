@@ -12,11 +12,10 @@ ports are compared.
 ## Prerequisites
 
 Install a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`,
-GTK4 and libadwaita development packages, Wayland development libraries, and
-libjpeg-turbo 3.1 or later development headers/libraries (Fedora:
-`libjpeg-turbo-devel`). The shared photo codec uses the native
-scanline API through a small C boundary; JPEG development files must be visible
-to `pkg-config`. ICC transforms use the existing `lcms2` Rust dependency.
+GTK4 and libadwaita development packages, and Wayland development libraries.
+JPEG decoding/encoding uses `libjpeg-turbo-rs`; ICC color management uses `moxcms`.
+Neither requires libjpeg-turbo or LittleCMS development packages. See the
+[portable color backend](portable-color.md) for memory policy and compatibility.
 Package names vary by distribution. GTK 4.22 or later is required for the shared
 SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features are declared in
 [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
@@ -24,7 +23,7 @@ SVG icon paintables; the current stack uses libadwaita 1.9. Enabled API features
 Check the libraries visible to the build:
 
 ```bash
-pkg-config --modversion gtk4 libadwaita-1 wayland-client libjpeg
+pkg-config --modversion gtk4 libadwaita-1 wayland-client
 ```
 
 Running the canvas requires a Wayland session and a hardware Vulkan driver with
@@ -197,8 +196,8 @@ check covers these boundaries, reopen and continued painting.
 
 Edit → Assign Profile, Convert Color Space and Change Bit Depth prepare a complete
 Before/After comparison before changing the drawing. Assign retains committed RGB
-numbers; Convert transforms editable backing with the selected intent and black
-point compensation, or creates a separate flattened copy. Retained originals keep
+numbers; Convert transforms editable backing with the selected intent, or creates
+a separate flattened copy. Black point compensation is currently unavailable. Retained originals keep
 their independent profiles. Depth changes offer optional dithering for 8-bit RGB.
 The GPU prepares the destination configuration before the document and history
 change together. Cancel discards pending work; Undo/Redo restores exact backing and
@@ -243,8 +242,7 @@ dist/capycanvas-linux/bin/capycanvas
 ```
 
 The staging directory includes the executable, desktop launcher, icon, runtime
-filters and project notices. GTK/libadwaita and libjpeg-turbo remain system
-dependencies. The script
+filters and project notices. GTK/libadwaita remain system dependencies. The script
 does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 

@@ -3,14 +3,19 @@ name = "layer-color"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Native ICC transforms and profiled SDR image interchange"
+description = "Portable ICC transforms and profiled SDR image interchange"
 
 [dependencies]
 layer-core = { path = "../layer-core" }
-lcms2 = "=6.2.0"
+libjpeg-turbo-rs = "=0.8.0"
+moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }
 png = "=0.18.1"
 tiff = "=0.10.3"
 
-[build-dependencies]
-cc = "1"
-pkg-config = "0.3"
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }
+
+[[example]]
+name = "portable_smoke"
+crate-type = ["cdylib"]
+test = false

@@ -727,12 +727,12 @@ fn native_document_files() {
                 let dither = find_named(options.upcast_ref(), "export-dither").unwrap()
                     .downcast::<adw::SwitchRow>().unwrap();
                 assert_eq!(intent.selected(), 0);
-                assert!(bpc.is_active());
+                assert!(!bpc.is_active());
                 assert!(!dither.is_active());
                 intent.set_selected(3);
                 assert!(!bpc.is_sensitive());
                 intent.set_selected(0);
-                assert!(bpc.is_sensitive());
+                assert!(!bpc.is_sensitive());
                 bpc.set_active(false);
                 dither.set_active(true);
                 pump(350);

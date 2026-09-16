@@ -197,7 +197,9 @@ pub(super) async fn run(
     group.add(&intent);
     let bpc = adw::SwitchRow::builder()
         .title("Black point compensation")
-        .active(true)
+        .subtitle("Currently unavailable")
+        .active(false)
+        .sensitive(false)
         .visible(operation == DocumentColorOperation::Convert)
         .build();
     bpc.set_widget_name("document-color-bpc");
@@ -274,7 +276,7 @@ pub(super) async fn run(
                 RenderingIntent::Saturation,
                 RenderingIntent::AbsoluteColorimetric,
             ][intent.selected() as usize];
-            bpc.set_sensitive(intent != RenderingIntent::AbsoluteColorimetric);
+            bpc.set_sensitive(false);
             dither.set_sensitive(depth == IntegerDepth::U8);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
             dialog.set_response_label("apply", if flattened { "Create Copy" } else { "Apply" });

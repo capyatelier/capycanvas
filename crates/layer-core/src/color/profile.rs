@@ -54,6 +54,8 @@ pub enum RenderingIntent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConversionOptions {
     pub intent: RenderingIntent,
+    /// Reserved for document compatibility. The portable CMM currently rejects
+    /// explicit black-point compensation rather than silently ignoring it.
     pub black_point_compensation: bool,
 }
 
@@ -61,7 +63,7 @@ impl Default for ConversionOptions {
     fn default() -> Self {
         Self {
             intent: RenderingIntent::RelativeColorimetric,
-            black_point_compensation: true,
+            black_point_compensation: false,
         }
     }
 }

@@ -6,8 +6,6 @@ use layer_core::{color::source::*, raster::TILE_SIZE};
 pub struct WorkingDecoder {
     source: SourceInterpretation,
     kind: DecoderKind,
-    // LCMS handles must be destroyed before their owning context.
-    _context: ThreadContext,
 }
 enum DecoderKind {
     Builtin {
@@ -26,7 +24,7 @@ impl WorkingDecoder {
         destination: RgbSpace,
         options: ConversionOptions,
     ) -> Result<Self, String> {
-        let context = ThreadContext::new();
+        validate_options(options)?;
         let kind = if let ColorProfile::Builtin(space) = source.profile {
             if source.channels == SourceChannels::Cmyk {
                 return Err("CMYK source samples require an embedded CMYK profile".into());
@@ -38,7 +36,7 @@ impl WorkingDecoder {
             if options.intent == RenderingIntent::AbsoluteColorimetric
                 && space.white() != destination.white()
             {
-                Self::icc_kind(&context, source, destination, options)?
+                Self::icc_kind(source, destination, options)?
             } else {
                 DecoderKind::Builtin {
                     transfer: (0..=source.depth.maximum())
@@ -53,23 +51,21 @@ impl WorkingDecoder {
                 }
             }
         } else {
-            Self::icc_kind(&context, source, destination, options)?
+            Self::icc_kind(source, destination, options)?
         };
         Ok(Self {
             source: source.clone(),
             kind,
-            _context: context,
         })
     }
 
     fn icc_kind(
-        context: &ThreadContext,
         source: &SourceInterpretation,
         destination: RgbSpace,
         options: ConversionOptions,
     ) -> Result<DecoderKind, String> {
-        let input = open(context, &source.profile)?;
-        let output = linear_profile(context, destination)?;
+        let input = open(&source.profile)?;
+        let output = linear_profile(destination)?;
         // Go straight from source samples to linear destination coordinates.
         // An intermediate encoded/bounded sRGB image would lose wide-gamut RGB.
         match (channels(&input)?, source.channels) {
@@ -78,44 +74,15 @@ impl WorkingDecoder {
                 if matches!(source.profile, ColorProfile::Builtin(_))
                     || matches!(source.channels, SourceChannels::Rgb | SourceChannels::Rgba) =>
             {
-                Ok(DecoderKind::Rgb(
-                    Transform::new_flags_context(
-                        context,
-                        &input,
-                        PixelFormat::RGBA_FLT,
-                        &output,
-                        PixelFormat::RGBA_FLT,
-                        intent(options.intent),
-                        flags(options) | Flags::COPY_ALPHA,
-                    )
-                    .map_err(error)?,
-                ))
+                Ok(DecoderKind::Rgb(CompiledTransform::new(
+                    &input, &output, options,
+                )?))
             }
-            (ProfileChannels::Gray, SourceChannels::Gray | SourceChannels::GrayAlpha) => {
-                Ok(DecoderKind::Gray(
-                    Transform::new_flags_context(
-                        context,
-                        &input,
-                        PixelFormat::GRAY_FLT,
-                        &output,
-                        PixelFormat::RGBA_FLT,
-                        intent(options.intent),
-                        flags(options),
-                    )
-                    .map_err(error)?,
-                ))
-            }
+            (ProfileChannels::Gray, SourceChannels::Gray | SourceChannels::GrayAlpha) => Ok(
+                DecoderKind::Gray(CompiledTransform::new(&input, &output, options)?),
+            ),
             (ProfileChannels::Cmyk, SourceChannels::Cmyk) => Ok(DecoderKind::Cmyk(
-                Transform::new_flags_context(
-                    context,
-                    &input,
-                    PixelFormat::CMYK_FLT,
-                    &output,
-                    PixelFormat::RGBA_FLT,
-                    intent(options.intent),
-                    flags(options),
-                )
-                .map_err(error)?,
+                CompiledTransform::new(&input, &output, options)?,
             )),
             _ => Err("Source channels disagree with the embedded ICC profile".into()),
         }
@@ -264,7 +231,7 @@ impl WorkingDecoder {
         decode(tile, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));
-        let [x, y] = [origin[0].clone()?, origin[1].clone()?];
+        let [x, y] = [origin[0]?, origin[1]?];
         for (i, pixel) in output.iter_mut().enumerate() {
             if x + i as u32 % TILE_SIZE >= source.extent[0]
                 || y + i as u32 / TILE_SIZE >= source.extent[1]

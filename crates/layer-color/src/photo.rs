@@ -8,15 +8,21 @@ use std::io::{BufRead, Read, Seek, Write};
 mod jpeg_codec;
 mod jpeg_io;
 mod jpeg_markers;
-mod orientation;
+mod jpeg_mpf;
+mod memory;
+pub use memory::PhotoMemoryBudget;
 mod metadata;
 #[cfg(test)]
 mod metadata_tests;
-#[cfg(test)]
-mod tiff_policy_tests;
+mod orientation;
 mod png_io;
 mod tiff_io;
-pub use jpeg_io::{read_jpeg, write_jpeg, write_jpeg_rows};
+#[cfg(test)]
+mod tiff_policy_tests;
+pub use jpeg_io::{
+    JpegEncodeOptions, read_jpeg, write_jpeg, write_jpeg_rows, write_jpeg_rows_with_options,
+    write_jpeg_with_options,
+};
 pub use png_io::{read_png, write_png, write_png_rows};
 pub use tiff_io::{read_tiff, write_tiff, write_tiff_rows};
 
@@ -28,20 +34,28 @@ pub struct DecodeLimits {
 }
 impl Default for DecodeLimits {
     fn default() -> Self {
+        Self::from_memory_budget(PhotoMemoryBudget::current())
+    }
+}
+impl DecodeLimits {
+    pub fn from_memory_budget(budget: PhotoMemoryBudget) -> Self {
         Self {
-            source_bytes: 512 * 1024 * 1024,
-            codec_bytes: 128 * 1024 * 1024,
+            source_bytes: budget.source_bytes,
+            codec_bytes: budget.decode_bytes,
             dimension: 32768,
         }
     }
 }
 impl DecodeLimits {
     fn extent(self, extent: [u32; 2]) -> Result<(), String> {
-        if extent.contains(&0) || extent.iter().any(|v| *v > self.dimension.min(32768)) {
-            return Err("This image exceeds the dimension limit".into());
-        }
-        Ok(())
+        validate_extent(extent, self.dimension)
     }
+}
+fn validate_extent(extent: [u32; 2], dimension: u32) -> Result<(), String> {
+    if extent.contains(&0) || extent.iter().any(|v| *v > dimension.min(32768)) {
+        return Err("This image exceeds the dimension limit".into());
+    }
+    Ok(())
 }
 
 /// Recognition uses file signatures; an extension never changes interpretation.
@@ -108,7 +122,7 @@ fn output_row_bytes(
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
 ) -> Result<usize, String> {
-    DecodeLimits::default().extent(extent)?;
+    validate_extent(extent, 32768)?;
     check_channels(interpretation.channels, &interpretation.profile)?;
     Ok(extent[0] as usize * interpretation.pixel_bytes())
 }
@@ -123,8 +137,8 @@ fn err(error: impl std::fmt::Display) -> String {
 }
 
 #[cfg(test)]
+mod jpeg_tests;
+#[cfg(test)]
 mod output_tests;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod jpeg_tests;

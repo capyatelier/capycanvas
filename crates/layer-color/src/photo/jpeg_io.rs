@@ -1,45 +1,51 @@
-use super::jpeg_codec::{Decoder, Encoder};
+use super::jpeg_codec::{self, Encoder};
 use super::*;
 use std::io::{BufReader, SeekFrom};
 
 pub fn read_jpeg(mut input: impl Read + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
     let origin = input.stream_position().map_err(err)?;
     // Bound preflight work independently of working pixels. The compressed
-    // stream is not retained; this ceiling also bounds arbitrary APP padding.
-    let max_input = limits.source_bytes.saturating_add(limits.codec_bytes);
-    let metadata = super::jpeg_markers::read(BufReader::new((&mut input).take(max_input as u64)))?;
+    // stream and full decoded pixels are budgeted by the portable backend.
+    let max_input = limits.codec_bytes;
+    let mut preflight = (&mut input).take(max_input as u64);
+    let metadata = super::jpeg_markers::read(BufReader::new(&mut preflight)).map_err(|error| {
+        if preflight.limit() == 0 {
+            jpeg_codec::MEMORY_ERROR.into()
+        } else {
+            error
+        }
+    })?;
     input.seek(SeekFrom::Start(origin)).map_err(err)?;
-    let mut decoder = Decoder::new(input)?;
-    let extent = [decoder.info.width, decoder.info.height];
+    let bytes = jpeg_codec::read_bounded(input, limits.codec_bytes)?;
+    let mut decoder = jpeg_codec::decoder(&bytes, bytes.capacity(), limits)?;
+    let extent = [
+        u32::from(decoder.header().width),
+        u32::from(decoder.header().height),
+    ];
     limits.extent(extent)?;
-    if decoder.info.precision != 8 {
+    if decoder.header().precision != 8 {
         return Err("SDR JPEG import requires 8-bit samples".into());
     }
-    let channels = match decoder.info.channels {
-        1 => SourceChannels::Gray,
-        3 => SourceChannels::Rgb,
-        4 if decoder.info.adobe != 0 && matches!(decoder.info.transform, 0 | 2) => {
-            SourceChannels::Cmyk
-        }
-        4 => return Err("This CMYK JPEG needs an explicit sample-polarity interpretation".into()),
-        _ => return Err("Unsupported JPEG color encoding".into()),
-    };
+    let (channels, format) = jpeg_codec::channels(&decoder, metadata.adobe_transform)?;
+    decoder.set_output_format(format);
+    decoder
+        .output_buffer_size()
+        .map_err(|e| format!("{}: {e}", jpeg_codec::MEMORY_ERROR))?;
     let interpretation = interpretation(channels, IntegerDepth::U8, metadata.profile)?;
     let mut builder = SourceBuilder::new(extent, interpretation, limits.source_bytes)?;
-    decoder.start(limits.codec_bytes)?;
+    let image = decoder.decode_image().map_err(err)?;
     let mut row = vec![0; extent[0] as usize * channels.count()];
-    for _ in 0..extent[1] {
-        decoder.row(&mut row)?;
+    for samples in image.data.chunks_exact(row.len()) {
+        row.copy_from_slice(samples);
         if channels == SourceChannels::Cmyk {
-            // Adobe CMYK/YCCK uses inverted ink values. Retained source/CMM
-            // channels use conventional 0 = no ink, 255 = full ink.
+            // JPEG's Adobe ink values are inverted; retained source samples use
+            // conventional 0 = no ink, 255 = full ink on every platform.
             for v in &mut row {
                 *v = 255 - *v;
             }
         }
         builder.push_row(&row)?;
     }
-    decoder.finish()?;
     let mut source = builder.finish()?;
     source.resolution = metadata.resolution;
     super::orientation::normalize(
@@ -49,31 +55,78 @@ pub fn read_jpeg(mut input: impl Read + Seek, limits: DecodeLimits) -> Result<So
     )
 }
 
+/// JPEG output admission settings. Hosts can pass their current process memory
+/// allowance instead of relying on a native query or the browser fallback.
+#[derive(Clone, Copy, Debug)]
+pub struct JpegEncodeOptions {
+    pub quality: u8,
+    pub codec_bytes: usize,
+}
+impl JpegEncodeOptions {
+    pub fn from_memory_budget(quality: u8, budget: PhotoMemoryBudget) -> Self {
+        Self {
+            quality,
+            codec_bytes: budget.encode_bytes,
+        }
+    }
+}
+
 pub fn write_jpeg(output: impl Write, source: &SourceImage, quality: u8) -> Result<(), String> {
+    write_jpeg_with_options(
+        output,
+        source,
+        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
+    )
+}
+
+pub fn write_jpeg_with_options(
+    output: impl Write,
+    source: &SourceImage,
+    options: JpegEncodeOptions,
+) -> Result<(), String> {
     source.validate()?;
     let mut rows = source.rows();
-    write_jpeg_rows(
+    write_jpeg_rows_with_options(
         output,
         source.extent,
         &source.interpretation,
         source.resolution,
-        quality,
+        options,
         |y, row| rows.read(y, row),
     )
 }
 
 /// Encoded straight 8-bit RGB, gray or CMYK rows. The caller performs color
 /// conversion and explicitly flattens transparency before this opaque format.
-/// Baseline coding uses full chroma resolution at every quality, and bounded
-/// row/I/O storage. Cancellation/errors abort without requesting further rows.
+/// Baseline coding uses full chroma resolution. The Rust backend buffers pixels
+/// within the available-memory budget. Provider errors stop requesting rows.
 pub fn write_jpeg_rows(
     output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     resolution: Option<layer_core::ImageResolution>,
     quality: u8,
+    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    write_jpeg_rows_with_options(
+        output,
+        extent,
+        interpretation,
+        resolution,
+        JpegEncodeOptions::from_memory_budget(quality, PhotoMemoryBudget::current()),
+        read_row,
+    )
+}
+
+pub fn write_jpeg_rows_with_options(
+    output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    resolution: Option<layer_core::ImageResolution>,
+    options: JpegEncodeOptions,
     mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
 ) -> Result<(), String> {
+    let quality = options.quality;
     let row_bytes = output_row_bytes(extent, interpretation)?;
     if interpretation.depth != IntegerDepth::U8 {
         return Err("JPEG output requires 8-bit samples".into());
@@ -98,6 +151,7 @@ pub fn write_jpeg_rows(
         interpretation.channels.count(),
         quality,
         resolution,
+        options.codec_bytes,
     )?;
     if let Some(resolution) = resolution {
         encoder.marker(1, &super::metadata::exif_output(resolution)?)?;

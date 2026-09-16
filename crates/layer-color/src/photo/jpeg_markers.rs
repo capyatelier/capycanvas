@@ -6,6 +6,7 @@ use std::io::BufRead;
 
 #[derive(Default)]
 pub(super) struct Metadata {
+    pub adobe_transform: Option<u8>,
     pub profile: Option<Vec<u8>>,
     pub orientation: Option<u16>,
     pub resolution: Option<layer_core::ImageResolution>,
@@ -78,6 +79,15 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
                 return Err("JPEG exceeds the supported scan limit".into());
             }
         }
+        if marker == 0xee && segment.starts_with(b"Adobe") {
+            if segment.len() < 12 {
+                return Err("Incomplete JPEG Adobe marker".into());
+            }
+            if result.adobe_transform.is_some_and(|v| v != segment[11]) {
+                return Err("Conflicting JPEG Adobe transforms".into());
+            }
+            result.adobe_transform = Some(segment[11]);
+        }
         if marker == 0xe2 && segment.starts_with(b"ICC_PROFILE\0") {
             if segment.len() < 14 {
                 return Err("Incomplete JPEG ICC chunk".into());
@@ -98,10 +108,13 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
             chunks.insert(sequence, segment[14..].to_vec());
         } else if marker == 0xe0 && segment.starts_with(b"JFIF\0") {
             if segment.len() >= 12 {
-                jfif_resolution = super::metadata::physical(u16::from(segment[7]) + 1, [
-                    Some([u32::from(u16::from_be_bytes([segment[8], segment[9]])), 1]),
-                    Some([u32::from(u16::from_be_bytes([segment[10], segment[11]])), 1]),
-                ]);
+                jfif_resolution = super::metadata::physical(
+                    u16::from(segment[7]) + 1,
+                    [
+                        Some([u32::from(u16::from_be_bytes([segment[8], segment[9]])), 1]),
+                        Some([u32::from(u16::from_be_bytes([segment[10], segment[11]])), 1]),
+                    ],
+                );
             }
         } else if marker == 0xe1 && segment.starts_with(b"Exif\0\0") {
             let metadata = super::metadata::exif(&segment)?;
@@ -111,7 +124,9 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
             }
             result.orientation = Some(orientation);
             if let Some(resolution) = metadata.resolution {
-                if result.resolution.is_some_and(|r| r != resolution) { return Err("Conflicting JPEG EXIF resolutions".into()); }
+                if result.resolution.is_some_and(|r| r != resolution) {
+                    return Err("Conflicting JPEG EXIF resolutions".into());
+                }
                 result.resolution = Some(resolution);
             }
         } else if marker == 0xe2 && segment.starts_with(b"urn:iso:std:iso:ts:21496:-1")
@@ -125,7 +140,7 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
         {
             return Err("This JPEG contains an HDR gain map. HDR import is not supported yet; export an SDR image from another editor.".into());
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
-            return Err("Multiple-picture JPEG is not supported. Export the intended image as a separate SDR PNG, JPEG or TIFF.".into());
+            super::jpeg_mpf::validate_previews(&segment)?;
         }
     }
     if let Some(count) = total {

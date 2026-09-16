@@ -371,19 +371,12 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     advanced.add_row(&intent);
     let bpc = adw::SwitchRow::builder()
         .title("Black point compensation")
-        .active(true)
+        .subtitle("Currently unavailable")
+        .active(false)
+        .sensitive(false)
         .build();
     bpc.set_widget_name("export-bpc");
     advanced.add_row(&bpc);
-    intent.connect_selected_notify(glib::clone!(
-        #[weak]
-        bpc,
-        move |intent| {
-            // ICC absolute intent preserves media white/black instead of adapting
-            // to the destination's endpoints. Remember the switch for other intents.
-            bpc.set_sensitive(intent.selected() != 3);
-        }
-    ));
     let dither = adw::SwitchRow::builder()
         .title("Reduce banding")
         .subtitle("Dither 8-bit gradients")
@@ -518,7 +511,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
                     RenderingIntent::Saturation => 2,
                     RenderingIntent::AbsoluteColorimetric => 3,
                 });
-                bpc.set_active(recipe.encoding.conversion.black_point_compensation);
+                bpc.set_active(false);
                 dither.set_active(recipe.encoding.dither != OutputDither::None);
                 match recipe.size {
                     ExportSize::Original => size.set_selected(0),

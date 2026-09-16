@@ -1,5 +1,4 @@
 use super::*;
-use lcms2::{InfoType, Locale, Tag, TagSignature};
 
 /// A display label only. Never use it as a profile identity or to skip a CMM
 /// conversion. Embedded bytes remain authoritative even for familiar names.
@@ -7,11 +6,8 @@ pub fn profile_description(profile: &ColorProfile) -> Result<String, String> {
     if let ColorProfile::Builtin(space) = profile {
         return Ok(space.name().into());
     }
-    let context = ThreadContext::new();
-    let opened = open(&context, profile)?;
-    let label = opened
-        .info(InfoType::Description, Locale::none())
-        .unwrap_or_else(|| "Embedded ICC profile".into())
+    let opened = open(profile)?;
+    let label = label(&opened)
         .chars()
         .filter(|c| !c.is_control())
         .take(256)
@@ -34,35 +30,22 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
     if let ColorProfile::Builtin(space) = profile {
         return Ok(Some(*space));
     }
-    let context = ThreadContext::new();
-    let opened = open(&context, profile)?;
-    if channels(&opened)? != ProfileChannels::Rgb || !opened.is_matrix_shaper() {
+    let opened = open(profile)?;
+    if channels(&opened)? != ProfileChannels::Rgb
+        || (opened.red_trc.is_none()
+            || opened.green_trc.is_none()
+            || opened.blue_trc.is_none()
+            || opened.lut_a_to_b_perceptual.is_some()
+            || opened.lut_a_to_b_colorimetric.is_some()
+            || opened.lut_a_to_b_saturation.is_some())
+    {
         return Ok(None);
     }
-    let colorants = |p: &Profile<ThreadContext>| -> Option<[[f64; 3]; 3]> {
-        let mut matrix = [[0.; 3]; 3];
-        for (column, tag) in matrix.iter_mut().zip([
-            TagSignature::RedColorantTag,
-            TagSignature::GreenColorantTag,
-            TagSignature::BlueColorantTag,
-        ]) {
-            let Tag::CIEXYZ(xyz) = p.read_tag(tag) else {
-                return None;
-            };
-            *column = [xyz.X, xyz.Y, xyz.Z];
-        }
-        Some(matrix)
+    let colorants = |p: &Profile| -> [[f64; 3]; 3] {
+        [p.red_colorant, p.green_colorant, p.blue_colorant].map(|v| [v.x, v.y, v.z])
     };
-    let Some(source) = colorants(&opened) else {
-        return Ok(None);
-    };
-    // The profile's own adaptation can differ from LCMS's current Bradford
-    // coefficients. Recover native colorimetry with its declared inverse.
-    // lcms2 exposes the nine CHAD doubles through CIExyYTRIPLE.
-    let adaptation = match opened.read_tag(TagSignature::ChromaticAdaptationTag) {
-        Tag::CIExyYTRIPLE(m) => Some([m.Red, m.Green, m.Blue].map(|r| [r.x, r.y, r.Y])),
-        _ => None,
-    };
+    let source = colorants(&opened);
+    let adaptation = opened.chromatic_adaptation.map(|m| m.v);
     let native = adaptation
         .and_then(inverse)
         .map(|m| source.map(|c| layer_core::color::rgb::apply(m, c)));
@@ -94,8 +77,8 @@ pub fn suggested_working_space(profile: &ColorProfile) -> Result<Option<RgbSpace
             }
             continue;
         }
-        let reference = builtin(&context, space)?;
-        let target = colorants(&reference).ok_or("Working profile has no colorants")?;
+        let reference = builtin(space)?;
+        let target = colorants(&reference);
         // Accommodate ICC fixed-point serialization and standard rounded
         // colorant variants. This threshold never controls pixel conversion.
         if source
@@ -136,12 +119,32 @@ fn inverse(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
                 continue;
             }
             let scale = rows[r][k];
-            for c in 0..6 {
-                rows[r][c] -= scale * rows[k][c];
+            let pivot = rows[k];
+            for (value, pivot) in rows[r].iter_mut().zip(pivot) {
+                *value -= scale * pivot;
             }
         }
     }
     Some(rows.map(|r| [r[3], r[4], r[5]]))
+}
+
+fn label(profile: &Profile) -> String {
+    use moxcms::ProfileText;
+    let label = match &profile.description {
+        Some(ProfileText::PlainString(s)) => Some(s.as_str()),
+        Some(ProfileText::Localizable(strings)) => strings
+            .iter()
+            .find(|s| s.language == "en")
+            .or(strings.first())
+            .map(|s| s.value.as_str()),
+        Some(ProfileText::Description(s)) => Some(if s.unicode_string.is_empty() {
+            s.ascii_string.as_str()
+        } else {
+            s.unicode_string.as_str()
+        }),
+        None => None,
+    };
+    label.unwrap_or("Embedded ICC profile").into()
 }
 
 #[cfg(test)]
@@ -173,19 +176,17 @@ mod tests {
     #[test]
     fn working_suggestions_ignore_names_and_keep_original_profile() {
         for space in RgbSpace::ALL {
-            let context = ThreadContext::new();
-            let mut profile = builtin(&context, space).unwrap();
-            describe(&mut profile, "Pretend sRGB").unwrap();
-            let definition = ColorProfile::Icc(profile.icc().unwrap().into());
+            let mut profile = builtin(space).unwrap();
+            describe(&mut profile, "Pretend sRGB");
+            let definition = ColorProfile::Icc(profile.encode().unwrap().into());
             let before = definition.clone();
             assert_eq!(suggested_working_space(&definition).unwrap(), Some(space));
             assert_eq!(profile_description(&definition).unwrap(), "Pretend sRGB");
             assert_eq!(definition, before);
         }
-        let context = ThreadContext::new();
-        let profile = linear_profile(&context, RgbSpace::DisplayP3).unwrap();
+        let profile = linear_profile(RgbSpace::DisplayP3).unwrap();
         assert_eq!(
-            suggested_working_space(&ColorProfile::Icc(profile.icc().unwrap().into())).unwrap(),
+            suggested_working_space(&ColorProfile::Icc(profile.encode().unwrap().into())).unwrap(),
             Some(RgbSpace::DisplayP3)
         );
         let gray = gray_profile(RgbSpace::AdobeRgb).unwrap();

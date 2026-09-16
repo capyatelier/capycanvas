@@ -15,8 +15,6 @@ pub struct WorkingEncoder {
     destination: SourceInterpretation,
     kind: OutputKind,
     dither: OutputDither,
-    // Transform handles must be dropped before their context.
-    _context: ThreadContext,
 }
 enum OutputKind {
     Builtin {
@@ -25,7 +23,7 @@ enum OutputKind {
         identity: bool,
     },
     Rgb(FloatTransform<4>),
-    Gray(Transform<[f32; 4], [f32; 1], ThreadContext, DisallowCache>),
+    Gray(CompiledTransform<4, 1>),
     Cmyk(FloatTransform<4>),
 }
 impl WorkingEncoder {
@@ -36,7 +34,7 @@ impl WorkingEncoder {
     ) -> Result<Self, String> {
         encoding.validate(destination.depth)?;
         let options = encoding.conversion;
-        let context = ThreadContext::new();
+        validate_options(options)?;
         let mut destination = destination.clone();
         destination.profile_assumed = false;
         if matches!(
@@ -46,7 +44,7 @@ impl WorkingEncoder {
         {
             destination.profile = gray_profile(space)?;
         }
-        let output = open(&context, &destination.profile)?;
+        let output = open(&destination.profile)?;
         let actual = channels(&output)?;
         let valid = match destination.channels {
             SourceChannels::Rgb | SourceChannels::Rgba => actual == ProfileChannels::Rgb,
@@ -56,7 +54,7 @@ impl WorkingEncoder {
         if !valid {
             return Err("Output channels disagree with the destination profile".into());
         }
-        let input = linear_profile(&context, source)?;
+        let input = linear_profile(source)?;
         let kind = match &destination.profile {
             ColorProfile::Builtin(space)
                 if options.intent != RenderingIntent::AbsoluteColorimetric
@@ -69,49 +67,21 @@ impl WorkingEncoder {
                 }
             }
             _ => match actual {
-                ProfileChannels::Rgb => OutputKind::Rgb(
-                    Transform::new_flags_context(
-                        &context,
-                        &input,
-                        PixelFormat::RGBA_FLT,
-                        &output,
-                        PixelFormat::RGBA_FLT,
-                        intent(options.intent),
-                        flags(options) | Flags::COPY_ALPHA,
-                    )
-                    .map_err(error)?,
-                ),
-                ProfileChannels::Gray => OutputKind::Gray(
-                    Transform::new_flags_context(
-                        &context,
-                        &input,
-                        PixelFormat::RGBA_FLT,
-                        &output,
-                        PixelFormat::GRAY_FLT,
-                        intent(options.intent),
-                        flags(options),
-                    )
-                    .map_err(error)?,
-                ),
-                ProfileChannels::Cmyk => OutputKind::Cmyk(
-                    Transform::new_flags_context(
-                        &context,
-                        &input,
-                        PixelFormat::RGBA_FLT,
-                        &output,
-                        PixelFormat::CMYK_FLT,
-                        intent(options.intent),
-                        flags(options),
-                    )
-                    .map_err(error)?,
-                ),
+                ProfileChannels::Rgb => {
+                    OutputKind::Rgb(CompiledTransform::new(&input, &output, options)?)
+                }
+                ProfileChannels::Gray => {
+                    OutputKind::Gray(CompiledTransform::new(&input, &output, options)?)
+                }
+                ProfileChannels::Cmyk => {
+                    OutputKind::Cmyk(CompiledTransform::new(&input, &output, options)?)
+                }
             },
         };
         Ok(Self {
             destination,
             kind,
             dither: encoding.dither,
-            _context: context,
         })
     }
 

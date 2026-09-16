@@ -5,19 +5,89 @@ fn builtin_profiles_are_stable_and_preserve_original_payloads() {
     for space in RgbSpace::ALL {
         let profile = ColorProfile::Builtin(space);
         let bytes = profile_bytes(&profile).unwrap();
+        assert_eq!(&bytes[24..36], &[7, 234, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
         assert_eq!(bytes, profile_bytes(&profile).unwrap());
         let embedded = ColorProfile::Icc(bytes.clone().into());
         assert_eq!(profile_bytes(&embedded).unwrap(), bytes);
         assert_eq!(profile_channels(&embedded).unwrap(), ProfileChannels::Rgb);
-        let context = ThreadContext::new();
-        let parsed = open(&context, &embedded).unwrap();
-        assert_eq!(
-            parsed
-                .info(lcms2::InfoType::Description, lcms2::Locale::new("en_US"))
-                .unwrap(),
-            space.name()
-        );
+        assert_eq!(profile_description(&embedded).unwrap(), space.name());
     }
+}
+
+#[test]
+fn unsupported_black_point_compensation_is_explicit_for_all_conversion_paths() {
+    use layer_core::color::{OutputEncoding, source::*};
+    let options = ConversionOptions {
+        black_point_compensation: true,
+        ..Default::default()
+    };
+    let profile = ColorProfile::default();
+    let source = SourceInterpretation {
+        channels: SourceChannels::Rgba,
+        depth: layer_core::color::IntegerDepth::U8,
+        profile: profile.clone(),
+        profile_assumed: false,
+    };
+    assert!(
+        RgbTransform::new(&profile, &profile, options)
+            .err()
+            .unwrap()
+            .contains("Black point")
+    );
+    assert!(
+        WorkingDecoder::new(&source, RgbSpace::Srgb, options)
+            .err()
+            .unwrap()
+            .contains("Black point")
+    );
+    assert!(
+        WorkingEncoder::new(
+            RgbSpace::Srgb,
+            &source,
+            OutputEncoding {
+                conversion: options,
+                ..Default::default()
+            }
+        )
+        .err()
+        .unwrap()
+        .contains("Black point")
+    );
+    assert!(
+        InputTransform::new(&gray_profile(RgbSpace::Srgb).unwrap(), &profile, options)
+            .err()
+            .unwrap()
+            .contains("Black point")
+    );
+}
+
+#[test]
+fn absolute_intent_preserves_media_white_and_alpha() {
+    let mut input = linear_profile(RgbSpace::Srgb).unwrap();
+    let output = input.clone();
+    let white = input.media_white_point.as_mut().unwrap();
+    white.x *= 0.8;
+    white.y *= 0.8;
+    white.z *= 0.8;
+    let relative =
+        CompiledTransform::<4, 4>::new(&input, &output, ConversionOptions::default()).unwrap();
+    let absolute = CompiledTransform::<4, 4>::new(
+        &input,
+        &output,
+        ConversionOptions {
+            intent: RenderingIntent::AbsoluteColorimetric,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut a = [[0.5, 0.25, 1., 0.375]];
+    let mut b = a;
+    relative.transform_in_place(&mut a);
+    absolute.transform_in_place(&mut b);
+    for c in 0..3 {
+        assert!((b[0][c] - a[0][c] * 0.8).abs() < 1e-6);
+    }
+    assert_eq!(a[0][3], b[0][3]);
 }
 
 #[test]
@@ -52,7 +122,7 @@ fn identity_preserves_every_u16_sample_and_alpha_bits() {
 }
 
 #[test]
-fn lcms_matches_independent_float64_standard_space_conversion() {
+fn portable_cmm_matches_independent_float64_standard_space_conversion() {
     let options = ConversionOptions {
         black_point_compensation: false,
         ..Default::default()
@@ -100,19 +170,13 @@ fn lcms_matches_independent_float64_standard_space_conversion() {
 
 #[test]
 fn gray_profile_is_converted_before_rgb_expansion() {
-    let context = ThreadContext::new();
-    let curve = ToneCurve::new(2.2);
-    let profile = Profile::new_gray_context(
-        &context,
-        &CIExyY {
-            x: 0.3127,
-            y: 0.329,
-            Y: 1.,
-        },
-        &curve,
+    let source = matrix_profile(
+        RgbSpace::Srgb.white(),
+        RgbSpace::Srgb.primaries(),
+        Some(1. / 2.2),
+        true,
     )
     .unwrap();
-    let source = ColorProfile::Icc(profile.icc().unwrap().into());
     assert_eq!(profile_channels(&source).unwrap(), ProfileChannels::Gray);
     assert!(RgbTransform::new(&source, &ColorProfile::default(), Default::default()).is_err());
     let transform =

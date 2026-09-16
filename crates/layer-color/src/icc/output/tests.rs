@@ -220,7 +220,7 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
             ] {
                 let options = ConversionOptions {
                     intent,
-                    black_point_compensation: true,
+                    black_point_compensation: false,
                 };
                 let encoder = WorkingEncoder::new(
                     source,
@@ -284,90 +284,106 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
 }
 
 #[test]
-#[ignore = "requires LAYER_TEST_CMYK_PROFILE pointing to a licensed output ICC profile"]
-fn cmyk_output_matches_independent_cmm_percent_samples() {
-    let path = std::env::var("LAYER_TEST_CMYK_PROFILE").expect("set LAYER_TEST_CMYK_PROFILE");
-    let bytes = std::fs::read(path).unwrap();
+#[ignore = "requires a CMYK profile and independently generated reference samples"]
+fn cmyk_output_matches_independent_reference_samples() {
+    // tools/validation/icc_reference.py generates these with a separate CMM.
+    let bytes =
+        std::fs::read(std::env::var("LAYER_TEST_CMYK_PROFILE").expect("CMYK profile")).unwrap();
+    let directory = std::path::PathBuf::from(
+        std::env::var("LAYER_TEST_CMYK_REFERENCE").expect("reference directory"),
+    );
+    let reference = |name: &str, count: usize| {
+        let bytes = std::fs::read(directory.join(name)).unwrap();
+        assert_eq!(bytes.len(), count * 4);
+        bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>()
+    };
     let destination = SourceInterpretation {
         channels: SourceChannels::Cmyk,
         depth: IntegerDepth::U16,
-        profile: ColorProfile::Icc(bytes.clone().into()),
+        profile: ColorProfile::Icc(bytes.into()),
         profile_assumed: false,
     };
-    for intent in [
-        RenderingIntent::RelativeColorimetric,
-        RenderingIntent::AbsoluteColorimetric,
+    let linear: Vec<_> = (0..729)
+        .map(|i| {
+            let rgb = [
+                (i % 9) as f64 / 8.,
+                (i / 9 % 9) as f64 / 8.,
+                (i / 81) as f64 / 8.,
+            ]
+            .map(|v| RgbSpace::Srgb.decode(v) as f32);
+            [rgb[0], rgb[1], rgb[2], 1.]
+        })
+        .collect();
+    for (id, intent) in [
         RenderingIntent::Perceptual,
+        RenderingIntent::RelativeColorimetric,
         RenderingIntent::Saturation,
-    ] {
-        for bpc in [false, true] {
-            let options = ConversionOptions {
-                intent,
-                black_point_compensation: bpc,
-            };
-            let encoder = WorkingEncoder::new(
-                RgbSpace::Srgb,
-                &destination,
-                layer_core::color::OutputEncoding {
-                    conversion: options,
-                    ..Default::default()
-                },
-            )
+        RenderingIntent::AbsoluteColorimetric,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let conversion = ConversionOptions {
+            intent,
+            black_point_compensation: false,
+        };
+        let encoder = WorkingEncoder::new(
+            RgbSpace::Srgb,
+            &destination,
+            OutputEncoding {
+                conversion,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = reference(&format!("rgb-to-cmyk-{id}.f32le"), 729 * 4);
+        let mut output = vec![0; linear.len() * 8];
+        encoder
+            .encode_straight(&linear, &mut output, None, [0, 0])
             .unwrap();
-            // Separate direct encoded-RGB -> CMYK transform, with independently
-            // selected LCMS formatters. CMYK float samples are percentages.
-            let input_profile = Profile::new_srgb();
-            let output_profile = Profile::new_icc(&bytes).unwrap();
-            let reference: Transform<[f32; 3], [f32; 4]> = Transform::new_flags(
-                &input_profile,
-                PixelFormat::RGB_FLT,
-                &output_profile,
-                PixelFormat::CMYK_FLT,
-                super::super::intent(intent),
-                flags(options),
-            )
-            .unwrap();
-            let encoded: Vec<_> = (0..729)
-                .map(|i| {
-                    [
-                        (i % 9) as f32 / 8.,
-                        (i / 9 % 9) as f32 / 8.,
-                        (i / 81) as f32 / 8.,
-                    ]
-                })
-                .collect();
-            let linear: Vec<_> = encoded
-                .iter()
-                .map(|p| {
-                    [
-                        RgbSpace::Srgb.decode(f64::from(p[0])) as f32,
-                        RgbSpace::Srgb.decode(f64::from(p[1])) as f32,
-                        RgbSpace::Srgb.decode(f64::from(p[2])) as f32,
-                        1.,
-                    ]
-                })
-                .collect();
-            let mut expected = vec![[0.; 4]; encoded.len()];
-            reference.transform_pixels(&encoded, &mut expected);
-            let mut output = vec![0; encoded.len() * 8];
-            encoder
-                .encode_straight(&linear, &mut output, None, [0, 0])
+        let max = codes(&output, IntegerDepth::U16)
+            .iter()
+            .zip(expected)
+            .map(|(a, b)| (*a as f32 / 65535. - b / 100.).abs())
+            .fold(0f32, f32::max);
+        eprintln!("{intent:?} maximum ink difference: {max}");
+        assert!(max < 0.02, "{intent:?} maximum ink difference: {max}");
+        let input: Vec<[f32; 4]> = (0..625)
+            .map(|i| std::array::from_fn(|c| ((i / 5usize.pow(c as u32)) % 5) as f32 * 25.))
+            .collect();
+        let decoder =
+            InputTransform::new(&destination.profile, &ColorProfile::default(), conversion)
                 .unwrap();
-            for (actual, expected) in codes(&output, IntegerDepth::U16)
-                .chunks_exact(4)
-                .zip(expected)
-            {
-                for c in 0..4 {
-                    let code =
-                        (f64::from(expected[c] / 100.).clamp(0., 1.) * 65535.).round() as u32;
-                    assert!(
-                        actual[c].abs_diff(code) <= 2,
-                        "{intent:?} bpc={bpc} channel {c}: {} vs {code}",
-                        actual[c]
-                    );
-                }
-            }
-        }
+        let mut rgb = vec![[0.; 4]; input.len()];
+        decoder.cmyk_percent(&input, &mut rgb).unwrap();
+        let expected = reference(&format!("cmyk-to-rgb-{id}.f32le"), 625 * 3);
+        // Compare extended linear RGB: encoded sRGB magnifies negative
+        // out-of-gamut differences by 12.92. Different CMMs also implement
+        // perceptual mapping differently; this is a 2% interoperability check,
+        // not a bit-exact LittleCMS-equivalence claim.
+        let max = rgb
+            .iter()
+            .flat_map(|p| p[..3].iter())
+            .zip(expected)
+            .map(|(a, b)| {
+                let linear = |v: f32| {
+                    if v <= 0.04045 {
+                        f64::from(v) / 12.92
+                    } else {
+                        ((f64::from(v) + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                (linear(*a) - linear(b)).abs()
+            })
+            .fold(0f64, f64::max);
+        eprintln!("{intent:?} maximum linear RGB difference: {max}");
+        assert!(
+            max < 0.02,
+            "{intent:?} maximum linear RGB difference: {max}"
+        );
     }
 }
 
