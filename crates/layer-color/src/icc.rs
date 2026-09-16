@@ -15,6 +15,8 @@ pub use description::{profile_description, suggested_working_space};
 pub use output::{OutputStatistics, WorkingEncoder};
 pub use profiles::{gray_profile, profile_bytes, profile_channels};
 pub use working::WorkingDecoder;
+mod proof;
+pub use proof::{ProofSample, ProofTransform};
 
 type FloatTransform<const N: usize> = CompiledTransform<N, 4>;
 

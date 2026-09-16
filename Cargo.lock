@@ -1026,6 +1026,7 @@ dependencies = [
  "moxcms",
  "png 0.18.1",
  "serde",
+ "serde_json",
  "sysinfo",
  "tiff",
 ]
