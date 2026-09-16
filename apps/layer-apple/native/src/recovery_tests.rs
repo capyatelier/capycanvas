@@ -171,7 +171,7 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
         let pointer = open.0 as usize;
         assert_eq!(
             std::thread::spawn(move || unsafe {
-                capy_project_read(pointer as *const CapyProjectTask, fd)
+                capy_project_read(pointer as *const CapyProjectTask, fd, c"Drawing.capy".as_ptr())
             })
             .join()
             .unwrap(),

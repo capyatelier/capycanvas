@@ -516,7 +516,8 @@ impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
-            Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::ImportImage | Self::PasteImage | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac),
+            Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::RasterizeSource | Self::RepairSourceProfile => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::CustomizeWorkspaceUi => matches!(
                 platform,

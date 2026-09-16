@@ -17,7 +17,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             install(&app);
             app.draw_until_idle();
             let source: Vec<u8> = (0..64 * 64).flat_map(|i| [180, (i % 200) as u8, 75, 220]).collect();
-            assert_eq!(unsafe { capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), c"Retained source".as_ptr(), 64, 64, source.as_ptr(), source.len()) }, 0);
+            app.place_rgba("Retained source", 64, 64, &source);
             app.draw_until_idle();
             let imported = app.pixels();
             app.stroke();
@@ -81,7 +81,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             file.rewind().unwrap();
             let saved = layer_core::Project::read(&mut file, Default::default()).unwrap();
             assert_project_document(&saved.document, &document);
-            assert!(!saved.assets.is_empty());
+            assert!(saved.document.layers.iter().any(|layer| layer.source.is_some()));
             std::fs::remove_file(path).unwrap();
 
             install(&app);

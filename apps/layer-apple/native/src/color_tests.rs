@@ -47,11 +47,11 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
         let captured = ProjectJob::new(&app, true);
         let changed = NewDocumentOptions { extent: [73, 51], ..defaults };
         app.action(json!({"type":"new_document_settings","settings":{"defaults":changed,"presets":[]}}));
-        assert_eq!(unsafe { capy_project_read(captured.0, -1) }, 0, "{:?}", captured.error());
+        assert_eq!(unsafe { capy_project_read(captured.0, -1, c"Drawing.capy".as_ptr()) }, 0, "{:?}", captured.error());
         adopt(&captured, defaults);
         assert_eq!(app.state()["settings"]["new_document"]["defaults"], json!(changed));
         let fresh = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_read(fresh.0, -1) }, 0, "{:?}", fresh.error());
+        assert_eq!(unsafe { capy_project_read(fresh.0, -1, c"Drawing.capy".as_ptr()) }, 0, "{:?}", fresh.error());
         adopt(&fresh, changed);
 
         app.stroke(); app.draw_until_idle();
@@ -109,7 +109,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             app.draw_until_idle();
             let open = ProjectJob::new(&app, true);
             assert_eq!(
-                unsafe { capy_project_read(open.0, file.as_raw_fd()) },
+                unsafe { capy_project_read(open.0, file.as_raw_fd(), c"Drawing.capy".as_ptr()) },
                 0,
                 "{:?}",
                 open.error()
@@ -197,7 +197,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 let open = ProjectJob::new(&restored, true);
                 file.rewind().unwrap();
                 assert_eq!(
-                    unsafe { capy_project_read(open.0, file.as_raw_fd()) },
+                    unsafe { capy_project_read(open.0, file.as_raw_fd(), c"Drawing.capy".as_ptr()) },
                     0,
                     "{:?}",
                     open.error()

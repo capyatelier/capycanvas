@@ -994,6 +994,7 @@ dependencies = [
 name = "layer-apple"
 version = "0.1.0"
 dependencies = [
+ "layer-color",
  "layer-core",
  "layer-engine",
  "layer-host",

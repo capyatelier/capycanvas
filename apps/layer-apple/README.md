@@ -711,38 +711,30 @@ hierarchy, rename, blend/opacity/locks/references, shared menu enablement, image
 import and GPU thumbnails. Imported pixels round-trip exactly through undo/redo.
 Numeric expressions and slider mapping use a stateless shared-policy entry point.
 
-Check the native image decoder without launching an app:
+Open, Place and Paste share the retained photo decoder in `layer-color` for
+PNG, JPEG and TIFF. Decoding keeps original profiles, integer depth and samples;
+Open selects the source working space and a separate native Save destination,
+while Place/Paste preserve the receiving document's space and add one undoable
+layer. The missing-profile preference can pause preparation for an explicit
+interpretation without changing source samples. Reads use the same coordinated,
+security-scoped file access as native projects, off the UI/render owner.
+
+Run the focused Metal and Swift owner workflows without simulator automation:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
-  apps/layer-apple/Shared/Bridge/JSON.swift \
-  apps/layer-apple/Shared/Bridge/LayerImageImport.swift \
-  apps/layer-apple/tests/image-import.swift -o /tmp/capy-image-import-tests
-/tmp/capy-image-import-tests
+cargo test -p layer-apple tests::photo -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/image-import-owner.swift
 ```
 
-Synthetic images check EXIF orientation, sRGB channels, straight alpha, row order
-and rejection of dimensions beyond the shared import limit. File decoding runs
-off the UI and render-owner queues inside the same security-scoped, coordinated
-reader used for projects and workspace packages. The decoder returns owned
-pixels before releasing file access; the layer retains the selected filename.
-Document import runs on the serial owner.
-The picker captures its drawing's identity. The native bridge rejects a late
-decode after New/Open replaces that drawing, while ordinary edits in the same
-drawing remain allowed. Document replacement also dismisses its old image picker.
-Run the ordered replacement/import regression without simulator automation:
-
-```sh
-CAPY_TEST_ASSETS_APP=apps/layer-apple/DerivedData/CompactColorMac/Build/Products/Debug/CapyCanvas-Mac.app \
-  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/image-import-owner.swift
-```
-
-This uses temporary images/documents and both Apple policies. It verifies waiting
-for a coordinated writer, stale import rejection, missing/invalid files, fresh
-import after an intervening edit, one-step Undo/Redo and unchanged source bytes.
-It does not exercise the native file picker or a cloud provider. The Mac UI
-workflow `testNativeImageImport` covers the actual picker, cancellation, the
-imported layer name, sampled artwork and Undo/Redo.
+The native checks cover P3/U8 and ProPhoto/U16 source retention through painting,
+history and native save/reopen, interpretation retry, promotion policy, cancellation
+and stale document/target/device rejection. The Swift fixture uses temporary files
+and both Apple policies to exercise coordinated reads, picker cancellation,
+encoded Paste, errors, history and source-safe Save. Shared codec tests own EXIF,
+channel, alpha and admission-limit checks. These owner tests do not establish
+native picker/clipboard-provider delivery or cloud access. The Mac UI workflow
+`testNativeImageImport` covers the actual picker, cancellation, the imported layer
+name, sampled artwork and Undo/Redo.
 
 The shared JSON transport uses direct Foundation container lookup to avoid
 bridging a complete dictionary for each field read by the editor. Check native

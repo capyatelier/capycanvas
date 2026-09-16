@@ -208,7 +208,7 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
-    func projectTask(opening: Bool, expected: (UInt64, UInt64)? = nil,
+    func projectTask(opening: Bool, placing: Bool = false, expected: (UInt64, UInt64)? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
@@ -219,7 +219,7 @@ final class NativeOwner: @unchecked Sendable {
                 return
             }
             if ready < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable"); return }
-            guard let pointer = capy_apple_project_task(handle, opening ? 1 : 0) else {
+            guard let pointer = capy_apple_project_task(handle, placing ? 3 : opening ? 1 : 0) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
                 return
             }
@@ -457,23 +457,6 @@ final class NativeOwner: @unchecked Sendable {
             try applyInitialActions(); try publish()
         }
         #endif
-    }
-    func importLayer(_ url: URL, epoch: UInt64) {
-        // File I/O and decode must not stall the UI or the render/input owner.
-        DispatchQueue.global(qos: .userInitiated).async { [self] in
-            do {
-                let image = try ProjectFileIO.coordinate(url, writing: false) { try LayerImagePixels.decode($0) }
-                perform { [self] in
-                    try url.lastPathComponent.withCString { name in
-                        try image.rgba.withUnsafeBytes { bytes in
-                            try check(capy_apple_import_layer(handle, epoch, name, image.width, image.height,
-                                bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count))
-                        }
-                    }
-                    try publish()
-                }
-            } catch { receive(nil, error.localizedDescription) }
-        }
     }
     func detach() {
         perform { [self] in

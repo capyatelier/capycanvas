@@ -22,7 +22,10 @@ The next checkpoint adds complete New Drawing options/presets/defaults, tagged
 paint entry, workspace palettes and document-space wheel previews. Shared,
 Swift/Metal owner and full Mac UI checks pass; see the
 [workflow record](apple-handoff.md#sdr-creation-and-paint-workflows) for current
-device coverage. **Continue with the remaining host workflows in step 3**, then
+device coverage. Retained photo Open/Place/Paste now share the native worker and
+profile/depth policies, replacing the lossy sRGB8 import path; see the
+[photo workflow record](apple-handoff.md#retained-photo-open-place-and-paste).
+**Continue with profile/depth changes and the remaining host workflows in step 3**, then
 display integration and physical acceptance. Profiled export and device
 performance are not closed.
 

@@ -8,7 +8,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom, Write},
     mem::ManuallyDrop,
     os::fd::FromRawFd,
     sync::{
@@ -25,6 +25,9 @@ struct Environment {
     viewport: [u32; 2],
     brush: layer_core::BrushSnapshot,
     new_options: layer_ui::NewDocumentOptions,
+    photo_policy: layer_ui::PhotoOpenPolicy,
+    place: Option<(layer_core::LayerId, u32)>,
+    working_space: layer_core::color::RgbSpace,
 }
 enum Payload {
     Save {
@@ -34,6 +37,15 @@ enum Payload {
     Open {
         environment: Option<Environment>,
         candidate: Option<Box<UiSession<Renderer>>>,
+        photo: bool,
+        pending_photo: Option<(String, layer_core::color::source::SourceImage)>,
+    },
+    Placed {
+        source: Option<layer_core::color::source::SourceImage>,
+        name: String,
+        target: layer_core::LayerId,
+        request: u32,
+        device: wgpu::Device,
     },
     Export {
         readback: Option<layer_render_wgpu::ExportReadback>,
@@ -154,8 +166,14 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 snapshot: Some(session.capture_project_recovery()?),
                 project: None,
             }
-        } else if opening == 1 {
+        } else if opening == 1 || opening == 3 {
             session.require_document_idle()?;
+            let place = if opening == 3 {
+                let request = session.state().requests.iter().find(|r| matches!(r.kind,
+                    HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste }))
+                    .ok_or("No image import is pending")?;
+                Some((session.engine().document().active_target(), request.id))
+            } else { None };
             let gpu = session
                 .engine()
                 .backend()
@@ -170,8 +188,13 @@ pub unsafe extern "C" fn capy_apple_project_task(
                     viewport: session.state().camera.viewport,
                     brush: session.engine().configured_brush().clone(),
                     new_options: session.state().settings.new_document.defaults,
+                    photo_policy: session.state().settings.photo_open,
+                    working_space: session.engine().document().color.space,
+                    place,
                 }),
                 candidate: None,
+                photo: false,
+                pending_photo: None,
             }
         } else {
             return Err("Unknown project task kind".into());
@@ -258,6 +281,12 @@ impl Read for Stream<'_> {
         self.file.read(bytes)
     }
 }
+impl Seek for Stream<'_> {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.cancelled()?;
+        self.file.seek(position)
+    }
+}
 impl Write for Stream<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.cancelled()?;
@@ -309,62 +338,127 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
     })
 }
 
-/// # Safety
-/// Worker only. Read/validate/prepare the complete candidate before adoption.
-/// fd == -1 prepares a new blank drawing. Other fds remain caller-owned.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32) -> i32 {
-    unsafe { prepare_project(task, fd, Ok(None)) }
+enum Input<'a> {
+    New(Option<layer_ui::NewDocumentOptions>),
+    File(i32),
+    Bytes(&'a [u8]),
+    Assume(layer_core::color::ColorProfile),
+}
+enum Decoded {
+    Project(Project),
+    Photo(layer_core::color::source::SourceImage),
+}
+fn decode(mut input: impl BufRead + Seek, limits: ProjectLimits, place: bool) -> Result<Decoded, String> {
+    if input.fill_buf().map_err(|e| e.to_string())?.starts_with(b"CAPY") {
+        if place { return Err("Choose a PNG, TIFF or JPEG image to place".into()); }
+        Project::read(input, limits).map(Decoded::Project)
+    } else {
+        layer_color::photo::read_photo(input, Default::default()).map(Decoded::Photo)
+    }
 }
 /// # Safety
-/// Worker only; the task must be an unused open task. Options is NUL-terminated
-/// UTF-8 NewDocumentOptions JSON, valid until this call returns.
+/// Worker only. Read/validate/prepare before adoption. fd == -1 uses captured
+/// New defaults. Other fds remain caller-owned; name is NUL-terminated UTF-8.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_project_new(
-    task: *const CapyProjectTask,
-    options: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32, name: *const c_char) -> i32 {
+    let input = match fd { -1 => Ok(Input::New(None)), n if n >= 0 => Ok(Input::File(n)),
+        _ => Err("Missing project input".into()) };
+    unsafe { prepare_project(task, input, read_title(name)) }
+}
+/// # Safety
+/// Worker only; bytes and UTF-8 name remain readable until this call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_read_bytes(task: *const CapyProjectTask, bytes: *const u8, count: usize, name: *const c_char) -> i32 {
+    let input = if bytes.is_null() || count == 0 || count > isize::MAX as usize {
+        Err("The clipboard contains no image data".into())
+    } else { Ok(Input::Bytes(unsafe { std::slice::from_raw_parts(bytes, count) })) };
+    unsafe { prepare_project(task, input, read_title(name)) }
+}
+/// # Safety
+/// Worker only; options is NUL-terminated NewDocumentOptions JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_new(task: *const CapyProjectTask, options: *const c_char) -> i32 {
     let options = unsafe { read_title(options) }.and_then(|text| {
-        serde_json::from_str(text).map(Some).map_err(|e| e.to_string())
+        serde_json::from_str(text).map(|value| Input::New(Some(value))).map_err(|e| e.to_string())
     });
-    unsafe { prepare_project(task, -1, options) }
+    unsafe { prepare_project(task, options, Ok("Untitled")) }
 }
-unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32,
-    options: Result<Option<layer_ui::NewDocumentOptions>, String>) -> i32 {
-    let Some(task) = (unsafe { task.as_ref() }) else {
-        return -1;
+/// # Safety
+/// Task remains alive; returns owned JSON interpretation, or JSON null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_profile(task: *const CapyProjectTask) -> *mut c_char {
+    let Some(task) = (unsafe { task.as_ref() }) else { return std::ptr::null_mut(); };
+    let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
+    let source = match &state.payload {
+        Payload::Open { pending_photo: Some((_, source)), .. } => Some(&source.interpretation),
+        _ => None,
     };
+    CString::new(serde_json::to_string(&source).unwrap()).unwrap().into_raw()
+}
+/// # Safety
+/// Worker only; profile is NUL-terminated ColorProfile JSON. Invalid choices
+/// retain the pending source for retry without rereading or altering the file.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_assume_profile(task: *const CapyProjectTask, profile: *const c_char) -> i32 {
+    let input = unsafe { read_title(profile) }.and_then(|text| {
+        serde_json::from_str(text).map(Input::Assume).map_err(|e| e.to_string())
+    });
+    unsafe { prepare_project(task, input, Ok("Photo")) }
+}
+unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>, String>, name: Result<&str, String>) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     task.perform(|payload| {
-        let options = options?;
-        let Payload::Open {
-            environment,
-            candidate,
-        } = payload
-        else {
+        let input = input?;
+        let mut name = name?.to_owned();
+        let Payload::Open { environment, candidate, photo, pending_photo } = payload else {
             return Err("Not an open task".into());
         };
-        let environment = environment.take().ok_or("This open task has already run")?;
+        // Validate an explicit assumption before consuming the resumable job.
+        let assumed = if let Input::Assume(profile) = &input {
+            let (source_name, source) = pending_photo.as_ref().ok_or("No image interpretation is pending")?;
+            name = source_name.clone();
+            Some(layer_color::assume_source_profile(source.clone(), profile.clone())?)
+        } else { None };
+        let context = environment.take().ok_or("This open task has already run")?;
         let limits = ProjectLimits {
-            dimension: environment
-                .device
-                .limits()
-                .max_texture_dimension_2d
-                .min(ProjectLimits::default().dimension),
+            dimension: context.device.limits().max_texture_dimension_2d.min(ProjectLimits::default().dimension),
             ..Default::default()
         };
-        let project = if fd == -1 {
-            options.unwrap_or(environment.new_options).project()?
-        } else if fd < -1 {
-            return Err("Missing project input".into());
-        } else {
-            Project::read(
-                Stream {
-                    file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }),
-                    task,
-                },
-                limits,
-            )?
+        let decoded = match input {
+            Input::New(options) => Decoded::Project(options.unwrap_or(context.new_options).project()?),
+            Input::File(fd) => decode(BufReader::new(Stream {
+                file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }), task,
+            }), limits, context.place.is_some())?,
+            Input::Bytes(bytes) => decode(Cursor::new(bytes), limits, context.place.is_some())?,
+            Input::Assume(_) => Decoded::Photo(assumed.unwrap()),
         };
+        task.check_cancelled()?;
+        let project = match decoded {
+            Decoded::Project(project) => project,
+            Decoded::Photo(source) => {
+                *photo = true;
+                if source.interpretation.profile_assumed
+                    && context.photo_policy.missing_profile == layer_ui::MissingProfilePolicy::Ask {
+                    *pending_photo = Some((name, source));
+                    *environment = Some(context);
+                    return Ok(());
+                }
+                pending_photo.take();
+                let name: String = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem)
+                    .chars().filter(|c| !c.is_control()).take(128).collect();
+                let name = if name.trim().is_empty() { "Photo" } else { name.trim() };
+                if let Some((target, request)) = context.place {
+                    layer_color::WorkingDecoder::new(&source.interpretation, context.working_space, Default::default())?;
+                    *payload = Payload::Placed { source: Some(source), name: name.into(), target, request, device: context.device };
+                    return Ok(());
+                }
+                let depth = context.photo_policy.editing_depth(source.interpretation.depth);
+                layer_color::photo_project(source, name, depth)?
+            }
+        };
+        if context.place.is_some() { return Err("Choose an image to place".into()); }
+        project.validate(limits)?;
+        let environment = context;
         task.check_cancelled()?;
         let mut gpu = WgpuRasterizer::from_wgpu_native_staged(
             environment.adapter, environment.device, environment.queue, project.document.color,
@@ -462,9 +556,35 @@ unsafe fn adopt_project(
         if let Some(error) = &state.error {
             return Err(error.clone());
         }
-        let Payload::Open { candidate, .. } = &mut state.payload else {
+        if let Payload::Placed { source, name, target, request, device } = &mut state.payload {
+            if recovered { return Err("An image import is not a recovery drawing".into()); }
+            let session = &mut app.host.session;
+            if session.state().document_file.epoch != task.epoch
+                || session.engine().document().revision != task.revision
+                || session.engine().document().active_target() != *target
+                || session.renderer_mut().0.as_ref().map(|gpu| gpu.device()) != Some(device)
+                || !session.state().requests.iter().any(|r| r.id == *request) {
+                return Err("The drawing or selected layer changed while importing; try again".into());
+            }
+            if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
+            let previous = session.state().revision;
+            session.import_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone())?;
+            source.take();
+            let mut change = session.complete_document_request(*request, Ok(true))?;
+            change.canvas_wake = true;
+            app.host.apply_change(previous, change);
+            return Ok(());
+        }
+        let Payload::Open { candidate, photo, .. } = &mut state.payload else {
             return Err("Not an open task".into());
         };
+        if *photo && recovered { return Err("Recovery requires a native drawing".into()); }
+        // Opening a photo never grants Save permission to overwrite its source.
+        let location = if *photo { None } else { location };
+        if candidate.as_ref().and_then(|s| s.engine().backend().0.as_ref()).map(|gpu| gpu.device())
+            != app.host.session.engine().backend().0.as_ref().map(|gpu| gpu.device()) {
+            return Err("The canvas changed while preparing this drawing; open it again".into());
+        }
         let prepared = candidate
             .take()
             .ok_or("Project preparation is incomplete")?;

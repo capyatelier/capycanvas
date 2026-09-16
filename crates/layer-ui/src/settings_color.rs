@@ -130,58 +130,60 @@ mod tests {
     use super::*;
     #[test]
     fn future_document_policies_validate_and_round_trip_independently() {
-        let mut settings = Settings::default();
-        let existing = settings.new_document.defaults.project().unwrap();
-        for (id, value) in [
-            (PreferenceId::NewColorSpace, 3),
-            (PreferenceId::NewBitDepth, 1),
-            (PreferenceId::NewBackground, 1),
-            (PreferenceId::PhotoDepth, 1),
-            (PreferenceId::MissingProfile, 1),
-        ] {
-            settings
-                .edit(id, PreferenceValue::Choice(value), Platform::Gtk)
-                .unwrap();
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+            let mut settings = Settings::default();
+            let existing = settings.new_document.defaults.project().unwrap();
+            for (id, value) in [
+                (PreferenceId::NewColorSpace, 3),
+                (PreferenceId::NewBitDepth, 1),
+                (PreferenceId::NewBackground, 1),
+                (PreferenceId::PhotoDepth, 1),
+                (PreferenceId::MissingProfile, 1),
+            ] {
+                settings
+                    .edit(id, PreferenceValue::Choice(value), platform)
+                    .unwrap();
+            }
+            let saved = serde_json::to_string(&settings).unwrap();
+            assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
+            settings.validate().unwrap();
+            assert_eq!(existing.document.color, Default::default());
+            let new = settings.new_document.defaults.project().unwrap();
+            assert_eq!(new.document.color.space, RgbSpace::ProPhoto);
+            assert_eq!(new.document.color.depth, IntegerDepth::U16);
+            assert!(!new.document.layers[1].visible);
+            assert_eq!(
+                settings.photo_open.editing_depth(IntegerDepth::U8),
+                IntegerDepth::U16
+            );
+            assert_eq!(
+                PhotoOpenPolicy::default().editing_depth(IntegerDepth::U8),
+                IntegerDepth::U8
+            );
+            assert_eq!(
+                settings.photo_open.missing_profile,
+                MissingProfilePolicy::Ask
+            );
+            let before = settings.clone();
+            assert!(
+                settings
+                    .edit(
+                        PreferenceId::NewColorSpace,
+                        PreferenceValue::Choice(4),
+                        platform
+                    )
+                    .is_err()
+            );
+            assert!(
+                settings
+                    .edit(
+                        PreferenceId::PhotoDepth,
+                        PreferenceValue::Choice(0),
+                        Platform::Windows
+                    )
+                    .is_err()
+            );
+            assert_eq!(settings, before);
         }
-        let saved = serde_json::to_string(&settings).unwrap();
-        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
-        settings.validate().unwrap();
-        assert_eq!(existing.document.color, Default::default());
-        let new = settings.new_document.defaults.project().unwrap();
-        assert_eq!(new.document.color.space, RgbSpace::ProPhoto);
-        assert_eq!(new.document.color.depth, IntegerDepth::U16);
-        assert!(!new.document.layers[1].visible);
-        assert_eq!(
-            settings.photo_open.editing_depth(IntegerDepth::U8),
-            IntegerDepth::U16
-        );
-        assert_eq!(
-            PhotoOpenPolicy::default().editing_depth(IntegerDepth::U8),
-            IntegerDepth::U8
-        );
-        assert_eq!(
-            settings.photo_open.missing_profile,
-            MissingProfilePolicy::Ask
-        );
-        let before = settings.clone();
-        assert!(
-            settings
-                .edit(
-                    PreferenceId::NewColorSpace,
-                    PreferenceValue::Choice(4),
-                    Platform::Gtk
-                )
-                .is_err()
-        );
-        assert!(
-            settings
-                .edit(
-                    PreferenceId::PhotoDepth,
-                    PreferenceValue::Choice(0),
-                    Platform::Mac
-                )
-                .is_err()
-        );
-        assert_eq!(settings, before);
     }
 }

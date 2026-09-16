@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 struct App(*mut CapyApple);
 #[path = "color_tests.rs"]
 mod color;
+#[path = "photo_tests.rs"]
+mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {
     layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).expect("Native SDR hardware GPU required")
 }
@@ -66,6 +68,12 @@ fn assert_project_document(actual: &layer_core::Document, expected: &layer_core:
             raster_samples(&actual.raster),
             raster_samples(&expected.raster)
         );
+        assert_eq!(actual.source, expected.source);
+        if let (Some(actual), Some(expected)) = (&actual.source, &expected.source) {
+            for (key, tile) in &expected.tiles {
+                assert_eq!(actual.tiles[key].decode().unwrap(), tile.decode().unwrap());
+            }
+        }
         for (actual, expected) in actual.masks().zip(expected.masks()) {
             assert_eq!(
                 raster_samples(&actual.raster),
@@ -593,7 +601,7 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         let pointer = stale.0 as usize;
         assert_eq!(
             std::thread::spawn(move || unsafe {
-                capy_project_read(pointer as *const CapyProjectTask, fd)
+                capy_project_read(pointer as *const CapyProjectTask, fd, c"Drawing.capy".as_ptr())
             })
             .join()
             .unwrap(),
@@ -625,7 +633,7 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         let pointer = open.0 as usize;
         assert_eq!(
             std::thread::spawn(move || unsafe {
-                capy_project_read(pointer as *const CapyProjectTask, fd)
+                capy_project_read(pointer as *const CapyProjectTask, fd, c"Drawing.capy".as_ptr())
             })
             .join()
             .unwrap(),
@@ -669,7 +677,7 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
             "Old save cannot name a replacement document"
         );
         let new = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_read(new.0, -1) }, 0);
+        assert_eq!(unsafe { capy_project_read(new.0, -1, c"Drawing.capy".as_ptr()) }, 0);
         let blank = CString::new("Untitled").unwrap();
         assert_eq!(
             unsafe { capy_apple_project_adopt(app.0, new.0, blank.as_ptr(), c"".as_ptr()) },
@@ -716,7 +724,7 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
         file.write_all(b"not a project").unwrap();
         file.rewind().unwrap();
         let open = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_read(open.0, file.as_raw_fd()) }, -1);
+        assert_eq!(unsafe { capy_project_read(open.0, file.as_raw_fd(), c"Drawing.capy".as_ptr()) }, -1);
         let title = CString::new("Broken.capy").unwrap();
         assert_eq!(
             unsafe {
@@ -730,7 +738,7 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
             -1
         );
         let cancelled = ProjectJob::new(&app, true);
-        assert_eq!(unsafe { capy_project_read(cancelled.0, -1) }, 0);
+        assert_eq!(unsafe { capy_project_read(cancelled.0, -1, c"Drawing.capy".as_ptr()) }, 0);
         unsafe { capy_project_cancel(cancelled.0) };
         assert_eq!(
             unsafe {
@@ -1123,7 +1131,6 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
             Some(native_renderer());
         app.draw_frame();
         let paper = app.pixels();
-        let name = CString::new("Embedded source").unwrap();
         let pixels: Vec<u8> = (0..64 * 64)
             .flat_map(|i| {
                 [
@@ -1134,12 +1141,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
                 ]
             })
             .collect();
-        assert_eq!(
-            unsafe {
-                capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 64, 64, pixels.as_ptr(), pixels.len())
-            },
-            0
-        );
+        app.place_rgba("Embedded source", 64, 64, &pixels);
         let id = app.state()["layer_tools"]["editing_layer"]["id"]
             .as_u64()
             .unwrap();
@@ -1171,12 +1173,8 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         let original =
             Project::snapshot_with(engine.document(), |id| engine.backend().source_asset(id))
                 .unwrap();
-        assert!(
-            original
-                .assets
-                .values()
-                .any(|a| a.format == ProjectAssetFormat::Rgba8Srgb)
-        );
+        assert!(original.document.layers.iter().any(|layer| layer.source.is_some()),
+            "The imported original stays retained alongside edited raster pixels");
         let mask = engine
             .document()
             .layer(layer_core::LayerId(id))
@@ -1503,24 +1501,8 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
             Some(native_renderer());
         app.draw_until_idle();
         let paper = app.pixels();
-        let name = CString::new("Test image").unwrap();
         let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, 0, 0, 0, 0];
-        let before = app.state();
-        assert_eq!(
-            unsafe { capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 2, 2, rgba.as_ptr(), 15) },
-            -1
-        );
-        assert_eq!(
-            app.state(),
-            before,
-            "Incomplete pixels cannot mutate the document"
-        );
-        assert_eq!(
-            unsafe {
-                capy_apple_import_layer(app.0, app.state()["document_file"]["epoch"].as_u64().unwrap(), name.as_ptr(), 2, 2, rgba.as_ptr(), rgba.len())
-            },
-            0
-        );
+        app.place_rgba("Test image", 2, 2, &rgba);
         let id = app.state()["layer_tools"]["editing_layer"]["id"]
             .as_u64()
             .unwrap();

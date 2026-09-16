@@ -25,14 +25,17 @@ void capy_workspace_library_destroy(CapyWorkspaceLibrary *library);
 typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
-/* kind: 0 manual save, 1 open, 2 private recovery capture (no save acknowledgment). */
+/* kind: 0 manual save, 1 open, 2 private recovery capture, 3 Place/Paste. */
 CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t kind);
 int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
 int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
-int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
+int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *name); /* -1: new */
+int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);
+char *capy_project_profile(const CapyProjectTask *task); /* owned JSON interpretation or null */
+int32_t capy_project_assume_profile(const CapyProjectTask *task, const char *profile_json);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
 int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */
@@ -89,9 +92,6 @@ int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);
 int32_t capy_apple_finish_startup_cache(CapyApple *app);
-/* Import into the captured document epoch; straight-alpha RGBA8 sRGB rows. */
-int32_t capy_apple_import_layer(CapyApple *app, uint64_t epoch, const char *name, uint32_t width,
-                               uint32_t height, const uint8_t *rgba, size_t count);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_redraw(CapyApple *app);
 int32_t capy_apple_detach(CapyApple *app);

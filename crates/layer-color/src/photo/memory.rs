@@ -57,8 +57,16 @@ fn available_memory() -> Option<u64> {
     if system.total_memory() == 0 {
         return None;
     }
+    // sysinfo 0.37's Apple available-memory calculation subtracts compressed
+    // pages from free/inactive pages, even though they are already excluded.
+    // Use its total/used readings to count compression once. Do not invent a
+    // minimum: true exhaustion must still produce a zero admission budget.
+    #[cfg(target_os = "macos")]
+    let headroom = system.total_memory().saturating_sub(system.used_memory());
+    #[cfg(not(target_os = "macos"))]
+    let headroom = system.available_memory();
     let available = process_allowance(
-        system.available_memory(),
+        headroom,
         system.total_memory(),
         system
             .cgroup_limits()

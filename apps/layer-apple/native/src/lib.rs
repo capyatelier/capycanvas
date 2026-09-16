@@ -463,52 +463,6 @@ pub unsafe extern "C" fn capy_apple_test_gpu_fault(app: *mut CapyApple, validati
     }).map_or(-1, |_| 0)
 }
 /// # Safety
-/// Valid exclusively owned handle, UTF-8 NUL-terminated name and `count` readable
-/// image bytes. Neither input is retained after this call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_import_layer(
-    app: *mut CapyApple,
-    epoch: u64,
-    name: *const c_char,
-    width: u32,
-    height: u32,
-    rgba: *const u8,
-    count: usize,
-) -> i32 {
-    let Some(app) = (unsafe { app.as_mut() }) else {
-        return -1;
-    };
-    app.perform(|a| {
-        if a.host.session.state().document_file.epoch != epoch {
-            return Err("The drawing changed before the image finished importing. Import it again.".into());
-        }
-        if name.is_null()
-            || rgba.is_null()
-            || width == 0
-            || height == 0
-            || width > 8192
-            || height > 8192
-            || count != width as usize * height as usize * 4
-        {
-            return Err("Import an image up to 8192 × 8192 pixels with complete RGBA data".into());
-        }
-        let name = unsafe { CStr::from_ptr(name) }
-            .to_str()
-            .map_err(|e| e.to_string())?;
-        a.host.import_layer_image(
-            name,
-            layer_render::HostImage {
-                width,
-                height,
-                stride: width * 4,
-                format: layer_render::PixelFormat::Rgba8Srgb,
-                bytes: unsafe { std::slice::from_raw_parts(rgba, count) },
-            },
-        )
-    })
-    .map_or(-1, |_| 0)
-}
-/// # Safety
 /// Records must contain count initialized doubles, alive for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_pointer(

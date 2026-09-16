@@ -18,10 +18,15 @@ import UIKit
     @Published var creating = false
     @Published var creationError: String?
     @Published var creationSaving = false
+    @Published var pendingProfile: JSON?
+    @Published var profileError: String?
+    @Published var interpreting = false
+    private var profileCompletion: ((JSON?) -> Void)?
     private var creationCompletion: ((JSON?) -> Void)?
     private var exportPreparing = false
     private weak var store: EditorStore?
     private var requestID: UInt64?
+    private var approved: (UInt64, UInt64)?
     private var destination: URL?
     var closeWindow: (() -> Void)?
     private var handledClose = false
@@ -39,11 +44,13 @@ import UIKit
         var save: (String, UTType, @escaping (URL?) -> Void) -> Void
         var create: ((JSON, @escaping (JSON?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
+        var paste: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = nil
     }
     private let dialogs: Dialogs?
     struct Picker: Identifiable {
         let id = UUID()
         let export: URL?
+        let types: [UTType]
     }
     init(store: EditorStore, dialogs: Dialogs? = nil) { self.store = store; self.dialogs = dialogs }
     var title: String {
@@ -62,9 +69,10 @@ import UIKit
         guard requestID == nil, !finishing,
             let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "document" }) else { return }
         requestID = request["id"].uint; busy = true; cancelling = false; cancelled = false
+        approved = (file["epoch"].uint, file["revision"].uint)
         let document = request["kind"]["request"]
         let action = document["type"].string
-        blocksEditor = action == "open" || action == "new" || action == "confirm_close" || action == "export" || closeCompletion != nil
+        blocksEditor = action != "save" || closeCompletion != nil
         switch action {
         case "save":
             destination = URL(string: document["location"]["uri"].string)
@@ -83,6 +91,21 @@ import UIKit
                 guard let self else { return }
                 if let url { open(url) } else { finish() }
             } }
+        case "place": chooseOpen(photosOnly: true) { [weak self] url in
+            guard let self else { return }
+            if let url { open(url, placing: true) } else { finish() }
+        }
+        case "paste":
+            let id = requestID
+            let completed: (Result<Data, Error>) -> Void = { [weak self] result in
+                guard let self, requestID == id else { return }
+                if cancelled { finish(); return }
+                switch result {
+                case .success(let data): open(nil, placing: true, image: data)
+                case .failure(let error): fail(error.localizedDescription)
+                }
+            }
+            if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
         case "confirm_close": confirming = true
         default: fail("This document service is not available yet")
         }
@@ -158,10 +181,9 @@ import UIKit
         cancelled = true; cancelling = true; activeTask?.cancel()
         if exportPreparing && activeTask == nil { finish() }
     }
-    private func task(opening: Bool, _ ready: @escaping (NativeProjectTask) -> Void) {
+    private func task(opening: Bool, placing: Bool = false, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
-        let file = store?.state["document_file"] ?? JSON()
-        native.projectTask(opening: opening, expected: opening ? (file["epoch"].uint, file["revision"].uint) : nil) { [weak self] task, error in
+        native.projectTask(opening: opening, placing: placing, expected: opening ? approved : nil) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.cancelled { self.finish(); return }
@@ -251,7 +273,7 @@ import UIKit
                         if self.cancelled { Self.removeStaging(staging); completion(nil); return }
                         let completed: (URL?) -> Void = { url in Self.removeStaging(staging); completion(url) }
                         if let export = self.dialogs?.export { export(staging, completed) }
-                        else { self.pickerCompletion = completed; self.picker = Picker(export: staging) }
+                        else { self.pickerCompletion = completed; self.picker = Picker(export: staging, types: []) }
                     }
                 } catch { let message = error.localizedDescription
                     DispatchQueue.main.async { self?.report(message); completion(nil) }
@@ -282,34 +304,61 @@ import UIKit
             }
         }
     }
-    private func open(_ url: URL?, options: JSON? = nil) {
+    private func open(_ url: URL?, options: JSON? = nil, placing: Bool = false, image: Data? = nil) {
         let recovery = recovering
-        task(opening: true) { [weak self] task in
-            NativeProjectTask.io.async {
-                do {
-                    try task.read(from: url, options: options)
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        if self.cancelled { self.finish(); return }
-                        self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url,
-                            recovered: recovery != nil) { [weak self] error in
-                            DispatchQueue.main.async {
-                                guard let self else { return }
-                                if let error { self.report(error) } else {
-                                    self.destination = recovery == nil ? url : nil
-                                    if let recovery { self.store?.recovery.didRestore(recovery) }
-                                }
-                                self.recovering = nil
-                                self.finish(error == nil)
-                            }
+        task(opening: true, placing: placing) { [weak self] task in
+            self?.prepare(task, url: url, recovery: recovery) {
+                if let image { try task.read(image: image) }
+                else { try task.read(from: url, options: options) }
+            }
+        }
+    }
+    private func prepare(_ task: NativeProjectTask, url: URL?, recovery: RecoveryRecord?, work: @escaping () throws -> Void) {
+        NativeProjectTask.io.async { [weak self] in
+            do {
+                try work()
+                let profile = try task.pendingProfile()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.interpreting = false
+                    if self.cancelled { self.finish(); return }
+                    if !profile.isNull {
+                        self.pendingProfile = profile; self.profileError = nil
+                        self.profileCompletion = { [weak self] choice in
+                            guard let self else { return }
+                            guard let choice else { self.finish(); return }
+                            self.interpreting = true
+                            self.prepare(task, url: url, recovery: recovery) { try task.assumeProfile(choice) }
+                        }
+                        return
+                    }
+                    self.profileCompletion = nil; self.pendingProfile = nil
+                    self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url,
+                        recovered: recovery != nil) { [weak self] error in
+                        DispatchQueue.main.async {
+                            guard let self else { return }
+                            if let error { self.report(error) }
+                            else if let recovery { self.store?.recovery.didRestore(recovery) }
+                            self.recovering = nil
+                            self.finish(error == nil)
                         }
                     }
-                } catch {
-                    let message = error.localizedDescription
-                    DispatchQueue.main.async { self?.report(message); self?.finish() }
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.interpreting = false
+                    if self.cancelled { self.finish() }
+                    else if self.pendingProfile != nil { self.profileError = message }
+                    else { self.fail(message) }
                 }
             }
         }
+    }
+    func chooseProfile(_ profile: JSON?) {
+        guard !interpreting else { return }
+        profileCompletion?(profile)
     }
     private func fail(_ message: String) { report(message); finish() }
     private func report(_ message: String) { if !cancelled { error = message } }
@@ -330,7 +379,8 @@ import UIKit
         }
     }
     private func released() {
-        requestID = nil; busy = false; blocksEditor = false; finishing = false
+        requestID = nil; approved = nil; busy = false; blocksEditor = false; finishing = false
+        profileCompletion = nil; pendingProfile = nil; profileError = nil; interpreting = false
         activeTask = nil; cancelling = false; exportPreparing = false
         if let state = store?.state.json {
             receive(state)
@@ -338,15 +388,15 @@ import UIKit
             if requestID == nil { recovering = nil; externalOpen = nil }
         }
     }
-    private func chooseOpen(_ completion: @escaping (URL?) -> Void) {
+    private func chooseOpen(photosOnly: Bool = false, _ completion: @escaping (URL?) -> Void) {
         if let dialogs { dialogs.open(completion); return }
         #if os(macOS)
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.capyProject]; panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.begin { response in completion(response == .OK ? panel.url : nil) }
         #else
-        pickerCompletion = completion; picker = Picker(export: nil)
+        pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes)
         #endif
     }
     private func chooseSave(name: String, type: UTType, _ completion: @escaping (URL?) -> Void) {
@@ -396,28 +446,34 @@ struct ProjectFilesModifier: ViewModifier {
                     files.created($0)
                 }.interactiveDismissDisabled(files.creationSaving).modifier(EditorPopupPresentation())
             }
+            .sheet(isPresented: Binding(get: { files.pendingProfile != nil }, set: { if !$0 { files.chooseProfile(nil) } })) {
+                PhotoProfileForm(interpretation: files.pendingProfile ?? JSON(),
+                    spaces: files.newDocumentSpec["creation"]["spaces"].array, error: files.profileError, busy: files.interpreting) {
+                    files.chooseProfile($0)
+                }.interactiveDismissDisabled(files.interpreting).modifier(EditorPopupPresentation())
+            }
             #if os(iOS)
             // Files may deliver its URL after SwiftUI dismisses this sheet.
             // Only the document-picker delegate completes selection or cancellation.
             .sheet(item: $files.picker) { picker in
-                NativeDocumentPicker(export: picker.export, contentType: .capyProject) { files.picked($0) }.ignoresSafeArea()
+                NativeDocumentPicker(export: picker.export, contentTypes: picker.types) { files.picked($0) }.ignoresSafeArea()
             }
             #endif
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { !confirming && picker == nil && !creating }
+    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil }
 }
 
 #if os(iOS)
 struct NativeDocumentPicker: UIViewControllerRepresentable {
     let export: URL?
-    let contentType: UTType
+    let contentTypes: [UTType]
     let completion: (URL?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(completion) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let controller = export.map { UIDocumentPickerViewController(forExporting: [$0], asCopy: false) }
-            ?? UIDocumentPickerViewController(forOpeningContentTypes: [contentType], asCopy: false)
+            ?? UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: false)
         controller.allowsMultipleSelection = false; controller.delegate = context.coordinator
         return controller
     }

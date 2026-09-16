@@ -3,7 +3,7 @@
 For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
-paint/palette workflows are integrated; the remaining host workflows and device
+paint/palette workflows and retained photo Open/Place/Paste are integrated; the remaining host workflows and device
 acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
@@ -305,6 +305,46 @@ milestone.
 
 Profile/depth changes, retained photo import/editing, inspection, ICC/export
 workflows, managed displays and physical SDR acceptance remain in phase 2 scope.
+
+## Retained photo Open, Place and Paste
+
+Apple now uses the shared PNG/JPEG/TIFF decoder inside the existing document
+worker. Open retains source depth/profile, chooses the shared working space and
+keeps Save separate from the source photograph. Place/Paste preserve the receiving
+document's color and retain the original samples in one undoable layer. The
+shared missing-profile and edit-depth settings are enabled on both hosts; Ask
+pauses the same job for a native interpretation form, including Cancel and retry.
+The old ImageIO-to-sRGB8 decoder, import ABI and separate layer picker are removed.
+
+Mac Metal checks preserve P3/U8 and ProPhoto/U16 samples through painting,
+Undo/Redo, native save/reopen and GPU recovery. They reject cancellation and
+stale document, target or device results. The Swift coordinator passes both
+Apple policies: coordinated read, picker cancellation, encoded Paste, failure
+preservation, safe Save/reopen and missing-profile cancellation/retry. Shared
+codec, host and UI checks pass 517 cases in aggregate, with five pre-existing
+ignored cases. The Apple suite passes 58 cases in aggregate. Two obsolete test
+assertions were updated and rerun separately: retained sources are no longer
+packed image assets, and Apple now supports Color preferences.
+
+A tiny TIFF also reproduced a shared macOS admission-budget failure: sysinfo's
+available-memory calculation subtracted compressed pages twice and returned
+zero on this machine. The macOS branch uses its total-minus-used readings;
+iOS retains its process allowance and other hosts retain their existing queries.
+The budget fractions and zero-exhaustion policy are unchanged. Both Release
+builds pass without compiler warnings. The existing Swift document workflow
+also passes on both Apple policies, including failed Open after Discard,
+unsaved-history preservation, cancellation and retry. The Mac native picker
+workflow passes selection/cancellation, rendered pixels, layer naming, exact
+Undo/Redo and unchanged source bytes. Captures are reviewed; an unrelated iCloud
+access prompt covers one corner, with no permission changed. This is local-file
+acceptance only. Evidence, original failures and scoped validation are under
+`artifacts/apple-photo-workflows-v1/`.
+
+Native clipboard-provider delivery, physical iPad photo workflows, the 61 MP
+journey, source repair/rasterization, profile/depth editing, inspection, ICC/export
+controls, managed displays and final device/performance acceptance remain open.
+Both artist review apps and drawings remain preserved. Main was fetched without
+incoming changes during this milestone.
 
 ## Native provider acceptance
 

@@ -25,20 +25,7 @@ fn region_app(platform: u32, gap: bool) -> App {
             })
         })
         .collect();
-    assert_eq!(
-        unsafe {
-            capy_apple_import_layer(
-                app.0,
-                app.state()["document_file"]["epoch"].as_u64().unwrap(),
-                c"Outline".as_ptr(),
-                64,
-                64,
-                pixels.as_ptr(),
-                pixels.len(),
-            )
-        },
-        0
-    );
+    app.place_rgba("Outline", 64, 64, &pixels);
     app.action(json!({"type":"set_color","rgba":[0,0,1,1]}));
     app.draw_until_idle();
     app

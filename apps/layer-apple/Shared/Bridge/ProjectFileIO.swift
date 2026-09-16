@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
     static let capyProject = UTType(exportedAs: "art.capycanvas.project", conformingTo: .data)
+    static let capyPhotoTypes: [UTType] = [.png, .jpeg, .tiff]
 }
 
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
@@ -30,14 +31,26 @@ final class NativeProjectTask: @unchecked Sendable {
     func read(from url: URL?, options: JSON? = nil) throws {
         guard let url else {
             if let options { try check(try options.encoded().withCString { capy_project_new(handle, $0) }) }
-            else { try check(capy_project_read(handle, -1)) }
+            else { try check(capy_project_read(handle, -1, "Untitled")) }
             return
         }
         try ProjectFileIO.coordinate(url, writing: false) { source in
             let file = try FileHandle(forReadingFrom: source)
             defer { try? file.close() }
-            try self.check(capy_project_read(self.handle, file.fileDescriptor))
+            try url.lastPathComponent.withCString { try self.check(capy_project_read(self.handle, file.fileDescriptor, $0)) }
         }
+    }
+    func read(image: Data) throws {
+        try image.withUnsafeBytes { try check(capy_project_read_bytes(handle,
+            $0.bindMemory(to: UInt8.self).baseAddress, $0.count, "Pasted image")) }
+    }
+    func pendingProfile() throws -> JSON {
+        guard let value = capy_project_profile(handle) else { throw HostFailure(message: "Document operation is unavailable") }
+        defer { capy_apple_string_free(value) }
+        return try JSON.decode(String(cString: value))
+    }
+    func assumeProfile(_ profile: JSON) throws {
+        try check(try profile.encoded().withCString { capy_project_assume_profile(handle, $0) })
     }
 }
 

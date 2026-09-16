@@ -100,6 +100,20 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>SDR Photograph</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.png</string>
+				<string>public.jpeg</string>
+				<string>public.tiff</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>Capy Canvas Drawing</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>

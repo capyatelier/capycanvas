@@ -134,7 +134,7 @@ extension XCTestCase {
             let pixels = self.editorPixels(in: app); return Int(pixels[2]) > Int(pixels[0]) + 100
         }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
-        XCTAssertTrue(app.staticTexts[url.lastPathComponent].firstMatch.exists, "Use the selected image's filename for its layer")
+        XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.exists, "Use the selected photo name for its layer")
         let imported = editorPixels(in: app)
         attachEditor(in: app, name: "native-image-imported")
         for (command, count, expected) in [("Undo", 2, paper), ("Redo", 3, imported)] {
