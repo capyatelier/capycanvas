@@ -45,11 +45,23 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
       footer.append(create);form.append(footer);form.onsubmit=e=>{e.preventDefault();create.click();};
     });
   }
-  function chooseFile() {
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:false,types:[{description:"Drawing or photo",accept:{"application/octet-stream":[".capy"],"image/jpeg":[".jpg",".jpeg"],"image/png":[".png"],"image/tiff":[".tif",".tiff"]}}]})
+  async function clipboardImage() {
+    if(!navigator.clipboard?.read)throw new Error("Image paste is unavailable in this browser. Use Import Image as Layer.");
+    const items=await navigator.clipboard.read();
+    const preferred=["web image/tiff","image/tiff","web image/png","web image/jpeg","image/png","image/jpeg"];
+    for(const type of preferred)for(const item of items)if(item.types.includes(type)) {
+      const blob=await item.getType(type),mime=type.replace(/^web /,"");
+      if(blob.size>512*1024*1024)throw new Error("Clipboard image exceeds 512 MiB");
+      const extension={"image/tiff":"tif","image/png":"png","image/jpeg":"jpg"}[mime];
+      return {file:new File([blob],`Pasted image.${extension}`,{type:mime})};
+    }
+    throw new Error("Copy a PNG, TIFF or JPEG image to paste, or import the original file.");
+  }
+  function chooseFile(placing=false) {
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:false,types:[{description:"Drawing or photo",accept:{...(placing?{}:{"application/octet-stream":[".capy"]}),"image/jpeg":[".jpg",".jpeg"],"image/png":[".png"],"image/tiff":[".tif",".tiff"]}}]})
       .then(async([handle])=>({file:await handle.getFile(),handle}));
     return new Promise(resolve=>{
-      const input=element("input");input.type="file";input.accept=".capy,.jpg,.jpeg,.png,.tif,.tiff";input.hidden=true;document.body.append(input);
+      const input=element("input");input.type="file";input.accept=(placing?"":".capy,")+".jpg,.jpeg,.png,.tif,.tiff";input.hidden=true;document.body.append(input);
       const done=value=>{input.remove();resolve(value);};
       input.onchange=()=>done(input.files[0]?{file:input.files[0]}:null);input.oncancel=()=>done(null);input.click();
     });
@@ -94,19 +106,24 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
         });
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
-      if(r.type==="change_color"||r.type==="color_history") {
+      if(r.type==="properties") {
+        const rows=await app.document_properties();
+        await dialog("Document Properties",(form,finish)=>{for(const [name,value]of rows){form.append(element("h3","",name),element("p","source-details",value));}form.append(button("Done",()=>finish(true)));});
+        applyChange(app.finish_document(id,true));
+      } else if(r.type==="change_color"||r.type==="color_history") {
         candidate=await chooseDocumentColor({app,dialog,element,button,gpuOperation,request:r,id});
         if(candidate){const prepared=candidate;candidate=null;applyChange(app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
-      } else if(r.type==="new"||r.type==="open") {
+      } else if(["new","open","place","paste"].includes(r.type)) {
         const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;
         if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
-        else {const chosen=await chooseFile();if(!chosen){applyChange(app.finish_document(id,false));return;}
+        else {const chosen=r.type==="paste"?await clipboardImage():await chooseFile(r.type==="place");if(!chosen){applyChange(app.finish_document(id,false));return;}
+          if(["place","paste"].includes(r.type)&&chosen.file.size>512*1024*1024)throw new Error("Image or project file exceeds 512 MiB");
           bytes=new Uint8Array(await chosen.file.arrayBuffer());target=location(chosen.file.name,chosen.handle);}
         message("Preparing drawing…");
         candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button})));
         applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
-        await retireRecovery();
+        if(r.type==="new"||r.type==="open")await retireRecovery();
       } else if(r.type==="save"||r.type==="export") {
         const recipe=r.type==="export"?await chooseExport({app,dialog,element,button}):null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}

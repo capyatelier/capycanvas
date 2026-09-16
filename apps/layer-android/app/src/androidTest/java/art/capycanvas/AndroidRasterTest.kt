@@ -237,6 +237,85 @@ class AndroidRasterTest {
         assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
+    @Test fun retainedPlacePasteAndDocumentDetails() {
+        fun fresh(space:String, depth:String) {
+            val task=native { h -> val(id,f)=request(h,"new_document")
+                Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+            try {
+                Native.projectOptions(task,obj("extent" to org.json.JSONArray(listOf(513,257)),"color" to obj("space" to space,"depth" to depth),"background" to "White").toString())
+                Native.projectWork(task,-1,513,257); native {Native.projectAdopt(it,task,"null")}
+            } finally {Native.projectFree(task)}
+            native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick()
+        }
+        fresh("ProPhoto","U16");stroke(0.0)
+        val form=native {JSONObject(Native.query(it,obj("type" to "export_form").toString()))}
+        val recipe=JSONObject(form.getJSONArray("recipes").getJSONArray(2).getJSONObject(1).toString()).put("format","Png")
+        val pixels=png("placement-original.png",recipe)
+        open(File(files,"placement-original.png"))
+        val source=manifest(save("placement-original.capy")).getJSONObject("tiled_sources")
+        fresh("DisplayP3","U8")
+        val before=manifest(save("placement-master.capy"))
+        val fileBefore=native {state(it).getJSONObject("document_file")}
+        val task=native { h -> val(id,f)=request(h,"import_image")
+            Native.projectTask(h,id,obj("uri" to "test:placement-original.png","name" to "placement-original.png").toString(),f.getLong("epoch"),f.getLong("revision")) }
+        try {
+            Native.projectWork(task,ParcelFileDescriptor.open(File(files,"placement-original.png"),ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
+            native {Native.projectAdopt(it,task,"null")}
+        } finally {Native.projectFree(task)}
+        tick()
+        val fileAfter=native {state(it).getJSONObject("document_file")}
+        assertEquals(fileBefore.getLong("epoch"),fileAfter.getLong("epoch"))
+        assertEquals(fileBefore.getJSONObject("location").toString(),fileAfter.getJSONObject("location").toString())
+        assertTrue(fileAfter.getBoolean("modified"))
+        val placed=manifest(save("placement-result.capy"))
+        assertEquals(before.getJSONObject("document").getJSONObject("color").toString(),placed.getJSONObject("document").getJSONObject("color").toString())
+        assertEquals(source.getJSONArray("images").toString(),placed.getJSONObject("tiled_sources").getJSONArray("images").toString())
+        assertEquals(source.getJSONArray("profiles").toString(),placed.getJSONObject("tiled_sources").getJSONArray("profiles").toString())
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick()
+        assertEquals(before.getJSONObject("tiled_sources").toString(),manifest(save("placement-undo.capy")).getJSONObject("tiled_sources").toString())
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick()
+        assertEquals(placed.getJSONObject("tiled_sources").toString(),manifest(save("placement-redo.capy")).getJSONObject("tiled_sources").toString())
+        open(File(files,"placement-result.capy"))
+        assertEquals(placed.getJSONObject("tiled_sources").toString(),manifest(save("placement-reopened.capy")).getJSONObject("tiled_sources").toString())
+        val infoTask=native {Native.documentInfoTask(it)}
+        val info=Native.documentInfo(infoTask)
+        assertTrue(info.contains("Display P3"));assertTrue(info.contains("16-bit RGB"));assertTrue(info.contains("embedded ICC retained"))
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread {host.invoke("document_properties")}
+        compose.waitUntil(10_000) {compose.onAllNodesWithText("placement-original").fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+        // Exercise Android's real URI clipboard transport, without Bitmap decoding.
+        val resolver=activity.contentResolver
+        val values=android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,"capy-m2-paste-${System.nanoTime()}.png")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE,"image/png")
+        }
+        val uri=resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,values)!!
+        val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
+        var previous:android.content.ClipData?=null
+        try {
+            resolver.openOutputStream(uri)!!.use {it.write(pixels)}
+            compose.runOnUiThread {previous=clipboard.primaryClip;clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver,"Capy test image",uri));host.invoke("paste_image")}
+            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.getJSONObject("document").getJSONArray("layers").length()+1}
+            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
+            assertNull(host.actionError)
+            DocumentController.nativeFileJobsForTest=true
+            val pasted=manifest(save("placement-pasted.capy"))
+            assertEquals("U8",pasted.getJSONObject("document").getJSONObject("color").getString("depth"))
+            for(image in pasted.getJSONObject("tiled_sources").getJSONArray("images").objects()) {
+                assertEquals("U16",image.getString("depth"))
+                assertEquals(source.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(),image.getJSONArray("tiles").toString())
+            }
+            assertEquals(source.getJSONArray("profiles").toString(),pasted.getJSONObject("tiled_sources").getJSONArray("profiles").toString())
+        } finally {
+            DocumentController.nativeFileJobsForTest=true
+            compose.runOnUiThread {previous?.let {clipboard.setPrimaryClip(it)} ?: clipboard.clearPrimaryClip()}
+            resolver.delete(uri,null,null)
+        }
+        assertNull(host.failure)
+    }
+
     @Test fun documentColorChangesPreserveExactHistoryAndCancel() {
         val fresh = native { handle -> val (id, f) = request(handle, "new_document")
             Native.projectTask(handle, id, "null", f.getLong("epoch"), f.getLong("revision")) }

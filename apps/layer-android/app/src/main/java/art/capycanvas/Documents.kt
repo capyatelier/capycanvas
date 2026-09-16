@@ -64,7 +64,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (request == null) return
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
-            "open" -> picker = DocumentPicker(request, approval.first, approval.second)
+            "open", "place" -> picker = DocumentPicker(request, approval.first, approval.second)
+            "paste" -> try {
+                val clipboard = application.getSystemService(android.content.ClipboardManager::class.java)
+                val uri = clipboard.primaryClip?.let { clip -> (0 until clip.itemCount).firstNotNullOfOrNull { clip.getItemAt(it).uri } }
+                if (uri == null) complete(id!!, false, "Copy a PNG, TIFF or JPEG image to paste.") else transfer(request, uri, approval)
+            } catch(e:Exception) { complete(id!!,false,e.message ?: "Clipboard image is unavailable") }
             "export" -> { exportRecipe = null; exportRequest = request }
             "save" -> document.objectOrNull("location")?.let { transfer(request, Uri.parse(it.getString("uri")), approval) }
                 ?: run { picker = DocumentPicker(request, approval.first, approval.second) }
@@ -170,7 +175,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
                     host.documentChanged()
-                    host.recovery.retire()
+                    if (kind == "new" || kind == "open") host.recovery.retire()
                 }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false) }
@@ -246,7 +251,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (picker != null && !picker.launched) {
             picker.launched = true
             val document = picker.request.getJSONObject("kind").getJSONObject("request")
-            val opening = document.getString("type") == "open"
+            val opening = document.getString("type") in listOf("open", "place")
             val intent = Intent(if (opening) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/octet-stream"
@@ -268,6 +273,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val id = request.getInt("id")
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
+            "properties" -> key(id) { DocumentPropertiesDialog(host) { controller.cancel(id) } }
             "change_color", "color_history" -> if (!DocumentController.nativeFileJobsForTest) key(id) { DocumentColorDialog(host, request) }
             "new" -> key(id) {
                 NewDrawingDialog(host, options, { controller.cancel(id) }) { choices -> controller.create(request, choices) }

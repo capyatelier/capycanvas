@@ -8,6 +8,7 @@ async function execute({id,request}) {
     let result;
     switch(request.operation) {
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "properties": result = wasm.raster_worker_properties(request.metadata); break;
       case "color-convert": result = await wasm.raster_worker_color(request.metadata,request.buffers); break;
       case "read": result = await wasm.raster_worker_read(request.metadata,request.buffers[0]); break;
       case "output-begin": result = await beginOutput(); break;

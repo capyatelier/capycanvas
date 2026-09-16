@@ -255,3 +255,46 @@ document source details, persistent named export presets/profile library, output
 comparison previews, broader adjustment/effect integration qualification, and the
 final tablet memory/120 Hz navigation measurements. This checkpoint is not final
 qualification or a user-test handoff.
+
+## Retained placement and document details — 2026-09-16
+
+Web and Android Place/Paste now use the same profiled PNG/JPEG/TIFF decoder and
+source-retention policy as Open. They add a layer to the current master, keeping
+its working space, editing depth, epoch and save location. Preparation captures
+the selected target, document revision and GPU generation; stale adoption fails.
+Missing-profile choices use the existing cancellable interpretation dialog.
+Both layer-panel import buttons now use this path; their old browser Canvas2D /
+Android Bitmap decoders, which reduced every import to RGBA8, have been removed.
+The raw RGBA8 import APIs remain for synthetic renderer test fixtures only.
+
+Document Properties inspects a small immutable metadata message on the file
+worker. It reports canvas extent, document space/depth, resolution metadata and
+each retained source's original channels, depth and profile, including explicit
+assumptions. Inspecting properties does not transfer image tiles to a worker.
+
+Validation on the physical tablet:
+
+- `tablet-native-source-import.log`: Android import, exact source sample/profile
+  preservation inside a P3 U8 master, undo/redo, reopen, actual properties dialog
+  and real Android URI clipboard paste passed (8.148 s).
+- `tablet-web-source-import-retry.log`: browser layer-panel import, undo/redo,
+  reopen, properties and real Chromium custom-format clipboard paste passed.
+  Every ProPhoto U16 source tile and ICC stayed identical inside a P3 U8 master.
+  Chromium was visible but its page initially lacked focus; a real pointer click
+  in the title bar fixed the clipboard test transport. The initial denial was
+  explicit, and left the document intact. Clipboard permissions were granted
+  only to the isolated localhost test origin through DevTools.
+- `android-source-import-build.log`, `android-source-import-tests-build.log`,
+  `web-source-import-build.log`: actual ARM64/Wasm builds passed.
+
+Browser paste retains the bytes the browser exposes. Chromium's `web image/png`,
+`web image/tiff` and `web image/jpeg` custom types are preferred over ordinary
+PNG/JPEG, which may already have been sanitized by the clipboard producer or
+browser. Original file import is the reliable interchange path with applications
+that do not expose richer clipboard types. This follows Chromium's
+[custom clipboard format contract](https://developer.chrome.com/blog/web-custom-formats-for-the-async-clipboard-api).
+Android reads the clipboard's image URI directly without Bitmap decoding.
+
+Still pending: source repair/rasterization, flattened conversion copies,
+persistent named export presets/profile library, output comparisons, broader
+adjustment/effect qualification and final tablet memory/navigation measurements.

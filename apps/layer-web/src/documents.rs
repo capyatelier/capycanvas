@@ -25,10 +25,26 @@ pub struct WebProject {
     closing: bool,
     recovered: bool,
     photo: bool,
+    placed: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
+    source_name: String,
+    target: layer_core::LayerId,
+    lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn document_properties(&self) -> Result<js_sys::Promise, JsValue> {
+        let info = layer_color::DocumentInfo::capture(self.session.engine().document());
+        Ok(future_to_promise(async move {
+            let metadata = serde_json::to_string(&info).map_err(js)?;
+            JsFuture::from(raster_worker::call(
+                "properties",
+                &metadata,
+                &js_sys::Array::new(),
+            )?)
+            .await
+        }))
+    }
     pub fn inspect_profile(&self, bytes: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
         if bytes.length() as usize > layer_color::MAX_ICC_BYTES {
             return Err(js("ICC profile exceeds 16 MiB"));
@@ -144,10 +160,15 @@ impl WebApp {
         .ok_or_else(|| js("The document request is no longer active"))?;
         if !matches!(
             (&request, &bytes),
-            (DocumentRequest::Open, Some(_)) | (DocumentRequest::New, None)
+            (
+                DocumentRequest::Open | DocumentRequest::Place | DocumentRequest::Paste,
+                Some(_)
+            ) | (DocumentRequest::New, None)
         ) {
             return Err(js("Invalid project preparation request"));
         }
+        let placing = matches!(request, DocumentRequest::Place | DocumentRequest::Paste);
+        let target = self.session.engine().document().active_target();
         let live = self
             .session
             .engine()
@@ -188,6 +209,10 @@ impl WebApp {
             let photo = bytes
                 .as_ref()
                 .is_some_and(|bytes| bytes.subarray(0, 4).to_vec() != b"CAPY");
+            if placing && !photo {
+                return Err(js("Choose a PNG, TIFF or JPEG image to place"));
+            }
+            let source_name = source_name.unwrap_or_else(|| "Photo".into());
             let mut project = match bytes {
                 Some(bytes) => {
                     raster_project::open(
@@ -195,7 +220,7 @@ impl WebApp {
                         raster_project::OpenOptions {
                             dimension: limits.dimension,
                             photo_policy,
-                            name: source_name.unwrap_or_else(|| "Photo".into()),
+                            name: source_name.clone(),
                             recovered,
                         },
                     )
@@ -230,6 +255,28 @@ impl WebApp {
                         layer_color::photo_project(source, &name, project.document.color.depth)
                             .map_err(js)?;
                 }
+            }
+            if placing {
+                let source = project
+                    .document
+                    .layers
+                    .iter()
+                    .find_map(|l| l.source.clone())
+                    .ok_or_else(|| js("The selected file is not a photo"))?;
+                return Ok(WebProject {
+                    session: None,
+                    request: id,
+                    epoch,
+                    revision,
+                    closing: false,
+                    recovered: false,
+                    photo: true,
+                    placed: Some(source),
+                    source_name,
+                    target,
+                    lost,
+                }
+                .into());
             }
             let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
                 adapter,
@@ -290,7 +337,7 @@ impl WebApp {
                 surface: None,
                 presenter,
                 blank_presented: true,
-                lost,
+                lost: lost.clone(),
             };
             let mut candidate =
                 UiSession::from_project(WebRenderer(Some(gpu)), project, None, viewport)
@@ -304,6 +351,10 @@ impl WebApp {
                 closing,
                 recovered,
                 photo,
+                placed: None,
+                source_name,
+                target,
+                lost,
             }
             .into())
         }))
@@ -315,6 +366,49 @@ impl WebApp {
     ) -> Result<JsValue, JsValue> {
         let location: Option<DocumentLocation> =
             serde_wasm_bindgen::from_value(location).map_err(js)?;
+        let live = self
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or_else(|| js("Canvas unavailable"))?;
+        if !std::sync::Arc::ptr_eq(&live.lost, &project.lost) || live.lost.lock().unwrap().is_some()
+        {
+            return Err(js(
+                "The canvas changed while preparing this image; try again",
+            ));
+        }
+        if let Some(source) = project.placed.take() {
+            if self.session.state().document_file.epoch != project.epoch
+                || self.session.engine().document().revision != project.revision
+                || self.session.engine().document().active_target() != project.target
+            {
+                return Err(js(
+                    "The document or selected layer changed while importing; try again",
+                ));
+            }
+            let name = project
+                .source_name
+                .rsplit_once('.')
+                .map_or(project.source_name.as_str(), |(stem, _)| stem)
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(128)
+                .collect::<String>();
+            self.session
+                .import_layer_source(
+                    if name.is_empty() { "Image" } else { &name },
+                    (*source).clone(),
+                )
+                .map_err(js)?;
+            let mut change = self
+                .session
+                .complete_document_request(project.request, Ok(true))
+                .map_err(js)?;
+            change.canvas_wake = true;
+            return serialize(&change);
+        }
         let location = if project.photo { None } else { location };
         if project.closing && !self.session.state().document_file.close_ready {
             return Err(js("Document close was cancelled"));
@@ -371,4 +465,10 @@ impl WebApp {
             )
         }
     }
+}
+
+#[wasm_bindgen]
+pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
+    let info: layer_color::DocumentInfo = serde_json::from_str(metadata).map_err(js)?;
+    serialize(&info.describe().map_err(js)?)
 }

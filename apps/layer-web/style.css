@@ -776,3 +776,4 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .color-comparison { display: flex; flex-wrap: wrap; gap: 12px; }
 .color-comparison figure { margin: 0; flex: 1 1 180px; text-align: center; }
 .color-comparison canvas { width: 100%; height: auto; background: repeating-conic-gradient(#777 0 25%,#aaa 0 50%) 0 0/16px 16px; }
+.source-details { white-space: pre-wrap; }

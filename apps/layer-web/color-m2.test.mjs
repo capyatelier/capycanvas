@@ -142,3 +142,41 @@ export async function checkColorEdits({call,evaluate,settle}) {
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);assert.ok(await evaluate('sdrFiles.get("untagged.png")?.length>100'));
   console.log('Full-image comparison, canceled/committed assignment, conversion, depth change, exact undo/redo and native reopen passed; retained source samples/profile unchanged');
 }
+
+export async function checkSourceImports({call,evaluate}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const click=label=>evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
+  const original=await evaluate('sdrManifest(sdrPhotoMaster).tiled_sources');
+  await invoke('new_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
+  await evaluate(`(()=>{const d=document.querySelector('dialog[open]');for(const i of d.querySelectorAll('input[type=number]'))i.value=i.getAttribute('aria-label').startsWith('Width')?'513':'257';d.querySelector('select[aria-label="Color space"]').value='DisplayP3';d.querySelector('select[aria-label="Bit depth"]').value='U8';})()`);
+  await click('Create');await idle();const before=await save();
+  await evaluate(`window.sdrPlaceFile=JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==='bigint'?Number(v):v);window.showOpenFilePicker=async()=>[{name:'retained-prophoto16.png',async getFile(){return new File([sdrPhotoBytes],'retained-prophoto16.png')}}];`);
+  // The layer-panel button must use the retained-source path as well as the menu.
+  await evaluate(`document.querySelector('button[aria-label="Import image as layer"]').click()`);await idle();
+  assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),await evaluate('JSON.parse(sdrPlaceFile).epoch'));
+  assert.deepEqual(await evaluate('layerApp.state().document_file.location'),await evaluate('JSON.parse(sdrPlaceFile).location'));
+  const placed=await save();assert.deepEqual(placed.document.color,{space:'DisplayP3',depth:'U8'});assert.deepEqual(placed.tiled_sources.images,original.images);assert.deepEqual(placed.tiled_sources.profiles,original.profiles);
+  await invoke('undo');await idle();assert.deepEqual((await save()).tiled_sources,before.tiled_sources);
+  await invoke('redo');await idle();assert.deepEqual((await save()).tiled_sources,placed.tiled_sources);
+  await invoke('document_properties');await wait(`document.querySelector('dialog[open]')?.textContent.includes('embedded ICC retained')`);
+  const details=await evaluate('document.querySelector("dialog[open]").textContent');assert.match(details,/Display P3/);assert.match(details,/16-bit RGB/);await click('Done');await idle();
+  await evaluate(`window.sdrPlacedMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'placed.capy',async getFile(){return new File([sdrPlacedMaster],'placed.capy')}}];`);
+  await invoke('open_document');await idle();assert.deepEqual((await save()).tiled_sources,placed.tiled_sources);
+  // Chromium custom image formats preserve the original bytes. Ordinary image/png
+  // may have been sanitized by the clipboard producer/browser before we read it.
+  const focus=await evaluate('({x:innerWidth/2,y:3})');
+  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...focus,button:'left',clickCount:1});
+  await wait('document.hasFocus()');
+  const pasted=await call('Runtime.evaluate',{expression:`(async()=>{await navigator.clipboard.write([new ClipboardItem({'web image/png':new Blob([sdrPhotoBytes],{type:'image/png'})})]);return true})()`,awaitPromise:true,returnByValue:true,userGesture:true});
+  if(pasted.exceptionDetails)throw Error(JSON.stringify(pasted.exceptionDetails));
+  await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});
+  await idle();assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  const copy=await save();assert.equal(copy.document.layers.length,placed.document.layers.length+1);
+  assert.deepEqual(copy.document.color,placed.document.color);assert.deepEqual(copy.tiled_sources.profiles,original.profiles);
+  for(const image of copy.tiled_sources.images){assert.equal(image.depth,'U16');assert.deepEqual(image.tiles,original.images[0].tiles);}
+  console.log('Layer-panel import and real custom-format clipboard paste preserve every ProPhoto16 sample/ICC in a P3 U8 master; undo/redo, reopen and document details passed');
+}

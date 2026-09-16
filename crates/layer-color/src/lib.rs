@@ -14,3 +14,6 @@ mod rasterize;
 pub use rasterize::rasterize_source;
 mod document;
 pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color};
+
+mod document_info;
+pub use document_info::DocumentInfo;

@@ -28,6 +28,7 @@ struct Environment {
     new_options: layer_ui::NewDocumentOptions,
     photo_policy: layer_ui::PhotoOpenPolicy,
     source_name: String,
+    working_space: layer_core::color::RgbSpace,
     pending_photo: Option<layer_core::color::source::SourceImage>,
 }
 enum Payload {
@@ -42,6 +43,10 @@ enum Payload {
         environment: Option<Environment>,
         candidate: Option<Box<UiSession<Renderer>>>,
     },
+    Placed {
+        source: Option<layer_core::color::source::SourceImage>,
+        name: String,
+    },
     Retired {
         _session: Box<UiSession<Renderer>>,
     },
@@ -52,6 +57,7 @@ struct Task {
     request: u32,
     recovered: bool,
     photo: bool,
+    place: Option<layer_core::LayerId>,
     gpu_generation: u64,
     payload: Payload,
 }
@@ -81,13 +87,18 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 _ => None,
             })
             .ok_or("The document request is no longer active")?;
+        let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste)
+            .then_some(session.engine().document().active_target());
         let payload = match request {
             DocumentRequest::Save { .. } => {
                 let location: DocumentLocation =
                     serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
                 Payload::Save(Some(session.capture_project_save(id as u32, location)?))
             }
-            DocumentRequest::Open | DocumentRequest::New => {
+            DocumentRequest::Open
+            | DocumentRequest::New
+            | DocumentRequest::Place
+            | DocumentRequest::Paste => {
                 session.require_document_idle()?;
                 if session.state().document_file.epoch != epoch as u64
                     || session.engine().document().revision != revision as u64
@@ -111,6 +122,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                         new_options: session.state().settings.new_document.defaults,
                         photo_policy: session.state().settings.photo_open,
                         pending_photo: None,
+                        working_space: session.engine().document().color.space,
                         source_name: serde_json::from_str::<Option<DocumentLocation>>(&read(
                             &mut env, &location,
                         )?)
@@ -129,6 +141,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             request: id as u32,
             recovered: false,
             photo: false,
+            place,
             gpu_generation: a.gpu_generation,
             payload,
         })) as jlong)
@@ -163,6 +176,9 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         Some(file) => {
             let mut input = BufReader::new(file);
             if input.fill_buf().map_err(error)?.starts_with(b"CAPY") {
+                if t.place.is_some() {
+                    return Err("Choose a PNG, TIFF or JPEG image to place".into());
+                }
                 Project::read(input, limits)?
             } else {
                 if t.recovered {
@@ -205,6 +221,36 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             }
         }
     };
+    if t.place.is_some() {
+        let source = project
+            .document
+            .layers
+            .iter()
+            .find_map(|l| l.source.as_ref())
+            .ok_or("The selected file is not a photo")?;
+        layer_color::WorkingDecoder::new(
+            &source.interpretation,
+            e.working_space,
+            Default::default(),
+        )?;
+        let name = e
+            .source_name
+            .rsplit_once('.')
+            .map_or(e.source_name.as_str(), |(stem, _)| stem)
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(128)
+            .collect::<String>();
+        t.payload = Payload::Placed {
+            source: Some((**source).clone()),
+            name: if name.is_empty() {
+                "Image".into()
+            } else {
+                name
+            },
+        };
+        return Ok(());
+    }
     let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
         e.adapter,
         e.device,
@@ -411,7 +457,9 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                 Payload::Open { .. } => {
                     prepare(t, input, width.max(0) as u32, height.max(0) as u32)
                 }
-                Payload::Retired { .. } => Err("Project already adopted".into()),
+                Payload::Retired { .. } | Payload::Placed { .. } => {
+                    Err("Project already prepared or adopted".into())
+                }
             })
             .map_err(error)?
             .join()
@@ -433,6 +481,28 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         let t = unsafe { task(transfer) };
         let location: Option<DocumentLocation> =
             serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
+        if let Some(target) = t.place {
+            let s = &mut a.host.session;
+            if s.state().document_file.epoch != t.epoch
+                || s.engine().document().revision != t.revision
+                || s.engine().document().active_target() != target
+                || a.gpu_generation != t.gpu_generation
+            {
+                return Err(
+                    "The document or selected layer changed while importing; try again".into(),
+                );
+            }
+            let Payload::Placed { source, name } = &mut t.payload else {
+                return Err("Image is not prepared".into());
+            };
+            let previous = s.state().revision;
+            s.import_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone())?;
+            source.take();
+            let mut change = s.complete_document_request(t.request, Ok(true))?;
+            change.canvas_wake = true;
+            a.host.apply_change(previous, change);
+            return Ok(());
+        }
         // Importing a photo never grants Save permission to overwrite it.
         let location = if t.photo { None } else { location };
         let Payload::Open { candidate, .. } = &mut t.payload else {
@@ -561,6 +631,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             request: id as u32,
             recovered: false,
             photo: false,
+            place: None,
             gpu_generation: a.gpu_generation,
             payload: Payload::Export {
                 gpu,
@@ -644,6 +715,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                     new_options: session.state().settings.new_document.defaults,
                     photo_policy: session.state().settings.photo_open,
                     source_name: "Recovered drawing".into(),
+                    working_space: session.engine().document().color.space,
                     pending_photo: None,
                 }),
                 candidate: None,
@@ -657,6 +729,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             request: 0,
             recovered: true,
             photo: false,
+            place: None,
             gpu_generation: a.gpu_generation,
             payload,
         })) as jlong)

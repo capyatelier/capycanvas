@@ -45,19 +45,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   }
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
   const maskButton = glyphButton("mask", "Add layer mask", () => send(addMask()), "", addMask); footer.append(maskButton);
-  const file = element("input"); file.type = "file"; file.accept = "image/*"; file.hidden = true;
-  file.onchange = async () => {
-    const source = file.files[0]; if (!source) return;
-    try {
-      const image = await createImageBitmap(source);
-      // Decode an imported file only; this is not a canvas raster fallback.
-      const buffer = new OffscreenCanvas(image.width, image.height), context = buffer.getContext("2d");
-      context.drawImage(image, 0, 0); const rgba = context.getImageData(0, 0, image.width, image.height);
-      applyChange(app.import_layer_image(source.name, image.width, image.height, rgba.data)); image.close();
-    } catch (error) { message(error); }
-    file.value = "";
-  };
-  footer.append(glyphButton("image", "Import image as layer", () => file.click()), file);
+  footer.append(glyphButton("image", "Import image as layer", () => dispatch({type:"invoke",command:"import_image"})));
   const deleteAction = () => ({ op: "delete_selected" });
   const deleteButton = glyphButton("delete", "Delete selected layers", () => send(deleteAction()), "", deleteAction);
   footer.append(deleteButton);

@@ -99,3 +99,29 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionHistogram(
     })();
     string(&mut env, result)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentInfoTask(
+    _: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jlong {
+    let a = unsafe { app(handle) };
+    Box::into_raw(Box::new(layer_color::DocumentInfo::capture(
+        a.host.session.engine().document(),
+    ))) as jlong
+}
+/// Consumes the small metadata job on IO, including profile parsing.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentInfo(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jstring {
+    let info = unsafe { Box::from_raw(handle as *mut layer_color::DocumentInfo) };
+    string(
+        &mut env,
+        info.describe()
+            .and_then(|rows| serde_json::to_string(&rows).map_err(error)),
+    )
+}

@@ -1,9 +1,6 @@
 package art.capycanvas
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -37,7 +34,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -65,8 +61,6 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
 @Composable internal fun LayerPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val view = state.getJSONObject("layer_tools")
     val active = view.objectOrNull("editing_layer")
     val controls = view.getJSONObject("controls")
@@ -133,26 +127,6 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             images.keys.filter { it.substringBefore(':') !in ids }.forEach { images.remove(it); revisions.remove(it) }
         }
     }
-    val import = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) scope.launch {
-            try {
-                val decoded = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }
-                checkNotNull(decoded) { "This image could not be decoded" }
-                try {
-                    val rgba = withContext(Dispatchers.Default) {
-                        val pixels = IntArray(decoded.width*decoded.height); decoded.getPixels(pixels,0,decoded.width,0,0,decoded.width,decoded.height)
-                        ByteArray(pixels.size*4).also { bytes -> pixels.forEachIndexed { i,p ->
-                            bytes[i*4] = (p shr 16).toByte(); bytes[i*4+1] = (p shr 8).toByte(); bytes[i*4+2] = p.toByte(); bytes[i*4+3] = (p ushr 24).toByte()
-                        } }
-                    }
-                    host.importLayer("Imported image",decoded.width,decoded.height,rgba)
-                } finally { decoded.recycle() }
-            } catch (error: Exception) {
-                android.util.Log.e("CapyCanvas","Image import failed",error)
-                host.reportActionError(error.message ?: "Could not import the image")
-            }
-        }
-    }
     Box(modifier.fillMaxSize().onGloballyPositioned { panelOrigin = it.boundsInRoot().topLeft }) {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density.density }.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -212,7 +186,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 LayerButton(host,"add-layer","New layer",action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
                 LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
-                LayerButton(host,"image","Import image as layer") { import.launch("image/*") }
+                LayerButton(host,"image","Import image as layer", action=obj("type" to "invoke", "command" to "import_image"))
                 LayerButton(host,"delete","Delete selected layers",enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
                 Spacer(Modifier.weight(1f))
                 LayerButton(host,"more","Layer actions") { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
