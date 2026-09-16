@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 struct App(*mut CapyApple);
 #[path = "color_tests.rs"]
 mod color;
+#[path = "document_color_tests.rs"]
+mod document_color;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {

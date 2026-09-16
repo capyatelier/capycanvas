@@ -3,7 +3,8 @@
 For the next color-management work, start with the short
 [phase 2 macOS/iPadOS handoff](color-management-m2-apple-handoff.md). The shared
 SDR renderer, existing effect/gradient controls, New Drawing options and tagged
-paint/palette workflows and retained photo Open/Place/Paste are integrated; the remaining host workflows and device
+paint/palette workflows, retained photo Open/Place/Paste and document profile/depth
+editing are integrated; the remaining host workflows and device
 acceptance stay open. Earlier acceptance below
 does not qualify all of those new contracts.
 
@@ -345,6 +346,52 @@ journey, source repair/rasterization, profile/depth editing, inspection, ICC/exp
 controls, managed displays and final device/performance acceptance remain open.
 Both artist review apps and drawings remain preserved. Main was fetched without
 incoming changes during this milestone.
+
+## Document profile and bit-depth workflows
+
+Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
+now use the same native document worker. Shared code owns conversion semantics
+and exact history. Preparation captures a stable project, computes complete
+before/after previews and builds the replacement renderer off the owner; adoption
+publishes the document and renderer together. Cancel and stale document/device
+results preserve the active drawing. Retained original photo samples are unchanged.
+Renderer replacement also retires the old layer/filter preview readbacks.
+
+The native forms distinguish assignment from conversion, expose integer depth
+and dither, and require a prepared comparison before Apply. Conversion can save
+a flattened native copy while retaining the editable original and its history.
+The copy cannot replace its current master. AppKit uses the normal Save panel;
+iPad chooses a folder and filename, rejecting an existing destination. Properties
+formats shared document/source metadata on the worker, including profile parsing.
+
+All 60 Apple bridge tests and 456 active shared UI/host tests pass, with one
+pre-existing shared case ignored. The Metal fixture covers painted P3/U16 data,
+assignment/conversion/depth, exact document samples and rendered pixels through
+Undo/Redo, retained sources, save/reopen, continued painting, copies and rejected
+adoption. Both Apple policies pass the Swift owner workflow, including failure
+and retry, cancellation, source/existing-file protection and usable thumbnails
+after history. The Mac native UI workflow passes Preview, Cancel, Apply, exact
+sampled-pixel Undo/Redo, depth/Properties and conversion through the real controls
+(one test, no failures or skips). The three dialog captures are reviewed. An
+unrelated iCloud prompt still covers a corner; no permission is changed. These
+checks do not qualify managed canvas/display appearance. Both final Release
+builds pass without compiler warnings, including an explicit explanation that
+editable conversion can change blending and effects.
+
+Initial native paint fixtures started input before deferred brush preparation;
+initial Swift/UI fixtures filled without a selection, and a corrected UI startup
+fill still left its captured document blank. The tests now prepare the brush or
+select the canvas explicitly; UI artwork is created through the ready native
+menus and verified before testing color changes. Original failures are retained,
+and no runtime workaround was added. Evidence is `artifacts/apple-document-color-v1/`.
+Physical UIKit forms and folder/provider delivery remain unqualified. Artist
+review binaries and drawings are preserved; the new Release products are not
+installed over them. Main was fetched without incoming changes.
+
+Next are source repair/rasterization, histogram/sampling, retained photo
+corrections/masks, ICC library and profiled export, managed displays and the
+remaining device/performance gates. This checkpoint does not close the overall
+Apple goal or qualify the 61 MP workflow.
 
 ## Native provider acceptance
 

@@ -736,6 +736,25 @@ native picker/clipboard-provider delivery or cloud access. The Mac UI workflow
 `testNativeImageImport` covers the actual picker, cancellation, the imported layer
 name, sampled artwork and Undo/Redo.
 
+Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
+also use the native document worker. Shared code owns color semantics and exact
+Undo/Redo; the worker prepares complete before/after compositions and a replacement
+renderer before atomic publication. Original photo samples remain retained. A
+flattened converted copy has a separate destination and leaves the editable
+drawing unchanged. AppKit uses its Save panel; iPad uses a folder choice and
+filename, rejecting an existing file rather than overwriting it without consent.
+
+```sh
+cargo test -p layer-apple tests::document_color -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/document-color-owner.swift
+```
+
+These checks exercise both Apple policies: painted documents, exact pixels and
+history, retained source samples, save/reopen, cancellation, stale adoption,
+copy protection and failure/retry. `testNativeDocumentColor` separately checks
+native forms, complete previews, Apply/Cancel, history and Properties. Physical
+iPad folder/provider delivery remains a device acceptance case.
+
 The shared JSON transport uses direct Foundation container lookup to avoid
 bridging a complete dictionary for each field read by the editor. Check native
 and decoded containers, scalar fidelity, bounds, immutable edits and round trips

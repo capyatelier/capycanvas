@@ -2,7 +2,7 @@
 #[test]
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
     use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace}};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
     let mut s = session();
     s.set_platform(platform);
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.8, 0.3, 0.1, 1.]).unwrap();

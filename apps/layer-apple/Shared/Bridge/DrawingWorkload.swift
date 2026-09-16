@@ -48,7 +48,7 @@ import Foundation
     private func prepare() async throws {
         guard let native = store?.native else { throw CancellationError() }
         let job: NativeProjectTask = try await withCheckedThrowingContinuation { continuation in
-            native.projectTask(opening: true) { task, error in
+            native.projectTask(kind: .open) { task, error in
                 if let task { continuation.resume(returning: task) }
                 else { continuation.resume(throwing: HostFailure(message: error ?? "Workload document preparation failed")) }
             }

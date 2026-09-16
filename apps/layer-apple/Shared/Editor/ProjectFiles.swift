@@ -18,6 +18,7 @@ import UIKit
     @Published var creating = false
     @Published var creationError: String?
     @Published var creationSaving = false
+    @Published var colorEditor: DocumentColorController?
     @Published var pendingProfile: JSON?
     @Published var profileError: String?
     @Published var interpreting = false
@@ -106,6 +107,12 @@ import UIKit
                 }
             }
             if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
+        case "change_color", "color_history", "properties":
+            guard let store else { fail("The canvas session is unavailable"); return }
+            let editor = DocumentColorController(store: store, request: document, expected: approved) { [weak self] result in
+                self?.colorEditor = nil; self?.finish(result)
+            }
+            colorEditor = editor; editor.load()
         case "confirm_close": confirming = true
         default: fail("This document service is not available yet")
         }
@@ -178,12 +185,13 @@ import UIKit
         }
     }
     func cancel() {
+        if let colorEditor { colorEditor.cancel(); return }
         cancelled = true; cancelling = true; activeTask?.cancel()
         if exportPreparing && activeTask == nil { finish() }
     }
     private func task(opening: Bool, placing: Bool = false, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
-        native.projectTask(opening: opening, placing: placing, expected: opening ? approved : nil) { [weak self] task, error in
+        native.projectTask(kind: placing ? .place : opening ? .open : .save, expected: opening ? approved : nil) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.cancelled { self.finish(); return }
@@ -452,6 +460,12 @@ struct ProjectFilesModifier: ViewModifier {
                     files.chooseProfile($0)
                 }.interactiveDismissDisabled(files.interpreting).modifier(EditorPopupPresentation())
             }
+            .sheet(isPresented: Binding(get: { files.colorEditor != nil }, set: { if !$0 { files.colorEditor?.cancel() } })) {
+                if let editor = files.colorEditor {
+                    DocumentColorForm(editor: editor, spaces: files.newDocumentSpec["creation"]["spaces"].array)
+                        .interactiveDismissDisabled(editor.publishing).modifier(EditorPopupPresentation())
+                }
+            }
             #if os(iOS)
             // Files may deliver its URL after SwiftUI dismisses this sheet.
             // Only the document-picker delegate completes selection or cancellation.
@@ -462,7 +476,7 @@ struct ProjectFilesModifier: ViewModifier {
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil }
+    var activeOperationVisible: Bool { !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil }
 }
 
 #if os(iOS)

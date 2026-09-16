@@ -18,6 +18,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "project_color.rs"]
+mod color;
+pub use color::*;
+
 struct Environment {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -30,6 +34,8 @@ struct Environment {
     working_space: layer_core::color::RgbSpace,
 }
 enum Payload {
+    Color(Box<color::Task>),
+    Info(layer_color::DocumentInfo),
     Save {
         snapshot: Option<Project>,
         project: Option<Project>,
@@ -62,6 +68,7 @@ struct State {
 pub struct CapyProjectTask {
     state: Mutex<State>,
     phase: AtomicU8,
+    control: layer_render_wgpu::snapshot::CaptureControl,
     epoch: u64,
     revision: u64,
     save_request: Option<u32>,
@@ -74,6 +81,7 @@ impl CapyProjectTask {
                 error: None,
             }),
             phase: AtomicU8::new(0),
+            control: Default::default(),
             epoch,
             revision,
             save_request,
@@ -166,6 +174,10 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 snapshot: Some(session.capture_project_recovery()?),
                 project: None,
             }
+        } else if opening == 4 {
+            Payload::Color(Box::new(color::Task::capture(session)?))
+        } else if opening == 5 {
+            Payload::Info(layer_color::DocumentInfo::capture(session.engine().document()))
         } else if opening == 1 || opening == 3 {
             session.require_document_idle()?;
             let place = if opening == 3 {
@@ -323,6 +335,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                     .ok_or("Missing project snapshot")?
                     .write(stream)
             }
+            Payload::Color(color) => color.write_copy(stream),
             Payload::Export { readback, image } => {
                 if let Some(readback) = readback.take() {
                     *image = Some(readback.finish().map_err(|e| e.to_string())?);
@@ -556,6 +569,10 @@ unsafe fn adopt_project(
         if let Some(error) = &state.error {
             return Err(error.clone());
         }
+        if let Payload::Color(color) = &mut state.payload {
+            if recovered { return Err("A color change is not a recovery drawing".into()); }
+            return color.adopt(app, task);
+        }
         if let Payload::Placed { source, name, target, request, device } = &mut state.payload {
             if recovered { return Err("An image import is not a recovery drawing".into()); }
             let session = &mut app.host.session;
@@ -671,9 +688,9 @@ unsafe fn read_title<'a>(title: *const c_char) -> Result<&'a str, String> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_cancel(task: *const CapyProjectTask) {
     if let Some(task) = unsafe { task.as_ref() } {
-        let _ = task
-            .phase
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+        if task.phase.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            task.control.cancel();
+        }
     }
 }
 /// # Safety

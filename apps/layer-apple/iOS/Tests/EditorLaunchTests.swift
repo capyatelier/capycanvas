@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNativeDocumentColor() throws {
+        try checkNativeDocumentColor(in: editorCaptureApplication())
+    }
+
     @MainActor func testEditorKeyboardFocus() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkEditorKeyboardFocus(in: editorCaptureApplication())

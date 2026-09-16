@@ -25,7 +25,11 @@ Swift/Metal owner and full Mac UI checks pass; see the
 device coverage. Retained photo Open/Place/Paste now share the native worker and
 profile/depth policies, replacing the lossy sRGB8 import path; see the
 [photo workflow record](apple-handoff.md#retained-photo-open-place-and-paste).
-**Continue with profile/depth changes and the remaining host workflows in step 3**, then
+Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
+now use the same worker, with complete before/after previews, source-safe flattened
+copies and exact shared history; see the
+[document color record](apple-handoff.md#document-profile-and-bit-depth-workflows).
+**Continue with source repair/rasterization and the remaining host workflows in step 3**, then
 display integration and physical acceptance. Profiled export and device
 performance are not closed.
 

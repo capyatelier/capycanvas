@@ -208,18 +208,18 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
-    func projectTask(opening: Bool, placing: Bool = false, expected: (UInt64, UInt64)? = nil,
+    func projectTask(kind: NativeProjectTask.Kind, expected: (UInt64, UInt64)? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
-            let ready = opening ? capy_apple_project_ready(handle) : capy_apple_prepare_recovery(handle, FrameTrace.now())
+            let ready = kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
             if ready == 1 {
                 if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(nil, "Document preparation timed out") }
                 return
             }
             if ready < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable"); return }
-            guard let pointer = capy_apple_project_task(handle, placing ? 3 : opening ? 1 : 0) else {
+            guard let pointer = capy_apple_project_task(handle, kind.rawValue) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
                 return
             }

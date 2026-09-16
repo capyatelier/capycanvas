@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CoreGraphics
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -10,6 +11,7 @@ extension UTType {
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
 /// Its final release can destroy a large retired document, so use the I/O queue.
 final class NativeProjectTask: @unchecked Sendable {
+    enum Kind: UInt32 { case save, open, recovery, place, color, properties }
     static let io = DispatchQueue(label: "art.capycanvas.project-files", qos: .userInitiated)
     let handle: OpaquePointer
     init(_ handle: OpaquePointer) { self.handle = handle }
@@ -44,6 +46,30 @@ final class NativeProjectTask: @unchecked Sendable {
         try image.withUnsafeBytes { try check(capy_project_read_bytes(handle,
             $0.bindMemory(to: UInt8.self).baseAddress, $0.count, "Pasted image")) }
     }
+    func prepareColor(_ choice: JSON?, copy: Bool) throws {
+        try check(try (choice ?? JSON()).encoded().withCString { capy_project_color_work(handle, $0, copy) })
+    }
+    func details() throws -> JSON {
+        guard let text = capy_project_details(handle) else { try check(-1); return JSON() }
+        defer { capy_apple_string_free(text) }
+        return try JSON.decode(String(cString: text))
+    }
+    func comparison(after: Bool) throws -> CGImage {
+        var preview = CapyProjectPreview()
+        guard capy_project_preview(handle, after, &preview) == 0, let pixels = preview.pixels,
+            preview.width > 0, preview.height > 0, preview.width <= 512, preview.height <= 384,
+            preview.count == Int(preview.width * preview.height * 4),
+            let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let provider = CGDataProvider(data: Data(bytes: pixels, count: preview.count) as CFData),
+            let image = CGImage(width: Int(preview.width), height: Int(preview.height), bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: Int(preview.width) * 4, space: space,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: true, intent: .relativeColorimetric) else {
+            throw HostFailure(message: "The color comparison is unavailable")
+        }
+        return image
+    }
+
     func pendingProfile() throws -> JSON {
         guard let value = capy_project_profile(handle) else { throw HostFailure(message: "Document operation is unavailable") }
         defer { capy_apple_string_free(value) }

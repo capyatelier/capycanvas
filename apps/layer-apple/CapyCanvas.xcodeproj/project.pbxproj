@@ -251,6 +251,18 @@
 			"path" = "Shared/Editor/ColorWheelDrawing.swift";
 			"sourceTree" = "<group>";
 		};
+		"5F289254A48CCB93F3046938" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/DocumentColorController.swift";
+			"sourceTree" = "<group>";
+		};
+		"C2D2139A8E60BA6A69DE470A" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/DocumentColorForm.swift";
+			"sourceTree" = "<group>";
+		};
 		"8275114EC40FC838A8A4C464" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -543,6 +555,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "Shared/Tests/ColumnStackChecks.swift";
+			"sourceTree" = "<group>";
+		};
+		"220738E1A9E58D37E9E9AFA0" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Tests/DocumentColorChecks.swift";
 			"sourceTree" = "<group>";
 		};
 		"0315E5B31FDE62A76505E930" = {
@@ -1039,6 +1057,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7DF7FABB533970E3AB119B4B";
 		};
+		"B5474BDD4C44080FB7BD637C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5F289254A48CCB93F3046938";
+		};
+		"36EB3271B5B724717965CD6D" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "C2D2139A8E60BA6A69DE470A";
+		};
 		"DB6A424400188140AA7549D1" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "8275114EC40FC838A8A4C464";
@@ -1335,6 +1361,8 @@
 				"9F09F1F0CE76C7C6C4BECD98",
 				"4DD7753A3871D6B4637F3D46",
 				"065BC20E17FAF9EB567C3E62",
+				"B5474BDD4C44080FB7BD637C",
+				"36EB3271B5B724717965CD6D",
 				"DB6A424400188140AA7549D1",
 				"C351273A6074D607DF5AFF35",
 				"201F21618A9728E6CF5333F4",
@@ -1544,6 +1572,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7E9B2F385336D669FAAFB891";
 		};
+		"D81A5BD308A34A515B5BE98A" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "220738E1A9E58D37E9E9AFA0";
+		};
 		"6856BFDD05139ECFD100FA45" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "0315E5B31FDE62A76505E930";
@@ -1649,6 +1681,7 @@
 				"701E53D1FD47F3C27574526D",
 				"8B2C79BB7E8C388CB142E2DC",
 				"58600922A4F83FC0D07DB4D2",
+				"D81A5BD308A34A515B5BE98A",
 				"6856BFDD05139ECFD100FA45",
 				"57964423EFB896E35AB14B43",
 				"B837960C4B7040BE1A7A254E",
@@ -1928,6 +1961,14 @@
 		"0730CE0633AA33FA371DEA0F" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7DF7FABB533970E3AB119B4B";
+		};
+		"5DDA12837057C2FA20F5FEAC" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5F289254A48CCB93F3046938";
+		};
+		"69BA4D74815232BBACC5966F" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "C2D2139A8E60BA6A69DE470A";
 		};
 		"0CD16D7303D325018E3B4768" = {
 			"isa" = "PBXBuildFile";
@@ -2233,6 +2274,8 @@
 				"D7E77D9144706AA620287BF2",
 				"196841AF15AE8BE49F15967C",
 				"0730CE0633AA33FA371DEA0F",
+				"5DDA12837057C2FA20F5FEAC",
+				"69BA4D74815232BBACC5966F",
 				"0CD16D7303D325018E3B4768",
 				"B3549EDE5C281CD32827848E",
 				"FB356AB91AB4F9C63700BCDC",
@@ -2438,6 +2481,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7E9B2F385336D669FAAFB891";
 		};
+		"A6946AC5A1DDE08F16FE835C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "220738E1A9E58D37E9E9AFA0";
+		};
 		"D1973B9DA5A1E2AD74F0F5BB" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "0315E5B31FDE62A76505E930";
@@ -2527,6 +2574,7 @@
 				"1E623271EA83F11430949AB4",
 				"FA9BEC0669680AEF64F31B6F",
 				"7D6765836617B738B0C56AB6",
+				"A6946AC5A1DDE08F16FE835C",
 				"D1973B9DA5A1E2AD74F0F5BB",
 				"BE96F02193E0A53D815D4A16",
 				"FE3AD9B4507EC0EE46657FCB",
@@ -2686,6 +2734,8 @@
 				"01B9A38932E4012197FEF359",
 				"E377F91CEFCC8E96CAEBFBBC",
 				"7DF7FABB533970E3AB119B4B",
+				"5F289254A48CCB93F3046938",
+				"C2D2139A8E60BA6A69DE470A",
 				"8275114EC40FC838A8A4C464",
 				"B2CA7D18AED5729895B6E6BD",
 				"7B2F2FDF47ABE4DEF5B5B028",
@@ -2735,6 +2785,7 @@
 				"A111EAB5DCA2AA4849983506",
 				"B6E1067988681B10B9DCCBC9",
 				"7E9B2F385336D669FAAFB891",
+				"220738E1A9E58D37E9E9AFA0",
 				"0315E5B31FDE62A76505E930",
 				"514C48F5D35C09F42B47238A",
 				"10F522A5A95BDE536F0461B5",

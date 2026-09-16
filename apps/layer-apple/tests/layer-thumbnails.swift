@@ -29,7 +29,7 @@ import SwiftUI
                 store.snapshot["shaders_ready"].bool && store.layerThumbnails.images.count == 2
             }
             let task = try await withCheckedThrowingContinuation { (done: CheckedContinuation<NativeProjectTask, Error>) in
-                native.projectTask(opening: true) { task, error in
+                native.projectTask(kind: .open) { task, error in
                     if let task { done.resume(returning: task) }
                     else { done.resume(throwing: HostFailure(message: error ?? "Prepare replacement drawing")) }
                 }

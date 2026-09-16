@@ -234,7 +234,7 @@ private final class ContactEvent: UIEvent {
         }
         func newDocument() async throws {
             let task = try await withCheckedThrowingContinuation { (done: CheckedContinuation<NativeProjectTask, Error>) in
-                native.projectTask(opening: true) { task, error in
+                native.projectTask(kind: .open) { task, error in
                     if let task { done.resume(returning: task) }
                     else { done.resume(throwing: HostFailure(message: error ?? "Prepare drawing")) }
                 }
