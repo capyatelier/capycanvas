@@ -59,6 +59,112 @@ fn mac_manual_prediction_paints_ahead_of_pen_and_mouse_without_committing_the_ti
 }
 
 #[test]
+fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
+    for platform in [0, 1] {
+        for recovered in [false, true] {
+            let app = App::new(platform);
+            unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
+                layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware Metal required"),
+            );
+            let mut settings = app.state()["settings"].clone();
+            settings["platform_prediction"] = json!(true);
+            settings["prediction_ms"] = json!(64.);
+            app.action(json!({"type":"restore_settings","settings":settings}));
+            app.action(json!({"type":"set_brush_size","value":4}));
+            app.action(json!({"type":"set_color","rgba":[0,0,1,1]}));
+            app.draw_until_idle();
+            let project = ProjectJob::new(&app, true);
+            assert_eq!(unsafe { capy_project_new(project.0, 2048, 1536) }, 0);
+            let adopted = unsafe {
+                if recovered {
+                    capy_apple_project_recover(app.0, project.0)
+                } else {
+                    capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr())
+                }
+            };
+            assert_eq!(adopted, 0);
+            assert_eq!(app.state()["settings"], settings);
+            app.draw_until_idle();
+            let baseline = app.pixels();
+            let transform = unsafe { &*app.0 }
+                .host
+                .session
+                .state()
+                .camera
+                .input_transform();
+            let ahead = transform.map(layer_core::Point { x: 720., y: 450. });
+            let width = unsafe { &*app.0 }.host.session.engine().document().width as usize;
+            let offset = (ahead.y as usize * width + ahead.x as usize) * 4;
+            let send = |record: &[f64], predicted| {
+                assert_eq!(
+                    unsafe {
+                        capy_apple_pointer(
+                            app.0,
+                            1,
+                            0,
+                            0,
+                            record.as_ptr(),
+                            record.len(),
+                            predicted,
+                            capy_apple_camera_revision(app.0),
+                        )
+                    },
+                    0
+                );
+            };
+            let frame = |time: f64| {
+                unsafe { &mut *app.0 }
+                    .host
+                    .prepare_canvas_frame(time as u64, time as u64 + 8_000_000, true)
+                    .unwrap()
+            };
+            let mut record = [500., 450., 0.8, 0., 0., 0., 0., 0., 1.];
+            for index in 0..101 {
+                record[0] = 500. + f64::from(index) * 2.;
+                record[7] = 3_000_000_000. + f64::from(index) * 5_000_000.;
+                record[8] = if index == 0 { 1. } else { 2. };
+                send(&record, 0);
+                let mut predicted = record;
+                predicted[0] += 3.2;
+                predicted[1] -= 4.;
+                predicted[7] += 8_000_000.;
+                predicted[8] = 2.;
+                send(&predicted, 1);
+                frame(record[7]);
+            }
+            let metrics = unsafe { &*app.0 }.host.session.engine().metrics();
+            assert_eq!(metrics.platform_prediction_frames > 0, platform == 0);
+            assert_eq!(metrics.engine_prediction_frames > 0, platform == 1);
+            let live = app.pixels();
+            let pixel = &live[offset..offset + 4];
+            eprintln!(
+                "adopt platform={platform} recovered={recovered} saved=64ms: ahead={pixel:?}, native={}, engine={}",
+                metrics.platform_prediction_frames, metrics.engine_prediction_frames
+            );
+            assert_eq!(
+                i16::from(pixel[2]) > i16::from(pixel[0]) + 50,
+                platform == 1
+            );
+            record[7] += 1_000_000.;
+            record[8] = 3.;
+            send(&record, 0);
+            frame(record[7]);
+            let committed = app.pixels();
+            assert_eq!(
+                &committed[offset..offset + 4],
+                &baseline[offset..offset + 4]
+            );
+            app.invoke("undo");
+            app.draw_until_idle();
+            assert_eq!(app.pixels(), baseline);
+            app.invoke("redo");
+            app.draw_until_idle();
+            assert_eq!(app.pixels(), committed);
+        }
+    }
+}
+
+#[test]
 fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_platforms() {
     for platform in [0, 1] {
         for tool in ["select", "lasso_fill"] {

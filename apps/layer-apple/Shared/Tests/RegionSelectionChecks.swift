@@ -135,8 +135,11 @@ extension XCTestCase {
 
 extension XCTestCase {
     @MainActor func checkRegionSelectionAndFill(in app: XCUIApplication) {
-        // Only colors/theme are seeded. Artwork, references and selections use native UI.
+        // Mac artwork cases need contrasting colors. UIKit exercises controls
+        // only, so it needs no startup actions while scene ownership settles.
+        #if os(macOS)
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        #endif
         app.launch(); capturePaintEditor(in: app)
         #if os(macOS)
         let viewport = workspaceViewport(in: app)
@@ -227,6 +230,31 @@ extension XCTestCase {
                     evaluatedWith: app.buttons["number-value-tool-tolerance"])
                 waitForExpectations(timeout: 5)
             }
+            #if os(iOS)
+            // Exercise the integer fields and the lower, scrollable smoothing
+            // control through UIKit. Switching tools verifies owner publication,
+            // rather than merely observing the field's unfinished local draft.
+            for (id, values) in [("gap_closing", ["4", "0"]), ("expansion", ["2", "-2", "0"])] {
+                for value in values {
+                    let entry = app.textFields["number-entry-tool-" + id]
+                    revealEditorControl(entry, in: app.scrollViews.containing(.textField, identifier: entry.identifier).firstMatch)
+                    workspaceActivate(entry); entry.typeText(value + "\n")
+                    editorTool("Brush", in: app); editorTool(tool, in: app)
+                    expectation(for: NSPredicate(format: "value == %@", value + " px"), evaluatedWith: entry)
+                    waitForExpectations(timeout: 5)
+                }
+            }
+            for percent in [25, 100] {
+                let value = app.buttons["number-value-tool-smoothing"]
+                revealEditorControl(value, in: app.scrollViews.containing(.button, identifier: value.identifier).firstMatch)
+                workspaceActivate(value)
+                let entry = app.textFields["number-entry-tool-smoothing"]
+                XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("\(percent)\n")
+                editorTool("Brush", in: app); editorTool(tool, in: app)
+                expectation(for: NSPredicate(format: "value == %@", "\(percent).0 %"), evaluatedWith: value)
+                waitForExpectations(timeout: 5)
+            }
+            #endif
             attachEditor(in: app, name: "region-\(tool)-controls")
         }
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

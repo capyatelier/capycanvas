@@ -33,6 +33,10 @@ On macOS, top-level application menus live in the **OS menu bar**, as requested;
 the editor header retains its title, Zen and other controls over the live canvas.
 Zen clears the measured native close/minimize/fullscreen controls. These are
 intentional Mac presentation differences, with menu functionality still in scope.
+The user accepts the native iPadOS window control for full-screen parity on
+2026-09-16; the unsupported in-app toggle remains unavailable. The same day,
+the user defers iCloud-provider testing because iCloud is unavailable in their
+environment. Local documents and the other lifecycle requirements remain in scope.
 
 Implement reliable platform input: Pencil coalescing, supported sensors,
 estimated-property corrections, visual-only prediction, palm rejection and
@@ -87,6 +91,13 @@ drawing normally. Reviewed captures retain the artwork and matching thumbnails.
 The reported missing Diagnostics GPU milliseconds is a separate confirmed bug
 being fixed; this pass does not establish unmeasured sensor modes, process-crash
 recovery or a new sustained benchmark.
+
+On 2026-09-16 the user confirms the XP-Pen has a clear additional lead at 64 ms,
+and physical iPad Settings dependency controls work. Separate iPad windows keep
+independent drawings and Undo history and continue drawing. Selecting an occupied
+workspace correctly brings its owning window forward. A newly reported native-
+prediction error after opening/recovery is tracked separately in the current
+release checklist; these confirmations do not close that runtime regression.
 
 Provide reproducible build/install/test commands and evidence for functionality,
 visuals, persistence, lifecycle and performance. Pull other ports' changes,

@@ -5,6 +5,16 @@
 Ship complete, visually consistent native iPadOS and macOS apps with fast,
 readable workflows, shared maintainable code, and validated drawing performance.
 
+The 2026-09-16 user confirmations close the XP-Pen manual-prediction check:
+64 ms visibly leads farther than 0 ms in the fixed Mac review app. The user also
+accepts the native iPadOS window control for full-screen parity. Preserve the
+unsupported in-app command's unavailable state. Older pending references below
+are historical; neither item should reopen without a new regression. Physical
+iPad switch interaction and independent-window drawing/history now also pass by
+direct user confirmation. Selecting an occupied workspace brings its owning
+window forward; it does not change both layouts. Remaining scene/lifecycle cases
+stay scoped in the release checklist.
+
 Full acceptance remains in [the Apple goal tracker](../history/apple-acceptance.md#goal):
 all exposed features, menus and actions; shared main-editor geometry and canvas
 behind the header; iPad 120 Hz and current Mac 90 Hz performance targets. Mac
@@ -29,7 +39,7 @@ requests and unchanged drawing state. This supplies native OpenURLAction results
 without opening a browser or using Metal. It does not establish physical iPad
 browser delivery. The focused check and model audit are retained under
 `artifacts/apple-release-closure-v1/`. The Mac review retains the installed
-prediction build while its XP-Pen check is pending; the iPad review is now on
+prediction build used for the now-passing XP-Pen check; the iPad review is now on
 the startup-progress fix after the hardware checks below. Both final Release builds
 pass without compiler warnings in separate build directories. The closure work
 is grouped with the Settings/prediction follow-up.
@@ -56,7 +66,86 @@ Release builds pass without warnings. The mounted Settings activation fixture
 was discarded after it failed to reach the links; direct rejection/retry UI
 acceptance remains open. This is a test limitation, not a new browser-delivery
 defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
-review apps are retained for the outstanding physical XP-Pen check.
+review apps are retained with the user's drawings; the XP-Pen check now passes.
+
+## Prediction policy during document adoption
+
+The user reports iPadOS prediction using the saved manual 64 ms amount after
+opening a drawing. The shared regression reproduces this: the prepared document
+is a generic session, so applying settings there disables native prediction
+before its engine enters the iPad window. Two assignments preserve the receiving
+window's platform and live capability before applying settings. No predictor,
+input adapter or scheduling workaround is added.
+
+The new regression covers 64 open/recovery, host, capability and saved-amount
+combinations; all 401 shared UI tests pass. The actual Apple/Metal bridge also
+passes native versus manual source selection, rendered preview pixels, pen-up
+removal and exact Undo/Redo on both Apple policies. Both Release builds pass
+without warnings. The fixed iPad Release is installed in place with all eight
+recovery drawings preserved and saved files byte-identical across installation.
+The Mac review remains untouched. Evidence is
+`artifacts/apple-prediction-adoption-v1/`; physical fixed-iPad review is pending.
+
+## Native control and modifier closure
+
+UIKit Fill/Auto Select refinement controls now pass fourteen native edits with
+retention after tool switching; both final captures are reviewed. An unnecessary
+Mac artwork seed was removed from the UIKit controls-only fixture after it
+encountered debug startup workspace protection. The AppKit editor also passes
+line/rectangle/ellipse Shift delivery, independent constraint geometry and exact
+PNG history in twenty-four new cases across both Apple policies. Its existing
+native fixture completes all forty-six groups. These are test-only changes;
+physical input and provider/lifecycle gates remain explicit in the release list.
+Evidence is `artifacts/apple-ipad-refinement-v1/` and
+`artifacts/apple-native-modifiers-v1/`. Main was fetched at base `53c560a`; these supporting checks are grouped with
+the prediction-adoption and panel-parity milestone.
+
+The generic selection-modifier gap was corrected against current shared source:
+Lasso and Auto Select replace selection on Web, Android and Apple. No exposed
+add/subtract/intersect modifier feature was removed. Applicable figure, ruler
+and transform modifiers remain in scope.
+
+## Visual evidence reuse
+
+Current-source AppKit/Web tool-action captures now pass normal-size perceptual
+review in both themes at 120 and 226 points. All 96 bounds match exactly and all
+eight decoded images reproduce the retained captures. Current shared palettes,
+font size and action metadata match the fixtures; raw comparison failures remain
+reported. Color and Tool Set source checks preserve their earlier scoped passes.
+The release checklist records the coverage boundaries and next missing states.
+
+The component capture initially exposed an unnecessary source dependency:
+`ColorSwatch.swift` also contained the editor-store-dependent `BrushColorButton`.
+That unchanged button now lives in `PanelControls.swift`, restoring independent
+component compilation without a stub or new runtime path. Both complete host
+source sets typecheck without warnings. No simulator or artist review app was
+launched. Evidence is `artifacts/apple-visual-closure-v1/`; these supporting
+changes are grouped with the prediction-adoption milestone.
+
+The next component review accepts six Brush size and six inactive Diagnostics
+AppKit/Web pairs in both themes at 140/184/242 points. Diagnostics now matches
+the centered chart proportions, dashed budget rule and narrow-label truncation.
+This does not qualify nonempty traces, UIKit appearance or full-editor state.
+The unfinished full-editor capture fixture hit the system iCloud prompt and is
+removed; its logs and captures remain private. Evidence is
+`artifacts/apple-panel-contents-v1/`.
+
+## Native provider acceptance
+
+The first Mac iCloud run reaches real native panels with disposable generated
+files. Image-import data/history, unchanged source bytes and provider upload
+assertions pass, but reviewed captures remain covered by macOS's iCloud access
+prompt. Project Save/reopen and invalid-Open checks time out at that prompt.
+Full provider UI acceptance remains open; no app defect or permission workaround
+is claimed. The original local file passes remain applicable.
+
+Automatic approval review rejected granting broader iCloud access. On
+2026-09-16 the user explicitly asks to ignore iCloud because it does not work in
+their environment. No permission is granted and no further cloud run is pending.
+iCloud acceptance is deferred, not passed. The unused provider test additions
+and consent handler are removed; passing local-file tests stay unchanged.
+Evidence is `artifacts/apple-provider-native-v1/` and the later user decision in
+`artifacts/apple-prediction-adoption-v1/user-acceptance.json`.
 
 ## Settings and lifecycle acceptance
 
@@ -70,7 +159,8 @@ and storage coverage; broader text/keyboard behavior and Settings link rejection
 remain scoped separately.
 Evidence is `artifacts/apple-preference-coverage-v1/`. The connected iPad review
 process was verified unchanged before requesting the physical New Window,
-independent drawing/history and continued-input check; its reply is pending.
+independent drawing/history and continued-input check; the user now confirms
+these pass. Further scene restoration and OS lifecycle cases remain open.
 
 The native Settings follow-up reproduces a UIKit cursor picker that does not
 open, including a direct touch at its visible control. Its custom icon labels
@@ -84,7 +174,7 @@ publication verification are under `artifacts/apple-settings-dropdowns-v1/`.
 UIKit prediction-switch taps still fail to change the control in the simulator;
 their initial enabled/hidden state and native-owner dependency checks pass.
 The unreliable switch fixture is removed instead of adding an app workaround.
-A short physical iPad dependency check is pending. This limit does not reopen
+The user now confirms the physical iPad dependency check passes. This does not reopen
 the user's physical smooth-drawing/prediction pass. The Settings, thumbnail and
 background-expiration fixes form one milestone following `d96a0a9`; review
 drawings and the installed physical review apps are preserved.

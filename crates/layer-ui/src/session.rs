@@ -15304,6 +15304,108 @@ mod tests {
     }
 
     #[test]
+    fn project_adoption_keeps_the_receiving_windows_prediction_policy() {
+        for platform in [
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Android,
+            Platform::Web,
+        ] {
+            for available in [false, true] {
+                for native in [false, true] {
+                    for milliseconds in [64., 0.] {
+                        for recovered in [false, true] {
+                            let mut s = session();
+                            s.set_platform(platform);
+                            s.set_platform_prediction_available(available);
+                            s.apply_settings(Settings {
+                                platform_prediction: native,
+                                prediction_ms: milliseconds,
+                                ..Default::default()
+                            })
+                            .unwrap();
+                            s.dispatch(UiAction::SetBrushSize { value: 4. }).unwrap();
+                            // The file worker prepares a generic session. Only
+                            // its document/renderer belong to the incoming file.
+                            let candidate = Box::new(
+                                UiSession::from_project(
+                                    Recorder::default(),
+                                    new_drawing(1024, 768).unwrap(),
+                                    None,
+                                    s.state.camera.viewport,
+                                )
+                                .unwrap(),
+                            );
+                            let epoch = s.state.document_file.epoch;
+                            let revision = s.engine.document().revision;
+                            let result = if recovered {
+                                s.adopt_recovered_project(candidate, epoch, revision)
+                            } else {
+                                s.adopt_project(candidate, epoch, revision, None)
+                            };
+                            assert!(result.is_ok());
+                            let uses_native = native && available && platform != Platform::Mac;
+                            let mut last = event(&s, 1, PenPhase::Down, 0.8);
+                            for index in 0..101 {
+                                last.timestamp_ns = 1_000_000_000 + index * 10_000_000;
+                                last.sequence = index + 1;
+                                last.surface_position = Point {
+                                    x: 300. + index as f32 * 4.,
+                                    y: 450.,
+                                };
+                                last.phase = if index == 0 {
+                                    PenPhase::Down
+                                } else {
+                                    PenPhase::Move
+                                };
+                                s.pen(last).unwrap();
+                                // Native prediction bends upward, making source
+                                // selection distinguishable from extrapolation.
+                                let predicted = PenEvent {
+                                    timestamp_ns: last.timestamp_ns + 8_000_000,
+                                    surface_position: Point {
+                                        x: last.surface_position.x + 3.2,
+                                        y: 446.,
+                                    },
+                                    phase: PenPhase::Move,
+                                    flags: SampleFlags::PREDICTED,
+                                    ..last
+                                };
+                                s.pen(predicted).unwrap();
+                                s.renderer_mut().recorded_dabs.clear();
+                                s.frame(last.timestamp_ns, predicted.timestamp_ns).unwrap();
+                            }
+                            let metrics = s.engine.metrics();
+                            let tip = s.renderer_mut().recorded_dabs.last().unwrap().center;
+                            let [a, b, c, d, x, y] = s.state.camera.document_to_surface();
+                            let tip = Point {
+                                x: a * tip.x + c * tip.y + x,
+                                y: b * tip.x + d * tip.y + y,
+                            };
+                            let expected = if uses_native {
+                                [703.2, 446.]
+                            } else {
+                                [700. + milliseconds * 0.4, 450.]
+                            };
+                            assert!(
+                                (tip.x - expected[0]).abs() < 0.3 && (tip.y - expected[1]).abs() < 0.3,
+                                "{platform:?} available={available} native={native} saved={milliseconds}ms recovered={recovered}: tip={tip:?}, expected={expected:?}, platform_frames={}, engine_frames={}",
+                                metrics.platform_prediction_frames,
+                                metrics.engine_prediction_frames
+                            );
+                            assert_eq!(metrics.platform_prediction_frames > 0, uses_native);
+                            assert_eq!(
+                                metrics.engine_prediction_frames > 0,
+                                !uses_native && milliseconds > 0.
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn native_prediction_order_dependencies_and_runtime_follow_capability_on_every_host() {
         for (platform, title, supported) in [
             (Platform::Generic, "Use native stroke prediction", false),

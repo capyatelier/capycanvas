@@ -1,5 +1,20 @@
 import SwiftUI
 
+struct BrushColorButton: View {
+    @ObservedObject var store: EditorStore
+    let label: String
+    var body: some View {
+        Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
+            ColorSwatch(rgba: store.state["brush"]["color"])
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
+                .background(EditorPalette(source: store.state["palette"])["button"].opacity(13 / 255),
+                    in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier("brush-color")
+    }
+}
+
 struct PanelControls: View {
     @ObservedObject var store: EditorStore
     let panel: JSON

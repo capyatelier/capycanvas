@@ -52,6 +52,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .engine
                 .set_brush(self.engine.configured_brush().clone())
                 .map_err(error)?;
+            // File preparation uses a generic session. Resolve prediction with
+            // this window's live capability before transferring its engine.
+            candidate.state.platform = self.state.platform;
+            candidate.platform_prediction_available = self.platform_prediction_available;
             candidate.apply_settings(self.state.settings.clone())?;
             Ok(next)
         })();

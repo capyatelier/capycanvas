@@ -340,6 +340,20 @@ dirty-state, history and retry-cancellation contract on both Apple policies.
 These checks add local failure/retry coverage, not cloud-provider or physical
 UIKit picker acceptance. Evidence is `artifacts/apple-file-failure-v1/`.
 
+The 2026-09-16 iCloud attempt retained scoped image-import data/history and
+provider metadata results, but the system access-consent prompt covered the
+editor and blocked project workflows. Automatic approval review rejected the
+broader OS permission. The user then explicitly deferred iCloud testing because
+it does not work in their environment. No grant or full cloud-provider pass is
+claimed; the unused provider fixture and permission handler are removed. Local
+file acceptance remains unchanged. Evidence is `artifacts/apple-provider-native-v1/`.
+
+Document adoption now evaluates prediction with the receiving window's platform
+and live native capability. The file worker's generic preparation session must
+not switch an iPad window back to the saved manual lookahead. Shared Open/recovery
+regressions and both-policy Apple/Metal preview/history checks cover this path.
+Evidence is `artifacts/apple-prediction-adoption-v1/`.
+
 The recovery checks use actual Swift owners and the Metal bridge for both platform
 policies. They verify private file modes, cancelled capture, newest-revision flush
 under queued edits, stale removal, malformed-record isolation, failed-write retry,
