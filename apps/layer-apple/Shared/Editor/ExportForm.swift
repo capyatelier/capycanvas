@@ -144,7 +144,8 @@ struct ExportForm: View {
             }
             return value
         }
-        return try editor.recipe.replacing("jpeg_quality", with: JSON(integer(quality, "JPEG quality")))
+        return try editor.recipe.replacing("jpeg_quality", with: editor.recipe["format"].string == "Jpeg"
+                ? JSON(integer(quality, "JPEG quality")) : editor.recipe["jpeg_quality"])
             .replacing("size", with: fit ? JSON(["Fit": ["bounds": [integer(width, "width"), integer(height, "height")], "enlarge": enlarge]]) : JSON("Original"))
             .replacing("resolution", with: resolution == "Ppi" ? JSON(["Ppi": integer(ppi, "resolution")]) : JSON(resolution))
     }

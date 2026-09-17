@@ -6,6 +6,16 @@ preparation and overlaps bounded submissions. Retain it; further optimization
 should follow measured composition costs rather than a new rendering architecture.
 No brush-size, preset-name, document-name or gesture special case is justified.
 
+Decision after attribution: keep the sparse planner and the small finalization
+ordering correction now published in `0a7b7d7e`. The latter improves heavy local
+replays without changing their work, pixels or memory ceilings. It does not
+prove an iPad speedup; the combined physical retest is pending. Do not start a
+storage/shader rewrite or increase cache limits to chase a theoretical number.
+If visible stalls remain, attribute their GPU passes on the combined build
+before choosing another change. The current Mac ten-minute watercolor result
+also supports retaining the shared design, within its separately documented
+[workload scope](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17).
+
 ## Evidence and its limits
 
 The user confirms faster physical iPad drawing after the preview-composition

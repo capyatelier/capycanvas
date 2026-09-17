@@ -208,6 +208,13 @@ Done/reopen. Updated theme-color values replace the focused draft so Done cannot
 restore a discarded value. The grouped `testNumericSettingsDone` editor workflow checks expression
 entry, Done, reopen, search-result/sidebar navigation and iPad keyboard dismissal
 through the actual native Settings window.
+
+Run `tests/settings-links.swift` through `scripts/test-project-files.sh` for
+native AppKit link clicks, visible rejection and successful retry on both shared
+Apple policies. The fixture supplies browser results, uses memory-only storage
+and locates link targets in its own rendered form. Physical UIKit and OS browser
+delivery are separate checks.
+
 Toolbar Color/Opacity controls use their existing drawers; the explicit
 configuration popup contains only Color. The obsolete modal opacity path is
 removed from the shared action and Apple dialog.
@@ -699,6 +706,9 @@ JPEG/resize, cancellation/retry, owner destruction, atomic ICC/preset storage an
 unchanged masters. The Mac `testNativeProfiledExport` workflow covers the actual
 options, ICC import/library, named preset and native destination panels. Physical
 iPad Files/provider delivery and sustained large-photo acceptance remain separate.
+`tests/export-form.swift`, through the same script, checks that invalid visible
+JPEG quality is rejected, hidden JPEG drafts do not block PNG/TIFF, and a valid
+JPEG draft reaches the destination choice without changing the drawing.
 
 Check editor behavior directly without driving system menus:
 

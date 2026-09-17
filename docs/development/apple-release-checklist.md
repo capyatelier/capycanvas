@@ -1,6 +1,6 @@
 # Apple release checklist
 
-Current closure list, 2026-09-16. The [goal](../history/apple-acceptance.md#goal)
+Current closure list, 2026-09-17. The [goal](../history/apple-acceptance.md#goal)
 still applies in full to **both** hosts. Historical checkpoint lists in the
 [handoff](apple-handoff.md) are evidence references, not additional independent
 test plans. The goal is incomplete.
@@ -129,7 +129,7 @@ Do not replace a missing result with a catalog entry or build success.
 | R3 | **Physical input and drag contract.** Basic drawing/navigation and physical Pencil layer reordering through both the grab handle and held row body pass, with correct Undo. Supplied AppKit/UIKit callbacks and shared history/pixel checks cover many constraints and cancellations. | Verify supported tilt/rotation/hover/proximity, interrupted contacts and recovery, physical trackpad/button navigation, Pencil eyedropper, and representative tool handles. Finish the device-specific tile/row/grip cases in the [drag inventory](../ui/drag-inventory.md#apple-macos-and-ipados). Physical iPad shortcut checks require a hardware keyboard, which is currently absent. Retained injected-key failures are unresolved evidence, not a proven application cause. |
 | R4 | **Documents, recovery and native windows.** Local save/reopen/PNG, native cold/warm URL delivery, painted process recovery on Mac/simulator and physical background/return have scoped passes. The user also confirms the grouped SDR drawing, Undo/Redo, background/return and local Save As/reopen workflow on both physical hosts. Eight local process-kill cases now prove complete old/new recovery publication, discard, cleanup and retry through the production file helpers on both Apple policies. iPad expiration ends its lease synchronously; a focused production-helper check proves callback ordering and exactly-once completion. | The user defers iCloud acceptance. Finish applicable native destination restoration, error/cancel/interruption and image-import delivery; actual physical lifecycle interruption and OS background-task expiration; remaining physical iPad scene restoration/lifecycle (independent drawings/history/input now pass); Mac sleep/wake and cross-display/surface transitions. Native Mac minimize/hide/narrow/restore with ProPhoto U16 and full-screen/return now pass scene/workspace, artwork, input and history checks; see the [window record](apple-handoff.md#mac-sdr-window-transitions). Verify artwork, settings/workspace, continued input and independent history in the remaining cases. Preserve the open limits in [Persistence](../../apps/layer-apple/PERSISTENCE.md). |
 | R5 | **Perceptual visual parity.** Main editor/component comparisons and reported fixes exist. Benchmark document replacement exposed stranded layer-preview readbacks; central invalidation now passes both-policy AppKit/Metal regression and a final Mac Release capture. | Map retained normal-size light/dark, preset and narrow/windowed captures to the final feature inventory; inspect missing visible states on both native hosts against Web. Correct straightforward visible mismatches. Do not rerun every pixel comparison for an unrelated engine fix. |
-| R6 | **Sustained hardware performance and measurement.** Source-scoped SDR layered-4K ten-minute runs have 1.016% long intervals on Mac and 0.576% on iPad, with artwork, nominal thermals and input/presentation delivery verified. The latest short heavy-watercolor runs have 0.977%/12.456% on Mac/iPad; the iPad gap remains open. Metal memory admission improves paired 24/60 MP Mac photo navigation while preserving artwork. | Finish the remaining large-photo fast-stroke cost (repeated zoom is physically confirmed smooth), then prioritize the remaining watercolor copy/transport/composition cost. Preserve passing ink evidence and the accepted rare-miss standard. Finish current SDR profiles, physical large-photo/ProPhoto-U16 performance, sustained memory pressure, recorder-off storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. See [Performance](../../apps/layer-apple/PERFORMANCE.md#metal-display-admission--2026-09-16); CPU/GPU/presentation proxies are not physical latency. |
+| R6 | **Sustained hardware performance and measurement.** Source-scoped SDR layered-4K ten-minute runs have 1.016% long intervals on Mac and 0.576% on iPad, with artwork, nominal thermals and input/presentation delivery verified. Current Mac sRGB/U8 heavy watercolor now passes ten minutes at 0.930%, with artwork and recovery verified; the retained short iPad result is 12.456%, so its gap remains open. Metal memory admission improves paired 24/60 MP Mac photo navigation while preserving artwork. | Finish the remaining large-photo fast-stroke cost (repeated zoom is physically confirmed smooth), then prioritize the remaining watercolor copy/transport/composition cost. Preserve passing ink evidence and the accepted rare-miss standard. Finish current SDR profiles, physical large-photo/ProPhoto-U16 performance, sustained memory pressure, recorder-off storage and idle/resume checks, instrumentation overhead and physical input-to-display measurement. See [Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17); CPU/GPU/presentation proxies are not physical latency. |
 | R7 | **Integration and delivery.** Creation/tagged-paint `9e3d2567`, retained photo `d614f7b4` and document color `0290c196` milestones are published. Source repair/rasterization and ICC file import now reuse the same worker/comparison UI and shared source/history rules. Scoped Metal/shared/Swift checks pass. Physical UIKit workflows and SDR requalification remain open. Full iPad XCTest is blocked by its extra runner's free-profile app limit; preserve artist apps/drawings. Histogram/sampling uses shared workers and corrected Metal row copies; local checks pass. Evidence: `artifacts/apple-source-edit-v1/` and `artifacts/apple-histogram-v1/`. | Complete physical managed-display/SDR, provider and background acceptance; profiled export and ICC/preset storage now pass local worker/owner checks. Retained photo corrections/masks pass scoped local checks recorded above. The final goal still requires R2–R6 and the new feature scope. |
 
 ## Feature closure map
@@ -169,6 +169,12 @@ reducing median GPU time from about 4.62 to 3.65 ms. The current-source Mac
 45-second native run has 0.897% long active intervals with nominal thermals and
 complete measured input/presentation delivery. This preserves the short Mac
 rare-miss pass; iPad watercolor cadence and sustained qualification remain open.
+The later `f3a93595` Mac Release with the export-draft fix now completes ten
+measured minutes of sRGB/U8 4K watercolor: 0.930% long active intervals, 11.111 ms
+presentation p99, 5.804 ms CPU owner p99 and nominal thermals. Final artwork and
+the production recovery reader pass. This closes that current Mac sustained
+workload; iPad, other depths, memory pressure and recorder-off checks remain
+separate. See the [sustained result](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17).
 Reuse the already installed iPad runtime after the pending large-photo retest;
 see the [watercolor follow-up](../../apps/layer-apple/PERFORMANCE.md#watercolor-after-the-shared-photo-fixes--2026-09-17).
 
@@ -254,6 +260,16 @@ The New Drawing fixture deliberately uses invalid dimensions and an error state.
 Evidence: `artifacts/apple-sdr-form-fit-v1/`. Full editor/window and managed SDR
 appearance acceptance remain separate.
 
+Forty further Mac captures cover populated export, conversion, source-profile and
+rasterization forms, both themes at 340×480/600×720, top/bottom scroll positions
+and real worker errors. Labels, preview access, errors and pinned actions pass
+normal-size review; cancellation preserves the drawing. Native typing also
+reproduces and verifies the fix for a hidden invalid JPEG-quality draft blocking
+PNG/TIFF export. See the [preview record](apple-handoff.md#populated-preview-forms-and-export-drafts--2026-09-17).
+UIKit preview capture remains unqualified: the simulator rejects the required
+Float32 sample/blend capability. Use physical device acceptance for those views;
+do not infer it from the Mac captures or add a renderer workaround for the fixture.
+
 ### Commands and controls
 
 The source catalog is [command-coverage.json](../../apps/layer-apple/command-coverage.json).
@@ -300,7 +316,7 @@ retained alongside the passing hardware run.
 | Camera | Native Hand/Fit/flip; direct Navigator and camera checks; supplied scroll/pinch/rotate; physical iPad touch navigation | Physical indirect input and interruption (R3). |
 | Preferences and shortcuts | All 16 pre-SDR Settings rows reconciled; every editable row passes native-owner edit, fresh-owner restore and exact durable Reset on both policies. The five added SDR policy rows have the scoped checks referenced in the color workflow milestones. Retained native numeric/text/image-choice editing, Reset/Done/reopen, search and shortcut forms/conflicts pass. Native theme/cursor choices and Done/reopen pass on both hosts; Mac prediction dependencies and amount editing also pass. | Physical iPad prediction dependencies pass by user confirmation; broader native text/menu traversal and hardware key combinations. UIKit compact-menu Command-Z and text Command-A remain unresolved. |
 | Native windows | Mac/simulator independent windows; Mac last-window reopen and full-screen artwork/history; native iPadOS full-screen control accepted by the user | Physical iPad independent drawing/history and continued input pass; remaining scene/display/lifecycle checks (R4). Keep the unsupported UIKit in-app toggle unavailable; the accepted native control satisfies the capability requirement. |
-| Application information and links | Mac/simulator About and actual browser handoff; mounted editor rejection/retry check below | Settings-link rejection/retry UI acceptance (callback handling is implemented), alternate-handler OS delivery and physical iPad link delivery. |
+| Application information and links | Mac/simulator About and actual browser handoff; mounted editor rejection/retry; native AppKit Settings clicks and visible rejection/retry on both shared Apple policies | Alternate-handler OS delivery and physical iPad link delivery. |
 
 The former generic selection-modifier gap was broader than the actual shared
 feature set. Lasso and Auto Select replace the selection through `SetSelection`;
@@ -422,10 +438,18 @@ Evidence is in `artifacts/apple-release-closure-v1/`.
 
 Settings also forwards its native links through `OpenURLAction`, displaying a
 rejected handoff in the existing inline error style and clearing it after a
-successful retry. Both final Release builds pass without warnings. A mounted
-Settings fixture could not activate the SwiftUI links, so no rejection/retry UI
-pass is claimed; the incomplete fixture was discarded. Existing real-browser
-acceptance remains separately scoped. Evidence is `artifacts/apple-settings-links-v1/`.
+successful retry. Both final Release builds pass without warnings. The original
+mounted fixture could not activate SwiftUI's virtual Form links. The follow-up
+now locates their rendered text within its owned window, sends native clicks and
+checks actual displayed error text. Website and Source code rejection followed
+by accepted retry pass on both shared Apple policies, with unchanged artwork and
+the About page retained. All four rejected captures match one reviewed image;
+all four successful-retry captures match the reviewed cleared state. This closes
+AppKit Settings rejection/retry, without a runtime change. The captures qualify
+the form's error state, not the whole Settings appearance. Supplied browser
+results do not establish physical UIKit or alternate-handler OS delivery.
+Evidence is `artifacts/apple-settings-link-input-v1/`; the earlier fixture limit
+remains recorded in `artifacts/apple-settings-links-v1/`.
 
 The local invalid-file path is now qualified separately from provider failures.
 The Mac native workflow passes error presentation after Discard approval,

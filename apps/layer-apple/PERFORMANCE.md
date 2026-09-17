@@ -285,6 +285,44 @@ No production edit accompanies this check. Evidence is
 cadence check must follow the pending large-photo drawing/save retest, using
 this already installed runtime before considering another rendering change.
 
+## Sustained Mac watercolor after shared integration — 2026-09-17
+
+The qualified Release at `f3a93595`, including the export-draft fix,
+completes **600.0008 measured seconds** of the existing `wet-watercolor-4k`
+workload. This is a 4096² sRGB/U8 document with eight paint layers plus paper,
+320 px Wet Watercolor, prediction and 240 synthetic samples/second. The ordinary
+editor, previews and recovery writer run throughout. GPU timestamps are disabled;
+CPU/presentation recording and once-per-second memory sampling remain enabled.
+
+At the Mac's 90 Hz target, **468/50,341 (0.930%)** continuous-active presentation
+intervals exceed the budget plus the existing 5% timing tolerance. Their p99 is
+**11.1113 ms**, maximum **22.2225 ms**. CPU owner-service p99 is **5.804 ms**,
+maximum **12.314 ms**. All 135,001 measured real samples are accepted, with no
+measured missing/zero-time presentations, frame errors or dropped trace records.
+Per-minute long-interval rates range from 0.697% to 1.191%; CPU p99 stays between
+5.676 and 5.989 ms. No compiler or other test/profiler ran during measurement.
+
+Thermals remain nominal. Measured footprint peaks at 2.467 GB and grows 546 MB
+from first to last sample; the last four minute peaks are 2.457, 2.457, 2.454 and
+2.448 GB. This observed late plateau is not memory-pressure qualification or a
+proof of a permanent bound. The complete trace retains larger startup costs:
+817 ms maximum owner service and 3.696 GB peak footprint, both before measurement.
+They are not silently folded into the steady drawing result. After pen-up, the
+last frame is at 37.6 ms and the display link becomes idle at 38 ms.
+
+The final artwork, Navigator and layer preview are reviewed. The private recovery
+checkpoint completes after pen-up; the production `Project::read` and validation
+load all nine layers at revision 431 successfully. The runner closes only its
+owned test app, leaving both artist apps and the pending iPad review unchanged.
+Runtime source hashes and the copied executable match the qualified inputs.
+Evidence is retained in `artifacts/apple-watercolor-sustained-v1/`.
+
+This closes the current Mac sustained sRGB/U8 watercolor cadence/artwork check
+under the accepted rare-miss standard. It does not establish physical Pencil
+latency, recorder-off overhead, other color depths, memory pressure or current
+iPad watercolor/large-photo performance. No renderer change accompanies this
+qualification; the pending physical iPad result remains the next device step.
+
 ## Integrated renderer GPU follow-up — 2026-09-16
 
 At `a5f57e2c`, the 512-frame 4K watercolor replay reproduces the preceding

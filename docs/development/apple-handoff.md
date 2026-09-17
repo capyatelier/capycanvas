@@ -69,13 +69,14 @@ processes are stopped. The same running prediction review was brought forward
 without restarting it; the iPad was untouched. Physical UIKit picker, provider
 and interruption acceptance remain separate.
 
-Settings link handoffs now also report rejection inline and clear that message
+Settings link handoffs also report rejection inline and clear that message
 after a successful retry, while preserving native `Link` controls. Both final
-Release builds pass without warnings. The mounted Settings activation fixture
-was discarded after it failed to reach the links; direct rejection/retry UI
-acceptance remains open. This is a test limitation, not a new browser-delivery
-defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
-review apps are retained with the user's drawings; the XP-Pen check now passes.
+Release builds pass without warnings. The first mounted fixture failed to reach
+the links; the [later native check](#settings-link-rejection-and-retry--2026-09-17)
+now closes AppKit rejection/retry acceptance. The original fixture limitation
+is retained in `artifacts/apple-settings-links-v1/`. Physical UIKit/OS delivery
+remains separate. The installed prediction review apps are retained with the
+user's drawings; the XP-Pen check now passes.
 
 ## Shared workflow adoption — 2026-09-17
 
@@ -304,6 +305,23 @@ result once on iPad: the shared transaction milestone above now installs the
 combined review build with all drawings preserved. Neither artist app was changed
 or restarted during the preceding attribution investigation. Continue the remaining parity gates rather
 than extending this into open-ended performance tuning.
+
+## Current Mac sustained watercolor — 2026-09-17
+
+The qualified Release (`f3a93595` plus the export-draft fix below) completes
+ten measured minutes of the ordinary sRGB/U8 4K watercolor
+workload. At 90 Hz, 468/50,341 continuous-active intervals are long (0.930%),
+with presentation p99 11.111 ms and CPU owner p99 5.804 ms. Thermals remain
+nominal and late memory peaks plateau. Measured input/presentation delivery,
+final artwork/previews and the completed recovery archive's production-reader
+validation pass. Startup costs remain in the retained trace and are reported
+separately in [Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17).
+
+The owned benchmark app is closed; artist apps and drawings are unchanged.
+There is no further renderer edit. This qualifies one current Mac sustained
+workload, not iPad performance, other color depths, memory pressure, recorder
+overhead or physical input latency. The combined physical iPad large-photo
+retest is still pending. Evidence is `artifacts/apple-watercolor-sustained-v1/`.
 
 ## Prediction policy during document adoption
 
@@ -994,6 +1012,53 @@ appearance are outside these captures. The disposable simulator apps are removed
 the physical review apps and drawings remain untouched. Evidence:
 `artifacts/apple-sdr-form-fit-v1/`. Continue the pending physical SDR check and
 the remaining release gates; this checkpoint does not close full visual parity.
+
+## Populated preview forms and export drafts — 2026-09-17
+
+Forty Mac captures extend the form-fit evidence to actual Metal-generated export,
+document-conversion, source-profile and rasterization previews. Both themes at
+340×480 and 600×720 points cover the top and bottom of the scrollable forms,
+plus export/ICC worker errors. Normal-size review accepts the labels, complete
+preview access, visible errors and pinned actions. Every cancelled comparison
+preserves the disposable ProPhoto/U16 drawing. The form layout is unchanged.
+
+The review also reproduces a hidden-draft defect: entering invalid JPEG quality
+and then choosing PNG still blocks Choose File with the now-hidden quality
+error. The shared Apple form now reads the text draft only for JPEG and retains
+the valid stored quality for other formats. The native typing/default-action
+regression fails before this two-line correction and passes afterward for numeric
+and nonnumeric invalid drafts, PNG/TIFF destination selection and cancellation,
+and valid JPEG quality 73. Format changes in this focused fixture use the
+production controller; prior native format-menu acceptance remains separate.
+Both final Release builds pass without compiler warnings. The fix and regression
+are grouped with native Settings-link acceptance and sustained Mac qualification
+as one acceptance milestone, following the user's check-in preference.
+
+Evidence is under `artifacts/apple-preview-fit-v1/`. The UIKit capture app
+compiles, but its simulator rejects Float32 sampling/blending before previews
+can be produced. It is removed after the failed run; no UIKit preview pass is
+claimed and no simulator-specific renderer path is added. Physical UIKit
+preview/form acceptance remains open. Both artist apps and their drawings are
+untouched, including the pending physical iPad performance/save review.
+
+## Settings-link rejection and retry — 2026-09-17
+
+The mounted native Settings check now reaches Website and Source code through
+actual clicks on the rendered links. SwiftUI's in-process accessibility tree
+omits the Form's virtual children, so the fixture locates the displayed link
+text inside its own window and checks the rendered error text after activation.
+It supplies rejected/accepted browser callbacks, uses memory-only storage and
+does not attach Metal or open a browser. No application path changes.
+
+Both shared Apple policies pass rejection followed by successful retry for both
+links, retaining About and the unchanged drawing. The error appears and then
+clears; four rejected captures are byte-identical, as are the four successful
+captures, and both distinct form states are reviewed. This closes the AppKit
+Settings error/retry gap; it does not qualify physical UIKit delivery, an alternate
+OS browser handler or complete Settings appearance. The owned fixture is closed
+and artist apps are unchanged. The new fixture is `tests/settings-links.swift`;
+evidence and the initial inaccessible-tree failure are retained under
+`artifacts/apple-settings-link-input-v1/`.
 
 ## Recovery publication under process interruption
 
