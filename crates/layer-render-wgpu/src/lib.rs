@@ -594,10 +594,11 @@ impl BrushReservoir {
 struct LayerPage {
     coordinate: [u32; 2],
     primary: PageSurface,
+    // Inactive color is overwritten by a full-page copy or the post-stroke
+    // edge pass before use. Only a new primary needs a separate clear.
     secondary: Option<PageSurface>,
     active_secondary: bool,
     primary_needs_clear: bool,
-    secondary_needs_clear: bool,
 }
 
 struct PageSurface {
@@ -650,13 +651,12 @@ impl LayerPage {
         let bytes = if self.active_secondary {
             let bytes = self.primary.storage_bytes();
             self.primary = secondary;
-            self.primary_needs_clear = self.secondary_needs_clear;
+            self.primary_needs_clear = false;
             bytes
         } else {
             secondary.storage_bytes()
         };
         self.active_secondary = false;
-        self.secondary_needs_clear = false;
         bytes
     }
 }
@@ -1625,7 +1625,6 @@ impl WgpuRasterizer {
             secondary: None,
             active_secondary: false,
             primary_needs_clear: true,
-            secondary_needs_clear: false,
         }
     }
 
@@ -1694,7 +1693,6 @@ impl WgpuRasterizer {
                 let secondary = self.create_page_surface("layer sparse destination companion");
                 let page = &mut self.paint_layers[layer_index].pages[page_index];
                 page.secondary = Some(secondary);
-                page.secondary_needs_clear = true;
             }
         }
     }
@@ -4360,17 +4358,6 @@ impl CanvasRenderer for WgpuRasterizer {
                         "layer clear new paint page",
                     );
                 }
-                if page.secondary_needs_clear {
-                    self.encode_clear(
-                        &mut encoder,
-                        &page
-                            .secondary
-                            .as_ref()
-                            .expect("flag requires companion")
-                            .view,
-                        "layer clear new destination companion",
-                    );
-                }
             }
             for page in &layer.material_pages {
                 if page.needs_clear {
@@ -4411,7 +4398,6 @@ impl CanvasRenderer for WgpuRasterizer {
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
                 page.primary_needs_clear = false;
-                page.secondary_needs_clear = false;
             }
             for page in &mut layer.material_pages {
                 page.needs_clear = false;

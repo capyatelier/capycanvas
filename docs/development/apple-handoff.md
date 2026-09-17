@@ -333,6 +333,16 @@ changing production code. The owned app is closed and artist processes remain
 unchanged. This closes one recorder-off recovery/idle case, not overhead, cadence,
 GPU power or iPad acceptance. Evidence is `artifacts/apple-recorder-off-v1/`.
 
+A follow-up on the same Release closes native mouse resumption with recording
+disabled: after foreground idle and after native Hide/return, new strokes commit
+and each Undo/Redo restores exact document metadata and every color/watercolor
+tile digest through the production recovery reader. Canvas/Navigator captures
+are reviewed. The existing workload and app run only once; correcting direct
+mouse injection and the external hide helper does not change product code.
+The isolated app is closed and artist processes remain unchanged. Evidence is
+`artifacts/apple-idle-resume-v1/`, held for the next milestone. This supplies one
+Mac sRGB/U8 idle/return case, not physical pen, iPad or latency acceptance.
+
 ## Current iPad sustained watercolor — 2026-09-17
 
 The physical Release now has runtime hashes matching `eafd1d51`, including the
@@ -348,6 +358,69 @@ This closes missing current sustained evidence, not the remaining cadence or
 physical large-photo acceptance. No renderer code changes, extra app slot or
 artist-app uninstall is needed. The user’s 570 px G-Pen case remains separate;
 the watercolor run cannot establish its performance floor.
+
+The following physical large-photo retest reports roughly 60 ms p99, so the
+remaining drawing cost is unresolved. A subsequent read-only capture shows
+CPU p99 82.16 ms and GPU p99 70.35 ms; perceptual impact remains unconfirmed.
+A five-minute trace on the existing review process
+contains no target GPU/encoder activity and cannot attribute this result.
+Recording has ended, and the same app remains open. Coordinate a fresh short
+capture with user readiness. Do not treat local replay gains or watercolor
+cadence as closure of this separate case. Evidence: `artifacts/apple-photo-cost-v4/`.
+
+The focused local follow-up corrects the replay's mostly off-canvas path and
+uses the latest saved drawing. It identifies a redundant composition pass:
+source decoding separated a scratch clear from its first draw. Moving that
+independent decode before the clear preserves the existing pass merge. Reversed
+paired runs reduce heavier-batch completion medians by 8–12%, with identical
+paint roots, work counts and exact history. Eight-sample p99 still exceeds 51 ms
+on Mac; this does not close the iPad tail. Both final Release builds pass without
+warnings. The iPad review now includes the correction, with all eleven recoveries,
+saved files and settings byte-identical through installation. Ordinary review is
+open with recording disabled. The user repeats the roughly 60 ms result; whether
+drawing still visibly lags remains unconfirmed. Mac artist apps remain untouched. The small shared correction and replay
+fix join the following qualification milestone; main was current at `173f760f`
+when these measurements were frozen.
+Deployment evidence is `artifacts/apple-clear-pass-device-v1/`. See the
+[updated algorithm review](apple-drawing-performance-review.md#corrected-workload-and-remaining-avoidable-passes).
+
+A further local pass-timing review identifies redundant initialization of inactive
+paint surfaces before their full-page copy or edge pass. Removing that clear and
+its flag simplifies shared code. Sixteen reversed-order replays across 96, 571
+and 1024 px brushes preserve exact artwork/history and work counts, with 3–7.5%
+lower completion medians. The 571 px eight-sample p99 still approaches 55 ms on
+Mac; this is no iPad closure claim. Temporary probes are removed and both artist
+apps remain untouched. See the [pass review](apple-drawing-performance-review.md#pass-attribution-and-redundant-paint-initialization)
+and `artifacts/apple-photo-pass-v5/`. Group this small correction with the next
+milestone instead of requiring a separate device installation/retest.
+
+The corresponding Mac Release now passes a native large-photo file journey in
+isolated storage: Open the saved 9504×6336 sRGB/U8 drawing, select 570.7 px G-Pen,
+draw through native mouse events, Undo/Redo, Save As a new local file, Save,
+reopen, draw and save again, then Quit. Production project reads compare exact
+paint and retained-source tile descriptors/digests plus document metadata,
+excluding only monotonic revision/stroke counters. Undo to the clean opened
+file correctly retires recovery; a new saved copy verifies that exact state.
+Canvas, Navigator and layer-preview captures match the expected strokes before
+and after reopen. The input copy and every pre-existing artist process remain
+unchanged; the isolated app is closed. Evidence is
+`artifacts/apple-clear-pass-mac-v1/mac-photo/qualification.json`. This closes
+current Mac native file/history correctness for this large drawing, not physical
+tablet input, memory pressure, cadence or the pending iPad performance result.
+
+The grouped follow-up now also qualifies current Mac ProPhoto/U16 sustained
+watercolor. The existing workload accepts shared document color options and
+records the requested format; the saved archive verifies actual 16-bit ProPhoto
+artwork. A short preflight and ten measured minutes pass, with 0.916% long active
+intervals at 90 Hz, 11.111 ms presentation p99, 5.761 ms CPU owner p99, nominal
+thermals and no late memory growth. Artwork/previews and production recovery
+validation pass. Both current Release builds are warning-free. The isolated Mac
+apps close and all artist sessions, including iPad, remain unchanged. See
+[Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-prophoto-16-bit-watercolor--2026-09-17)
+and `artifacts/apple-prophoto-sustained-v1/`. This closes one remaining format
+qualification, not the iPad tail, physical latency or imposed memory-pressure
+cases. The shared render cleanup, corrected replay and native photo/16-bit
+qualification are grouped as one milestone; remaining release gates stay open.
 
 The approved review bundle is updated in place without consuming another app
 slot. All eleven normal recoveries, saved files and settings remain byte-identical
