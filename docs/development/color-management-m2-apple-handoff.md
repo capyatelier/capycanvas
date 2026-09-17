@@ -51,8 +51,14 @@ identifies the updated physical review apps and pending grouped device check.
 The 61 MP class synthetic-JPEG G-Pen, exact history/save/reopen and GPU-loss
 regression also passes both policies on Mac Metal. Physical iPad execution and
 large-photo performance remain unqualified.
-**Continue with provider/background workflows in step 4 and grouped physical SDR
-acceptance.** Device performance and provider delivery are not closed.
+The current SDR layered-4K Mac performance regression is corrected in the
+shared renderer: decoded-tile retention and byte-based staging accounting reduce
+ten-minute long active intervals from 41.397% to **1.016%**, within the accepted
+rare-miss standard. Pixel/history regressions and both Release builds pass; see
+the [performance record](../../apps/layer-apple/PERFORMANCE.md#layered-sdr-drawing-upload-cache-correction--2026-09-16).
+Continue with outstanding current SDR iPad/other-profile performance, provider/
+background workflows in step 4 and grouped physical SDR acceptance. Device
+performance and provider delivery are not fully closed.
 
 The physical M4 startup check exposed and fixed a vendored wgpu Metal Float32
 capability mismatch; startup and short synthetic painting now pass. The simulator

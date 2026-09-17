@@ -7,7 +7,7 @@ use layer_core::{Document, Project};
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 use std::io::Cursor;
 
-const EXTENT: [u32; 2] = [4352, 512]; // 34 tiles, larger than the source cache.
+const EXTENT: [u32; 2] = [4352, 512]; // 33 backed tiles and one transparent hole.
 fn project(color: DocumentColor) -> Project {
     let mut document = Document::new("cold paint", EXTENT[0], EXTENT[1]);
     document.color = color;
@@ -164,7 +164,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                 cold.paint_layers[0].pages.is_empty(),
                 "read-only consumers must not materialize mutable tiles"
             );
-            assert!(cold.scene.as_ref().unwrap().source_cache_work()[1] > 33);
+            assert!(cold.scene.as_ref().unwrap().source_cache_work()[1] >= 33);
         }
     }
 }

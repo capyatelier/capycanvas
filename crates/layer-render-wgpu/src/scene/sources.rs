@@ -12,11 +12,15 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
+// Resident decoded pixels and in-flight uploads have different lifetimes.
+// A small stroke crossing four tiles in eight layers exceeds the old shared
+// 16-slot bound. Retain that working set independently of staging memory.
+const DECODED_SLOTS: usize = 64;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
@@ -97,7 +101,6 @@ struct EncodedInput {
 }
 #[derive(Default)]
 struct InFlight {
-    count: AtomicUsize,
     bytes: AtomicU64,
 }
 // Dropping an unsubmitted encoder also releases its charge. A failed frame
@@ -105,8 +108,7 @@ struct InFlight {
 struct UploadCharge(Arc<InFlight>, u64);
 impl Drop for UploadCharge {
     fn drop(&mut self) {
-        self.0.bytes.fetch_sub(self.1, Ordering::Relaxed);
-        self.0.count.fetch_sub(1, Ordering::Release);
+        self.0.bytes.fetch_sub(self.1, Ordering::Release);
     }
 }
 #[derive(Default)]
@@ -150,7 +152,11 @@ impl DecodedTiles {
             .map(|s| &s.view)
     }
     pub fn uploads_full(&self) -> bool {
-        self.in_flight.count.load(Ordering::Acquire) >= SOURCE_SLOTS
+        // Preserve the 16 MiB worst-case staging ceiling, reserving room for
+        // one Float32 tile. U8/U16 inputs consume less; charging them as full
+        // Float32 uploads needlessly stalls ordinary layered strokes.
+        self.in_flight.bytes.load(Ordering::Acquire)
+            > (SOURCE_SLOTS as u64 - 1) * FLOAT_TILE_BYTES
     }
     pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace) -> Option<&wgpu::TextureView> {
         let key = Key::Raster(Arc::downgrade(blob), space, self.destination);
@@ -159,7 +165,6 @@ impl DecodedTiles {
     }
 
     pub fn charge_upload(&self, encoder: &crate::submission::CommandEncoder, bytes: u64) -> u64 {
-        self.in_flight.count.fetch_add(1, Ordering::Relaxed);
         let total = self.in_flight.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
         let charge = UploadCharge(self.in_flight.clone(), bytes);
         encoder.on_submitted_work_done(move || drop(charge));
@@ -258,7 +263,7 @@ impl DecodedTiles {
             ));
         }
         self.misses += 1;
-        let index = if self.slots.len() < SOURCE_SLOTS {
+        let index = if self.slots.len() < DECODED_SLOTS {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded Float32 source tile"),
                 size: wgpu::Extent3d {

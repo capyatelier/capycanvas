@@ -68,6 +68,61 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Layered SDR drawing: upload cache correction — 2026-09-16
+
+The corrected sRGB/U8 `layered-4k` Mac Release completes 600 measured seconds
+with **511/50,309 long active intervals (1.016%)**, meeting the user's accepted
+rare-miss standard for this synthetic workload. The `448c1ee4` baseline had
+14,621/35,319 (41.397%). Eight paint layers, prediction and 240 Hz input remain
+unchanged. Both captures show correct artwork, Navigator and layer previews.
+
+| Ten-minute Mac run | Long intervals | Presentation p50/p95/p99 ms | Preparation p99/max ms |
+| --- | ---: | --- | --- |
+| Original SDR | 41.397% | 11.111 / 22.222 / 33.334 | 22.107 / 38.882 |
+| Corrected SDR | 1.016% | 11.111 / 11.111 / 22.222 | 8.005 / 13.549 |
+
+The original 16-slot decoded-source cache could not retain neighboring tiles
+across eight layers, repeatedly uploading unchanged color. A valid CPU profile
+localized most renderer time to source-upload submission and waits. The cache
+now retains up to 64 Float32 tiles, independently of staging. Upload accounting
+uses actual bytes and removes the redundant count: U8/U16 inputs can use more
+of the existing **16 MiB worst-case staging ceiling**. Ordered uploads and
+bounded display-composition submissions remain in place. Decoded textures add
+at most 48 MiB, with a total decoded-cache ceiling of 66.25 MiB including existing
+integer inputs and transfer tables. This is a shared renderer correction.
+
+The `layer-host` example `layered-strokes` reproduces the cause without native
+UI or screen presentation. Its fixed three-sample batches produce identical
+per-frame damage across all 256 frames. Misses fall from 3,234 to 986 and
+synchronous upload drains from 112 to zero. Active preparation p95 falls from
+7.479 to 2.331 ms. Cache retention alone left seven drains and 4.491% long
+intervals in a short native run; byte accounting reduces the final short run
+to 0.906%. These intermediate results remain scoped separately from the completed
+ten-minute qualification.
+
+The final sustained run has no rejected input, renderer errors, dropped records,
+or missing/zero measured presentation callbacks. Thermals remain nominal.
+GPU queue-span p99/max is 16.192/29.218 ms; this includes CPU gaps, not solely
+GPU execution. Measured footprint peaks at 2,475.72 MiB, falls 30.69 MiB in the
+last two minutes and another 234 MiB during the postlude. The canvas becomes
+idle 45.10 ms after pen-up, with no frames in the final five seconds. No memory
+workaround is justified by this curve; other device/workload budgets remain open.
+
+All 12 source-cache, precision, native paint, source-preservation, prediction,
+transform and exact-history regressions pass. Both macOS and iPadOS Release
+builds pass without warnings. The separate source microbenchmark remains ignored.
+The measured Mac binary matches every retained source hash for `448c1ee4` plus
+this milestone's runtime patch. Runs use an isolated identity and storage;
+existing review/artist processes and drawings are preserved. The first short
+profile aborted its producer and mostly sampled idle time; it is invalid evidence.
+
+Evidence: `artifacts/performance/sdr-448c1ee4/`, including baseline and final
+`byte-budget-native/mac-layered-4k-600-gpu-1/`, the valid intermediate
+`mac-layered-4k-45-gpu-1-profile2/cpu-sample.txt`, renderer CSVs and `review.json`.
+Current iPad/other-profile and ProPhoto/U16 performance, recorder-off behavior,
+instrumentation overhead and physical input-to-display measurement remain open.
+CPU/GPU timestamps and synthetic input association are not physical pen latency.
+
 ## Recurrent physical Pencil stall — 2026-09-15
 
 The user confirms lag after the revised timer restart. The actual Pencil trace

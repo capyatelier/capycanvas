@@ -82,7 +82,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                         );
                         encoder.submit(&r.queue);
                         let read = crate::layer_tests::page_bytes(&r, &pending.texture);
-                        assert_eq!(cache.in_flight.count.load(Ordering::Acquire), 0);
+                        assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
                         let decoder = layer_color::WorkingDecoder::new(
                             &source.interpretation,
                             destination,
@@ -142,7 +142,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                         }
                         assert!(
                             cache.gpu_bytes()
-                                <= SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES
+                                <= DECODED_SLOTS as u64 * FLOAT_TILE_BYTES
                                     + 3 * 256 * 256 * 4
                                     + 3 * transfer::TABLE_BYTES
                         );
@@ -162,13 +162,29 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
     }
     assert_eq!(tables.gpu_bytes(), 3 * transfer::TABLE_BYTES);
     let cache = DecodedTiles::default();
-    let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    for _ in 0..SOURCE_SLOTS {
-        cache.charge_upload(&abandoned, FLOAT_TILE_BYTES);
+    for tile_bytes in [FLOAT_TILE_BYTES / 4, FLOAT_TILE_BYTES / 2, FLOAT_TILE_BYTES] {
+        let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let mut count = 0;
+        while !cache.uploads_full() {
+            let bytes = cache.charge_upload(&abandoned, tile_bytes);
+            assert!(bytes <= SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES);
+            count += 1;
+        }
+        assert!(count >= SOURCE_SLOTS);
+        if tile_bytes < FLOAT_TILE_BYTES { assert!(count > SOURCE_SLOTS); }
+        drop(abandoned);
+        assert!(!cache.uploads_full());
+        assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
     }
-    assert!(cache.uploads_full());
+    // A final maximum-sized upload must also fit after mixed smaller inputs.
+    let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    while !cache.uploads_full() {
+        cache.charge_upload(&abandoned, FLOAT_TILE_BYTES / 4);
+        if cache.uploads_full() { break; }
+        assert!(cache.charge_upload(&abandoned, FLOAT_TILE_BYTES)
+            <= SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES);
+    }
     drop(abandoned);
-    assert!(!cache.uploads_full());
     assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
 }
 
@@ -359,6 +375,64 @@ fn encode_pending(
         .unwrap();
     cache.charge_upload(encoder, count);
 }
+
+#[test]
+fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let scene = Scene::new(&r);
+    let mut cache = DecodedTiles::new(RgbSpace::Srgb);
+    // An ordinary layered stroke needs neighboring tiles from eight layers.
+    // Keep their distinct immutable backings alive across queue submissions.
+    let tiles: Vec<_> = (0..32)
+        .map(|i| {
+            let pixel = [i * 7, 129, 231, 255];
+            Arc::new(
+                TileBlob::encode(
+                    layer_core::color::DocumentColor::default().paint_descriptor(),
+                    &pixel.repeat(256 * 256),
+                )
+                .unwrap(),
+            )
+        })
+        .collect();
+    for tile in &tiles {
+        if cache.uploads_full() {
+            r.wait_idle().unwrap();
+        }
+        let (_, pending) = cache
+            .plan_raster(&r, tile, RgbSpace::Srgb, RgbSpace::Srgb)
+            .unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        encode_pending(&r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
+        encoder.submit(&r.queue);
+    }
+    r.wait_idle().unwrap();
+    for (i, tile) in tiles.iter().enumerate() {
+        let (decoded, pending) = cache
+            .plan_raster(&r, tile, RgbSpace::Srgb, RgbSpace::Srgb)
+            .unwrap();
+        assert!(
+            pending.is_none(),
+            "unchanged layer tile must not upload again"
+        );
+        let bytes = crate::layer_tests::page_bytes(&r, &decoded.texture);
+        let expected = [
+            RgbSpace::Srgb.decode((i * 7) as f64 / 255.) as f32,
+            RgbSpace::Srgb.decode(129. / 255.) as f32,
+            RgbSpace::Srgb.decode(231. / 255.) as f32,
+            1.,
+        ];
+        for pixel in bytes.chunks_exact(16) {
+            for (actual, expected) in pixel.chunks_exact(4).zip(expected) {
+                let actual = f32::from_ne_bytes(actual.try_into().unwrap());
+                assert!((actual - expected).abs() <= 3e-6);
+            }
+        }
+    }
+    assert_eq!(cache.misses, tiles.len() as u64);
+    assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
+}
+
 #[test]
 fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
     let r = WgpuRasterizer::new_headless().unwrap();
@@ -465,10 +539,10 @@ fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
             }
         }
     }
-    assert_eq!(cache.slots.len(), SOURCE_SLOTS);
+    assert_eq!(cache.slots.len(), DECODED_SLOTS);
     assert_eq!(
         cache.gpu_bytes(),
-        SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES + 3 * 256 * 256 * 4 + 3 * transfer::TABLE_BYTES
+        DECODED_SLOTS as u64 * FLOAT_TILE_BYTES + 3 * 256 * 256 * 4 + 3 * transfer::TABLE_BYTES
     );
     assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
 }
@@ -496,7 +570,7 @@ fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_va
     let (blob, _) = raster_fixture(IntegerDepth::U16, AlphaAssociation::Straight, Some(65535));
     let weak = Arc::downgrade(&blob);
     let mut identities = Vec::new();
-    for i in 0..SOURCE_SLOTS * 4 {
+    for i in 0..DECODED_SLOTS * 4 {
         if cache.uploads_full() {
             r.device
                 .poll(wgpu::PollType::Wait {
@@ -523,7 +597,7 @@ fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_va
         encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
         encoder.submit(&r.queue);
     }
-    assert_eq!(identities.len(), SOURCE_SLOTS);
+    assert_eq!(identities.len(), DECODED_SLOTS);
     let (_, pending) = cache
         .plan_raster(&r, &blob, RgbSpace::Srgb, RgbSpace::Srgb)
         .unwrap();
@@ -574,5 +648,5 @@ fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_va
         })
         .unwrap();
     assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
-    assert_eq!(cache.slots.len(), SOURCE_SLOTS);
+    assert_eq!(cache.slots.len(), DECODED_SLOTS);
 }
