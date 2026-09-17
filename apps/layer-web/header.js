@@ -20,7 +20,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
-  let buttonContact, colorKey;
+  let buttonContact, colorKey, measurementTheme;
   function clearButtonPress(e) {
     if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
     buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
@@ -156,6 +156,8 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   function refresh() {
     view=app.header_view(); size=view.sizes.find(s=>s.id===view.model.size);
     const key=JSON.stringify([view.model,view.editing]);
+    const remeasure=key!==modelKey || measurementTheme!==state().theme;
+    measurementTheme=state().theme;
     if(key!==modelKey) {
       clearButtonPress();
       end(null,true); const wasEditing=editing; editing=view.editing; modelKey=key;
@@ -208,7 +210,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     bank.querySelector('#header-canvas-info').checked=state().workspace.layout.canvas_info.visible;
     document.querySelector('#canvas-status').hidden=!state().workspace.layout.canvas_info.visible;
     for(const m of root.querySelectorAll('details[open]'))m.refreshMenu?.();
-    queue();
+    // Resize/content observers cover the native clock, battery and workspace
+    // labels. Canvas/model publications do not change intrinsic item widths.
+    if(remeasure)queue();
   }
   function measure() {
     const extra=editing?20:0;
@@ -385,6 +389,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   root.addEventListener('contextmenu',e=>{const item=e.target.closest('[data-header-item]');if(editing&&item)select(Number(item.dataset.headerItem));});
   new ResizeObserver(()=>{if(contact&&contact.width!==root.clientWidth)end(null,true);queue();}).observe(root);
   new ResizeObserver(queue).observe(bank);
+  document.fonts.addEventListener('loadingdone',queue);
   new MutationObserver(()=>{
     if(contact&&(!contact.node.isConnected||contact.node.parentNode!==contact.parent))end(null,true);
     if(buttonContact&&(!buttonContact.node.isConnected||buttonContact.node.parentNode!==buttonContact.parent))clearButtonPress();

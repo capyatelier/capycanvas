@@ -659,6 +659,9 @@ impl WebApp {
     pub fn layout_update(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.workspace_layout_update([width, height]))
     }
+    pub fn panel_measurements(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().workspace.layout.measurements)
+    }
     pub fn camera(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().camera)
     }

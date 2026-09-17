@@ -430,3 +430,92 @@ Evidence: `/tmp/capy-final-moving-device.json`,
 `/tmp/capy-mips-bounded-placement.json`, `/tmp/capy-final-main-full-photo.json`,
 `/tmp/capy-mips-gtk-workflow/workflow.json`. The Android reporter now prints
 callback rate and p95 cadence as well as CPU phases and presentation intervals.
+
+## Web animation and retained UI milestone
+
+The initial headed-browser movement run delivered only 60–72 animation callbacks/s
+despite approximately 0.3 ms Wasm frame work and sub-millisecond GPU work. Browser
+CPU profiles identified the missing cost: unchanged panel DOM was cloned and
+measured on every placement publication. The global workspace content revision
+also advances for numeric tool values and canvas poses; it is not an intrinsic
+widget-content revision. In addition, the browser compared panel measurements
+against a field deliberately omitted from serialized workspace state, repeatedly
+publishing identical measurements back to Rust.
+
+The browser now retains intrinsic panel copies across movement and invalidates
+them for widget structure, labels, appearance and available width. A small Wasm
+getter reads the actual transient measurements held by the shared session.
+Placement controls reuse the published state, unchanged layer rows retain their
+SVG/text widgets, and the title bar measures again on model, theme, font, native
+content or size changes. Native DOM measurement and widget retention remain in
+JavaScript; layout decisions, document/color/source workflows and the renderer
+remain shared Rust. No extra rendering pipeline or pointer-specific fast path
+was added.
+
+The full photo-placement journey passes in headed Chrome with hardware WebGPU
+on an isolated 120 Hz Mutter Wayland display, using the same 61 MP and 24 MP
+camera originals. It verifies native file/drop/clipboard transport, Apply/Cancel,
+one-step history, exact retained source identity through drawing and reopen,
+rejected malformed/stale/cancelled imports and compact placement controls.
+The column-stack, layer-controls and title-bar-overflow suites also pass,
+including their mouse/touch/pen cancellation and Undo/Redo coverage. JavaScript
+syntax checks and the release Wasm build pass.
+
+The older `--columns` test still fails at its expected-divider assertion
+(`columns.test.mjs:44`). An isolated static overlay of the committed browser UI
+reproduces the same failure. The current `--column-stacks` suite passes; the old
+assertion is a pre-existing test/layout mismatch, not a passing check.
+
+The motion harness now records the complete animation-callback timeline and
+optional Chrome CPU profiles (`LAYER_IMAGE_PROFILE=1`). Real CDP pointer input is
+emitted on its own approximately 240 Hz clock so touch-event acknowledgements
+cannot throttle injection. `host_frame_ms` measures the Wasm frame call, not the
+entire JavaScript callback; callback intervals include host/UI scheduling cost.
+GPU histories remain rolling diagnostics and can contain earlier activity.
+
+Unprofiled desktop measurement (`web-retained-final/motion.json`), five seconds
+of pen movement and five seconds of drawing per case, on the Threadripper 9995WX
+and RTX PRO 6000 Blackwell Max-Q:
+
+| Source | Scale / fit | Moving callbacks/s | Moving interval p50 / p95 | Drawing callbacks/s |
+| --- | --- | --- | --- | --- |
+| 9504 × 6336 | 1.1 | 119.6 | 8.3 / 8.4 ms | 119.8 |
+| 9504 × 6336 | 1.2 | 120.0 | 8.3 / 8.4 ms | 120.1 |
+| 9504 × 6336 | 2.0 | 120.0 | 8.3 / 8.4 ms | 120.0 |
+| 4000 × 6000 | 1.1 | 120.0 | 8.3 / 8.4 ms | 120.3 |
+| 4000 × 6000 | 1.2 | 120.2 | 8.3 / 8.4 ms | 120.1 |
+| 4000 × 6000 | 2.0 | 109.1 | 8.3 / 16.6 ms | 120.0 |
+| Both visible | Final drawing | — | — | 119.8 |
+
+Moving Wasm frame medians are 0.3 ms and GPU medians 0.085–0.151 ms. Short
+one-second mouse runs reach 119.6–120.4 callbacks/s; touch runs range from 110.0
+to 120.0. The last sustained moving case retains a scheduling stall in its
+reported result (52.4 ms maximum interval); this is not a clean six-case 120 Hz
+pass. A second run with the CPU profiler reproduces that case at 108.6 callbacks/s
+while the main thread is mostly idle during the dropped callbacks. Five other
+moving cases remain approximately 120 callbacks/s.
+
+A full Chrome scheduling trace reproduces the last case at 107.6 callbacks/s
+(tracing adds overhead). During its stall, Chrome's GPU process spends up to
+12.0 ms in a WebGPU command-buffer flush while the renderer main thread is mostly
+idle. The trace does not establish which Dawn/driver operation causes that delay.
+This remaining browser/GPU-service stall is recorded rather than hidden by a
+warm-up exclusion or addressed with an unproven renderer special case. The trace
+is `/tmp/capy-web-browser-trace.json`; its timing report is
+`artifacts/image-placement/web-browser-trace/motion.json`. Further work on that
+tail needs Dawn/driver-level profiling. The measured application-side hot paths
+and Android's sustained moving workload are below the 8.33 ms budget.
+
+Reproduce the functional and timing workload with:
+
+```sh
+LAYER_WEB_PORT=4288 LAYER_IMAGE_MOTION=1 \
+LAYER_PHOTO_FILES='["/tmp/capy-real-photos/61mp-DSC02494.JPG","/tmp/capy-real-photos/24mp-cameralabs-A7III.jpg"]' \
+LAYER_TEST_ARTIFACTS=artifacts/image-placement/web-retained-final \
+bash tools/performance/workspace-motion.sh web --image-placement
+```
+
+The baseline, final timeline and profiles are under
+`artifacts/image-placement/{web-latency,web-retained-final,web-retained-profile}`.
+These measurements exercise browser and OS input delivery; they do not measure
+physical pen-to-photon delay.

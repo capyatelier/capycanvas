@@ -39,9 +39,10 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
   });
   window.addEventListener('pagehide',()=>control?.cancel());
   return {
-    refresh(){
-      controls.hidden=!command('placement_original_size')?.enabled;
-      for(const b of controls.children)b.disabled=!command(b.dataset.command)?.enabled;
+    refresh(state){
+      const commands=state.commands;
+      controls.hidden=!commands.find(c=>c.id==='placement_original_size')?.enabled;
+      for(const b of controls.children)b.disabled=!commands.find(c=>c.id===b.dataset.command)?.enabled;
     },
     async run(id,choose) {
       const drop=incoming;incoming=null;

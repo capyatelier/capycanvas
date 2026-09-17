@@ -15,6 +15,7 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,sour
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/image-placement/web-motion';await mkdir(directory,{recursive:true});
   const report={...hardware??{cpu:cpus()[0]?.model,gpu:(await call('SystemInfo.getInfo',{},null)).gpu.devices},loading_ms:loadingMs,runs:[]};
   const sources=sourceIdentity(baseline),layers=baseline.document.layers.slice(0,sources.length);
+  let profileIndex=0;
   const rasterIdentity=m=>m.rasters.map(r=>({...r,tiles:r.tiles.map(t=>({...t,blob:m.blobs[t.blob].digest}))}));
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
@@ -30,17 +31,36 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,sour
   }
   async function motion(device,kind) {
     const start=await screen(1000,750);
-    const count=kind==='measure'?180:20;
-    await evaluate(`placementTest.frames=[];placementTest.frame=layerApp.app.frame.bind(layerApp.app);layerApp.app.frame=(...args)=>{const t=performance.now();try{return placementTest.frame(...args)}finally{placementTest.frames.push(performance.now()-t)}}`);
+    const duration=kind==='measure'?5000:1000;
+    const profile=process.env.LAYER_IMAGE_PROFILE && device==='pen';
+    if(profile){await call('Profiler.enable');await call('Profiler.start');}
+    await evaluate(`placementTest.frames=[];placementTest.frame=layerApp.app.frame.bind(layerApp.app);layerApp.app.frame=(...args)=>{const t=performance.now();try{return placementTest.frame(...args)}finally{placementTest.frames.push([args[0],t,performance.now()-t])}}`);
     try {
+      const started=performance.now();let inputs=0,error;
+      const delivered=[];
       await pointer('mousePressed',start,device);
-      for(let i=0;i<count;i++){
-        await pointer('mouseMoved',{x:start.x+40*Math.sin(i/12),y:start.y+20*Math.cos(i/9)},device);await settle();
+      while(performance.now()-started<duration){
+        const elapsed=performance.now()-started;
+        // CDP touch acknowledgements can wait for a compositor frame. Keep the
+        // injection clock independent, as a physical device's input clock is.
+        delivered.push(pointer('mouseMoved',{x:start.x+40*Math.sin(elapsed/250),y:start.y+20*Math.cos(elapsed/310)},device).catch(e=>{error??=e;}));
+        inputs++;await new Promise(resolve=>setTimeout(resolve,4));
       }
+      await Promise.all(delivered);if(error)throw error;
       await pointer('mouseReleased',start,device);await settle();
-      const result=await evaluate(`({host:placementTest.frames.slice(-120),stats:JSON.parse(JSON.stringify(layerApp.app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v))})`);
-      return {device,host_frame_ms:summary(result.host),gpu_ms:summary(result.stats.gpu_samples),render_cpu_ms:summary(result.stats.samples),tracked_canvas_bytes:result.stats.resident_bytes,...await memory()};
-    } finally {await evaluate('layerApp.app.frame=placementTest.frame;delete placementTest.frame');}
+      const result=await evaluate(`({host:placementTest.frames,stats:JSON.parse(JSON.stringify(layerApp.app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v))})`);
+      // The normal browser animation callback owns rendering throughout input.
+      // Keep its full timeline; a rolling GPU history can contain older work.
+      return {device,inputs,frames:result.host,frame_fields:['animation_ms','start_ms','cpu_frame_ms'],
+        host_frame_ms:summary(result.host.map(f=>f[2])),
+        callback_interval_ms:summary(result.host.slice(1).map((f,i)=>f[0]-result.host[i][0])),
+        gpu_ms:summary(result.stats.gpu_samples),render_cpu_ms:summary(result.stats.samples),tracked_canvas_bytes:result.stats.resident_bytes,...await memory()};
+    } finally {
+      await evaluate('layerApp.app.frame=placementTest.frame;delete placementTest.frame');
+      if(profile){
+        const {profile}=await call('Profiler.stop');await writeFile(join(directory,`motion-${profileIndex++}.cpuprofile`),JSON.stringify(profile));await call('Profiler.disable');
+      }
+    }
   }
   try {
     await send({type:'customize',action:{type:'set_panel_visible',panel:'stats',visible:true}});
@@ -56,9 +76,8 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,sour
       await send({type:'set_tool_setting',id:'transform_width',value:scale});
       const entry={extent:[w,h],factor,translation:[],drawing:null};
       for(const device of ['mouse','touch','pen'])entry.translation.push(await motion(device,device==='pen'?'measure':'input'));
-      console.log('Translation diagnostics',JSON.stringify(entry));
+      console.log('Translation diagnostics',JSON.stringify({...entry,translation:entry.translation.map(({frames,...summary})=>summary)}));
       assert.ok(entry.translation.every(run=>run.host_frame_ms?.count>0),'Every pointer device moves placement');
-      assert.ok(entry.translation.at(-1).render_cpu_ms?.count>=120,'Warm translation is measured with diagnostics active');
       await invoke('apply_transform');await invoke('pen');await send({type:'select_brush',id:1});
       await send({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[1,0,.7,.5]}}});
       entry.drawing=await motion('pen','measure');

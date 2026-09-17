@@ -513,6 +513,10 @@ function invalidatePanelMeasurement(id) {
   panelMeasurements.get(id)?.root.remove();
   panelMeasurements.delete(id);
 }
+function panelContentChanged(id) {
+  invalidatePanelMeasurement(id);
+  queuePanelMeasurements();
+}
 function queuePanelMeasurements() {
   if (measuringPanels) return;
   measuringPanels = true;
@@ -524,11 +528,14 @@ function queuePanelMeasurements() {
 function measurePanels() {
   const pending = [];
   // Batch writes before reads. Intrinsic measurement keeps one offscreen DOM
-  // copy per content revision, so width changes reflow it without cloning.
+  // copy per intrinsic content change, so width changes reflow it without cloning.
   for (const config of state.workspace.layout.panels) {
     const view = customization.view(config.id);
     const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
-    const key = JSON.stringify([String(workspaceContentRevision), view.title, view.tab, view.icon, view.controls, view.tile_style]);
+    // Model publication also advances for numeric values and canvas poses.
+    // Intrinsic copies change only with panel structure/copy, appearance or
+    // available width; each content widget invalidates its own schema below.
+    const key = JSON.stringify([state.theme, view.title, view.tab, view.icon, view.controls, view.tile_style]);
     let cached = panelMeasurements.get(config.id);
     if (cached?.key !== key) {
       invalidatePanelMeasurement(config.id);
@@ -572,8 +579,10 @@ function measurePanels() {
   for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
   const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
   // Compare against the shared publication, not a second authoritative cache.
-  // Full restores omit these transient facts and therefore measure again.
-  const current = state.workspace.layout.measurements;
+  // Measurements are transient and deliberately omitted from saved workspace
+  // state. Read Rust's live values rather than repeatedly publishing because a
+  // freshly serialized full state lacks that field.
+  const current = app.panel_measurements();
   if (!current || current.length !== measurements.length || measurements.some((m, i) =>
     m.panel !== current[i].panel || m.tab_width !== current[i].tab_width || m.content_height !== current[i].content_height ||
     m.scroll?.fixed_height !== current[i].scroll?.fixed_height || m.scroll?.unit_height !== current[i].scroll?.unit_height)) {
@@ -628,9 +637,9 @@ function buildPanels() {
     sizeButtons.set(value, choice);
   }
   panels.get("sizes").append(controls, grid);
-  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext() });
+  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
-    contentChanged:id=>{invalidatePanelMeasurement(id);queuePanelMeasurements();}});
+    contentChanged:panelContentChanged});
 }
 function contentPanel(id) {
   const panel=element("div",`panel ${id}-panel`);
@@ -1424,14 +1433,14 @@ try {
   await loadIcons();
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences() });
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
-  editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange});
+  editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   buildHeader();
   buildPanels();
   customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
-  documents = createDocuments({app,canvas,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
+  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);

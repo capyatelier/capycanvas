@@ -1,6 +1,6 @@
 import { chooseColor, choosePalette } from './color-controls.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange }) {
+export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const updates = new Map(), navigators = new Set();
   let positioning = 0, nextNavigator = 1;
   const color = action => dispatch({ type: "color", action });
@@ -41,6 +41,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
             node.append(label); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
           }
         }
+        contentChanged("brushes");
       }
       for (const {node,kind,index} of rows) {
         const pressed=String(view[kind][index].selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);
@@ -63,6 +64,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
           const node=button("",()=>dispatch({type:"invoke",command:spec.command}),"tool-setting-action");
           node.dataset.toolAction=spec.command; root.append(node); actions.push([spec,node]);
         }
+        contentChanged("tool_settings");
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
       for (const [spec,node] of actions) {

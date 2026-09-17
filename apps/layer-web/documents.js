@@ -4,7 +4,7 @@ import {chooseExport,chooseSourceProfile} from './export-controls.js';
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
+export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,
@@ -280,8 +280,9 @@ export function createDocuments({app,canvas,dispatch,applyChange,wake,element,bu
   // Exposed on the existing host controller for deterministic lifecycle tests.
   window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
   return {handle,autosave,startRecovery,refresh(){
-    images.refresh();
-    if(closing || !app.state().document_file.close_ready)return;
+    const published=state();
+    images.refresh(published);
+    if(closing || !published.document_file.close_ready)return;
     closing=true;
     const current=app.state().document_file,extent=app.editor_models(innerWidth,innerHeight).document_options.extent;
     // Close leaves an empty untitled workspace after the shared unsaved decision.
