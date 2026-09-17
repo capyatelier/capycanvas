@@ -765,8 +765,8 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::SoftProofSetup => "Soft Proof Setup…",
-            Self::SoftProof => "Soft Proof",
+            Self::SoftProofSetup => "Proof Setup…",
+            Self::SoftProof => "Proof Colors",
             Self::GamutWarning => "Gamut Warning",
             Self::Histogram => "Histogram…",
             Self::ImportImage => "Import Image as Layer…",

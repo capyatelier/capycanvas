@@ -6,6 +6,7 @@ pub(crate) struct ProfileChooser {
     pub error: gtk::Label,
     pub selected: Rc<dyn Fn() -> Result<ExportProfile, String>>,
     pub restore: Rc<dyn Fn(ExportProfile)>,
+    state: Rc<State>,
 }
 
 struct State {
@@ -14,6 +15,7 @@ struct State {
     error: glib::WeakRef<gtk::Label>,
     menu: glib::WeakRef<gtk::MenuButton>,
     value: RefCell<Option<ExportProfile>>,
+    document: RefCell<Option<ExportProfile>>,
     failure: RefCell<Option<String>>,
     busy: Cell<bool>,
     in_flight: Cell<bool>,
@@ -197,6 +199,12 @@ fn item(
 }
 
 impl ProfileChooser {
+    pub fn restore_document(&self, profile: ExportProfile) {
+        *self.state.document.borrow_mut() =
+            matches!(profile.profile, ColorProfile::Icc(_)).then(|| profile.clone());
+        self.state.set(profile);
+    }
+
     pub fn new(
         w: &Rc<Workspace>,
         title: &str,
@@ -236,6 +244,7 @@ impl ProfileChooser {
             error: error.downgrade(),
             menu: menu.downgrade(),
             value: Default::default(),
+            document: Default::default(),
             failure: Default::default(),
             busy: Cell::new(false),
             in_flight: Cell::new(false),
@@ -317,9 +326,30 @@ impl ProfileChooser {
                     actions,
                     async move {
                         let current = state.value.borrow().clone();
-                        let (entries, current) = gio::spawn_blocking(move || {
-                            let entries = library::list(&library::directory());
+                        let document = state.document.borrow().clone();
+                        let (entries, document, current) = gio::spawn_blocking(move || {
+                            let mut entries = library::list(&library::directory());
+                            if let Some(ExportProfile {
+                                profile: ColorProfile::Icc(bytes),
+                                ..
+                            }) = &document
+                            {
+                                let key = glib::compute_checksum_for_data(
+                                    glib::ChecksumType::Sha256,
+                                    bytes,
+                                )
+                                .unwrap();
+                                if let Ok(entries) = &mut entries {
+                                    entries.retain(|entry| {
+                                        entry.path.file_stem().and_then(|s| s.to_str())
+                                            != Some(key.as_str())
+                                    });
+                                }
+                            }
                             let current = current.filter(|p| {
+                                if document.as_ref().is_some_and(|d| d.profile == p.profile) {
+                                    return false;
+                                }
                                 let ColorProfile::Icc(bytes) = &p.profile else {
                                     return false;
                                 };
@@ -336,27 +366,33 @@ impl ProfileChooser {
                                     })
                                 })
                             });
-                            (entries, current)
+                            (entries, document, current)
                         })
                         .await
-                        .unwrap_or_else(|_| (Err("Could not load saved profiles".into()), None));
+                        .unwrap_or_else(|_| {
+                            (Err("Could not load saved profiles".into()), None, None)
+                        });
                         state.listing.set(false);
                         choices.remove_all();
-                        if let Some(current) = current {
+                        for (profile, label, action) in [
+                            (document, "Document Profile", "document"),
+                            (current, "Current Profile", "current"),
+                        ] {
+                            let Some(profile) = profile else { continue };
                             let section = gio::Menu::new();
-                            let title = current.name.clone();
+                            let title = profile.name.clone();
                             item(
                                 &section,
                                 &actions,
                                 &title,
-                                "current",
+                                action,
                                 glib::clone!(
                                     #[strong]
                                     state,
-                                    move || state.choose(Some(current.clone()), None)
+                                    move || state.choose(Some(profile.clone()), None)
                                 ),
                             );
-                            choices.append_section(Some("Current Profile"), &section);
+                            choices.append_section(Some(label), &section);
                         }
                         match entries {
                             Ok(entries) => {
@@ -427,12 +463,16 @@ impl ProfileChooser {
                     .ok_or_else(|| "Choose a profile".into())
             }
         });
-        let restore = Rc::new(move |value| state.set(value));
+        let restore = Rc::new({
+            let state = state.clone();
+            move |value| state.set(value)
+        });
         Self {
             row,
             error,
             selected,
             restore,
+            state,
         }
     }
 }

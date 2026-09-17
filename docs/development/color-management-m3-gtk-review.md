@@ -1,9 +1,8 @@
 # GTK print proofing: manual review
 
-The GTK implementation is ready for app review. Automated qualification and its
+The user accepted the GTK app review on 2026-09-17. Automated qualification and its
 measured limits are in the [acceptance record](../history/color-management-gtk-m3-validation.md).
-Manual acceptance is **pending your confirmation**. Other platforms and HDR have
-not been enabled by this work.
+Other platforms and HDR have not been enabled by this work.
 
 ## Run the review build
 
@@ -25,7 +24,9 @@ Saved profiles from the previous review session have been copied into this one.
 1. Open a photograph or drawing. For a quick prepared example, open
    `artifacts/color-m3/gtk-journey/variant.capy`, which contains the tested CMYK
    recipe and a small edited drawing. Reopening starts in normal viewing.
-2. Choose **View → Soft Proof Setup** (`Ctrl+Alt+Shift+P`). Open the single
+2. Choose **View → Proof Colors** (`Ctrl+Alt+P`). With no saved proof profile,
+   this opens **Proof Setup**; cancelling leaves the preview off. To change an
+   existing setup, choose **View → Proof Setup…** (no default shortcut). Open the single
    **Proof profile** picker. Select a saved profile or use **Add Profile…** to
    choose an `.icc`/`.icm` file; it is saved to the library and selected immediately.
    Re-adding the same file reuses its entry. Standard color spaces have their own
@@ -40,17 +41,23 @@ Saved profiles from the previous review session have been copied into this one.
    The canvas and Navigator should change together. Try paper/ink settings on
    both a neutral ramp and saturated colors. Preparing a complex profile can
    take several seconds; Cancel leaves the saved setup unchanged.
-5. Compare with **View → Soft Proof** (`Ctrl+Alt+P`) and **Gamut Warning**
-   (`Ctrl+Shift+G`). Warning gray is a viewing overlay. Toggling must leave the
+5. Compare with **View → Proof Colors** (`Ctrl+Alt+P`) and **Gamut Warning**
+   (`Ctrl+Shift+Y`). Warning gray is a viewing overlay. Toggling must leave the
    document's saved/dirty state unchanged. These shortcuts preserve `Ctrl+Y` redo.
 6. Use **Save As** for a print variant, then paint or adjust colors while proofing.
    Check undo/redo for both the edit and a changed proof setup. Reopen the saved
    variant: the recipe must remain available, with temporary view toggles off.
+   Each file embeds only its active proof profile. When trying a replacement,
+   the original stays under **Document Profile**. Applying the replacement saves
+   the original in this machine's **Saved Profiles**, so it remains available
+   after saving and reopening. Cancelling setup does not save the original to
+   the library. Taking the updated file to another machine brings only the
+   replacement profile.
 7. Export using the lab's **explicit delivery profile** and requested file/depth
    settings. A CMYK proof can accompany an sRGB or Adobe RGB delivery. Importing
    a proof target does not choose an export profile. Compare exports made with
    proof/warnings on and off; simulation and warning gray must never enter them.
-8. Try cancelling setup and switching **View → Soft Proof** off and on. Turning
+8. Try cancelling setup and switching **View → Proof Colors** off and on. Turning
    both viewing options off hides the proof status and retains its settings.
    An invalid or unsupported ICC must produce
    an actionable error. Open Drawing and Add Profile should use the desktop picker
@@ -73,5 +80,4 @@ for your actual printer/paper or lab when judging the workflow.
   The performance record includes cold preparation, first-use latency and brief
   save/export contention. Dirty-image regeneration remains a separate limitation.
 
-After this review, confirm acceptance or describe the behavior to adjust. This
-handoff stops here; it does not authorize another platform or HDR work.
+This accepted GTK review does not authorize another platform or HDR work.

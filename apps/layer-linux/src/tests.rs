@@ -8488,7 +8488,12 @@ fn native_menu_sections() {
     let app = native_test_app("dev.layer.MenuTest");
     let w = fixture_workspace(&app);
     w.window.present();
-    pump(500);
+    new_photo::ready(&w);
+    // Exercise both the menu bar and the configurable Main Menu component.
+    let mut workspace = state(&w).workspace;
+    workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu]).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(300);
     let dir = "../../artifacts/ui/menus";
     std::fs::create_dir_all(dir).unwrap();
     let open = |id: ApplicationMenu| {
@@ -8529,11 +8534,16 @@ fn native_menu_sections() {
                         &item.sections,
                     );
                 } else {
-                    assert_eq!(
+                    assert!(
                         section
                             .item_attribute_value(i as i32, "custom", None)
-                            .is_some(),
-                        !item.hint.is_empty()
+                            .is_none()
+                    );
+                    assert_eq!(
+                        section
+                            .item_attribute_value(i as i32, "accel", None)
+                            .and_then(|v| v.get::<String>()),
+                        item.bindings.first().map(native_accelerator)
                     );
                     assert!(
                         section
@@ -8638,16 +8648,6 @@ fn native_menu_sections() {
             .session
             .application_menu(id);
         check(&menu.menu_model().unwrap(), &expected.sections);
-        assert!(
-            expected
-                .sections
-                .iter()
-                .flatten()
-                .find(|i| i.label == CommandId::Settings.label())
-                .unwrap()
-                .hint
-                .is_empty()
-        );
         menu.popdown();
     }
     w.window.destroy();
@@ -9814,29 +9814,15 @@ fn native_preferences_and_shortcuts() {
             popup.is_visible(),
             "reset menu must survive the editor losing focus"
         );
-        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
-            .unwrap()
-            .downcast()
-            .unwrap();
+        let reset_label = format!("Reset to Default ({})", theme.default_base());
+        let reset = find_menu_item(popup.upcast_ref(), &reset_label).unwrap();
         assert!(reset.is_sensitive());
-        let labels = reset.child().unwrap();
-        assert_eq!(
-            labels
-                .last_child()
-                .and_downcast::<gtk::Label>()
-                .unwrap()
-                .text(),
-            theme.default_base().to_string()
-        );
         capture_popover(popup.upcast_ref(), &format!("{dir}/gtk-reset-{suffix}.png"));
-        click(&reset);
+        popup.activate_action("field.reset", None).unwrap();
         assert_eq!(state(&w).palette.bg, theme.default_base());
         hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
         pump(100);
-        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
-            .unwrap()
-            .downcast()
-            .unwrap();
+        let reset = find_menu_item(popup.upcast_ref(), &reset_label).unwrap();
         assert!(!reset.is_sensitive());
         popup.popdown();
         entry.grab_focus();
@@ -13774,6 +13760,20 @@ fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture, points: &[Poin
 
 #[path = "workspace_switcher_tests.rs"]
 mod workspace_switcher_tests;
+
+fn find_menu_item(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
+    if root.type_().name() == "GtkModelButton" && root.property::<String>("text") == label {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = find_menu_item(&widget, label) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
 
 fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
     if let Some(b) = root.downcast_ref::<gtk::Button>()

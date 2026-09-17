@@ -92,7 +92,7 @@ pub struct Preferences {
     shown: Cell<[bool; 3]>,
     updating: Cell<bool>,
     context: gtk::PopoverMenu,
-    context_reset: RefCell<Option<(PreferenceId, gtk::Button)>>,
+    context_reset: RefCell<Option<(PreferenceId, gtk::gio::SimpleAction)>>,
 }
 impl Drop for Preferences {
     fn drop(&mut self) {
@@ -271,32 +271,29 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
         root.append_section(None, &editing);
     }
     let section = gtk::gio::Menu::new();
-    let item = gtk::gio::MenuItem::new(None, None);
-    item.set_attribute_value("custom", Some(&"reset".to_variant()));
+    let item = gtk::gio::MenuItem::new(
+        Some(&format!("{} ({})", reset.label, reset.value)),
+        Some("field.reset"),
+    );
+    if let Some(key) = w.gpu.borrow().as_ref().and_then(|g| {
+        g.session.state().settings.action_keys(
+            &UiAction::Preferences { action: PreferenceAction::Reset { id } },
+            Platform::Gtk,
+        ).into_iter().next()
+    }) {
+        item.set_attribute_value(
+            "accel",
+            Some(&crate::workspace::native_accelerator(&key).to_variant()),
+        );
+    }
     section.append_item(&item);
     root.append_section(None, &section);
-    popup.insert_action_group("field", Some(&actions));
-    popup.set_menu_model(Some(&root));
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("preference-reset");
-    button.set_widget_name("preference-reset");
-    button.set_sensitive(reset.enabled);
-    let labels = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-    let title = gtk::Label::builder()
-        .label(&reset.label)
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    let value = gtk::Label::new(Some(&reset.hint));
-    value.add_css_class("dim-label");
-    labels.append(&title);
-    labels.append(&value);
-    button.set_child(Some(&labels));
-    button.connect_clicked(glib::clone!(
+    let action = gtk::gio::SimpleAction::new("reset", None);
+    action.set_enabled(reset.enabled);
+    action.connect_activate(glib::clone!(
         #[weak]
         w,
-        move |_| {
+        move |_, _| {
             w.preferences.context.popdown();
             if let Some(Field::Number(_, number)) = w.preferences.fields.borrow().get(&id) {
                 number.cancel_edit();
@@ -312,8 +309,10 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
             }
         }
     ));
-    popup.add_child(&button, "reset");
-    *w.preferences.context_reset.borrow_mut() = Some((id, button));
+    actions.add_action(&action);
+    popup.insert_action_group("field", Some(&actions));
+    popup.set_menu_model(Some(&root));
+    *w.preferences.context_reset.borrow_mut() = Some((id, action));
     if let Some(point) = widget.compute_point(
         &w.preferences.content_view,
         &gtk::graphene::Point::new(x as f32, y as f32),
@@ -1015,8 +1014,8 @@ impl Preferences {
         {
             self.context.popdown();
         }
-        if let Some((id, button)) = self.context_reset.borrow().as_ref() {
-            button.set_sensitive(
+        if let Some((id, action)) = self.context_reset.borrow().as_ref() {
+            action.set_enabled(
                 view.as_ref()
                     .and_then(|v| {
                         v.pages

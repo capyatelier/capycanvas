@@ -1,11 +1,43 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let original = s.engine.document().clone();
+    let checkpoint = s.engine.checkpoint();
+    assert!(s.command(CommandId::SoftProof).enabled);
+    assert!(!s.command(CommandId::GamutWarning).enabled);
+
+    // Opening another document blocks first-use setup just like explicit setup.
+    s.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap();
+    assert!(!s.command(CommandId::SoftProof).enabled);
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).is_err());
+    let id = s.state.requests.first().unwrap().id;
+    s.complete_document_request(id, Ok(false)).unwrap();
+
+    // Cancelling setup leaves the preview off and allows trying again.
+    for _ in 0..2 {
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
+        assert_eq!(s.state.requests.len(), 1);
+        let request = s.state.requests.first().unwrap();
+        assert!(matches!(request.kind, HostRequestKind::SoftProofSetup));
+        let id = request.id;
+        assert!(!s.state.soft_proof && !s.state.gamut_warning);
+        assert!(!s.command(CommandId::SoftProof).selected);
+        s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+        assert_eq!(s.engine.document(), &original);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert!(s.command(CommandId::SoftProof).enabled);
+    }
+}
+
+#[test]
 fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     use layer_core::color::{ColorProfile, ProofRecipe};
     let mut s = session();
     s.set_platform(Platform::Gtk);
     let original = s.engine.document().clone();
-    assert!(!s.command(CommandId::SoftProof).enabled);
+    assert!(s.command(CommandId::SoftProof).enabled);
     let recipe = ProofRecipe::new("Lab paper".into(), ColorProfile::default());
     s.set_proof_recipe(Some(recipe.clone())).unwrap();
     assert!(s.state.soft_proof);

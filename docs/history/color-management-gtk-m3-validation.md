@@ -1,6 +1,6 @@
 # GTK print proofing implementation record
 
-2026-09-16. **Implementation complete; ready for manual review. Acceptance pending.** The original
+2026-09-17. **GTK app review accepted by the user.** The original
 [handoff](../development/color-management-m3-gtk-handoff.md) and the pre-implementation
 [design/tolerances](../development/color-management-m3-gtk-design.md) define the
 scope. Other hosts, HDR and the deferred regeneration redesign are outside
@@ -306,3 +306,35 @@ of displaying a saved target during normal viewing. Turning either option back
 on restores the indicator. The target, cached transform and document remain intact.
 The existing proof journey checks status visibility alongside canvas comparison,
 unchanged saved data and export independence.
+
+## Accepted GTK workflow and profile portability
+
+The user accepted the revised GTK app on 2026-09-17 and authorized integration.
+This supersedes the pending review status recorded in earlier revisions above.
+The accepted workflow uses **Proof Colors** and **Proof Setup…** together in View;
+first use of Proof Colors opens setup, and cancelling leaves the view unchanged.
+Proof Colors uses Ctrl+Alt+P; Gamut Warning uses Ctrl+Shift+Y, preserving Ctrl+Y
+redo. Native menu rows provide consistent spacing, checkmarks and shortcut columns
+throughout the shared GTK menus and preference reset menus.
+
+Each document embeds only its active proof profile. The original remains under
+**Document Profile** while choosing a replacement. Applying a replacement first
+preserves the original's exact ICC bytes in the local **Saved Profiles** library.
+Cancelling does not import the original; failure to preserve it leaves the saved
+proof setup unchanged. After saving and reopening, the original can be selected
+from the same machine's library. Another machine receives only the new embedded
+proof profile. Existing source-image profiles keep their separate storage role.
+
+The release GTK build, four profile library/reader tests, and three native tests
+pass: profile portability and one-profile archive persistence; picker import,
+visibility, removal and export independence; and proof cancellation, supersession
+and invalid-profile recovery. Portability checks also cover retry after a local
+library write failure and proof use without an installed profile. Logs and the
+preserved test executable are in `artifacts/color-m3/proof-portability/`.
+Earlier native menu/preferences checks are in `artifacts/color-m3/view-menu-spacing/`;
+first-use checks are in `artifacts/color-m3/proof-first-use/`.
+
+The accepted review build is recorded in
+`artifacts/color-m3/profile-review-2/review/build.json`. This acceptance covers GTK
+app behavior; the stated limits on other platforms, HDR, calibrated displays and
+physical print matching remain unchanged.

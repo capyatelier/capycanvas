@@ -1751,7 +1751,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             .count();
         let enabled = match id {
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProof | CommandId::GamutWarning => document.proof.is_some(),
+            CommandId::SoftProof => document.proof.is_some()
+                || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
+            CommandId::GamutWarning => document.proof.is_some(),
             CommandId::ResetLayout if self.managed_workspace.is_some() => {
                 self.require_workspace_idle().is_ok()
                     && self
@@ -3398,6 +3400,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         use regions::*;
         match command {
             CommandId::SoftProofSetup => {
+                self.request(HostRequestKind::SoftProofSetup)?;
+                Ok((HOST, false))
+            }
+            CommandId::SoftProof if self.engine.document().proof.is_none() => {
                 self.request(HostRequestKind::SoftProofSetup)?;
                 Ok((HOST, false))
             }

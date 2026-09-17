@@ -75,6 +75,27 @@ mod picker;
 pub(super) use picker::ProfileChooser;
 pub(super) const UNNAMED_PROFILE: &str = "Embedded ICC profile";
 
+// Keep a replaced proof locally; the project continues to embed only its active proof.
+pub(super) async fn preserve_replaced_proof(
+    previous: Option<&layer_core::color::ProofRecipe>,
+    next: &layer_core::color::ProofRecipe,
+) -> Result<(), String> {
+    let Some(previous) = previous.filter(|p| p.profile != next.profile) else {
+        return Ok(());
+    };
+    let ColorProfile::Icc(bytes) = &previous.profile else {
+        return Ok(());
+    };
+    let bytes = bytes.clone();
+    let name = previous.name.clone();
+    gio::spawn_blocking(move || library::store(&library::directory(), &bytes, &name).map(|_| ()))
+        .await
+        .map_err(|_| "Profile library worker failed".to_string())?
+        .map_err(|error| {
+            format!("Could not save the previous proof profile to Saved Profiles: {error}")
+        })
+}
+
 pub(super) fn describe(profile: ColorProfile) -> Result<ExportProfile, String> {
     let channels = layer_color::profile_channels(&profile)?;
     let name = layer_color::profile_description(&profile)?;

@@ -10,7 +10,11 @@ pub(super) fn wait_proof(w: &Rc<Workspace>, prefix: &str) {
     loop {
         pump(20);
         if w.proof.label.text().starts_with(prefix) {
-            assert_eq!(w.proof.label.is_visible(), prefix != "Normal", "proof status visibility");
+            assert_eq!(
+                w.proof.label.is_visible(),
+                prefix != "Normal",
+                "proof status visibility"
+            );
             return;
         }
         assert!(
@@ -40,11 +44,13 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     w.window.present();
     ready(&w);
     let original = snapshot(&w);
-    invoke(&w, CommandId::SoftProofSetup);
+    invoke(&w, CommandId::SoftProof);
     super::new_photo::profile_action(&w, "proof", "builtin-0");
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), original);
+    assert!(!w.gpu.borrow().as_ref().unwrap().session.state().soft_proof);
+    wait_proof(&w, "Normal");
     // Cancel at the worker publication boundary, even if a small LUT is fast.
     let cancelled = Rc::new(Cell::new(false));
     let observed = cancelled.clone();
@@ -474,6 +480,178 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
 #[test]
 #[ignore = "isolated Wayland display and hardware GPU"]
 #[allow(deprecated)]
+fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile() {
+    use super::new_photo::{profile_action, profile_name};
+    use layer_core::color::ProofRecipe;
+    let app = native_test_app("art.capycanvas.ProofPortability");
+    let output = std::path::Path::new("../../artifacts/color-m3/proof-portability");
+    std::fs::create_dir_all(output).unwrap();
+    let output = output.canonicalize().unwrap();
+    let library = std::path::PathBuf::from(std::env::var_os("LAYER_SETTINGS_FILE").unwrap())
+        .parent()
+        .unwrap()
+        .join("color-profiles");
+    assert!(!library.exists(), "run with an isolated profile library");
+    let a = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
+    let b = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+    let a_profile = ColorProfile::Icc(a.clone().into());
+    let b_profile = ColorProfile::Icc(b.clone().into());
+    let a_name = layer_color::profile_description(&a_profile).unwrap();
+    let b_name = layer_color::profile_description(&b_profile).unwrap();
+    let a_path = library.join(format!(
+        "{}.icc",
+        glib::compute_checksum_for_data(glib::ChecksumType::Sha256, &a).unwrap()
+    ));
+    let mut project = new_drawing(128, 64).unwrap();
+    project.document.proof = Some(ProofRecipe::new(a_name.clone(), a_profile.clone()));
+    let original_file = output.join("embedded-original.capy");
+    project
+        .write(std::fs::File::create(&original_file).unwrap())
+        .unwrap();
+    let project = layer_core::Project::read(
+        std::fs::File::open(&original_file).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.present();
+    ready(&w);
+    let original = snapshot(&w);
+
+    // The original remains selectable after browsing alternatives. Opening,
+    // cancelling, or applying the same profile does not import it locally.
+    invoke(&w, CommandId::SoftProofSetup);
+    assert_eq!(profile_name(&w, "proof-profile"), a_name);
+    profile_action(&w, "proof", "builtin-0");
+    profile_action(&w, "proof", "document");
+    assert_eq!(profile_name(&w, "proof-profile"), a_name);
+    profile_action(&w, "proof", "builtin-0");
+    response(&w, "cancel");
+    finish(&w);
+    assert_eq!(snapshot(&w), original);
+    assert!(!library.exists());
+    invoke(&w, CommandId::SoftProofSetup);
+    response(&w, "apply");
+    finish(&w);
+    wait_proof(&w, "Proof:");
+    assert!(!library.exists());
+
+    // Explicitly adding B saves B locally; cancelling setup still leaves A
+    // embedded only. Merely browsing B must not preserve A yet.
+    let b_file = output.join("replacement.icc");
+    std::fs::write(&b_file, &b).unwrap();
+    invoke(&w, CommandId::SoftProofSetup);
+    profile_action(&w, "proof", "add");
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(&b_file)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while profile_name(&w, "proof-profile") != b_name {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    assert!(!a_path.exists());
+    profile_action(&w, "proof", "document");
+    assert_eq!(profile_name(&w, "proof-profile"), a_name);
+    profile_action(&w, "proof", "saved-0");
+    response(&w, "cancel");
+    finish(&w);
+    assert!(!a_path.exists());
+
+    // A local write failure must not silently discard the embedded original.
+    invoke(&w, CommandId::SoftProofSetup);
+    profile_action(&w, "proof", "saved-0");
+    let before_replacement = snapshot(&w);
+    let held_library = library.with_extension("held");
+    std::fs::rename(&library, &held_library).unwrap();
+    std::fs::write(&library, b"not a directory").unwrap();
+    // Failure reopens this same dialog, so wait for its error instead of dismissal.
+    click(&find_button(w.window.visible_dialog().unwrap().upcast_ref(), "Apply").unwrap());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        pump(20);
+        if let Some(dialog) = w
+            .window
+            .visible_dialog()
+            .filter(|d| d.widget_name() == "soft-proof-setup")
+        {
+            let issue = find_named(dialog.upcast_ref(), "proof-setup-error")
+                .unwrap()
+                .downcast::<gtk::Label>()
+                .unwrap();
+            if issue.is_visible() {
+                assert!(
+                    issue
+                        .text()
+                        .starts_with("Could not save the previous proof profile")
+                );
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "profile preservation error");
+    }
+    assert_eq!(snapshot(&w), before_replacement);
+    std::fs::remove_file(&library).unwrap();
+    std::fs::rename(&held_library, &library).unwrap();
+    response(&w, "apply");
+    finish(&w);
+    wait_proof(&w, "Proof:");
+    assert_eq!(std::fs::read(&a_path).unwrap(), a);
+
+    // Save through the native dialog, then inspect the archive itself: only B
+    // travels, even though both A and B remain in this machine's library.
+    let master = output.join(format!("replacement-{}.capy", std::process::id()));
+    invoke(&w, CommandId::SaveDocumentAs);
+    let file = chooser();
+    file.set_current_folder(Some(&gtk::gio::File::for_path(&output)))
+        .unwrap();
+    file.set_current_name(master.file_name().unwrap().to_str().unwrap());
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    finish(&w);
+    let archive = std::fs::read(&master).unwrap();
+    assert!(!archive.windows(a.len()).any(|bytes| bytes == a));
+    assert_eq!(
+        archive.windows(b.len()).filter(|bytes| *bytes == b).count(),
+        1
+    );
+    let reopened = layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
+    assert_eq!(reopened.document.proof.as_ref().unwrap().profile, b_profile);
+    w.window.destroy();
+    let restored = Workspace::with_project(&app, Some((reopened, None)));
+    restored.window.present();
+    ready(&restored);
+    invoke(&restored, CommandId::SoftProofSetup);
+    assert_eq!(profile_name(&restored, "proof-profile"), b_name);
+    profile_action(&restored, "proof", "saved-0");
+    assert_eq!(profile_name(&restored, "proof-profile"), a_name);
+    profile_action(&restored, "proof", "document");
+    assert_eq!(profile_name(&restored, "proof-profile"), b_name);
+    response(&restored, "cancel");
+    finish(&restored);
+    restored.window.destroy();
+
+    // Another machine receives only B; it can still use B without the library.
+    std::fs::rename(&library, &held_library).unwrap();
+    let reopened = layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
+    let other = Workspace::with_project(&app, Some((reopened, None)));
+    other.window.present();
+    ready(&other);
+    invoke(&other, CommandId::SoftProofSetup);
+    profile_action(&other, "proof", "document");
+    assert_eq!(profile_name(&other, "proof-profile"), b_name);
+    response(&other, "apply");
+    finish(&other);
+    wait_proof(&other, "Proof:");
+    assert!(!library.exists());
+    other.window.destroy();
+    std::fs::rename(&held_library, &library).unwrap();
+}
+
+#[test]
+#[ignore = "isolated Wayland display and hardware GPU"]
+#[allow(deprecated)]
 fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let app = native_test_app("art.capycanvas.PrintProof");
     let output = std::path::Path::new("../../artifacts/color-m3/gtk-journey");
@@ -499,10 +677,8 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let normal = w.gpu.borrow_mut().as_mut().unwrap().capture().unwrap();
     keyboard(
         &w,
-        gdk::Key::P,
-        gdk::ModifierType::CONTROL_MASK
-            | gdk::ModifierType::ALT_MASK
-            | gdk::ModifierType::SHIFT_MASK,
+        gdk::Key::p,
+        gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK,
     );
     assert_eq!(
         w.window.visible_dialog().unwrap().widget_name(),
@@ -591,7 +767,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
             "Normal",
         ),
         (
-            gdk::Key::G,
+            gdk::Key::Y,
             gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK,
             "Gamut:",
         ),

@@ -33,7 +33,7 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
         )
     };
     let dialog = adw::AlertDialog::builder()
-        .heading("Soft Proof Setup")
+        .heading("Proof Setup")
         .body("Preview how colors will look in print.")
         .prefer_wide_layout(true)
         .content_width(480)
@@ -120,7 +120,7 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
                 if profile.name == super::profile::UNNAMED_PROFILE {
                     profile.name = recipe.name.clone();
                 }
-                (chooser.restore)(profile);
+                chooser.restore_document(profile);
             }
             Err(error) => {
                 chooser.error.set_label(&error);
@@ -159,7 +159,7 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             if session.state().document_file.epoch != epoch
                 || session.engine().document().color.space != working
             {
-                return Err("The drawing changed; reopen Soft Proof Setup".to_string());
+                return Err("The drawing changed; reopen Proof Setup".to_string());
             }
             let profile = (chooser.selected)()?;
             let mut recipe = ProofRecipe::new(profile.name, profile.profile);
@@ -173,10 +173,11 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
         let result = match result {
             Ok(recipe) => {
                 w.proof.pause().await;
-                let result = prepare(w, working, recipe.clone()).await.and_then(|lut| {
-                    let Some(lut) = lut else {
+                let result = async {
+                    let Some(lut) = prepare(w, working, recipe.clone()).await? else {
                         return Ok(false);
                     };
+                    super::profile::preserve_replaced_proof(previous.as_ref(), &recipe).await?;
                     let result = {
                         let mut gpu = w.gpu.borrow_mut();
                         let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
@@ -190,7 +191,8 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
                     w.proof.retain(working, recipe, lut);
                     w.changed(Ok(result));
                     Ok(true)
-                });
+                }
+                .await;
                 w.proof.resume(w);
                 result
             }
