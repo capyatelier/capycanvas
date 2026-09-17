@@ -198,6 +198,9 @@ pub struct GpuRasterMetrics {
     pub source_upload_submissions: u64,
     pub source_tile_hits: u64,
     pub source_tile_misses: u64,
+    /// Completed intermediate display batches; the final batch stays in the
+    /// ordinary frame submission so presentation does not wait on the CPU.
+    pub display_composition_submissions: u64,
     /// Native physical-filter window execution, separate from source uploads.
     /// Pixel caches include clipping uniforms here, but exclude tile scratch,
     /// paint, the full composite and driver allocations.

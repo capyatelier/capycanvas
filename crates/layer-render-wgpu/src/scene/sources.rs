@@ -18,21 +18,21 @@ use std::{
 
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 // Resident decoded pixels and in-flight uploads have different lifetimes.
-// A small stroke crossing four tiles in eight layers exceeds the old shared
-// 16-slot bound. Retain that working set independently of staging memory.
+// Retain neighboring layer tiles independently of staging memory. Equal native
+// tile contents share decoded pixels even across distinct document revisions.
 const DECODED_SLOTS: usize = 64;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
 enum Key {
     Image(Weak<SourceImage>, [u32; 2]),
-    Raster(Weak<TileBlob>, RgbSpace, RgbSpace),
+    Raster([u8; 32], RgbSpace, RgbSpace),
 }
 impl Key {
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Image(a, x), Self::Image(b, y)) => a.ptr_eq(b) && x == y,
-            (Self::Raster(a, x, d), Self::Raster(b, y, e)) => a.ptr_eq(b) && x == y && d == e,
+            (Self::Raster(a, x, d), Self::Raster(b, y, e)) => a == b && x == y && d == e,
             _ => false,
         }
     }
@@ -159,7 +159,7 @@ impl DecodedTiles {
             > (SOURCE_SLOTS as u64 - 1) * FLOAT_TILE_BYTES
     }
     pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace) -> Option<&wgpu::TextureView> {
-        let key = Key::Raster(Arc::downgrade(blob), space, self.destination);
+        let key = Key::Raster(blob.digest, space, self.destination);
         self.slots.iter().find(|s| s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire))
             .map(|s| &s.view)
     }
@@ -218,7 +218,7 @@ impl DecodedTiles {
             IntegerDepth::U8
         };
         let (tile, write) =
-            self.plan_key(r, Key::Raster(Arc::downgrade(blob), space, destination))?;
+            self.plan_key(r, Key::Raster(blob.digest, space, destination))?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space),
             texture: tile.texture.clone(),

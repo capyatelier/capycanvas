@@ -68,6 +68,70 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Native tile reuse and final display batches — 2026-09-16
+
+The current SDR follow-up reproduces two further sources of drawing stalls.
+Native raster tiles already carry a SHA-256 identity over their representation
+and exact samples. The decoded GPU cache now uses that identity plus source and
+destination color spaces, allowing identical tiles in separate allocations or
+revisions to reuse pixels. Its 64-tile residency limit and the existing 16 MiB
+upload ceiling stay unchanged. Cache entries retain no history backing.
+
+The renderer-only `layered-strokes wet-watercolor` replay has identical damage
+in all 256 frames. Content reuse reduces source misses from 5,207 to zero and
+synchronous upload drains from 44 to zero. Preparation p95 falls from 32.598 to
+4.799 ms. The example also accepts a frame count to reproduce repeated strokes
+without native UI or a wall-clock input producer.
+
+The 2,048-frame replay then exposes a separate terminal display wait. Composition
+previously submitted and waited after its sixteenth tile, even when that was the
+last tile. It now drains before a seventeenth tile and sends the final batch with
+the ordinary frame. Intermediate batches remain bounded at 16 tiles. Across the
+1,680 active frames after the first two strokes, preparation p99 falls from
+18.626 to 5.644 ms and frames above 11.11 ms fall from 31 to zero, with identical
+damage. These preparation/completion observations are not screen presentation.
+
+Content reuse alone completes a physical iPad ten-minute `layered-4k` run:
+386/66,967 long active intervals (**0.576%**), presentation p99 8.334 ms and
+preparation p99/max 4.112/11.078 ms. All measured input is accepted; there are no
+renderer errors, recorder drops or missing/zero measured presentation callbacks.
+Thermals stay nominal. Footprint peaks at 1,742.02 MiB, grows 5.91 MiB in the final
+two minutes, then falls 196.34 MiB in the postlude. The canvas sleeps 29.90 ms after
+pen-up, with no frames in the final five seconds. Two zero-time callbacks precede
+measurement; 84 GPU observations are skipped, with no invalid/pending final samples.
+This measured build precedes the terminal-display-wait change.
+
+The earlier short iPad baseline has 11.582%/12.004% long intervals with optional
+GPU timing on/off. The corrected short result is 0.516%. Mac watercolor improves
+from 36.088% to 14.547% with content reuse alone; GPU timing off gives 13.305%,
+so that intermediate Mac result remains outside the accepted rare-miss standard.
+The CPU-sampled run aborts its producer and is excluded. With the terminal display
+change, the full 45-second watercolor runs have **12.803% long intervals on Mac
+and 28.347% on iPad**. Preparation p99/max is now 8.818/12.572 ms on Mac and
+5.738/6.840 ms on iPad, with no renderer errors or rejected input. These final
+heavy-workload cadence results still fail the accepted rare-miss standard. The
+remaining GPU/display cost needs separate diagnosis; no ten-minute failing
+watercolor run is repeated and no scheduling workaround is added.
+Final 45-second layered-ink checks preserve the accepted cadence: 35/3,788 long
+intervals (**0.924%**) on Mac and 18/5,043 (**0.357%**) on iPad. Presentation p99
+is 11.111/8.334 ms; preparation p99 is 4.648/4.018 ms. Both have nominal thermals,
+complete measured callbacks, no rejected input and no renderer/recorder errors.
+Their reviewed captures retain artwork, Navigator and layer previews.
+
+Five source-cache tests verify reuse, exact decoding, color interpretation,
+eviction, cancellation and backing lifetime. Twenty-four display/cold-paint tests
+pass, including exact 16/17/32-tile batch boundaries, complete paper pixels,
+navigation, filters, prediction and history. Both Release builds pass without
+warnings. The shared renderer also passes its WebAssembly compilation check with
+the existing target-specific LLVM compiler and archiver.
+
+Evidence: `artifacts/apple-sdr-device-v1/`, with exact runtime manifests,
+`replay-comparison.json`, `content64/` and `final-batch/`. Device updates preserve
+all nine recovery drawings and every pre-existing saved file. Workloads use
+private cache roots. Physical SDR workflows, other profiles/ProPhoto-U16,
+recorder-off resource behavior, calibrated overhead and physical pen latency
+remain separately scoped.
+
 ## Layered SDR drawing: upload cache correction — 2026-09-16
 
 The corrected sRGB/U8 `layered-4k` Mac Release completes 600 measured seconds

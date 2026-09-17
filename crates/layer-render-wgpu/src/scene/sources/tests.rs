@@ -385,7 +385,7 @@ fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
     // Keep their distinct immutable backings alive across queue submissions.
     let tiles: Vec<_> = (0..32)
         .map(|i| {
-            let pixel = [i * 7, 129, 231, 255];
+            let pixel = [i, 129, 231, 255];
             Arc::new(
                 TileBlob::encode(
                     layer_core::color::DocumentColor::default().paint_descriptor(),
@@ -417,7 +417,7 @@ fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
         );
         let bytes = crate::layer_tests::page_bytes(&r, &decoded.texture);
         let expected = [
-            RgbSpace::Srgb.decode((i * 7) as f64 / 255.) as f32,
+            RgbSpace::Srgb.decode(i as f64 / 255.) as f32,
             RgbSpace::Srgb.decode(129. / 255.) as f32,
             RgbSpace::Srgb.decode(231. / 255.) as f32,
             1.,
@@ -431,6 +431,35 @@ fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
     }
     assert_eq!(cache.misses, tiles.len() as u64);
     assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let scene = Scene::new(&r);
+    let mut cache = DecodedTiles::default();
+    let (first, bytes) = raster_fixture(IntegerDepth::U16, AlphaAssociation::Straight, Some(32767));
+    let second = Arc::new(TileBlob::encode_source(first.descriptor, &bytes).unwrap());
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(first.digest, second.digest);
+    let weak = Arc::downgrade(&first);
+    let (decoded, pending) = cache.plan_raster(&r, &first, RgbSpace::ProPhoto, RgbSpace::Srgb).unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    encode_pending(&r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
+    encoder.submit(&r.queue);
+    let original = crate::layer_tests::page_bytes(&r, &decoded.texture);
+    drop(first);
+    assert!(weak.upgrade().is_none(), "decoded pixels must not retain history backing");
+
+    let (reused, pending) = cache.plan_raster(&r, &second, RgbSpace::ProPhoto, RgbSpace::Srgb).unwrap();
+    assert!(pending.is_none(), "identical native samples must not upload again");
+    assert_eq!(decoded.texture, reused.texture);
+    assert_eq!(original, crate::layer_tests::page_bytes(&r, &reused.texture));
+    assert_eq!((cache.hits, cache.misses, cache.slots.len()), (1, 1, 1));
+    assert!(cache.prepared_raster_view(&second, RgbSpace::ProPhoto).is_some());
+    for (source, destination) in [(RgbSpace::Srgb, RgbSpace::Srgb), (RgbSpace::ProPhoto, RgbSpace::ProPhoto)] {
+        assert!(cache.plan_raster(&r, &second, source, destination).unwrap().1.is_some());
+    }
 }
 
 #[test]
@@ -579,7 +608,9 @@ fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_va
                 })
                 .unwrap();
         }
-        let other = Arc::new(TileBlob::encode(blob.descriptor, &blob.decode().unwrap()).unwrap());
+        let mut bytes = blob.decode().unwrap();
+        bytes[..2].copy_from_slice(&(i as u16).to_le_bytes());
+        let other = Arc::new(TileBlob::encode(blob.descriptor, &bytes).unwrap());
         let (tile, pending) = if i % 2 == 0 {
             cache
                 .plan_raster(&r, &other, RgbSpace::ProPhoto, RgbSpace::Srgb)

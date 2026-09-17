@@ -8,6 +8,30 @@ fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterErr
     Ok(r)
 }
 
+#[test]
+fn display_batches_wait_only_when_another_tile_needs_encoding() {
+    for tiles in [16, 17, 32] {
+        let doc = layer_core::Document::new("paper batches", tiles * PAGE_SIZE, PAGE_SIZE);
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.native_edit.as_mut().unwrap().display_complete_bytes = u64::MAX;
+        let v = ViewState {
+            width_px: tiles * 8,
+            height_px: 8,
+            ..view([1. / 32., 0., 0., 1. / 32., 0., 0.])
+        };
+        submit(&mut r, &doc, v, true);
+        assert!(r.live_display.is_some());
+        assert_eq!(r.metrics.display_composition_submissions, u64::from((tiles - 1) / 16));
+        assert_eq!(r.metrics.composited_pixels, u64::from(doc.width) * u64::from(doc.height));
+        let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+            SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        for pixel in present(&r, &mut presenter, v) {
+            assert!(pixel.into_iter().all(|channel| (channel - 1.).abs() < 5e-6));
+        }
+    }
+}
+
 fn centered_view(extent: [u32; 2], viewport: [u32; 2], scale: f32, angle: f32) -> ViewState {
     let (sin, cos) = angle.sin_cos();
     let a = scale * cos;

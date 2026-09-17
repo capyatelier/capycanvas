@@ -56,7 +56,13 @@ shared renderer: decoded-tile retention and byte-based staging accounting reduce
 ten-minute long active intervals from 41.397% to **1.016%**, within the accepted
 rare-miss standard. Pixel/history regressions and both Release builds pass; see
 the [performance record](../../apps/layer-apple/PERFORMANCE.md#layered-sdr-drawing-upload-cache-correction--2026-09-16).
-Continue with outstanding current SDR iPad/other-profile performance, provider/
+The next correction reuses identical native tiles by their existing content
+identity, with unchanged memory limits. Physical iPad layered-4K then completes
+ten minutes with **0.576%** long intervals. Moving the bounded-display wait before
+the next batch removes terminal CPU stalls. Heavy 4K watercolor still has
+12.803%/28.347% long intervals on Mac/iPad in short runs; this is the immediate
+performance blocker. See the [follow-up record](../../apps/layer-apple/PERFORMANCE.md#native-tile-reuse-and-final-display-batches--2026-09-16).
+Continue with that GPU/display diagnosis, remaining current SDR profiles, provider/
 background workflows in step 4 and grouped physical SDR acceptance. Device
 performance and provider delivery are not fully closed.
 

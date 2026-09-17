@@ -20,6 +20,13 @@ fn action(host: &mut NativeHost, value: serde_json::Value) {
 }
 
 fn main() {
+    let (brush, diameter) = match std::env::args().nth(1).as_deref() {
+        None | Some("ink") => (1, 24),
+        Some("wet-watercolor") => (21, 320),
+        _ => panic!("usage: layered-strokes [ink|wet-watercolor] [frames]"),
+    };
+    let frames: usize = std::env::args().nth(2).map(|n| n.parse().unwrap()).unwrap_or(256);
+    assert!((1..=100_000).contains(&frames));
     let project = layer_ui::new_drawing(4096, 4096).unwrap();
     let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
     let mut host = NativeHost::new(Platform::Mac).unwrap();
@@ -36,8 +43,8 @@ fn main() {
             action(&mut host, json!({"type":"invoke","command":command}));
         }
     }
-    action(&mut host, json!({"type":"select_brush","id":1}));
-    action(&mut host, json!({"type":"set_brush_size","value":24}));
+    action(&mut host, json!({"type":"select_brush","id":brush}));
+    action(&mut host, json!({"type":"set_brush_size","value":diameter}));
     action(
         &mut host,
         json!({"type":"set_color","rgba":[0.08,0.2,0.55,1.]}),
@@ -46,9 +53,9 @@ fn main() {
     assert_eq!(host.session.engine().document().layers.len(), 9);
     let camera = host.session.state().camera.clone();
     println!(
-        "frame,stroke_sample,prepare_ms,complete_ms,composited_pixels,source_misses,upload_submissions,paint_pages"
+        "frame,stroke_sample,prepare_ms,complete_ms,composited_pixels,source_misses,upload_submissions,display_submissions,paint_pages"
     );
-    for frame in 0..256 {
+    for frame in 0..frames {
         let before = host
             .session
             .engine()
@@ -89,7 +96,7 @@ fn main() {
         }
         let now = 1_000_000_000 + ((frame + 1) as u64 * 3 * 1_000_000_000 / 240);
         if !records.is_empty() {
-            host.pointer(contact, 0, 0, &records, false).unwrap();
+            host.pointer(contact as u64, 0, 0, &records, false).unwrap();
         }
         let start = Instant::now();
         host.session.frame(now, now + 11_111_111).unwrap();
@@ -111,11 +118,12 @@ fn main() {
             .unwrap()
             .metrics();
         println!(
-            "{frame},{},{prepare:.3},{complete:.3},{},{},{},{}",
+            "{frame},{},{prepare:.3},{complete:.3},{},{},{},{},{}",
             frame * 3 % 384,
             after.composited_pixels - before.composited_pixels,
             after.source_tile_misses - before.source_tile_misses,
             after.source_upload_submissions - before.source_upload_submissions,
+            after.display_composition_submissions - before.display_composition_submissions,
             after.paint_pages
         );
     }

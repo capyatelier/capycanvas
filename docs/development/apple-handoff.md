@@ -627,7 +627,8 @@ Initial fixture failures were a Rust borrow error, incorrect reuse of stroke IDs
 in the Undo expectation and an attempted private-field assignment; the corrected
 fixture uses the public allocation API. The final run has no compiler warnings.
 
-Both approved physical review apps now run Release `a2054398`. Before their
+The recovery checkpoint updated both approved physical review apps to Release
+`a2054398`. Before their
 in-place updates, artwork and workspace data were backed up and the owned
 processes identified. Nine iPad recovery drawings and four Mac recovery manifests
 are preserved; iPad files are byte-identical across installation and Mac recovery
@@ -637,6 +638,16 @@ delivery on both devices. Physical drawing, background/return and local
 Save As/reopen confirmation is pending. Evidence is
 `artifacts/apple-sdr-lifecycle-v1/`; local recovery checks do not establish actual
 iPad background expiration, file-provider delivery or sustained performance.
+
+The subsequent [performance milestone](../../apps/layer-apple/PERFORMANCE.md#native-tile-reuse-and-final-display-batches--2026-09-16)
+updates the iPad review in place again, retaining all nine recovery drawings and
+every pre-existing saved file. Its ordinary launch has recording disabled and
+opens the same ProPhoto/U16 fixture behind Recovered Drawings. Installation changes
+the data-container URL; the fixture is restaged with identical bytes before warm
+delivery. The original Mac review and separate artist process remain unchanged.
+Current hardware performance checks use the separate Mac workload identity and
+isolated per-launch storage on both hosts. Evidence is
+`artifacts/apple-sdr-device-v1/`; grouped physical SDR interaction remains pending.
 
 ## SDR form fit and feature inventory
 

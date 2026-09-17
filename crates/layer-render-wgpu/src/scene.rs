@@ -1385,6 +1385,13 @@ impl Scene {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
             }
+            if display_tiles == SOURCE_SLOTS {
+                // Bound command/driver storage before encoding another batch.
+                // Submit the final batch with the frame, without a CPU wait.
+                Self::submit_chunk(r, encoder, "bounded display composition")?;
+                r.metrics.display_composition_submissions += 1;
+                display_tiles = 0;
+            }
             composited += page_rect(tile).intersect(dirty).area();
             let mut output = self.group(r, packet, None, tile)?;
             if overlay {
@@ -1428,14 +1435,6 @@ impl Scene {
                 self.free(output);
                 result?;
                 display_tiles += 1;
-                if display_tiles == SOURCE_SLOTS {
-                    // Source uploads drain their own staging, but a paper-only
-                    // recovery frame (or resident paint) has no uploads. Bound
-                    // its command/driver storage as well: thousands of mip
-                    // passes otherwise remain live until the final submission.
-                    Self::submit_chunk(r, encoder, "bounded display composition")?;
-                    display_tiles = 0;
-                }
                 continue;
             }
             // The last effect already writes every pixel. Write directly into
