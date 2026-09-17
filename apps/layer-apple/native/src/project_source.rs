@@ -105,20 +105,3 @@ impl Task {
         Ok(())
     }
 }
-
-fn inspect_profile(bytes: Vec<u8>, summary: bool) -> Result<Value, String> {
-    let profile = ColorProfile::Icc(bytes.into());
-    let channels = layer_color::profile_channels(&profile)?;
-    let name = layer_color::profile_description(&profile)?;
-    if summary { Ok(serde_json::json!({"name":name,"channels":channels})) }
-    else { serde_json::to_value(layer_ui::ExportProfile { profile, channels, name }).map_err(|e| e.to_string()) }
-}
-/// # Safety
-/// Worker only. Borrows count bytes for this call; returns owned profile/error JSON.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_color_profile_inspect(bytes: *const u8, count: usize, summary: bool) -> *mut c_char {
-    let result = if bytes.is_null() || count == 0 || count > layer_color::MAX_ICC_BYTES {
-        Err("Choose an ICC profile of at most 16 MiB".into())
-    } else { inspect_profile(unsafe { std::slice::from_raw_parts(bytes, count) }.to_vec(), summary) };
-    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
-}

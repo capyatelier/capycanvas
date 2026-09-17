@@ -5,7 +5,13 @@ still applies in full to **both** hosts. Historical checkpoint lists in the
 [handoff](apple-handoff.md) are evidence references, not additional independent
 test plans. The goal is incomplete.
 
-Main now includes shared SDR color/photo work through `7d2511e5`. Its
+Main now includes shared SDR color/photo work and workflow centralization through
+`668ff0a0`. Apple's export drafts, ICC-library policy and New Drawing preference
+changes now use those shared services; see the
+[integration record](apple-handoff.md#shared-workflow-adoption--2026-09-17).
+Color/source transactions, photo preparation/adoption and recovery still need
+their remaining shared-service migrations. Interactive batch Place/Paste/Drop
+with Apply/Cancel remains a native parity gap. The
 [Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate
 implementation priority. Existing effect/gradient controls and native SDR
 constructors now pass scoped local checks and both Release builds. New Drawing
@@ -143,6 +149,14 @@ preserved. Physical drawing/Diagnostics and local save/reopen are pending.
 Files-picker delivery, sustained memory pressure and the remaining heavy-watercolor
 gap still need acceptance.
 
+On `3fbb937b`, two paired local watercolor replays preserve exact artwork while
+reducing median GPU time from about 4.62 to 3.65 ms. The current-source Mac
+45-second native run has 0.897% long active intervals with nominal thermals and
+complete measured input/presentation delivery. This preserves the short Mac
+rare-miss pass; iPad watercolor cadence and sustained qualification remain open.
+Reuse the already installed iPad runtime after the pending large-photo retest;
+see the [watercolor follow-up](../../apps/layer-apple/PERFORMANCE.md#watercolor-after-the-shared-photo-fixes--2026-09-17).
+
 ### Retained visual evidence
 
 The current-source tool-action check closes the AppKit component's perceptual
@@ -255,7 +269,7 @@ retained alongside the passing hardware run.
 | Catalog group | Existing evidence to retain | Remaining behavior, excluding shared R3–R6 checks |
 | --- | --- | --- |
 | Document transport | Local native save/open/export/cancel; painted recovery; OS URL delivery; native Mac invalid-Open preservation/retry and both-policy owner checks below | Provider/destination/interruption cases are owned by R4. |
-| Retained photo input | Shared/native-owner profile/depth/source retention through Open/Place/Paste, missing-profile choice, cancellation and stale adoption; 61 MP class synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | Physical UIKit picker/clipboard delivery and large-photo execution; provider/lifecycle cases are shared with R4. |
+| Retained photo input | Shared/native-owner profile/depth/source retention through Open/Place/Paste, missing-profile choice, cancellation and stale adoption; 61 MP class synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | Adopt shared import policy and interactive multi-image Place/Paste/Drop with Apply/Cancel instead of immediate single-image insertion; native capability-derived filters, physical UIKit picker/clipboard delivery and large-photo execution. Provider/lifecycle cases are shared with R4. |
 | Document color and properties | Shared/native-owner profile/depth operations, complete comparisons, atomic adoption, exact history and flattened master preservation; native Mac forms | Physical UIKit property/color forms and SDR appearance; lifecycle cases remain under R4. |
 | Retained source editing | Source-profile repair, ICC import, full-extent rasterization, exact history/save/reopen and native Mac controls | Physical UIKit source/ICC workflows and provider delivery. |
 | Drawing tools | All 34 current presets mapped to retained native control passes: 30 painting/erasing and four Blend/Liquify; Mac artwork/history and catalog-wide numeric bridge edits | No unaccounted catalog brush/group or setting-dispatch route remains. Physical sensors, hover/proximity and interruption belong to R3; perceptual coverage belongs to R5. |

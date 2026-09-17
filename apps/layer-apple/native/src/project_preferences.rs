@@ -1,6 +1,38 @@
 //! Stateless preferences work; Swift owns serial I/O and atomic publication.
 use super::*;
 
+/// # Safety
+/// Worker only. Borrows NUL-terminated action JSON and count readable bytes.
+/// Returns owned shared profile-library result/error JSON; storage stays native.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_profile_library(request: *const c_char, bytes: *const u8, count: usize) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        // The storage adapter reads one extra byte to detect an oversized file.
+        // Inspect turns that shared validation failure into an unavailable row.
+        if count > layer_ui::profile_library::PROFILE_READ_LIMIT + 1 { return Err("ICC profile exceeds 16 MiB".into()); }
+        let bytes = if count == 0 { &[] } else {
+            if bytes.is_null() { return Err("Profile bytes are unavailable".into()); }
+            unsafe { std::slice::from_raw_parts(bytes, count) }
+        };
+        let action: layer_ui::profile_library::ProfileLibraryAction =
+            serde_json::from_str(unsafe { read_title(request) }?).map_err(|e| e.to_string())?;
+        action.execute(bytes)
+    })();
+    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
+}
+
+/// # Safety
+/// Worker only. Borrows NUL-terminated recipe/action JSON; returns owned draft/error JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_export_draft(recipe: *const c_char, action: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let recipe: layer_ui::ExportRecipe = serde_json::from_str(unsafe { read_title(recipe) }?).map_err(|e| e.to_string())?;
+        let action = serde_json::from_str(unsafe { read_title(action) }?).map_err(|e| e.to_string())?;
+        serde_json::to_value(recipe.draft(action)).map_err(|e| e.to_string())
+    })();
+    CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()
+}
+
 pub(super) fn validate_export(recipe: &layer_ui::ExportRecipe, color: layer_core::color::DocumentColor) -> Result<(), String> {
     recipe.validate()?;
     if layer_color::profile_channels(&recipe.profile.profile)? != recipe.profile.channels {

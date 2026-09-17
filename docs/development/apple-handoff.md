@@ -77,6 +77,57 @@ acceptance remains open. This is a test limitation, not a new browser-delivery
 defect. Evidence is `artifacts/apple-settings-links-v1/`. The installed prediction
 review apps are retained with the user's drawings; the XP-Pen check now passes.
 
+## Shared workflow adoption — 2026-09-17
+
+Main's `f09df94a` centralizes color/photo workflows for Web, Android and GTK.
+Apple now uses the shared export draft, ICC-library policy and atomic
+New Drawing preference action. Swift retains native controls, bounded file reads,
+coordinated access and atomic publication. Shared Rust owns export option
+dependencies, profile identity/integrity/quotas and preset/default changes.
+Over-quota profile entries remain visible and removable. CMYK selection removes
+unsupported PNG/transparency choices; JPEG and 16-bit choices update their
+dependent controls. The old ICC inspection bridge and duplicate Swift policy
+branches are removed.
+
+The native suite also exposed an omission in `3fbb937b`: the Pencil brush's
+direct encoder still traversed the enclosing rectangle after sparse allocation
+stopped creating untouched pages. It now consumes the same tile plan as the
+material encoder. The disjoint-contact regression covers both G-Pen and Pencil,
+with exact pixels against separate submissions. No extra renderer path is added.
+
+Actual CMYK export additionally exposed large unoptimized CMM lookup-table
+temporaries exhausting the native file-worker stack. The workspace keeps
+`moxcms 0.9.1` optimized in debug builds, as in Release; no alternate worker or
+reduced color precision is introduced. Private evidence, including the original
+crash and native pixel-test failure, is under `artifacts/apple-shared-preferences-v1/`.
+
+Before the final main integration, the full Apple bridge suite passes 68 active
+tests, and shared color passes 75. Both-policy Swift/Metal
+workflows pass actual CMYK/RGB output, profile corruption/repair, over-quota
+cleanup, destination cancellation, preset/default retry and durable restoration.
+The native Mac export journey passes its real controls, menus, panels and files;
+preview and populated-library captures are reviewed. Web compilation also passes.
+The full renderer suite has 285 passes, 30 ignored and the unchanged
+filter-reference failure (maximum byte error 56); all four contact integration
+tests pass. The expanded sparse G-Pen/Pencil regression passes in both formats.
+Main then advances to `668ff0a0`, adding shared transformed-photo prediction
+reuse and sparse composition damage. The milestone rebases cleanly. Five focused
+Metal tests pass on the combined source: transformed-photo pixel/cancellation,
+sparse G-Pen/Pencil pixels, both mask-preview cases and native pixel/save/reopen.
+Both final Apple Release builds pass without compiler warnings, and Web checks
+pass again. The broad-suite counts above precede this final integration; no new
+device timing is inferred from upstream Android results.
+The current physical review apps are retained; this is not device acceptance of
+the new controls or a new performance qualification.
+
+Apple's remaining shared-service migrations are color/source transactions,
+photo preparation/adoption and recovery (C1–C3/C6 in the
+[centralization handoff](shared-workflow-centralization-handoff.md)). Interactive
+multi-image Place/Paste/Drop with Apply/Cancel is a concrete remaining parity
+gap: Apple's current worker still calls immediate `import_layer_source`.
+Keep provider/device acceptance and the pending iPad performance/save retest
+separate from these local integrations.
+
 ## Prediction policy during document adoption
 
 The user reports iPadOS prediction using the saved manual 64 ms amount after
@@ -694,6 +745,16 @@ Physical fast circles/Diagnostics and large-photo local Save As/reopen are now
 pending. Drawing performance closure remains open. See the [measured causes and limits](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
 and `artifacts/apple-photo-lag-v1/`. Local save/reopen of this large image remains
 unconfirmed; the earlier small ProPhoto workflow stays passed.
+
+The published shared follow-up `3fbb937b` also improves two paired local 4K
+watercolor replays: GPU median falls from about 4.62 to 3.65 ms with identical
+final pixels and unchanged per-frame painting work. A short native Mac run on
+the same runtime has 0.897% long active intervals and no measured input/frame/
+presentation-delivery failures. The isolated workload app is closed; artist
+Mac windows and the pending iPad large-photo check are untouched. No new runtime
+change is made. Retest current iPad watercolor cadence after the pending
+drawing/local-save check; see the
+[current watercolor qualification](../../apps/layer-apple/PERFORMANCE.md#watercolor-after-the-shared-photo-fixes--2026-09-17).
 
 The recovery checkpoint updated both approved physical review apps to Release
 `a2054398`. Before their

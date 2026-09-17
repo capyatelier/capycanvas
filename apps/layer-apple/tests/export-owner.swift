@@ -92,7 +92,25 @@ import UniformTypeIdentifiers
         try require(reset["recipe"]["depth"].string == "U8", "Reset destination uses shared default")
         let removed = try reopened.presets(color: color, request: JSON(["type": "remove", "index": 4]))
         try require(removed["names"].array.count == 4, "Remove named preset")
+        let overflowRoot = root.appendingPathComponent("overflow")
+        let overflowDirectory = overflowRoot.appendingPathComponent("color-profiles")
+        try FileManager.default.createDirectory(at: overflowDirectory, withIntermediateDirectories: true)
+        let overflow = ColorPreferencesStore(root: overflowRoot)
+        for index in 0..<129 {
+            try Data([0]).write(to: overflowDirectory.appendingPathComponent(String(format: "%064x.icc", index)))
+        }
+        let overflowEntries = try overflow.profiles()
+        try require(overflowEntries.count == 129 && overflowEntries.allSatisfy { !$0["issue"].isNull },
+            "Every corrupt or over-quota entry must stay visible and removable")
+        try rejected("Shared quota prevents publication") { _ = try overflow.importProfile(original) }
+        for entry in overflowEntries.prefix(2) { try overflow.removeProfile(entry["id"].string) }
+        _ = try overflow.importProfile(original)
+        try require(try overflow.profiles().count == 128, "Removing excess entries permits import again")
+        try rejected("Reject read outside the library") { _ = try overflow.profile("../Original") }
+        try rejected("Reject removal outside the library") { try overflow.removeProfile("../Original") }
+        try require(try Data(contentsOf: original) == bytes, "Rejected keys must preserve the original")
         print("PASS ICC library: exact import/reuse, deduplication, damaged-copy retry, safe removal, atomic named/destination presets")
+        print("PASS shared ICC library: over-quota entries remain visible/removable, import resumes after cleanup and invalid keys preserve sources")
         return profile
     }
     @MainActor static func main() async throws {
@@ -100,6 +118,8 @@ import UniformTypeIdentifiers
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let profile = try await io { try library(root) }
+        let cmyk = try await io { try ColorPreferencesStore(root: nil).importProfile(
+            URL(fileURLWithPath: "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")) }
         for platform: UInt32 in [0,1] {
             let directory = root.appendingPathComponent("state-\(platform)")
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: directory), managedWorkspaces: false)
@@ -153,9 +173,30 @@ import UniformTypeIdentifiers
             let state = store.state["document_file"].stableKey
             let original = try Data(contentsOf: master)
             var editor = try await dialog()
-            let initial = editor.recipe
             editor.cancel(); try await idle()
             try require(store.state["document_file"].stableKey == state, "Cancel leaves unsaved master unchanged")
+            editor = try await dialog()
+            editor.preference(JSON(["type": "get", "index": 2])); try await finished(editor)
+            editor.change("format", JSON("Jpeg")); try await finished(editor)
+            try require(editor.recipe["depth"].string == "U8" && editor.recipe["background"].string == "White"
+                && editor.draft["depths"].array.map(\.string) == ["U8"]
+                && !editor.draft["backgrounds"].array.map(\.string).contains("Preserve"), "JPEG draft supplies valid dependent values and choices")
+            editor.change("encoding", editor.recipe["encoding"].replacing("dither", with: JSON("Stochastic8")))
+            try await finished(editor)
+            editor.change("format", JSON("Png")); try await finished(editor)
+            editor.change("depth", JSON("U16")); try await finished(editor)
+            try require(editor.recipe["encoding"]["dither"].string == "None"
+                && editor.draft["dithers"].array.map(\.string) == ["None"], "16-bit draft removes inapplicable dither")
+            editor.imported(cmyk); try await finished(editor)
+            try require(editor.recipe["format"].string == "Tiff" && editor.recipe["background"].string == "White"
+                && editor.draft["formats"].array.map(\.string) == ["Tiff", "Jpeg"]
+                && !editor.draft["backgrounds"].array.map(\.string).contains("Preserve"), "CMYK import supplies supported output choices")
+            let cmykOutput = root.appendingPathComponent("CMYK-\(platform).tiff")
+            destination = cmykOutput; editor.choose(editor.recipe); try await idle()
+            try image(cmykOutput, type: .tiff, depth: 16, extent: [64,48])
+            let cmykSource = CGImageSourceCreateWithURL(cmykOutput as CFURL, nil)!
+            try require(CGImageSourceCreateImageAtIndex(cmykSource, 0, nil)?.colorSpace?.model == .cmyk,
+                "The shared draft must produce an actual CMYK delivery copy")
             editor = try await dialog()
             editor.preview(editor.recipe.replacing("jpeg_quality", with: JSON(0)))
             try await wait("Invalid output", store: store) { editor.error != nil }
@@ -167,11 +208,12 @@ import UniformTypeIdentifiers
             try require(editor.previews.count == 2 && editor.details["output_extent"][0].uint == 32
                 && editor.details["output_extent"][1].uint == 24, "Complete before/output comparison and fit")
             editor.preference(JSON(["type": "save", "name": "Delivery", "recipe": recipe.raw])); try await finished(editor)
-            destination = nil; editor.choose(editor.recipe); try await idle()
             let preferences = store.colorPreferences
             let color = JSON(["space": "DisplayP3", "depth": "U16"])
+            let previousCustom = try await io { try preferences.presets(color: color, request: JSON(["type":"get", "index":3])) }
+            destination = nil; editor.choose(editor.recipe); try await idle()
             let remembered = try await io { try preferences.presets(color: color, request: JSON(["type":"get", "index":3])) }
-            try require(remembered["recipe"].stableKey == initial.stableKey, "Cancelled destination never remembers output choices")
+            try require(remembered["recipe"].stableKey == previousCustom["recipe"].stableKey, "Cancelled destination preserves the previous Custom output choices")
             editor = try await dialog()
             editor.preference(JSON(["type":"get", "index":4])); try await finished(editor)
             try require(editor.recipe.stableKey == recipe.stableKey, "Reuse named output after cancel")

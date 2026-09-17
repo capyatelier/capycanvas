@@ -48,3 +48,8 @@ strip = "debuginfo"
 # Rust debuggable while avoiding multi-second unoptimized shader compiler jobs.
 [profile.dev.package.naga]
 opt-level = 3
+
+# ICC LUT construction has large temporary tables before optimization. Keep
+# the CMM optimized in debug apps too, including native file-worker stacks.
+[profile.dev.package."moxcms:0.9.1"]
+opt-level = 3

@@ -118,19 +118,26 @@ fn source_edit_invalid_cancel_and_stale_results_never_publish_partial_work() {
 }
 
 #[test]
-fn icc_inspection_keeps_exact_bytes_supports_summaries_and_rejects_invalid_input() {
+fn shared_icc_library_bridge_keeps_bytes_summaries_and_invalid_entry_errors() {
+    let call = |action: Value, bytes: &[u8]| {
+        let action = CString::new(action.to_string()).unwrap();
+        let text = unsafe { capy_profile_library(action.as_ptr(), bytes.as_ptr(), bytes.len()) };
+        assert!(!text.is_null());
+        let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
+        unsafe { capy_apple_string_free(text) };
+        value
+    };
     let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
-    for summary in [false, true] {
-        for input in [bytes.as_slice(), b"Invalid profile"] {
-            let text = unsafe { capy_color_profile_inspect(input.as_ptr(), input.len(), summary) };
-            assert!(!text.is_null());
-            let value: Value = serde_json::from_slice(unsafe { CStr::from_ptr(text) }.to_bytes()).unwrap();
-            unsafe { capy_apple_string_free(text) };
-            if input == bytes.as_slice() {
-                assert_eq!(value["channels"], "Rgb");
-                if summary { assert!(value["profile"].is_null()); }
-                else { assert_eq!(value["profile"]["Icc"], json!(bytes)); }
-            } else { assert!(value["error"].is_string()); }
-        }
-    }
+    let imported = call(json!({"type":"import","entries":[]}), &bytes);
+    assert_eq!(imported["profile"]["Icc"], json!(bytes));
+    let id = imported["id"].as_str().unwrap();
+    let record = json!({"id":id,"bytes":bytes.len()});
+    let summary = call(json!({"type":"inspect","entry":record}), &bytes);
+    assert_eq!(summary["channels"], "Rgb"); assert!(summary["profile"].is_null());
+    assert_eq!(call(json!({"type":"get","id":id}), &bytes), imported);
+    assert!(call(json!({"type":"get","id":id}), b"Invalid profile")["error"].is_string());
+    assert!(call(json!({"type":"inspect","entry":record}), b"Invalid profile")["issue"].is_string());
+    let limit = call(json!({"type":"limits"}), &[])["read_bytes"].as_u64().unwrap() as usize;
+    assert!(call(json!({"type":"inspect","entry":record}), &vec![0;limit+1])["issue"].is_string());
+    assert!(call(json!({"type":"remove","id":"../Original.icc"}), &[])["error"].is_string());
 }

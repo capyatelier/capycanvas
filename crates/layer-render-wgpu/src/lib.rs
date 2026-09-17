@@ -2572,24 +2572,19 @@ impl WgpuRasterizer {
             }
             BrushEncodingTarget::Preview { .. } => &self.preview_pages,
         };
-        for coordinate in page_coordinates(damage) {
+        for tile in context.tiles {
             let page = pages
                 .iter()
-                .find(|page| page.coordinate == coordinate)
+                .find(|page| page.coordinate == tile.coordinate)
                 .expect("brush pages are prepared before encoding");
-            let local = damage
-                .intersect(page_rect(coordinate))
-                .page_local(coordinate);
-            if !local.is_empty() {
-                self.encode_batch(
-                    encoder,
-                    batch_index,
-                    batch,
-                    &page.active().view,
-                    local,
-                    self.layer_target_offset(batch.layer_id, coordinate),
-                )?;
-            }
+            self.encode_batch(
+                encoder,
+                batch_index,
+                batch,
+                &page.active().view,
+                tile.local,
+                self.layer_target_offset(batch.layer_id, tile.coordinate),
+            )?;
         }
         Ok(())
     }

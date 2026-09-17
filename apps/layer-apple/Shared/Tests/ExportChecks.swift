@@ -67,7 +67,25 @@ extension XCTestCase {
             field.typeKey("a", modifierFlags: .command); field.typeText(value)
         }
         openExport(); choice("export-destination", "Further editing")
+        choice("export-format", "JPEG")
+        let depth = app.descendants(matching: .any).matching(identifier: "export-depth").firstMatch
+        expectation(for: NSPredicate(format: "enabled == NO"), evaluatedWith: depth)
+        waitForExpectations(timeout: 15)
+        choice("export-format", "TIFF")
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: depth)
+        waitForExpectations(timeout: 15)
+        choice("export-destination", "Further editing")
         let importProfile = app.buttons["source-profile-import"]
+        reveal(importProfile); workspaceActivate(importProfile)
+        chooseFile(URL(fileURLWithPath: "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc"))
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: app.buttons["export-choose-file"])
+        waitForExpectations(timeout: 20)
+        for (id, excluded) in [("export-format", "PNG"), ("export-background", "Preserve")] {
+            let picker = app.descendants(matching: .any).matching(identifier: id).firstMatch
+            reveal(picker); workspaceActivate(picker)
+            XCTAssertFalse(app.menuItems[excluded].exists, "CMYK must omit unsupported \(excluded)")
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        }
         reveal(importProfile); workspaceActivate(importProfile); chooseFile(profile)
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: app.buttons["export-choose-file"])
         waitForExpectations(timeout: 20)

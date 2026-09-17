@@ -1,10 +1,10 @@
 # Large-photo drawing: algorithm review — 2026-09-17
 
 The current tile-based design is appropriate, but approximately 50 ms p99 is
-not an established hardware limit. Retain the shared fixes and optimize the
-remaining general preparation/submission overhead before considering a new
-rendering architecture. No brush-size, preset-name, document-name or gesture
-special case is justified.
+not an established hardware limit. The shared follow-up below removes redundant
+preparation and overlaps bounded submissions. Retain it; further optimization
+should follow measured composition costs rather than a new rendering architecture.
+No brush-size, preset-name, document-name or gesture special case is justified.
 
 ## Evidence and its limits
 
@@ -54,6 +54,16 @@ prediction, other layers, mips, attachments, driver overhead and synchronization
 Caches and tile memory also mean logical traffic is not measured DRAM traffic.
 The model cannot prove a sub-millisecond frame, but it cannot justify 50 ms as
 an unavoidable consequence of the image's size either.
+
+For a round brush of diameter d moving distance L without crossing itself, the
+swept area is approximately dL + pi*d*d/4. A 570 px brush moving 1000 document
+pixels therefore covers about 825,000 pixels, before tile rounding. Revisiting
+pixels reduces the distinct area but can increase contact evaluations. Fast
+motion, sample batching and zoom determine this work; the 61 MP document size
+alone does not. The useful cost model includes both transferred bytes and
+per-pixel contact evaluations, plus CPU encoding, synchronization and cold
+resource costs. Neither peak bandwidth nor one diagnostic percentile supplies
+all of these terms.
 
 ## Algorithm assessment of the reviewed iPad build
 
@@ -148,3 +158,77 @@ Recovered Drawings, recording disabled. Physical drawing/Diagnostics and local
 large-photo Save As/reopen checks are pending; Mac artist apps are unchanged. Evidence
 is retained in `artifacts/apple-photo-lag-v3/`, including both frozen binaries,
 source hashes, failed intermediate assertions and final pixel comparisons.
+
+## Algorithmic limits after the follow-up
+
+The dry-contact planner visits each contact's intersected tiles once and inserts
+them into an ordered map. With K contact/tile intersections and T distinct tiles,
+its map work is O(K log T), followed by O(T) tile preparation. It no longer
+allocates the entire enclosing rectangle or rescans every contact independently
+for each destination tile. Exact coverage still belongs to the shader; the
+conservative bounds do not discard painted pixels.
+
+This is not a proof of optimality. Each tile retains a first-to-last contact
+range, so a path that leaves and revisits a tile can cause its shader to test
+intervening contacts. Full-page preservation also remains before clipped dry
+updates. Per-tile contact lists or in-place painting could remove some of that
+work, but introduce indexing or resource-dependency costs and must preserve
+ordered blending, prediction and nonlocal materials. Current evidence does not
+establish either as the next dominant device cost. Keep them as measured
+follow-up candidates, not reasons to rewrite the renderer now.
+
+The improvements extend beyond the large-photo gesture. Two paired local 4K
+watercolor replays against the retained `90adbb6d` baseline produce byte-identical
+final pixels while GPU median falls from about 4.62 to 3.65 ms. A short native
+Mac run on `3fbb937b` records 0.897% long active intervals at the 90 Hz target.
+These checks support the generality of the shared changes; they do not establish
+iPad timing, sustained memory-pressure behavior or physical pen latency. See the
+[watercolor qualification](../../apps/layer-apple/PERFORMANCE.md#watercolor-after-the-shared-photo-fixes--2026-09-17).
+The next performance decision should use the pending physical iPad result on
+this installed build before adding another optimization.
+
+Reanalysis of the retained final replay CSVs puts **82–96% of total CPU frame
+time inside composition**, across the four workloads above. For example, the
+ordinary replay's slowest frame completes in 26.61 ms and spends 23.00 ms in
+composition; the coalesced replay's slowest completes in 108.67 ms and spends
+102.04 ms there. These phase intervals include waits for earlier GPU work and
+source preparation, so they do not establish that composition's shader is the
+bottleneck or that brush execution is free. They do locate the next measurement:
+separate command preparation, source-cache misses and queue waits within that
+phase before changing contact indexing or texture storage. This analysis reuses
+existing measurements, without another simulator/device run. CPU preparation
+accounts for only 1–6% in these runs; even eliminating that phase entirely would
+remove only that share of the recorded CPU time. The small brush-encoding phase
+does not similarly bound GPU brush cost, because its execution can be waited
+for later in composition.
+
+The practical recommendation is to keep the current shared design and its
+bounded overlap, not claim optimality. A 50 ms p99 represents roughly six
+120 Hz refresh periods, but is neither the average frame time nor measured
+pen-to-screen latency. If that tail still produces visible stalls, further
+focused optimization is warranted. If drawing meets the accepted smoothness
+standard, prioritize the remaining parity gates over speculative shader/cache
+changes. Retain a further change only after representative local A/B replays
+show repeatable improvement with unchanged pixels/history and bounded memory,
+then qualify the combined result once on iPad.
+
+Subsequent full Apple integration testing exposed a correctness omission in the
+sparse plan: the direct Pencil brush encoder still traversed the enclosing
+rectangle, including untouched pages that allocation no longer created. It now
+uses the existing tile plan, just as the material encoder does. The native
+pixel/save/reopen regression fails before this correction and passes afterward;
+the disjoint-contact pixel/allocation test now covers both Pencil and G-Pen.
+This correction is not a new timing claim, and the pending iPad review still
+uses the preceding installed build. Evidence is in
+`artifacts/apple-shared-preferences-v1/`.
+
+Main advanced again to `668ff0a0` during publication. Its shared renderer reuses
+the complete retained placed-photo image during prediction and maps sparse
+contact damage into document coordinates for transformed photos and masks.
+This removes another unnecessary composition fallback using existing paths.
+It is relevant to placed/transformed artwork; no timing benefit is assumed for
+an identity-placed large drawing. The replay numbers above precede
+this integration, and its Android measurements do not establish iPad timing.
+The physical iPad review remains unchanged. The combined source passes five
+focused Metal pixel/history tests, both Release builds without warnings and
+Web compilation; it has no new device performance qualification.

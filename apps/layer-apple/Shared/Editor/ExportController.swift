@@ -6,7 +6,8 @@ import SwiftUI
     @Published private(set) var loaded = false
     @Published private(set) var choiceRevision = 0
     @Published private(set) var details = JSON()
-    @Published private(set) var recipe = JSON()
+    @Published private(set) var draft = JSON()
+    var recipe: JSON { draft["recipe"] }
     @Published private(set) var profiles: [JSON] = []
     @Published private(set) var profileIndex = 0
     @Published private(set) var names: [String] = []
@@ -40,11 +41,12 @@ import SwiftUI
                         let details = try task.details()
                         let view = try preferences.presets(color: details["color"], request: JSON(["type": "get", "index": 0]))
                         let profile = ExportController.matchProfile(view["recipe"]["profile"], in: details["form"]["profiles"].array)
+                        let draft = try preferences.exportDraft(recipe: view["recipe"])
                         DispatchQueue.main.async { [weak self] in
                             guard let self else { return }
                             self.busy = false
                             if self.closing { self.finish(nil); return }
-                            self.details = details; self.accept(view, profiles: profile.0, selected: profile.1)
+                            self.details = details; self.accept(view, draft: draft, profiles: profile.0, selected: profile.1)
                             self.loaded = true; ready?()
                         }
                     } catch { let message = error.localizedDescription
@@ -61,38 +63,40 @@ import SwiftUI
         }
         return (values + [profile], values.count)
     }
-    private func accept(_ view: JSON, profiles: [JSON], selected: Int) {
+    private func accept(_ view: JSON, draft: JSON?, profiles: [JSON], selected: Int) {
         names = view["names"].array.map(\.string)
         if !view["index"].isNull { destination = Int(view["index"].uint) }
-        if !view["recipe"].isNull {
-            recipe = view["recipe"]; self.profiles = profiles; profileIndex = selected
+        if let draft {
+            self.draft = draft; self.profiles = profiles; profileIndex = selected
         }
         choiceRevision += 1; invalidate()
     }
     func invalidate() { previews = []; clipped = 0; error = nil }
     func change(_ key: String, _ value: JSON) {
-        guard !busy else { return }
-        recipe = recipe.replacing(key, with: value); invalidate()
-    }
-    func selectProfile(_ index: Int) {
-        guard profiles.indices.contains(index), !busy else { return }
-        profileIndex = index; change("profile", profiles[index])
-    }
-    func imported(_ profile: JSON) {
-        guard !busy else { return }
-        // This explicit import transition runs once, and avoids comparing ICCs in layout.
-        let previous = profiles
-        busy = true
+        guard loaded, !busy, !closing, !finished else { return }
+        busy = true; invalidate()
+        let recipe = recipe, preferences = preferences, profiles = profiles
         NativeProjectTask.io.async { [weak self] in
-            let result = ExportController.matchProfile(profile, in: previous)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.busy = false
-                if self.closing { self.finish(nil); return }
-                self.profiles = result.0; self.selectProfile(result.1)
+            do {
+                let draft = try preferences.exportDraft(recipe: recipe, action: JSON(["type": key, "value": value.raw]))
+                let selected = key == "profile" ? ExportController.matchProfile(value, in: profiles) : nil
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.busy = false
+                    if self.closing { self.finish(nil); return }
+                    self.draft = draft
+                    if let selected { self.profiles = selected.0; self.profileIndex = selected.1 }
+                }
+            } catch { let message = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in self?.failed(message) }
             }
         }
     }
+    func selectProfile(_ index: Int) {
+        guard profiles.indices.contains(index) else { return }
+        change("profile", profiles[index])
+    }
+    func imported(_ profile: JSON) { change("profile", profile) }
     func preference(_ request: JSON) {
         guard loaded, !busy, !closing, !finished else { return }
         busy = true; error = nil
@@ -101,11 +105,12 @@ import SwiftUI
             do {
                 let view = try preferences.presets(color: color, request: request)
                 let profile = ExportController.matchProfile(view["recipe"]["profile"], in: previous)
+                let draft = view["recipe"].isNull ? nil : try preferences.exportDraft(recipe: view["recipe"])
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.busy = false
                     if self.closing { self.finish(nil); return }
-                    self.accept(view, profiles: profile.0, selected: profile.1)
+                    self.accept(view, draft: draft, profiles: profile.0, selected: profile.1)
                 }
             } catch { let message = error.localizedDescription
                 DispatchQueue.main.async { [weak self] in self?.failed(message) }
@@ -117,17 +122,19 @@ import SwiftUI
     private func prepare(_ recipe: JSON, preview: Bool) {
         guard loaded, !busy, !closing, !finished, let task else { return }
         busy = true; invalidate()
+        let preferences = preferences
         NativeProjectTask.io.async { [weak self] in
             do {
                 try task.configureExport(recipe)
                 if preview { try task.compare() }
                 let details = try task.details()
                 let images = preview ? try [task.comparison(after: false), task.comparison(after: true)] : []
+                let draft = try preferences.exportDraft(recipe: recipe)
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     self.busy = false
                     if self.closing { self.finish(nil); return }
-                    self.recipe = recipe; self.details = details
+                    self.draft = draft; self.details = details
                     self.previews = images; self.clipped = details["clipped_channels"].uint
                     if !preview { self.finish(task) }
                 }

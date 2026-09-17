@@ -214,17 +214,10 @@ import UIKit
             completion?(options)
         }
         guard let choice else { complete(nil); return }
-        let name = choice.presetName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty || choice.useAsDefaults else { complete(choice.options); return }
         guard let store else { creationError = "The canvas session is unavailable"; return }
-        var settings = store.state["settings"]["new_document"]
-        if choice.useAsDefaults { settings = settings.replacing("defaults", with: choice.options) }
-        if !name.isEmpty {
-            settings = settings.replacing("presets", with: JSON(settings["presets"].array.map(\.raw)
-                + [["name": name, "options": choice.options.raw]]))
-        }
         creationSaving = true
-        store.edit(["type": "new_document_settings", "settings": settings.raw]) { [weak self] error in
+        store.edit(["type": "new_document_preferences", "action": ["type": "remember",
+            "options": choice.options.raw, "name": choice.presetName, "defaults": choice.useAsDefaults]]) { [weak self] error in
             guard let self else { return }
             creationSaving = false; creationError = error
             if error == nil { complete(choice.options) }

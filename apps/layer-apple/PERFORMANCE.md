@@ -256,6 +256,35 @@ candidate, with no consistent tail improvement. The experiment is fully
 reverted; neither physical review app is changed. Evidence is
 `artifacts/apple-watercolor-full-pages-v1/`. This does not close the iPad gap.
 
+## Watercolor after the shared photo fixes — 2026-09-17
+
+The published renderer at `3fbb937b` also improves the retained 512-frame 4K
+watercolor replay. Two baseline/current pairs use the frozen qualified
+`90adbb6d` binary and the current binary, with no concurrent build or GPU work.
+GPU medians move from 4.606/4.633 to 3.653/3.656 ms; completion medians move from
+7.626/7.697 to 6.577/6.640 ms. Final 4096×4096 RGBA bytes are identical in all
+four runs, as are every frame's composited-pixel, source-miss, source-upload and
+paint-page counts. Display submissions change from zero to 287 because the
+new half-batch submission begins GPU work earlier. These remain synchronous
+local replay results, not physical iPad acceptance or pen-to-screen latency.
+
+An isolated copy of the qualified Mac Release then completes the existing
+45-second, timer-off native workload at the 90 Hz target. It records 34/3791
+(**0.897%**) long continuous-active intervals, CPU owner-service p99 **5.544 ms**,
+nominal thermals and a 2.073 GB peak footprint. The measured phase has no frame
+errors, rejected input or missing/zero-time presentation callbacks. Artwork and
+Navigator are reviewed. The analyzer's duration warning reflects a 10.5 µs
+rounding difference from 45 seconds; completion and the postlude are present.
+This is a short current-source Mac pass within the accepted rare-miss standard,
+not ten-minute or memory-pressure qualification. The copied app uses the existing
+workload's private session storage and is closed; artist Mac windows and the
+pending iPad large-photo review stay unchanged.
+
+No production edit accompanies this check. Evidence is
+`artifacts/apple-watercolor-post-photo-v1/`. The remaining iPad heavy-watercolor
+cadence check must follow the pending large-photo drawing/save retest, using
+this already installed runtime before considering another rendering change.
+
 ## Integrated renderer GPU follow-up — 2026-09-16
 
 At `a5f57e2c`, the 512-frame 4K watercolor replay reproduces the preceding

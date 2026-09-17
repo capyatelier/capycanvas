@@ -266,9 +266,13 @@ are being qualified before publication; final evidence belongs below.
 
 ### Remaining host integrations and boundaries
 
-Windows and Apple can consume the contracts above without copying Android jobs.
-They still need native executors, picker/storage adapters and device-lifetime
-observations; this work does not claim their new workflow acceptance. Existing
+Apple now consumes C4's export draft, C5's profile-library actions and the
+atomic New Drawing preference action. Its native file coordination, bounded reads,
+atomic publication and worker scheduling remain adapters. See the
+[Apple integration record](apple-handoff.md#shared-workflow-adoption--2026-09-17)
+for evidence and remaining physical acceptance. Apple C1–C3/C6 and Windows's
+host migrations remain open; they need native executors, picker/storage adapters
+and device-lifetime observations. Existing
 lower-level renderer, session, recipe and settings APIs remain available.
 C7 stays a Windows task: consume tagged color values, converted swatches and the
 shared gradient samples from `layer-ui::color::form`. No additional core model is

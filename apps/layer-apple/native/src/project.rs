@@ -23,7 +23,6 @@ mod color;
 pub use color::*;
 #[path = "project_source.rs"]
 mod source;
-pub use source::*;
 #[path = "project_inspection.rs"]
 mod inspection;
 #[path = "project_export.rs"]

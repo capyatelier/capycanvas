@@ -61,26 +61,19 @@ struct ExportForm: View {
             })) {
                 ForEach(editor.names.indices, id: \.self) { Text(editor.names[$0]).tag($0) }
             }.accessibilityIdentifier("export-destination")
-            FormPicker("Format", selection: Binding(get: { editor.recipe["format"].string }, set: { format in
-                editor.change("format", JSON(format))
-                if format == "Jpeg" {
-                    editor.change("depth", JSON("U8"))
-                    if editor.recipe["background"].string == "Preserve" { editor.change("background", JSON("White")) }
-                }
-            })) { Text("PNG").tag("Png"); Text("TIFF").tag("Tiff"); Text("JPEG").tag("Jpeg") }
+            FormPicker("Format", selection: choice("format")) {
+                options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG"])
+            }
                 .accessibilityIdentifier("export-format")
             FormPicker("Output profile", selection: Binding(get: { editor.profileIndex }, set: editor.selectProfile)) {
                 ForEach(editor.profiles.indices, id: \.self) { Text(editor.profiles[$0]["name"].string).tag($0) }
             }.accessibilityIdentifier("export-profile")
             ProfileChooserButtons(preferences: editor.preferences, busy: $readingProfile, onProfile: editor.imported)
-            FormPicker("Bit depth", selection: Binding(get: { editor.recipe["depth"].string }, set: { depth in
-                editor.change("depth", JSON(depth))
-                if depth == "U16" { encoding("dither", "None") }
-            })) { Text("8-bit").tag("U8"); Text("16-bit").tag("U16") }
-                .disabled(editor.recipe["format"].string == "Jpeg").accessibilityIdentifier("export-depth")
+            FormPicker("Bit depth", selection: choice("depth")) {
+                options("depths", labels: ["U8": "8-bit", "U16": "16-bit"])
+            }.disabled(editor.draft["depths"].array.count < 2).accessibilityIdentifier("export-depth")
             FormPicker("Transparency", selection: choice("background")) {
-                if editor.recipe["format"].string != "Jpeg" { Text("Preserve").tag("Preserve") }
-                Text("White background").tag("White"); Text("Black background").tag("Black")
+                options("backgrounds", labels: ["Preserve": "Preserve", "White": "White background", "Black": "Black background"])
             }.accessibilityIdentifier("export-background")
             if editor.recipe["format"].string == "Jpeg" { number("JPEG quality (1–100)", $quality, id: "export-quality") }
             Toggle("Fit within pixel size", isOn: $fit).accessibilityIdentifier("export-fit")
@@ -99,8 +92,8 @@ struct ExportForm: View {
                         Text("Saturation").tag("Saturation"); Text("Absolute colorimetric").tag("AbsoluteColorimetric")
                     }
                     FormPicker("Dither", selection: Binding(get: { editor.recipe["encoding"]["dither"].string }, set: { encoding("dither", $0) })) {
-                        Text("None").tag("None"); Text("Stochastic (8-bit output)").tag("Stochastic8")
-                    }.disabled(editor.recipe["depth"].string != "U8")
+                        options("dithers", labels: ["None": "None", "Stochastic8": "Stochastic (8-bit output)"])
+                    }.disabled(editor.draft["dithers"].array.count < 2)
                     FormPicker("Resolution metadata", selection: $resolution) {
                         Text("Keep original").tag("Master"); Text("Pixels per inch").tag("Ppi"); Text("Omit").tag("Omit")
                     }
@@ -128,6 +121,11 @@ struct ExportForm: View {
     }
     private func choice(_ key: String) -> Binding<String> {
         Binding(get: { editor.recipe[key].string }, set: { editor.change(key, JSON($0)) })
+    }
+    private func options(_ key: String, labels: [String: String]) -> some View {
+        ForEach(editor.draft[key].array.map(\.string), id: \.self) { value in
+            Text(labels[value] ?? value).tag(value)
+        }
     }
     private func encoding(_ key: String, _ value: String) {
         editor.change("encoding", editor.recipe["encoding"].replacing(key, with: JSON(value)))

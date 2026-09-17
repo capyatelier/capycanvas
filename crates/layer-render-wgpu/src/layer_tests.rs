@@ -2598,7 +2598,10 @@ fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
 #[test]
 fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners() {
     use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
-    for native in [false, true] {
+    for (native, preset) in [false, true].into_iter().flat_map(|native| {
+        [layer_core::DefaultBrushPreset::GPen, layer_core::DefaultBrushPreset::Pencil]
+            .map(|preset| (native, preset))
+    }) {
         let mut r = if native {
             WgpuRasterizer::new_native_headless(DocumentColor {
                 space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
@@ -2612,7 +2615,7 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
         let mut last = first;
         last.center = Point { x: 890., y: 890. };
         let mut stroke = batch(1);
-        stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+        stroke.style = preset_style(preset);
         stroke.dab_count = 2;
         stroke.damage = first.bounds().union(last.bounds());
         let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
@@ -2626,8 +2629,9 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
         let together = r.readback_srgb_rgba8().unwrap();
         let paint = &r.paint_layers[0];
         assert_eq!(paint.pages.len(), 2, "native={native}");
-        assert_eq!(paint.coverage_pages.len(), 2, "native={native}");
-        assert!(paint.pages.iter().all(|p| p.secondary.is_some()));
+        let destination = BrushPassPlan::for_style(&stroke.style).requires_destination();
+        assert_eq!(paint.coverage_pages.len(), if destination { 2 } else { 0 }, "native={native}, preset={preset:?}");
+        assert!(paint.pages.iter().all(|p| p.secondary.is_some() == destination));
         assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
         assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
         assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
