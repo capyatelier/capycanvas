@@ -221,6 +221,12 @@ impl FilterService {
         native.invalidate_snapshot();
     }
     pub(crate) fn poll(&mut self, native: &mut NativeHost) {
+        // Native staged renderers hold speculative previews until the initial
+        // host catalog has settled. Also release that hold after GPU replacement
+        // and failed/fallback loads; the renderer makes this idempotent.
+        if !self.status.pending && let Some(gpu) = &mut native.session.renderer_mut().0 {
+            gpu.finish_startup_cache();
+        }
         let completed = self.task.poll();
         if native.session.rendering_suspended() {
             if self.status.pending {

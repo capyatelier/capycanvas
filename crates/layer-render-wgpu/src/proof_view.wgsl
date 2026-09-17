@@ -20,6 +20,7 @@ fn proof_artwork(paint: vec4<f32>) -> vec4<f32> {
     let t = coordinate - vec3<f32>(low);
     // Spell out the six tetrahedra. Dynamically indexing and updating vectors
     // in the three-step loop is substantially slower on Android Chrome/Dawn.
+    // Also avoid dynamic vector l-values, which Windows FXC cannot address.
     // Keep the CPU interpolation's stable x/y/z tie order and accumulation.
     var first = vec3<u32>(1u, 0u, 0u);
     var second = vec3<u32>(0u, 1u, 0u);

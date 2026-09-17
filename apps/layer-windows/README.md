@@ -401,46 +401,46 @@ separate renderer on the same D3D12 device, and retires replaced GPU resources
 off the canvas owner. Shared checkpoints and document generations protect newer
 edits during save, open and close decisions.
 
-The native File menu provides New, Open, Save, Save As, Export PNG and Close. New drawing
-uses shared size limits and numeric expressions. Open and Save use the Windows
-App SDK desktop pickers; disk work and GPU preparation remain on the document
-worker. A modified drawing presents Save, Discard Changes and Cancel before
-replacement or close. Cancelling a picker preserves the current drawing.
+The native File menu provides New, Open, Save, Save As, Export and Close. New
+supports independent working RGB, U8/U16 precision, background, defaults and
+named presets. Open accepts native drawings and retained photos through the
+shared import service; a photo gets a separate editable master on Save.
 
-Preferences and document prompts share the window's dialog slot. The canvas is
-disabled until a modal dialog fully finishes. Closing commits Preferences drafts,
-waits for document authorization and outstanding dialog callbacks, and releases
-retained XAML controls before closing their window context. The opt-in UI trace
-also writes local lifecycle.log stage timings.
+The native SDR renderer preserves integer U8/U16 artwork with Float32 processing.
+Tagged effect/gradient colors and the wheel use shared color projection. Precise
+color and palette editing is available from the color readout's context menu;
+ordinary clicks still switch the readout. Color preferences expose future-document
+and photo interpretation policies, and a native ICC library manager.
 
-Export PNG captures the full document in sRGB with transparency, independently
-of viewport zoom, rotation and native chrome. The canvas owner submits a GPU
-snapshot after presentation; GPU waiting, row packing, PNG encoding and atomic
-replacement run on the document worker. Export preserves the project destination
-and unsaved state. Edits made before a deferred capture is ready require retry;
-edits after capture cannot change the exported snapshot. File replacement retries
-brief Windows access or sharing failures on the worker for up to one second,
-with cancellation checks; persistent failure preserves the prior file.
+Assign/Convert/Depth, source repair/rasterization and exact color history use
+shared candidate workflows. Comparison previews are prepared on the file worker.
+Properties and the full-resolution histogram use shared inspection. The host
+checks current GPU identity and schedules publication; shared Rust decides whether
+the candidate is valid and how it enters history.
 
-The Layers footer imports images through the Windows picker. The document
-worker uses Windows BitmapDecoder to produce straight RGBA8 in sRGB, respecting
-EXIF orientation. Source and oriented dimensions are checked before decoding
-pixels, with an 8192-pixel limit per dimension (or the device limit if smaller).
-PNG, JPEG, BMP, GIF, TIFF and JPEG XR use Windows codecs; WebP and HEIF depend on
-installed codec support. Animated and multi-frame sources import their first
-frame. Core owns placement, selection, Undo and embedding the pixels in saved
-projects, so later Open does not need the source file.
+Export provides PNG/JPEG/TIFF, output profiles, depth, matte, rendering intent,
+black-point compensation, dithering, resizing, resolution and reusable presets.
+Shared recipe drafts normalize dependent controls; shared snapshots choose
+original-source or composed output and generate the comparison. Files are written
+atomically on the worker, without acknowledging a master save.
 
-The canvas owner captures the target after pending field edits and before
-opening the picker. Cancellation, failure and stale results preserve the
-drawing. A change to the document or editing target during decoding requires
-retrying import. Other file operations cancel a pending import and wait for its
-worker slot. Pixel decoding, orientation, color conversion and source copying
-run off the UI and canvas threads; Core performs the final GPU asset upload.
+Import, clipboard paste and external file drops retain source samples and use one
+shared batch placement transaction. Apply/Cancel and undo follow the shared
+placement controls. Canvas drops use the captured screen position; layer-list
+drops use the shared destination hint. File filters for placement come from the
+shared codecs, independently of installed Windows codecs.
 
-Additional native windows remain pending, with New Window disabled. Full
-workspace, physical input, device recovery, presentation and release acceptance
-remain open.
+Private artwork recovery uses shared recovery ordering, worker-side atomic writes,
+and Windows file locks. A previous unfinished drawing can be restored, left for
+later or explicitly discarded. Its origin survives until a replacement checkpoint
+is durable. Clean close drains accepted recovery retirement before window teardown.
+
+Preferences and document prompts share one native dialog slot. File, clipboard,
+profile and GPU work stays off the UI thread. See the
+[port status and validation](../../docs/development/windows-feature-parity-progress.md)
+for current coverage and hardware acceptance still required. The following older
+fixtures remain useful regressions, rather than release acceptance for every new
+workflow.
 
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe

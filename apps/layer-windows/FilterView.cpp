@@ -129,8 +129,14 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
 };
 }
-FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
+FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<FiltersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
+    if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
+        if(auto view=weak.lock()){
+            double unit=0;for(auto const& row:view->previews)if(row.button.IsLoaded()&&row.button.ActualHeight()>0){auto margin=row.button.Margin();unit=row.button.ActualHeight()+margin.Top+margin.Bottom+view->rows.Spacing();break;}
+            return O({{L"fixed_height",N(18.+view->header.ActualHeight())},{L"unit_height",N(unit)}});
+        }return J{};
+    };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock())return 18.+view->header.ActualHeight()+view->list.ExtentHeight();
         return -1.;

@@ -15,12 +15,13 @@ struct DrawingWorkloadPlan {
     let diameter: Double
     let predicts: Bool
     let seconds: Double
+    let color: [String: String]
 
-    init(name: String, seconds: Double) throws {
+    init(name: String, seconds: Double, color: [String: String] = ["space": "Srgb", "depth": "U8"]) throws {
         guard seconds.isFinite, seconds >= 1, seconds <= 1800 else {
             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be between 1 and 1800")
         }
-        self.name = name; self.seconds = seconds
+        self.name = name; self.seconds = seconds; self.color = color
         switch name {
         case "ink": identifier = 1; extent = 2048; paintLayers = 1; brush = 1; diameter = 24; predicts = false
         case "ink-predicted": identifier = 2; extent = 2048; paintLayers = 1; brush = 1; diameter = 24; predicts = true
@@ -36,11 +37,15 @@ struct DrawingWorkloadPlan {
         guard let seconds = Double(environment["CAPY_WORKLOAD_SECONDS"] ?? "600") else {
             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be a number")
         }
-        return try DrawingWorkloadPlan(name: name, seconds: seconds)
+        // The shared document reader validates these ordinary creation options.
+        return try DrawingWorkloadPlan(name: name, seconds: seconds, color: [
+            "space": environment["CAPY_WORKLOAD_SPACE"] ?? "Srgb",
+            "depth": environment["CAPY_WORKLOAD_DEPTH"] ?? "U8"])
     }
     private struct PlanError: LocalizedError { let errorDescription: String? }
     var metadata: [String: Any] {
         ["version": 1, "name": name, "document_pixels": [extent, extent], "paint_layers": paintLayers,
+         "document_color": color,
          "brush_id": brush, "diameter": diameter, "prediction": predicts, "sample_hz": Self.samplesPerSecond,
          "warmup_seconds": Self.warmupSeconds, "measurement_seconds": seconds, "input_source": "synthetic"]
     }

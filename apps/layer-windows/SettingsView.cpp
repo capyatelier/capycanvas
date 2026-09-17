@@ -98,6 +98,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             tab.HorizontalContentAlignment(HorizontalAlignment::Left);sidebar.Children().Append(tab);tabs.emplace(id.c_str(),tab);
             StackPanel node;node.Spacing(16);AutomationProperties::SetName(node,str(page,L"title"));
             pageNodes.emplace(id.c_str(),node);pages.Children().Append(node);
+            if(id==L"color")node.Children().Append(button(data,L"Manage ICC profiles…",[data=data]{
+                data->dispatch(O({{L"type",S(L"close_settings")}}));data->document(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(0)}}).Stringify()));
+            }));
             for(auto groupValue:array(page,L"groups")){
                 auto group=groupValue.GetObject();StackPanel section;section.Spacing(8);
                 section.Children().Append(label(data,str(group,L"title"),true));
@@ -324,8 +327,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(!showing)show();
     }
 };
-SettingsView::SettingsView(Dispatch dispatch,Json catalog,XamlRoot root,Key key,Dispatch report,std::function<void()> changed):impl(std::make_shared<Impl>()){
-    impl->data->send=std::move(dispatch);impl->data->catalog=catalog;impl->xamlRoot=root;impl->key=std::move(key);impl->report=std::move(report);impl->changed=std::move(changed);impl->init();
+SettingsView::SettingsView(Dispatch dispatch,Json catalog,XamlRoot root,Key key,Dispatch report,std::function<void()> changed,Dispatch document):impl(std::make_shared<Impl>()){
+    impl->data->document=std::move(document);impl->data->send=std::move(dispatch);impl->data->catalog=catalog;impl->xamlRoot=root;impl->key=std::move(key);impl->report=std::move(report);impl->changed=std::move(changed);impl->init();
 }
 SettingsView::~SettingsView()=default;
 void SettingsView::Apply(Json const& snapshot){impl->apply(snapshot);}

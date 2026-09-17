@@ -13,6 +13,7 @@ public:
     void Apply(bool visible);
     void Layout(CapyUi::J const& geometry);
     double ContentHeight()const;
+    CapyUi::J ScrollMetrics()const{return scrollMetrics?scrollMetrics():CapyUi::J{};}
     std::unique_ptr<NavigatorView> navigator;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::FrameworkElement> tileElements;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Button> tileControls;
@@ -22,6 +23,7 @@ private:
     winrt::Microsoft::UI::Xaml::FrameworkElement root{nullptr};
     CapyUi::Bindings bindings;
     std::function<double()> contentHeight;
+    std::function<CapyUi::J()> scrollMetrics;
     std::vector<uint32_t> tileOrder;
     std::map<uint32_t,winrt::Microsoft::UI::Xaml::Controls::Border> dividers;
     winrt::Microsoft::UI::Xaml::FrameworkElement tileGrip{nullptr};

@@ -10,6 +10,7 @@ use layer_render_wgpu::{SdrSurfaceColor, ViewportPresenter, WgpuRasterizer};
 use std::{collections::BTreeMap, io::{BufReader, BufWriter, Write}, time::{Duration, Instant}};
 
 const SIZE: [u32; 2] = [2752, 2064];
+const DRAW_SCALE: f32 = 0.2;
 type Engine = CanvasEngine<WgpuRasterizer>;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -56,7 +57,13 @@ fn main() -> Result<()> {
     gpu.set_complete_display_allowance(allowance * 1024 * 1024);
     gpu.set_telemetry_enabled(true);
     let (mut input, consumer) = input_queue(samples as usize + 8);
-    let (mut view, inverse) = camera(extent, 0.2, 0.);
+    let (mut view, inverse) = camera(extent, DRAW_SCALE, 0.);
+    // Keep the stroke on the visible document. A viewport-sized path can lie
+    // mostly outside a zoomed-out canvas and understate the drawing cost.
+    let path_radius: [f32; 2] = std::array::from_fn(|axis| {
+        let visible = (extent[axis] as f32 * DRAW_SCALE).min(SIZE[axis] as f32);
+        0.42 * (visible - diameter * DRAW_SCALE).max(0.)
+    });
     let mut engine = CanvasEngine::new(gpu, project.document, consumer, view, inverse)?;
     engine.set_instant_feedback(InstantFeedbackConfig {
         enabled: true, use_platform_prediction: false, prediction_horizon_micros: 8_000,
@@ -98,8 +105,8 @@ fn main() -> Result<()> {
                     sequence += 1;
                     input.push(PenEvent { device_id: 1, sequence,
                         timestamp_ns: 1_000_000_000 + index * 4_166_667, view_revision: 0,
-                        surface_position: Point { x: SIZE[0] as f32 * (0.5 + 0.42*position[0]),
-                            y: SIZE[1] as f32 * (0.5 + 0.42*position[1]) },
+                        surface_position: Point { x: SIZE[0] as f32 * 0.5 + path_radius[0]*position[0],
+                            y: SIZE[1] as f32 * 0.5 + path_radius[1]*position[1] },
                         pressure: 1., tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
                         tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
                         phase: if index == 0 { PenPhase::Down }

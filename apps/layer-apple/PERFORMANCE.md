@@ -198,6 +198,26 @@ Ordinary review is open, recording disabled; physical fast-circle/Diagnostics an
 large-photo local Save As/reopen confirmation are pending. Mac artist apps remain
 unchanged.
 
+The later physical retest still reports roughly 60 ms p99; a retained capture
+shows CPU/GPU p99 of 82.16/70.35 ms. Correcting the local replay's mostly
+off-canvas path exposes a redundant clear pass during source-tile loading.
+A small shared ordering correction improves heavier paired Mac completion
+medians by 8–12%, with identical artwork/history and work counts; it does not
+close the full tail or establish an iPad speedup. See the
+[corrected workload review](../../docs/development/apple-drawing-performance-review.md#corrected-workload-and-remaining-avoidable-passes).
+After 31 focused Metal passes, Web/iOS compilation and both warning-free Release
+builds, the iPad review is updated with all eleven recoveries and existing files
+preserved. The user again reports roughly 60 ms; visible-lag acceptance remains
+unconfirmed. Evidence is
+`artifacts/apple-clear-pass-device-v1/`; recording is disabled.
+
+The next local pass review removes redundant inactive paint-surface clears and
+their flag, with 3–7.5% lower medians across sixteen paired small/large-brush
+replays and unchanged exact artwork/history. Eight-sample 571 px p99 still
+approaches 55 ms on Mac. This correction is not installed on either device;
+it accompanies the native photo/16-bit qualification milestone. The [pass attribution and limits](../../docs/development/apple-drawing-performance-review.md#pass-attribution-and-redundant-paint-initialization)
+remain distinct from physical latency and the unresolved iPad result.
+
 ## Metal display admission — 2026-09-16
 
 Apple now admits the existing shared complete display and placed-photo caches
@@ -347,6 +367,107 @@ This qualifies one current Mac recorder-off drawing/recovery/idle case. It does
 not measure unrecorded cadence, GPU power, thermal behavior, calibrated recorder
 overhead or physical input latency, and does not qualify iPad. Evidence is
 `artifacts/apple-recorder-off-v1/`.
+
+The subsequent recorder-off resume check uses the same Release on source
+`94bd5d1f`, with a ten-second measured watercolor setup and its normal warm-up
+and postlude. After 15.45 seconds of foreground idle, a native mouse stroke
+produces new durable artwork; Undo and Redo restore the exact document metadata
+and all color/watercolor-state tile digests. The app's native Hide command then
+precedes 15.43 seconds of hidden idle. Returning and drawing another stroke
+passes the same complete recovery/history comparisons. Canvas and Navigator
+captures show both new strokes and the intact preceding artwork.
+
+Foreground/hidden idle consume 0.04/0.19 process CPU seconds respectively;
+artwork/settings and workspace content remain unchanged except normal ownership
+lease renewal. No trace file is produced. Direct-to-process mouse injection
+initially produces no stroke; standard window-server delivery succeeds. The
+external hide API also returns false, while the native Hide menu works. These
+fixture corrections retain the same app process and require no runtime change.
+The owned test app is closed and existing editor processes remain unchanged.
+Evidence is `artifacts/apple-idle-resume-v1/`, held for the next milestone.
+This qualifies native mouse drawing/history after idle and hidden return in one
+Mac sRGB/U8 4K case; physical tablet/Pencil, iPad, other profiles, GPU power,
+cadence and recorder overhead remain outside this result.
+
+## Sustained Mac ProPhoto 16-bit watercolor — 2026-09-17
+
+The shared workload runner now accepts the ordinary document color options
+instead of fixing every run to sRGB/U8. The shared document reader validates
+the requested profile/depth; the trace records them, and qualification checks
+the actual saved document and native tile descriptors. Input, brush behavior,
+rendering and storage use the existing paths. Both current Release builds pass
+without compiler warnings, including the shared clear-pass cleanup.
+
+The isolated Mac Release completes a 45-second preflight and **600.0084 measured
+seconds** of 4096² ProPhoto/U16 Wet Watercolor, eight paint layers plus paper,
+320 px brush and manual prediction, with 240 synthetic samples/second. Ordinary
+previews and recovery remain enabled. CPU/presentation recording is enabled;
+GPU timestamps are disabled. No build, test or GPU profiler overlaps measurement.
+
+At 90 Hz, **461/50,312 (0.916%)** continuous-active intervals exceed the budget
+plus the existing 5% timing tolerance. Presentation p99 is **11.1113 ms**, maximum
+**33.3337 ms**; CPU owner-service p99 is **5.761 ms**, maximum **12.839 ms**.
+All 135,003 measured input samples are accepted, with no rejected batches,
+missing/zero-time measured presentations, frame errors or dropped records.
+Per-minute long-interval rates are 0.797–0.998%, with CPU p99 5.671–5.860 ms.
+
+Thermals remain nominal. Measured footprint peaks at **2.442 GB** in the first
+minute; the last four minute peaks are 2.410, 2.422, 2.396 and 2.398 GB. The
+first-to-last increase is 422 MB, without continued late growth in this run.
+This is not imposed memory-pressure qualification. The full trace retains a
+3.824 GB startup peak and one zero-time presentation outside measurement.
+The display link becomes idle about 40 ms after pen-up.
+
+Final canvas, Navigator and layer-preview captures agree. Production archive
+reading/validation succeeds at revision 431, with nine layers, ProPhoto/U16
+document color and 16-bit native color tiles. Both owned test apps close, and
+pre-existing artist processes retain their identities. The iPad is not installed
+or restarted. Evidence is `artifacts/apple-prophoto-sustained-v1/`.
+
+This closes the current Mac sustained ProPhoto/U16 watercolor case within the
+accepted rare-miss standard. It does not establish iPad large-brush performance,
+physical pen latency, imposed memory pressure or recorder-off overhead. Retain
+the existing sRGB/U8 and physical user workflow evidence separately.
+
+## Sustained iPad ProPhoto 16-bit watercolor — 2026-09-17
+
+The physical iPad Release at `1f96d5a6` completes a 45-second preflight and
+**600.0081 measured seconds** of the same 4096² ProPhoto/U16 workload: eight
+paint layers plus paper, 320 px Wet Watercolor, manual prediction and 240
+synthetic samples/second. Ordinary previews and recovery remain enabled in
+isolated storage. CPU/presentation recording is enabled; GPU timestamps are off.
+No on-device profiler or container transfer overlaps measurement. Integration
+checks and Release builds run concurrently on the Mac, using its own GPU.
+
+At 120 Hz, **2,610/65,205 (4.003%)** continuous-active intervals exceed the
+budget plus the existing 5% tolerance. Presentation median/p95/p99 are
+**8.3333/8.3335/16.6668 ms**, maximum **25.0000 ms**. CPU owner-service p99 is
+**9.124 ms**, maximum **17.581 ms**. The short preflight has 3.494% long
+intervals and 9.126 ms CPU owner p99. The long run accepts 135,003 measured
+nonpredicted samples and records 65,581 actual presentations, without rejected
+batches, missing/zero-time measured presentations, frame errors or dropped
+records. These figures do not establish the accepted smooth/rare-miss standard;
+watercolor cadence acceptance remains open.
+
+Thermals remain nominal across all 600 measured memory samples. Measured
+footprint peaks at **2.358 GB** in the first minute; the last four minute peaks
+are **1.969, 1.938, 1.936 and 1.909 GB**. First-to-last footprint falls by
+23.6 MB, with no continuing late growth. The full trace retains a **3.952 GB**
+startup peak, 10.217 seconds before measurement, and two zero-time presentations
+before measurement. Postlude activity becomes idle about 28 ms after pen-up.
+
+Final canvas, Navigator and layer-preview captures agree. Both recovery archives
+pass the production reader with nine ProPhoto/U16 layers and **1,930 native
+16-bit color tiles**; the long-run document reaches revision 431. Both workload
+processes close. A subsequent ordinary review process is inspected at Recovered
+Drawings and backed up before the update; all normal recoveries, saved drawings
+and settings files are preserved. Evidence is
+`artifacts/apple-ipad-prophoto-sustained-v1/`.
+
+This supplies sustained physical iPad evidence for the 16-bit profile, with
+artwork, recovery, nominal thermals and bounded observed memory. It does not
+close the separate 570 px large-photo tail, watercolor cadence acceptance,
+imposed memory pressure, recorder overhead or physical Pencil latency.
 
 ## Current iPad sustained watercolor — 2026-09-17
 
@@ -2015,6 +2136,13 @@ recovery and idle transitions; its end does not prove that rendering drained.
 Trace recording defaults to the requested measurement plus a 140-second allowance
 for setup/warm-up/postlude, but normally finishes at the postlude. An explicit
 `CAPY_TRACE_SECONDS` overrides that limit, and can therefore truncate a run.
+
+`CAPY_WORKLOAD_SPACE` and `CAPY_WORKLOAD_DEPTH` select the ordinary shared
+document-creation color options, defaulting to `Srgb` and `U8`. For example,
+`ProPhoto` and `U16` exercise wide-gamut 16-bit storage with the same input and
+renderer. Shared document validation rejects unsupported values. The trace's
+`workload.document_color` records the requested format; verify the resulting
+recovery archive before counting a run as qualification of that format.
 
 Launch the built, isolated Mac app through Launch Services to foreground it;
 an occluded window cannot supply presentation evidence:

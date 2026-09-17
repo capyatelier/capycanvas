@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "ColorForm.h"
 #include <array>
 #include <utility>
 
@@ -45,11 +46,11 @@ struct Property {
     hstring id()const{return L"property-"+key;}
 };
 FrameworkElement ColorField(std::shared_ptr<Property> const& property,hstring const& title,
-    std::function<A()> get,std::function<void(A)> set,Bindings& bindings,
+    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,
     std::function<hstring()> context={});
 FrameworkElement CurveField(std::shared_ptr<Property> const& property,Bindings& bindings);
 FrameworkElement GradientField(std::shared_ptr<Property> const& property,Bindings& bindings);
 }
 winrt::Microsoft::UI::Xaml::FrameworkElement PropertiesPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings);
 
-winrt::Microsoft::UI::Xaml::FrameworkElement FiltersPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings,std::function<double()>* contentHeight=nullptr);
+winrt::Microsoft::UI::Xaml::FrameworkElement FiltersPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings,std::function<double()>* contentHeight=nullptr,std::function<CapyUi::J()>* scrollMetrics=nullptr);

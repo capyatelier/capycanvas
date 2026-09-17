@@ -54,8 +54,8 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         }});
         positionGate.Content(positionFields);positionGate.IsTabStop(false);positionGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         root.Children().Append(bar);root.Children().Append(positionGate);
-        root.Children().Append(ColorField(property,L"Color",[weak]{if(auto self=weak.lock())return array(self->stop(),L"color");return A{};},
-            [weak](A color){if(auto self=weak.lock())self->change(self->selected,num(self->stop(),L"position"),color);},fields,
+        root.Children().Append(ColorField(property,L"Color",[weak]{if(auto self=weak.lock())return object(self->stop(),L"color");return J{};},
+            [weak](J color){if(auto self=weak.lock())self->change(self->selected,num(self->stop(),L"position"),color);},fields,
             [weak]{if(auto self=weak.lock())return self->context();return hstring{};}));
         StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(6);
         auto add=button(data,L"Add stop",[weak]{if(auto self=weak.lock())self->addMiddle();});
@@ -85,10 +85,12 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         double width=std::max(0.,bar.ActualWidth()-12);
         auto next=O({{L"stops",all},{L"width",N(width)},{L"selected",N(selected)}}).Stringify();
         if(next==drawn)return;drawn=next;ramp.Width(width);brush.GradientStops().Clear();dots.Children().Clear();
+        auto samples=colorUi(O({{L"type",S(L"gradient")},{L"stops",all},
+            {L"document_space",S(str(object(data->model,L"color_panel"),L"rgb_space",L"Srgb"))}})).GetArray();
+        for(uint32_t i=0;i<samples.Size();++i){GradientStop entry;entry.Offset(double(i)/(samples.Size()-1));
+            entry.Color(displayColor(samples.GetObjectAt(i)));brush.GradientStops().Append(entry);}
         for(uint32_t i=0;i<all.Size();i++){
-            auto stop=all.GetObjectAt(i);auto color=array(stop,L"color");
-            auto byte=[&](int index){return uint8_t(std::round(std::clamp(color.GetNumberAt(index),0.,1.)*255));};
-            GradientStop entry;entry.Offset(num(stop,L"position"));entry.Color({byte(3),byte(0),byte(1),byte(2)});brush.GradientStops().Append(entry);
+            auto stop=all.GetObjectAt(i);
             double radius=int(i)==selected?4:2.5;Shapes::Ellipse dot;dot.Width(radius*2);dot.Height(radius*2);dot.Fill(data->brush(L"text"));
             Canvas::SetLeft(dot,6+num(stop,L"position")*width-radius);Canvas::SetTop(dot,39-radius);dots.Children().Append(dot);
         }
