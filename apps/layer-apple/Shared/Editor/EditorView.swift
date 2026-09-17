@@ -18,7 +18,7 @@ struct EditorView<Canvas: View>: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         ZStack(alignment: .topLeading) {
-            canvas().ignoresSafeArea()
+            canvas().ignoresSafeArea().modifier(PhotoDropTarget(store: store))
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }

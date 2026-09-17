@@ -84,7 +84,7 @@ import UniformTypeIdentifiers
         let layer = try await attach(store!)
         store!.projectFiles = ProjectFiles(store: store!, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(nil) }, create: { _, done in
             done(JSON(["extent": [128, 96], "color": ["space": space, "depth": depth], "background": "White"]))
-        }, paste: { $0(.success([PhotoClipboard.Item { $0(.success(photo)) }])) }))
+        }, paste: { $0(.success([PhotoItem { $0(.success(.image(photo))) }])) }))
         func invoke(_ command: String) async throws { try await edit(store!, ["type": "invoke", "command": command]) }
         func idle() async throws {
             try await wait("Document completion", store!) { !store!.projectFiles.busy && store!.state["requests"].array.isEmpty }

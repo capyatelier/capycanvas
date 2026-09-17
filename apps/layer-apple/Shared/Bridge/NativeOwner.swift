@@ -209,7 +209,11 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     func projectTask(kind: NativeProjectTask.Kind, expected: (UInt64, UInt64)? = nil,
+        placement: JSON? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        let placementText: String?
+        do { placementText = try placement?.encoded() }
+        catch { completion(nil, error.localizedDescription); return }
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
             // Inspection validates a committed snapshot in Rust; it does not
@@ -221,7 +225,10 @@ final class NativeOwner: @unchecked Sendable {
                 return
             }
             if ready < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable"); return }
-            guard let pointer = capy_apple_project_task(handle, kind.rawValue) else {
+            let pointer: OpaquePointer?
+            if let placementText { pointer = placementText.withCString { capy_apple_project_task(handle, kind.rawValue, $0) } }
+            else { pointer = capy_apple_project_task(handle, kind.rawValue, nil) }
+            guard let pointer else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
                 return
             }
@@ -260,7 +267,7 @@ final class NativeOwner: @unchecked Sendable {
             guard ready == 0 else {
                 completion(nil, ready < 0 ? capy_apple_error(handle).map(String.init(cString:)) : nil); return
             }
-            guard let pointer = capy_apple_project_task(handle, 2) else {
+            guard let pointer = capy_apple_project_task(handle, 2, nil) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:))); return
             }
             let task = NativeProjectTask(pointer)

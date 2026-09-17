@@ -53,9 +53,11 @@ final class NativeProjectTask: @unchecked Sendable {
             try url.lastPathComponent.withCString { try self.check(capy_project_read(self.handle, file.fileDescriptor, $0)) }
         }
     }
-    func read(image: Data) throws {
-        try image.withUnsafeBytes { try check(capy_project_read_bytes(handle,
-            $0.bindMemory(to: UInt8.self).baseAddress, $0.count, "Pasted image")) }
+    func read(image: Data, name: String = "Pasted image") throws {
+        try name.withCString { title in
+            try image.withUnsafeBytes { try check(capy_project_read_bytes(handle,
+                $0.bindMemory(to: UInt8.self).baseAddress, $0.count, title)) }
+        }
     }
     func prepareEdit(_ choice: JSON?, copy: Bool) throws {
         try check(try (choice ?? JSON()).encoded().withCString { capy_project_edit_work(handle, $0, copy) })

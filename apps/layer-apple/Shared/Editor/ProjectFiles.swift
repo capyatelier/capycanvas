@@ -37,6 +37,8 @@ import UIKit
     private var cancelled = false
     private var finishing = false
     private var externalOpen: (url: URL, submitted: Bool)?
+    private var droppedPhotos: (items: [PhotoItem], placement: JSON)?
+    private var loadingPhoto = false
     private var recovering: RecoveryRecord?
     private var closeCompletion: ((Bool) -> Void)?
     /// Dialog dependency keeps editor/file effects testable without driving
@@ -46,7 +48,7 @@ import UIKit
         var save: (String, UTType, @escaping (URL?) -> Void) -> Void
         var create: ((JSON, @escaping (JSON?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
-        var paste: ((@escaping (Result<[PhotoClipboard.Item], Error>) -> Void) -> Void)? = nil
+        var paste: ((@escaping (Result<[PhotoItem], Error>) -> Void) -> Void)? = nil
         var exportOptions: ((ExportController) -> Void)? = nil
     }
     private let dialogs: Dialogs?
@@ -73,7 +75,8 @@ import UIKit
         }
         guard requestID == nil, !finishing,
             let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "document" }) else { return }
-        requestID = request["id"].uint; busy = true; cancelling = false; cancelled = false
+        requestID = request["id"].uint; busy = true
+        if droppedPhotos == nil { cancelling = false; cancelled = false }
         approved = (file["epoch"].uint, file["revision"].uint)
         let document = request["kind"]["request"]
         let action = document["type"].string
@@ -97,23 +100,25 @@ import UIKit
                 if let url = urls.first { open(url) } else { finish() }
             } }
         case "place":
-            task(opening: true, placing: true) { [weak self] task in
+            let drop = droppedPhotos; droppedPhotos = nil
+            task(opening: true, placing: true, placement: drop?.placement) { [weak self] task in
+                if let drop { self?.place(task, inputs: drop.items); return }
                 self?.chooseOpen(photosOnly: true) { [weak self] urls in
                     guard let self else { return }
-                    if urls.isEmpty { finish() } else { place(task, inputs: urls.map(PhotoInput.file)) }
+                    if urls.isEmpty { finish() } else { place(task, inputs: urls.map(PhotoItem.init(fileURL:))) }
                 }
             }
         case "paste":
             task(opening: true, placing: true) { [weak self] task in
                 guard let self else { return }
                 let id = requestID
-                let completed: (Result<[PhotoClipboard.Item], Error>) -> Void = { [weak self] result in
+                let completed: (Result<[PhotoItem], Error>) -> Void = { [weak self] result in
                     guard let self, requestID == id else { return }
                     if cancelled { finish(); return }
                     switch result {
                     case .success(let images):
                         if images.isEmpty { fail("The clipboard contains no supported images") }
-                        else { place(task, inputs: images.map(PhotoInput.image)) }
+                        else { place(task, inputs: images) }
                     case .failure(let error): fail(error.localizedDescription)
                     }
                 }
@@ -200,10 +205,14 @@ import UIKit
         if let colorEditor { colorEditor.cancel(); return }
         if let exportEditor { exportEditor.cancel(); return }
         cancelled = true; cancelling = true; activeTask?.cancel()
+        // Provider delivery can take arbitrarily long. Its late callback is
+        // rejected by request ID; cancellation need not wait for that callback.
+        if loadingPhoto { finish() }
     }
-    private func task(opening: Bool, placing: Bool = false, _ ready: @escaping (NativeProjectTask) -> Void) {
+    private func task(opening: Bool, placing: Bool = false, placement: JSON? = nil, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
-        native.projectTask(kind: placing ? .place : opening ? .open : .save, expected: opening ? approved : nil) { [weak self] task, error in
+        native.projectTask(kind: placing ? .place : opening ? .open : .save, expected: opening ? approved : nil,
+            placement: placement) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.cancelled { self.finish(); return }
@@ -344,21 +353,36 @@ import UIKit
             }
         }
     }
-    private enum PhotoInput { case file(URL), image(PhotoClipboard.Item) }
-    private func place(_ task: NativeProjectTask, inputs: [PhotoInput], index: Int = 0) {
-        guard index < inputs.count else { prepare(task, url: nil, recovery: nil) {}; return }
-        let next: () -> Void = { [weak self] in
-            self?.place(task, inputs: inputs, index: index + 1)
+    func drop(_ providers: [NSItemProvider], placement: JSON) -> Bool {
+        guard let store, !busy, externalOpen == nil, droppedPhotos == nil,
+            store.command("import_image")["enabled"].bool else { return false }
+        let items = providers.compactMap(PhotoItem.provider)
+        guard !items.isEmpty else { return false }
+        droppedPhotos = (items, placement); busy = true; blocksEditor = true
+        cancelled = false; cancelling = false
+        store.edit(["type": "invoke", "command": "import_image"]) { [weak self] message in
+            guard let self, let message else { return }
+            droppedPhotos = nil
+            if requestID != nil { fail(message) }
+            else { busy = false; blocksEditor = false; cancelling = false; error = message }
         }
-        switch inputs[index] {
-        case .file(let url):
-            prepare(task, url: nil, recovery: nil, next: next) { try task.read(from: url) }
-        case .image(let item):
-            let id = requestID
-            item.load { [weak self] result in
-                guard let self, requestID == id else { return }
-                if cancelled { finish(); return }
-                prepare(task, url: nil, recovery: nil, next: next) { try task.read(image: result.get()) }
+        return true
+    }
+    private func place(_ task: NativeProjectTask, inputs: [PhotoItem], index: Int = 0) {
+        guard index < inputs.count else { prepare(task, url: nil, recovery: nil) {}; return }
+        let id = requestID, item = inputs[index]
+        loadingPhoto = true
+        item.load { [weak self, weak task] result in
+            guard let self, let task, requestID == id, !finishing else { return }
+            loadingPhoto = false
+            if cancelled { finish(); return }
+            prepare(task, url: nil, recovery: nil, next: { [weak self] in
+                self?.place(task, inputs: inputs, index: index + 1)
+            }) {
+                switch try result.get() {
+                case .file(let url): try task.read(from: url)
+                case .image(let data): try task.read(image: data, name: item.name)
+                }
             }
         }
     }
@@ -438,6 +462,7 @@ import UIKit
         requestID = nil; approved = nil; busy = false; blocksEditor = false; finishing = false
         profileCompletion = nil; pendingProfile = nil; profileError = nil; interpreting = false
         activeTask = nil; cancelling = false; exportDelivery = nil; exportEditor = nil
+        loadingPhoto = false
         if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }

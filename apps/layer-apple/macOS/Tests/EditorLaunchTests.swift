@@ -39,6 +39,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkNativeImageImport(in: editorCaptureApplication())
     }
 
+    @MainActor func testNativeImageDrop() throws {
+        try checkNativeImageDrop(in: editorCaptureApplication())
+    }
+
     @MainActor func testEditorKeyboardFocus() { checkEditorKeyboardFocus(in: editorCaptureApplication()) }
     @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
     @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }

@@ -6,36 +6,56 @@ import AppKit
 import UIKit
 #endif
 
-/// Read the encoded representation only when Paste is invoked. Native image
-/// drawing/re-encoding would discard the source profile or integer precision.
-@MainActor enum PhotoClipboard {
-    struct Item {
-        let load: (@escaping (Result<Data, Error>) -> Void) -> Void
+/// One deferred transport item, shared by picker, clipboard and external drops.
+/// Files stay streamed/coordinated; encoded representations are never redrawn.
+@MainActor struct PhotoItem {
+    enum Content { case file(URL), image(Data) }
+    let name: String
+    let load: (@escaping (Result<Content, Error>) -> Void) -> Void
+    init(name: String = "Pasted image", load: @escaping (@escaping (Result<Content, Error>) -> Void) -> Void) {
+        self.name = name; self.load = load
     }
-    static func read(_ completion: @escaping (Result<[Item], Error>) -> Void) {
-        let types = UTType.capyPhotoTypes
+    init(fileURL: URL) {
+        name = fileURL.lastPathComponent; load = { $0(.success(.file(fileURL))) }
+    }
+    static func content(_ data: Data, file: Bool) throws -> Content {
+        if !file { return .image(data) }
+        guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
+            throw HostFailure(message: "The image provider did not supply a local file")
+        }
+        return .file(url)
+    }
+    static func provider(_ provider: NSItemProvider) -> PhotoItem? {
+        let file = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        let type = file ? UTType.fileURL : UTType.capyPhotoTypes.first { provider.hasItemConformingToTypeIdentifier($0.identifier) }
+        guard let type else { return nil }
+        return PhotoItem(name: provider.suggestedName ?? "Imported image") { done in
+            provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
+                DispatchQueue.main.async {
+                    if let data { done(Result { try content(data, file: file) }) }
+                    else { done(.failure(error ?? HostFailure(message: "Could not read an image"))) }
+                }
+            }
+        }
+    }
+}
+
+@MainActor enum PhotoClipboard {
+    static func read(_ completion: @escaping (Result<[PhotoItem], Error>) -> Void) {
         #if os(macOS)
-        let images = (NSPasteboard.general.pasteboardItems ?? []).compactMap { item -> Item? in
-            guard let type = types.map({ NSPasteboard.PasteboardType($0.identifier) })
+        let types = UTType.capyPhotoTypes
+        let images = (NSPasteboard.general.pasteboardItems ?? []).compactMap { item -> PhotoItem? in
+            guard let type = ([UTType.fileURL] + types).map({ NSPasteboard.PasteboardType($0.identifier) })
                 .first(where: { item.types.contains($0) }) else { return nil }
-            return Item { done in
-                if let data = item.data(forType: type) { done(.success(data)) }
+            return PhotoItem { done in
+                if let data = item.data(forType: type) {
+                    done(Result { try PhotoItem.content(data, file: type.rawValue == UTType.fileURL.identifier) })
+                }
                 else { done(.failure(HostFailure(message: "Could not read a clipboard image"))) }
             }
         }
         #else
-        let images = UIPasteboard.general.itemProviders.compactMap { provider -> Item? in
-            guard let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) })
-                else { return nil }
-            return Item { done in
-                provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
-                    DispatchQueue.main.async {
-                        if let data { done(.success(data)) }
-                        else { done(.failure(error ?? HostFailure(message: "Could not read a clipboard image"))) }
-                    }
-                }
-            }
-        }
+        let images = UIPasteboard.general.itemProviders.compactMap(PhotoItem.provider)
         #endif
         // Decode each item before requesting the next encoded representation.
         // Shared batch limits can stop loading without retaining every input.

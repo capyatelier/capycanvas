@@ -175,7 +175,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
 
             for recovered in [false, true] {
                 let save = if recovered {
-                    ProjectJob(unsafe { capy_apple_project_task(app.0, 2) })
+                    ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) })
                 } else {
                     ProjectJob::new(&app, false)
                 };

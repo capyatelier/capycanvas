@@ -13,8 +13,9 @@ Photo Open and batch Place/Paste now also consume shared preparation/adoption
 policy and interactive Apply/Cancel; see the
 [photo batch record](apple-handoff.md#interactive-photo-batches--2026-09-17).
 Color/source transactions and recovery still need their remaining shared-service
-migrations. External canvas/layer drops and physical placement/provider acceptance
-remain native parity gaps. The
+migrations. External canvas/layer drops now use the same shared placement path;
+see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
+Native Mac drag delivery passes; physical UIKit placement/provider acceptance remains open. The
 [Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate
 implementation priority. Existing effect/gradient controls and native SDR
 constructors now pass scoped local checks and both Release builds. New Drawing
@@ -272,7 +273,7 @@ retained alongside the passing hardware run.
 | Catalog group | Existing evidence to retain | Remaining behavior, excluding shared R3–R6 checks |
 | --- | --- | --- |
 | Document transport | Local native save/open/export/cancel; painted recovery; OS URL delivery; native Mac invalid-Open preservation/retry and both-policy owner checks below | Provider/destination/interruption cases are owned by R4. |
-| Retained photo input | Shared Open policy and atomic batch Place/Paste with Original Size, Apply/Cancel and one-step history; both-policy native/source preservation, missing-profile retry and stale/failed-member rejection; native Mac multi-selection and controls with panels hidden; scoped 61 MP synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | External canvas/layer drops; physical UIKit picker/clipboard delivery, Pencil placement and large-photo execution. Provider/lifecycle cases are shared with R4. |
+| Retained photo input | Shared Open policy and atomic batch Place/Paste/Drop with Original Size, Apply/Cancel and one-step history; both-policy source preservation, missing-profile retry, stale/failed-member rejection and delayed-provider cancellation; native Mac cross-application canvas/row drops, multi-selection and controls with panels hidden; scoped 61 MP synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | Physical UIKit picker/clipboard/drop delivery, Pencil placement and large-photo execution. Provider/lifecycle cases are shared with R4. |
 | Document color and properties | Shared/native-owner profile/depth operations, complete comparisons, atomic adoption, exact history and flattened master preservation; native Mac forms | Physical UIKit property/color forms and SDR appearance; lifecycle cases remain under R4. |
 | Retained source editing | Source-profile repair, ICC import, full-extent rasterization, exact history/save/reopen and native Mac controls | Physical UIKit source/ICC workflows and provider delivery. |
 | Drawing tools | All 34 current presets mapped to retained native control passes: 30 painting/erasing and four Blend/Liquify; Mac artwork/history and catalog-wide numeric bridge edits | No unaccounted catalog brush/group or setting-dispatch route remains. Physical sensors, hover/proximity and interruption belong to R3; perceptual coverage belongs to R5. |

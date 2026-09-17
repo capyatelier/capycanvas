@@ -431,6 +431,12 @@
 			"path" = "Shared/Editor/PanelMeasurements.swift";
 			"sourceTree" = "<group>";
 		};
+		"742700D6DDEC697C1CB0706E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/PhotoDrop.swift";
+			"sourceTree" = "<group>";
+		};
 		"30D1198AE889354CFA445140" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -1249,6 +1255,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "86CA9770A2A5CFE70DA07981";
 		};
+		"34902025F63DF7CFCF9E6759" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "742700D6DDEC697C1CB0706E";
+		};
 		"F31680D516F1F7A69591F945" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "30D1198AE889354CFA445140";
@@ -1495,6 +1505,7 @@
 				"F827C91B1100CBE96705B641",
 				"1B860C0FB5B54684B9293622",
 				"2139F485A608CD16C38A9383",
+				"34902025F63DF7CFCF9E6759",
 				"F31680D516F1F7A69591F945",
 				"031F91BD4F608AE95B9D300D",
 				"B3CE80A302A2CB0E77A5D4E9",
@@ -2214,6 +2225,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "86CA9770A2A5CFE70DA07981";
 		};
+		"8CEA3AAF80A03D9F299B2D00" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "742700D6DDEC697C1CB0706E";
+		};
 		"7660C37B78ADE8656E1F446F" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "30D1198AE889354CFA445140";
@@ -2468,6 +2483,7 @@
 				"E7E9AD3757194E84A3CDB7F4",
 				"F5BFC168E3534A8268199BA2",
 				"B6C9C11A402D780A3A8611B3",
+				"8CEA3AAF80A03D9F299B2D00",
 				"7660C37B78ADE8656E1F446F",
 				"5C7D38750C0DC7591CEF3692",
 				"C90A77B26334B2BB0F92A2C3",
@@ -2790,6 +2806,23 @@
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
+		"FA3A60507B814542BAAA38BA" = {
+			"isa" = "PBXShellScriptBuildPhase";
+			"buildActionMask" = "2147483647";
+			"files" = (
+			);
+			"inputPaths" = (
+				"$(SRCROOT)/scripts/photo-drag-source.sh",
+				"$(SRCROOT)/tests/photo-drag-source.swift",
+			);
+			"outputPaths" = (
+				"$(BUILT_PRODUCTS_DIR)/PhotoDragSource.app/Contents/MacOS/PhotoDragSource",
+			);
+			"runOnlyForDeploymentPostprocessing" = "0";
+			"name" = "Build native photo drag fixture";
+			"shellPath" = "/bin/bash";
+			"shellScript" = "/bin/bash \"$SRCROOT/scripts/photo-drag-source.sh\"\n";
+		};
 		"833A60E8AA3E7E0EB97334C2" = {
 			"isa" = "PBXContainerItemProxy";
 			"containerPortal" = "244210E48437B6556980A702";
@@ -2818,6 +2851,7 @@
 				"ARCHS" = "arm64";
 				"CLANG_ENABLE_MODULES" = "YES";
 				"MACOSX_DEPLOYMENT_TARGET" = "15.0";
+				"ENABLE_USER_SCRIPT_SANDBOXING" = "NO";
 				"CAPY_RUST_PROFILE" = "debug";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
@@ -2840,6 +2874,7 @@
 				"ARCHS" = "arm64";
 				"CLANG_ENABLE_MODULES" = "YES";
 				"MACOSX_DEPLOYMENT_TARGET" = "15.0";
+				"ENABLE_USER_SCRIPT_SANDBOXING" = "NO";
 				"CAPY_RUST_PROFILE" = "release";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";
@@ -2860,6 +2895,7 @@
 			"buildConfigurationList" = "CB2615FF56FD382EB1FA8473";
 			"buildPhases" = (
 				"B97B0E9143C94A72AA65A9DC",
+				"FA3A60507B814542BAAA38BA",
 			);
 			"buildRules" = (
 			);
@@ -2956,6 +2992,7 @@
 				"0CD4B2886D736DE30F245211",
 				"3790B32A02CA8A90B81EBFF9",
 				"86CA9770A2A5CFE70DA07981",
+				"742700D6DDEC697C1CB0706E",
 				"30D1198AE889354CFA445140",
 				"653CF3C6BEEACF2434DB8A2F",
 				"7E1120DA1B0E8C34474826E3",

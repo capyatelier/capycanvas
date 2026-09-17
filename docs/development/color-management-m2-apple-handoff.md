@@ -29,7 +29,9 @@ The subsequent [batch milestone](apple-handoff.md#interactive-photo-batches--202
 adopts shared Open policy and interactive multi-image Place/Paste with
 Original Size, Apply/Cancel and one-step history. Native format filters use shared
 decoder capabilities; clipboard loading is sequential. External canvas/layer
-drops and physical placement/provider acceptance remain open.
+drops now share that transport and placement policy, with captured targets and
+delayed-provider cancellation; see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
+Native Mac cross-application canvas/row drops pass; physical UIKit placement/provider acceptance remains open.
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 now use the same worker, with complete before/after previews, source-safe flattened
 copies and exact shared history; see the

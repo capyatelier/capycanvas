@@ -42,11 +42,11 @@ fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
         assert_eq!(captured.layers, committed.layers);
         assert_eq!(captured.revision, committed.revision);
         assert!(
-            unsafe { capy_apple_project_task(app.0, 1) }.is_null(),
+            unsafe { capy_apple_project_task(app.0, 1, std::ptr::null()) }.is_null(),
             "Open must still wait for the contact"
         );
         let save = ProjectJob::new(&app, false);
-        let recovery = ProjectJob(unsafe { capy_apple_project_task(app.0, 2) });
+        let recovery = ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) });
         assert!(!recovery.0.is_null());
         for task in [&save, &recovery] {
             file.rewind().unwrap();
@@ -115,7 +115,7 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
         // queued ink before capture even when the drawable has disappeared.
         // Recovery may capture the preceding committed boundary while input
         // is queued. The lifecycle path drains first to include the final ink.
-        let before_flush = ProjectJob(unsafe { capy_apple_project_task(app.0, 2) });
+        let before_flush = ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) });
         assert!(!before_flush.0.is_null());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
@@ -130,7 +130,7 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
         let pixels = app.pixels();
         assert_ne!(pixels, blank);
         let original = unsafe { &*app.0 }.host.session.engine().document().clone();
-        let task = ProjectJob(unsafe { capy_apple_project_task(app.0, 2) });
+        let task = ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) });
         assert!(!task.0.is_null());
         assert_eq!(app.state()["document_file"]["busy"], false);
         assert!(app.state()["requests"].as_array().unwrap().is_empty());

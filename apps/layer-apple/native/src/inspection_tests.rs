@@ -25,7 +25,7 @@ fn initialized(platform: u32, space: RgbSpace, depth: IntegerDepth) -> App {
     app.draw_until_idle(); app
 }
 fn capture(app: &App) -> ProjectJob {
-    let task = unsafe { capy_apple_project_task(app.0, 7) };
+    let task = unsafe { capy_apple_project_task(app.0, 7, std::ptr::null()) };
     assert!(!task.is_null(), "{:?}", unsafe { CStr::from_ptr(capy_apple_error(app.0)) }); ProjectJob(task)
 }
 fn histogram(task: &ProjectJob) -> Value {

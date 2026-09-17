@@ -88,7 +88,7 @@ import UniformTypeIdentifiers
             }, create: { _, done in
                 done(JSON(["extent": [64, 48], "color": ["space": "Srgb", "depth": "U8"], "background": "White"]))
             }, paste: { done in done(.success(clipboard.map { bytes in
-                PhotoClipboard.Item { loaded in clipboardLoads += 1; loaded(.success(bytes)) }
+                PhotoItem { loaded in clipboardLoads += 1; loaded(.success(.image(bytes))) }
             })) }))
             let files = store.projectFiles
             func layerState(ignoringSelection: Bool = false) -> String {
@@ -188,6 +188,73 @@ import UniformTypeIdentifiers
                 "A failed clipboard member must preserve artwork and stop loading later images")
             files.error = nil
             clipboard = [sourceBytes]
+            // Exercise actual provider delivery, including a file URL and
+            // lazy encoded bytes, through the same production placement task.
+            var providerLoads = [String]()
+            var delayedRepresentation: ((Data?, Error?) -> Void)?
+            func provider(_ name: String, _ data: Data, hold: Bool = false) -> NSItemProvider {
+                let item = NSItemProvider(); item.suggestedName = name
+                item.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { done in
+                    DispatchQueue.main.async {
+                        providerLoads.append(name)
+                        if hold { delayedRepresentation = done } else { done(data, nil) }
+                    }
+                    return nil
+                }
+                return item
+            }
+            let dropPoint = JSON(["screen": ["x": 68.0, "y": 61.0]])
+            let fileProvider = NSItemProvider(item: url as NSURL, typeIdentifier: UTType.fileURL.identifier)
+            try require(files.drop([fileProvider, provider("Encoded.png", sourceBytes)], placement: dropPoint), "Accept native file/image providers")
+            try await settled("Mixed provider batch")
+            try require(files.error == nil && store.state["layers"].array.count == 6,
+                files.error ?? "Drop must enter placement without opening a picker")
+            try require(store.state["layers"].array.contains { $0["label"].string == "Encoded" },
+                "A provider's supplied filename must name its retained layer")
+            try await invoke("apply_transform"); try await settled("Apply dropped batch")
+            let dropped = layerState(ignoringSelection: true)
+            try await invoke("undo"); try await wait("Drop batch Undo", native: native) { layerState() == pasted }
+            try await invoke("redo"); try await wait("Drop batch Redo", native: native) { layerState(ignoringSelection: true) == dropped }
+            try await invoke("undo"); try await wait("Restore drop baseline", native: native) { layerState() == pasted }
+
+            providerLoads = []
+            try require(files.drop([provider("First.png", sourceBytes), provider("Broken.png", Data("invalid".utf8)),
+                provider("Unused.png", sourceBytes)], placement: dropPoint), "Accept deferred provider batch")
+            try await settled("Failed second provider")
+            try require(files.error != nil && layerState() == pasted && providerLoads == ["First.png", "Broken.png"],
+                "Failed provider batch must insert nothing and stop before requesting later images")
+            files.error = nil
+
+            try require(files.drop([provider("Cancelled.png", sourceBytes, hold: true)], placement: dropPoint), "Start delayed provider")
+            try await wait("Delayed representation", native: native) { delayedRepresentation != nil }
+            let cancelledReply = delayedRepresentation!; delayedRepresentation = nil
+            files.cancel(); try await settled("Cancel without waiting for provider")
+            try require(layerState() == pasted && files.error == nil, "Provider cancellation preserves artwork and releases the editor")
+            try require(files.drop([provider("New.png", sourceBytes, hold: true)], placement: dropPoint), "Start a newer drop")
+            try await wait("New representation", native: native) { delayedRepresentation != nil }
+            cancelledReply(sourceBytes, nil)
+            try await Task.sleep(for: .milliseconds(50))
+            try require(files.busy && layerState() == pasted, "An old provider reply must not complete a newer drop")
+            delayedRepresentation?(sourceBytes, nil); delayedRepresentation = nil
+            try await settled("New provider completes")
+            try require(files.error == nil && store.state["layers"].array.count == 5, files.error ?? "Only the new provider may enter placement")
+            try await invoke("cancel_transform"); try await settled("Cancel dropped placement")
+            try require(layerState() == pasted, "Drop cancellation removes the complete provisional placement")
+
+            providerLoads = []
+            try require(files.drop([provider("Immediate.png", sourceBytes)], placement: dropPoint), "Reserve a drop")
+            files.cancel(); try await settled("Cancel before task capture")
+            try require(providerLoads.isEmpty && layerState() == pasted, "Cancellation before task capture must not load a provider")
+
+            try require(files.drop([provider("Stale.png", sourceBytes, hold: true)], placement: dropPoint), "Start stale-target check")
+            try await wait("Stale representation", native: native) { delayedRepresentation != nil }
+            try await invoke("add_layer")
+            let intervening = layerState()
+            delayedRepresentation?(sourceBytes, nil); delayedRepresentation = nil
+            try await settled("Reject stale provider")
+            try require(files.error != nil && layerState() == intervening, "Provider completion must preserve intervening edits")
+            files.error = nil
+            try await invoke("undo"); try await wait("Restore before stale provider", native: native) { layerState() == pasted }
             for failedURL in [root.appendingPathComponent("missing.png"), invalid] {
                 selection = failedURL
                 try await invoke("import_image"); try await settled("Failed read")
@@ -237,7 +304,7 @@ import UniformTypeIdentifiers
             try require(files.error == nil && files.pendingProfile == nil && store.state["layers"].array.count == 3, files.error ?? "Explicit interpretation must finish the pending Place")
             try await invoke("apply_transform"); try await settled("Apply interpreted photo")
             try await invoke("undo"); try await wait("Interpreted Place Undo", native: native) { layerState() == beforePrompt }
-            print("PASS platform \(platform): coordinated batch Place, Apply/Cancel, multi-image Paste, one-step history, stale/second-file failure preservation, P3 Open, safe Save and reopen")
+            print("PASS platform \(platform): coordinated Place/Paste/Drop batches, file and encoded providers, delayed/immediate cancellation and late replies, Apply/Cancel, one-step history, stale/second-member failure preservation, P3 Open, safe Save and reopen")
         }
     }
 }

@@ -16,10 +16,78 @@ impl App {
     }
 }
 fn place_job(app: &App) -> ProjectJob {
+    place_at(app, None)
+}
+fn place_at(app: &App, placement: Option<Value>) -> ProjectJob {
     app.invoke("import_image");
-    let job = unsafe { capy_apple_project_task(app.0, 3) };
+    let text = placement.map(|value| CString::new(value.to_string()).unwrap());
+    let job = unsafe { capy_apple_project_task(app.0, 3, text.as_ref().map_or(std::ptr::null(), |t| t.as_ptr())) };
     assert!(!job.is_null());
     ProjectJob(job)
+}
+
+#[test]
+fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    let original = source(RgbSpace::DisplayP3, IntegerDepth::U8);
+    layer_color::photo::write_tiff(&mut encoded, &original).unwrap();
+    let bytes = encoded.into_inner();
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        let new = ProjectJob::new(&app, true);
+        assert_eq!(new.create([200, 150]), 0); adopt(&app, &new, false);
+        app.invoke("zoom_in"); app.invoke("rotate_right"); app.invoke("flip_horizontal");
+        let point = layer_core::Point { x: 615., y: 430. };
+        let expected = unsafe { &*app.0 }.host.session.state().camera.input_transform().map(point);
+        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let job = place_at(&app, Some(json!({"screen": point})));
+        // Provider delivery is asynchronous; later navigation must not move
+        // the captured document target or cause insertion at the canvas center.
+        app.invoke("zoom_out"); app.invoke("rotate_left");
+        read_bytes(&job, "Drop.tiff", &bytes); adopt(&app, &job, false);
+        let doc = unsafe { &*app.0 }.host.session.engine().document();
+        let placed = doc.layers.iter().find(|l| l.source.is_some()).unwrap();
+        let center = doc.layer_transform(placed.id).map(layer_core::Point { x: 6.5, y: 4.5 });
+        assert!((center.x - expected.x).abs() < 0.0001 && (center.y - expected.y).abs() < 0.0001);
+        assert_eq!(source_samples(placed.source.as_ref().unwrap()), source_samples(&original));
+        app.invoke("apply_transform"); app.draw_until_idle();
+        let pixels = app.pixels();
+        app.invoke("undo"); app.draw_until_idle();
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+        assert!(!unsafe { &*app.0 }.host.session.engine().can_undo());
+        app.invoke("redo"); app.draw_until_idle(); assert_eq!(app.pixels(), pixels);
+        app.invoke("undo"); app.draw_until_idle();
+
+        app.layer_action(json!({"op":"group_selected"})); app.draw_until_idle();
+        let group = unsafe { &*app.0 }.host.session.engine().document().layers.iter()
+            .find(|l| l.kind == layer_core::LayerKind::Group).unwrap().id;
+        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        for (fraction, position, index) in [(0.1, "above", 0), (0.5, "into", 1), (0.9, "below", 2)] {
+            assert_eq!(app.request(2, json!({"type":"image_layer_drop","target":group.0,"fraction":fraction})).unwrap()["position"], position);
+            let job = place_at(&app, Some(json!({"layer":{"target":group.0,"fraction":fraction}})));
+            read_bytes(&job, "Row drop.tiff", &bytes); adopt(&app, &job, false);
+            let doc = unsafe { &*app.0 }.host.session.engine().document();
+            assert!(doc.layers[index].source.is_some(), "{position} insertion order");
+            assert_eq!(doc.layers[index].properties.parent, (position == "into").then_some(group));
+            app.invoke("cancel_transform"); app.draw_until_idle();
+            assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+        }
+        app.layer_action(json!({"op":"lock","id":group.0,"value":true})); app.draw_until_idle();
+        assert!(app.request(2, json!({"type":"image_layer_drop","target":group.0,"fraction":0.5})).unwrap()["position"].is_null());
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
+        for placement in [json!({"layer":{"target":group.0,"fraction":0.5}}),
+            json!({"layer":{"target":99999,"fraction":0.1}}),
+            json!({"screen":point,"layer":{"target":group.0,"fraction":0.1}})] {
+            app.invoke("import_image");
+            let text = CString::new(placement.to_string()).unwrap();
+            assert!(unsafe { capy_apple_project_task(app.0, 3, text.as_ptr()) }.is_null());
+            assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
+            let id = app.state()["requests"].as_array().unwrap().iter().find(|r| r["kind"]["type"] == "document").unwrap()["id"].as_u64().unwrap();
+            assert_eq!(unsafe { capy_apple_document_complete(app.0, id as u32, 0) }, 0);
+        }
+    }
 }
 fn read_bytes(job: &ProjectJob, name: &str, bytes: &[u8]) {
     let name = CString::new(name).unwrap();

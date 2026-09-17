@@ -140,15 +140,18 @@ impl CapyProjectTask {
 /// # Safety
 /// Called on the session owner. Return a job to a worker; never use the session
 /// from that worker. The caller must eventually free the job after all calls.
+/// placement is optional JSON for kind 3: a surface point or a layer-row hit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_project_task(
     app: *mut CapyApple,
     opening: u32,
+    placement: *const c_char,
 ) -> *mut CapyProjectTask {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return std::ptr::null_mut();
     };
     app.perform(|app| {
+        if opening != 3 && !placement.is_null() { return Err("Only image placement accepts a drop target".into()); }
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
@@ -189,7 +192,20 @@ pub unsafe extern "C" fn capy_apple_project_task(
         } else if opening == 7 {
             Payload::Inspection(Box::new(inspection::Task::capture(session)?))
         } else if opening == 3 {
-            let context = session.image_placement_context(None, None)?;
+            #[derive(Default, serde::Deserialize)]
+            struct Placement { screen: Option<layer_core::Point>, layer: Option<Row> }
+            #[derive(serde::Deserialize)]
+            struct Row { target: u64, fraction: f32 }
+            let placement: Placement = if placement.is_null() { Default::default() } else {
+                serde_json::from_str(unsafe { read_title(placement) }?).map_err(|e| e.to_string())?
+            };
+            if placement.screen.is_some() && placement.layer.is_some() { return Err("Choose one image drop target".into()); }
+            let destination = placement.layer.map(|row| {
+                let position = session.image_layer_drop_hint(row.target, row.fraction)
+                    .ok_or("Images cannot be placed at that layer position")?;
+                Ok::<_, String>(layer_ui::ImageLayerDestination { target: layer_core::LayerId(row.target), position })
+            }).transpose()?;
+            let context = session.image_placement_context(placement.screen, destination)?;
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
                 HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste }))
                 .ok_or("No image import is pending")?.id;

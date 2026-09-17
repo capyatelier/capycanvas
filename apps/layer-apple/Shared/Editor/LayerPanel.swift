@@ -25,6 +25,7 @@ struct LayerPanel: View {
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                                     .overlay { dropMark(layer) }
+                                    .modifier(PhotoDropTarget(store: store, row: layer["id"].uint))
                                     .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
                                     .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: layer["id"].uint) }
                                     .onDisappear {

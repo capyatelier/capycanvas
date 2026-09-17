@@ -3,7 +3,69 @@ import ImageIO
 import UniformTypeIdentifiers
 
 #if os(macOS)
+import AppKit
+
 extension XCTestCase {
+    @MainActor func checkNativeImageDrop(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Drop " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let photo = root.appendingPathComponent("Dropped blue.png")
+        let context = try XCTUnwrap(CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8,
+            bytesPerRow: 256, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        let output = try XCTUnwrap(CGImageDestinationCreateWithURL(photo as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(output))
+        let original = try Data(contentsOf: photo)
+        app.launch(); capturePaintEditor(in: app)
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        XCTAssertEqual(rows.count, 2)
+        let fixture = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("PhotoDragSource.app")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.path), "The Mac UI-test build must include its native drag source")
+        let donor = XCUIApplication(url: fixture)
+        donor.launchArguments = [photo.path, String(canvas.frame.minX + 20), String(canvas.frame.minY + 100)]
+        donor.launch()
+        defer { if donor.state != .notRunning { donor.terminate() } }
+        let sourceView = donor.descendants(matching: .any)["photo-drag-source"].firstMatch
+        XCTAssertTrue(sourceView.waitForExistence(timeout: 10))
+        var starts = 0
+        func drag(to destination: XCUICoordinate) {
+            donor.activate()
+            sourceView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.1, thenDragTo: destination)
+            starts += 1
+            XCTAssertEqual(sourceView.value as? String, String(starts), "The external source must receive the native drag")
+        }
+        let apply = app.buttons["photo-placement-apply"]
+        drag(to: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        XCTAssertTrue(apply.waitForExistence(timeout: 20), "A native external canvas drop must start placement")
+        XCTAssertEqual(rows.count, 3)
+        attachEditor(in: app, name: "native-canvas-photo-drop")
+        workspaceActivate(app.buttons["photo-placement-cancel"])
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); XCTAssertEqual(rows.count, 2)
+        let paper = app.descendants(matching: .any)["layer-row-2"].firstMatch
+        XCTAssertTrue(paper.isHittable)
+        drag(to: paper.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.5)))
+        XCTAssertTrue(apply.waitForExistence(timeout: 20), "A native external row drop must start placement")
+        workspaceActivate(apply); XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(rows.count, 3)
+        // AppKit can expose this file as PNG bytes with no suggested name.
+        // Supplied names are checked separately through the provider owner test.
+        XCTAssertTrue(app.staticTexts["Dropped blue"].firstMatch.exists || app.staticTexts["Imported image"].firstMatch.exists)
+        for (command, count) in [("Undo", 2), ("Redo", 3)] {
+            editorHistory(command, in: app)
+            expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: rows)
+            waitForExpectations(timeout: 10)
+        }
+        XCTAssertEqual(try Data(contentsOf: photo), original)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        attachEditor(in: app, name: "native-layer-photo-drop-redone")
+    }
+
     @MainActor func checkFailedProjectOpenPreservesArtwork(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Failed Open " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

@@ -171,9 +171,48 @@ policies, preserving the complete archive payload, source samples, corrections,
 masks and continued Undo after a fresh owner. Their explicit no-drawable
 persistence barrier remains part of the check.
 
-External file drops into the canvas/layer list, physical UIKit/provider delivery
-and Pencil placement remain open. The existing artist review apps and drawings
-are preserved; local integration does not establish new device performance.
+The next milestone below implements external file drops into the canvas/layer
+list. Physical UIKit/provider delivery and Pencil placement remain open. The
+existing artist review apps and drawings are preserved; local integration does
+not establish new device performance.
+
+## External photo drops — 2026-09-17
+
+Canvas and layer-row targets now use native SwiftUI drop delivery and the same
+sequential photo transport as Place/Paste. The Rust task captures the canvas
+point in document coordinates before provider loading; later camera changes
+cannot retarget it. Layer hover feedback and final insertion use the existing
+shared above/below/into validation, including groups, locks and clipping rules.
+No internal reorder pickup, hold timing or history policy is replaced.
+
+Cancelling a delayed provider immediately releases the editor. Request identity
+rejects late replies, and the callback holds the preparation task weakly so a
+provider that never replies cannot retain already-decoded images. Cancel before
+task capture avoids provider loading altogether. Failed batch members stop later
+reads and insert nothing; successful batches keep Apply/Cancel and one-step
+history. Picker, clipboard and drop no longer have separate transport enums.
+
+The full Apple bridge suite passes 70 tests, with the separate 61 MP stress case
+ignored. Both-policy Swift/Metal owner checks pass real file/encoded providers,
+immediate/delayed cancellation, late replies during a newer request, stale-target
+rejection, complete batch history and source-safe save/reopen. A new native
+bridge regression checks transformed-camera capture, row insertion positions,
+locked/invalid targets, exact source samples and Undo/Redo pixels. Both Release
+builds pass without compiler warnings. Evidence is under
+`artifacts/apple-photo-drop-v1/`.
+
+The final native Mac journey (`mac-ui-v6`) passes real cross-application canvas
+and layer-row drops, Cancel/Apply and one-step Undo/Redo. A small separate source
+app is built only with Mac UI tests; it supplies native pasteboard files without
+altering Finder or adding a product-only test path. Earlier fixture failures
+used invalid application coordinates, targeted the runner instead of an external
+app, or tried to compile inside XCTest's App Sandbox. The final source is built
+as a normal test dependency. AppKit exposes this donor's file as PNG bytes with
+no suggested filename, so the UI accepts the existing "Imported image" fallback;
+the owner fixture separately checks supplied names. The temporary metadata
+probe is removed, and final runtime hashes match both Release builds.
+Physical UIKit provider/placement acceptance remains open, with artist apps and
+drawings preserved. This milestone adds no device performance claim.
 
 ## Prediction policy during document adoption
 

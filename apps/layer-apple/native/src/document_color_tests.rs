@@ -41,7 +41,7 @@ fn check_document(app: &App, mut expected: layer_core::Document) {
 }
 fn job(app: &App, command: &str) -> ProjectJob {
     app.invoke(command);
-    let pointer = unsafe { capy_apple_project_task(app.0, 4) };
+    let pointer = unsafe { capy_apple_project_task(app.0, 4, std::ptr::null()) };
     assert!(!pointer.is_null(), "{command}"); ProjectJob(pointer)
 }
 fn work(job: &ProjectJob, choice: Value, copy: bool) {
@@ -133,7 +133,7 @@ fn apple_color_cancel_stale_results_flattened_copy_and_properties_preserve_origi
             if let Some(renderer)=retired {unsafe{&mut *app.0}.host.session.renderer_mut().0=Some(renderer);}
             complete(&app);
         }
-        app.invoke("document_properties");let info=ProjectJob(unsafe{capy_apple_project_task(app.0,5)});assert!(!info.0.is_null());
+        app.invoke("document_properties");let info=ProjectJob(unsafe{capy_apple_project_task(app.0, 5, std::ptr::null())});assert!(!info.0.is_null());
         let details=unsafe{capy_project_details(info.0)};assert!(!details.is_null());
         let value=unsafe{CStr::from_ptr(details)}.to_string_lossy().into_owned();unsafe{capy_apple_string_free(details)};
         assert!(value.contains("Display P3")&&value.contains("16-bit integer SDR")&&value.contains("Retained photograph")&&value.contains("Original samples"),"{value}");

@@ -211,6 +211,28 @@ remove only that share of the recorded CPU time. The small brush-encoding phase
 does not similarly bound GPU brush cost, because its execution can be waited
 for later in composition.
 
+Rechecking those CSVs also limits what can be inferred about source-cache misses.
+Every frame with new brush dabs in the ordinary, wide and coalesced replays has
+at least one source miss. Only 17 of 292 such frames in the small-zigzag replay
+have none. Most no-miss frames contain no new brush dabs, so their faster times
+are not a controlled warm-cache comparison. The median completion times when
+restricted to frames with new dabs are 10.42, 11.64, 24.70 and 40.38 ms,
+respectively; the earlier table includes all stroke-phase frames. Miss counts
+alone cannot distinguish first-use decoding from repeated eviction or establish
+which dominates elapsed time. The coalesced replay has only 48 stroke frames,
+so its extreme percentiles are especially sensitive to individual frames.
+
+The next bounded investigation should attribute composition's source preparation,
+command materialization and queue waits on the same replay, separating first use
+from repeated passes. Then change only the dominant avoidable cost. The current
+64 decoded-tile slots and 16 MiB upload ceiling bound different resource
+lifetimes; enlarging either without attribution can spend memory without
+improving the critical path. Preserve queue ordering, exact pixels/history and
+memory ceilings when evaluating less frequent waits or reuse of completed work.
+Linear page lookup, bounding-rectangle traversal and contact-span gaps remain
+secondary candidates until measured. This keeps the investigation general to
+all shared-renderer platforms and avoids another drawing architecture.
+
 The practical recommendation is to keep the current shared design and its
 bounded overlap, not claim optimality. A 50 ms p99 represents roughly six
 120 Hz refresh periods, but is neither the average frame time nor measured

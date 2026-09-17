@@ -18,7 +18,7 @@ fn initialized(platform: u32) -> App {
     app.draw_until_idle();app
 }
 fn job(app: &App, command:&str) -> ProjectJob {
-    app.invoke(command);let task=unsafe{capy_apple_project_task(app.0,6)};assert!(!task.is_null());ProjectJob(task)
+    app.invoke(command);let task=unsafe{capy_apple_project_task(app.0, 6, std::ptr::null())};assert!(!task.is_null());ProjectJob(task)
 }
 fn work(task:&ProjectJob,choice:Value) -> i32 {
     let value=CString::new(choice.to_string()).unwrap();unsafe{capy_project_edit_work(task.0,value.as_ptr(),false)}

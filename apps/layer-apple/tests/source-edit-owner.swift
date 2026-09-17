@@ -68,7 +68,7 @@ import UniformTypeIdentifiers
             let saved=root.appendingPathComponent("Edited-\(platform).capy")
             store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([imageURL])},save:{_,_,done in done(saved)},create:{_,done in
                 done(JSON(["extent":[64,48],"color":["space":"Srgb","depth":"U8"],"background":"White"]))
-            },paste:{$0(.success([PhotoClipboard.Item { $0(.success(photo)) }]))}))
+            },paste:{$0(.success([PhotoItem { $0(.success(.image(photo))) }]))}))
             func invoke(_ command:String) async throws {try await edit(store,["type":"invoke","command":command])}
             func idle() async throws {
                 try await wait("Document completion",store:store) {!store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"}}

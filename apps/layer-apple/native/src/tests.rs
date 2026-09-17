@@ -511,7 +511,7 @@ impl ProjectJob {
             }
             app.invoke("save_document");
         }
-        let task = unsafe { capy_apple_project_task(app.0, u32::from(opening)) };
+        let task = unsafe { capy_apple_project_task(app.0, u32::from(opening), std::ptr::null()) };
         assert!(!task.is_null());
         Self(task)
     }

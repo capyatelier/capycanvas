@@ -14,7 +14,7 @@ import Darwin
             if let result { capy_apple_string_free(result) }
             if let error = capy_apple_error(app) { throw HostFailure(message: String(cString: error)) }
         }
-        guard let job = capy_apple_project_task(app, 2) else {
+        guard let job = capy_apple_project_task(app, 2, nil) else {
             throw HostFailure(message: capy_apple_error(app).map(String.init(cString:)) ?? "Capture failed")
         }
         return NativeProjectTask(job)
