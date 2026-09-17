@@ -58,8 +58,14 @@ impl ProofLut {
             return Err("Invalid proof worker sample dimensions".into());
         }
         let samples: Vec<[f32; 5]> = bytes.chunks_exact(20).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i*4..i*4+4].try_into().unwrap()))).collect();
+        Self::from_worker_samples(space, edge, dark_grid, samples.into_boxed_slice())
+    }
+    pub fn from_worker_samples(space: RgbSpace, edge: u32, dark_grid: bool, samples: Box<[[f32; 5]]>) -> Result<Self, String> {
+        if !matches!(edge, 65 | 129) || (dark_grid && edge != 129) || samples.len() != (edge as usize).pow(3) {
+            return Err("Invalid proof worker sample dimensions".into());
+        }
         if samples.iter().flatten().any(|v| !v.is_finite()) { return Err("Invalid proof worker samples".into()); }
-        Ok(Self { space, edge: edge as usize, dark_grid, samples: samples.into_boxed_slice() })
+        Ok(Self { space, edge: edge as usize, dark_grid, samples })
     }
     pub fn worker_bytes(&self) -> Vec<u8> {
         self.samples.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
@@ -269,6 +275,14 @@ mod tests {
         let lut = ProofLut::build(RgbSpace::Srgb, &recipe, || false).unwrap();
         assert_eq!(lut.edge(), 65);
         assert_eq!(lut.byte_len(), 65usize.pow(3) * 20);
+        let bytes = lut.worker_bytes();
+        let transported = ProofLut::from_worker(RgbSpace::Srgb, lut.edge(), lut.dark_grid(), &bytes).unwrap();
+        assert_eq!(transported.samples(), lut.samples());
+        assert!(ProofLut::from_worker(RgbSpace::Srgb, 129, false, &bytes).is_err());
+        assert!(ProofLut::from_worker(RgbSpace::Srgb, 65, true, &bytes).is_err());
+        let mut invalid = bytes;
+        invalid[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(ProofLut::from_worker(RgbSpace::Srgb, 65, false, &invalid).is_err());
         for alpha in [0., f32::MIN_POSITIVE, 0.001, 0.125, 0.5, 1.] {
             let input = [0.02 * alpha, 0.25 * alpha, 0.75 * alpha, alpha];
             let output = lut.apply_premultiplied(input, true, true);

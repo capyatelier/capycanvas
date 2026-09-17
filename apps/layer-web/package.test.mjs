@@ -75,6 +75,8 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
+    "proof-worker.js": 'import init from "./pkg/layer_web.js";',
+    "proof.js": `import {importProfile} from './export-controls.js'; new Worker(new URL("./proof-worker.js",import.meta.url));`,
     "raster-worker.js": 'import init from "./pkg/layer_web.js";',
     "raster-worker-client.js": 'new Worker(new URL("./raster-worker.js", import.meta.url));',
     "workspace-store.js": "export const store = {};",
@@ -87,7 +89,7 @@ function runtimeFixture(t, changes = {}) {
     "editor-panels.js": "import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
     "image-import.js": "export function createImageImport() {}",
-    "documents.js": "import {createImageImport} from './image-import.js'; import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
+    "documents.js": "import {createProof} from './proof.js'; import {createImageImport} from './image-import.js'; import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
     "document-color.js": "import {importProfile} from './export-controls.js'; export function chooseDocumentColor() {}",
     "histogram.js": "export function createHistogram() {}",
     "export-controls.js": "export function chooseExport() {}",

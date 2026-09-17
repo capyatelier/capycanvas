@@ -5,6 +5,7 @@ mod image_import;
 mod color_edit;
 mod source_edit;
 mod color_preferences;
+mod proof;
 mod output;
 mod editor;
 mod header;
@@ -22,6 +23,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
@@ -404,6 +406,7 @@ impl WebApp {
             })
             .map_err(js)?;
         Ok(Self {
+            proof: Default::default(),
             session,
             workspaces: None,
             canvas,
@@ -516,7 +519,9 @@ impl WebApp {
             gpu.renderer.device().destroy();
         }
         self.deferred_contacts.clear();
-        self.overviews.clear();
+        // Retained DOM navigators keep their registration and geometry through
+        // device replacement; only resources owned by the retired GPU expire.
+        for slot in self.overviews.values_mut() { slot.gpu = None; }
         serialize(&change)
     }
     pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
@@ -985,6 +990,11 @@ impl WebApp {
             }
         }
         change.canvas_wake |= !self.startup.complete;
+        let lut = self.proof.lut(&self.session);
+        let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
+        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
+        }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
         let mut overlay = Vec::new();

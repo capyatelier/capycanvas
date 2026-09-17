@@ -166,6 +166,7 @@ summary::-webkit-details-marker { display: none; }
 .command-label { flex: 1; }
 .shortcut-hint { opacity: .55; font-weight: 400; white-space: nowrap; }
 #canvas-status { position: absolute; padding: 0 4px; display: flex; justify-content: flex-end; align-items: flex-end; background: transparent; color: var(--text); font-size: var(--ui-text-size); }
+.proof-status { background: var(--surround); border-radius: 16px; padding: 4px 8px; margin-right: 6px; max-width: 32em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #view-info { padding: 3px 10px; line-height: 1.25; border-radius: 20px; background: var(--bg); }
 svg { width: 16px; height: 16px; flex: none; display: block; }
 #header button, #header summary { height: 36px; display: flex; align-items: center; justify-content: center; }

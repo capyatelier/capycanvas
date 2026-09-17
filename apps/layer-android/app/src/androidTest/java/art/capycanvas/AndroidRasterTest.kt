@@ -176,6 +176,95 @@ class AndroidRasterTest {
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    @Test fun proofSetupCompareEditPortabilityExportAndRecovery() {
+        val profilePath=InstrumentationRegistry.getArguments().getString("proofProfile")
+        Assume.assumeTrue("Supply -e proofProfile /data/local/tmp/capy-proof-cmyk.icc",profilePath!=null)
+        val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
+        val target=runBlocking{ProfileStore.import(activity,targetBytes)}
+        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun setup(command:String="soft_proof_setup") {
+            action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isNotEmpty()}
+            compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile").fetchSemanticsNodes().isNotEmpty()}
+        }
+        fun pick(name:String){
+            compose.onNodeWithTag("proof-profile").performClick()
+            compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).onFirst().performScrollTo().performClick()
+            compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile-picker").fetchSemanticsNodes().isEmpty()}
+            compose.onNodeWithTag("proof-profile").assertTextContains(name)
+        }
+        fun apply(){compose.onNodeWithText("Apply").performClick();compose.waitUntil(120_000){!host.proof.busy&&compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty()};assertNull(host.proof.error)}
+        fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
+        fun status()=native{JSONObject(Native.proofStatus(it))}
+        fun hist():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        // Real first-use dialog, cancellation, sensible defaults.
+        setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
+        compose.onNodeWithText("Black ink").assertExists()
+        compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
+        // Obtain a portable RGB ICC through the real profiled file pipeline.
+        val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
+        png("proof-original.png",wide);open(File(files,"proof-original.png"))
+        val profiles=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("profiles")}
+        val original=profiles.objects().first{it.getJSONObject("profile").has("Icc")}
+        val array=original.getJSONObject("profile").getJSONArray("Icc")
+        val originalBytes=ByteArray(array.length()){array.getInt(it).toByte()}
+        val embedded=runBlocking{ProfileStore.import(activity,originalBytes)}
+        compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        setup();pick(embedded.getString("name"));apply()
+        assertTrue("The saved ICC, not the same-named builtin, must be selected",current().getJSONObject("profile").has("Icc"))
+        val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
+        runBlocking{ProfileStore.remove(activity,originalEntry.getString("id"))}
+        val baseline=manifest(save("proof-original.capy"))
+        setup();pick(target.getString("name"));compose.onNodeWithTag("proof-profile").performClick()
+        compose.onNodeWithText("Document Profile").assertExists()
+        compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
+        compose.onNodeWithText("Done").performClick();compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
+        assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
+        // An unwritable library path fails before document/history publication.
+        setup();pick(target.getString("name"))
+        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
+        println("Preparing replacement with blocked local profile storage")
+        val oldDirectory=ColorPreferencesStore.directoryForTest
+        val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
+        ColorPreferencesStore.directoryForTest=blocked
+        compose.onNodeWithText("Apply").performClick()
+        compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty())}
+        assertNotNull("Preservation must fail before replacing ${current().getString("name")}",host.proof.error)
+        assertEquals(embedded.getString("name"),current().getString("name"))
+        ColorPreferencesStore.directoryForTest=oldDirectory
+        apply()
+        val preserved=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
+        assertEquals(array.toString(),runBlocking{ProfileStore.get(activity,preserved.getString("id"))}.getJSONObject("profile").getJSONArray("Icc").toString())
+        val replacement=manifest(save("proof-replacement.capy"))
+        assertEquals(target.getString("name"),replacement.getJSONObject("tiled_sources").getJSONObject("proof").getString("name"))
+        assertEquals(baseline.getJSONArray("blobs").toString(),replacement.getJSONArray("blobs").toString())
+        println("Proof UI first use, cancel, Document Profile retention, preservation failure/retry and exact original ICC copy passed")
+        native{Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(it,obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1.0,0.0,.7,1.0))).toString())}
+        val before=hist();stroke(0.0);val painted=hist();assertNotEquals(before,painted)
+        action("undo");tick();assertEquals(before,hist());action("redo");tick();assertEquals(painted,hist())
+        val master=save("proof-painted.capy")
+        val on=png("proof-on.png")
+        action("gamut_warning");action("soft_proof");tick()
+        assertFalse(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        assertEquals(painted,hist());assertEquals(hash(on),hash(png("proof-warning.png")))
+        action("gamut_warning");tick();assertEquals("",status().getString("text"));assertEquals(hash(on),hash(png("proof-off.png")))
+        // Removing both local entries models moving the file to another machine.
+        runBlocking{ProfileStore.list(activity).forEach{ProfileStore.remove(activity,it.getString("id"))}}
+        open(File(files,"proof-painted.capy"));compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        assertFalse(native{state(it).getBoolean("soft_proof")||state(it).getBoolean("gamut_warning")})
+        assertEquals("",status().getString("text"));assertEquals(target.getString("name"),current().getString("name"))
+        assertEquals(manifest(master).getJSONArray("blobs").toString(),manifest(save("proof-reopened.capy")).getJSONArray("blobs").toString())
+        action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
+        assertEquals(painted,hist())
+        compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.snapshot?.optBoolean("brush_ready")==true&&host.failure==null}
+        tick();assertEquals(painted,hist());assertEquals(hash(on),hash(png("proof-recovered.png")))
+        scenario.recreate();scenario.onActivity{activity=it};compose.waitUntil(60_000){host.snapshot?.optBoolean("brush_ready")==true};tick()
+        assertEquals(target.getString("name"),current().getString("name"));assertEquals(painted,hist())
+        assertNull(host.failure);assertNull(host.actionError)
+        println("Proofed editing/history, clean viewing toggles, exact histogram/export, portable save/reopen and GPU/Activity replacement passed")
+    }
+
     private fun summary(values: org.json.JSONArray): JSONObject? {
         if(values.length()==0)return null
         val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()

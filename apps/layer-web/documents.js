@@ -1,4 +1,5 @@
 import {chooseDocumentColor} from './document-color.js';
+import {createProof} from './proof.js';
 import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
 import {createImageImport} from './image-import.js';
@@ -19,6 +20,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     build(form,finish);root.showModal();
   });
   const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
+  const proof=createProof({app,dialog,element,button,applyChange,wake});
   async function newDocument() {
     const spec=app.editor_models(innerWidth,innerHeight).document_options,model=spec.creation;
     return dialog(spec.new_title,(form,finish)=>{
@@ -100,6 +102,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
     try {
+      if(request.kind.type==="soft_proof_setup"){await proof.run(request.id);if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type==="histogram"){histogram.open();dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
       const r=request.kind.request,id=request.id;
@@ -280,6 +283,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   // Exposed on the existing host controller for deterministic lifecycle tests.
   window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
   return {handle,autosave,startRecovery,refresh(){
+    proof.sync();
     const published=state();
     images.refresh(published);
     if(closing || !published.document_file.close_ready)return;

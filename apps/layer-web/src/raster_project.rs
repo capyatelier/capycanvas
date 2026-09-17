@@ -28,6 +28,9 @@ fn limits(dimension: u32) -> ProjectLimits {
 #[derive(Serialize, Deserialize)]
 struct Metadata {
     document: Document,
+    // Document's generic serde intentionally skips persisted proof metadata;
+    // the native archive owns its profile table. Carry it across worker heaps.
+    proof: Option<layer_core::color::ProofRecipe>,
     rasters: Vec<Raster>,
     blobs: Vec<Blob>,
     sources: Vec<Source>,
@@ -103,6 +106,7 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
     project.validate(limits(ProjectLimits::default().dimension))?;
     let mut metadata = Metadata {
         document: project.document.clone(),
+        proof: project.document.proof.clone(),
         rasters: Vec::new(),
         blobs: Vec::new(),
         sources: Vec::new(),
@@ -223,6 +227,7 @@ pub(super) async fn unpack(
         document: metadata.document,
         assets: BTreeMap::new(),
     };
+    project.document.proof = metadata.proof;
     let budget = limits(ProjectLimits::default().dimension);
     if metadata.blobs.len() > budget.tiles || metadata.rasters.len() > budget.layers * 2
         || metadata.originals.len() > budget.layers {

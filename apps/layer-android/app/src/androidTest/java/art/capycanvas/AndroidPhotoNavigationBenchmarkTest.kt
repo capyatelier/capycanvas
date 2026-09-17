@@ -26,6 +26,7 @@ class AndroidPhotoNavigationBenchmarkTest {
         val root=File(instrumentation.targetContext.cacheDir,"photo-bench-${System.nanoTime()}")
         CanvasHost.workspaceDirectoryForTest=File(root,"workspace").absolutePath
         RecoveryController.directoryForTest=File(root,"recovery")
+        ColorPreferencesStore.directoryForTest=File(root,"color")
         DocumentController.nativeFileJobsForTest=true
         try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity:MainActivity
@@ -41,6 +42,23 @@ class AndroidPhotoNavigationBenchmarkTest {
             scenario.onActivity {host.documentChanged();host.invoke("fit_canvas")}
             waitFor{host.snapshot?.getJSONObject("state")?.getJSONArray("tabs")?.getJSONObject(0)?.optInt("width")==9504 && host.snapshot?.optBoolean("shaders_ready")==true}
             val importMs=SystemClock.elapsedRealtime()-started
+            var proofMs:Long?=null
+            val proofCallbacks=JSONArray()
+            InstrumentationRegistry.getArguments().getString("proofProfile")?.let { path ->
+                val bytes=ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $path")).use{it.readBytes()}
+                val profile=runBlocking{ProfileStore.import(activity,bytes)}
+                val recipe=obj("name" to profile.getString("name"),"profile" to profile.getJSONObject("profile"),
+                    "conversion" to obj("intent" to "RelativeColorimetric","black_point_compensation" to true),"simulate_black_ink" to true,"simulate_paper" to false)
+                val flag=Native.captureControl()
+                val proof=native{h->Native.dispatch(h,obj("type" to "invoke","command" to "soft_proof_setup").toString());val s=JSONObject(Native.snapshot(h)!!).getJSONObject("state");val id=s.array("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,id,recipe.toString(),flag)}
+                val sampling=java.util.concurrent.atomic.AtomicBoolean(true)
+                scenario.onActivity{Choreographer.getInstance().postFrameCallback(object:Choreographer.FrameCallback{override fun doFrame(time:Long){proofCallbacks.put(time);if(sampling.get())Choreographer.getInstance().postFrameCallback(this)}})}
+                val start=SystemClock.elapsedRealtime()
+                try{Native.proofWork(proof);native{Native.proofApply(it,proof,false)};proofMs=SystemClock.elapsedRealtime()-start}
+                finally{sampling.set(false);Native.proofRelease(proof);Native.captureFree(flag)}
+                scenario.onActivity{host.documentChanged()}
+                waitFor{native{JSONObject(Native.proofStatus(it)).getString("text").startsWith("Proof:")}}
+            }
             val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera")
             val area=camera.getJSONArray("work_area");val cx=area.getDouble(0)+area.getDouble(2)/2;val cy=area.getDouble(1)+area.getDouble(3)/2
             val output=activity.getExternalFilesDir(null)!!;val results=JSONArray()
@@ -67,9 +85,9 @@ class AndroidPhotoNavigationBenchmarkTest {
                 output.resolve("photo-navigation-$run.json").writeText(measured.toString())
                 results.put(obj("run" to run,"frames" to measured.getJSONArray("frames").length(),"input_ticks" to cadence.length()))
             }
-            output.resolve("photo-navigation-info.json").writeText(obj("import_ms" to importMs,"camera" to camera,"runs" to results).toString(2))
+            output.resolve("photo-navigation-info.json").writeText(obj("import_ms" to importMs,"proof_ms" to proofMs,"proof_callbacks_ns" to proofCallbacks,"proof" to native{JSONObject(Native.proofStatus(it))},"camera" to camera,"runs" to results).toString(2))
             println("Photo navigation completed: $results; import_ms=$importMs")
             assertNull(host.failure);assertNull(host.actionError)
-        }} finally {CanvasHost.workspaceDirectoryForTest=null;RecoveryController.directoryForTest=null;DocumentController.nativeFileJobsForTest=false}
+        }} finally {CanvasHost.workspaceDirectoryForTest=null;RecoveryController.directoryForTest=null;ColorPreferencesStore.directoryForTest=null;DocumentController.nativeFileJobsForTest=false}
     }
 }

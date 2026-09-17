@@ -9,7 +9,7 @@ pub(super) struct NavigatorSurface {
     size: [f32; 2],
     scale: f32,
     capacity: [u32; 2],
-    gpu: Option<(
+    pub(super) gpu: Option<(
         wgpu::Surface<'static>,
         ViewportPresenter,
         wgpu::SurfaceConfiguration,
@@ -232,6 +232,7 @@ impl WebApp {
                 slot.gpu = Some((surface, presenter, config));
             }
             let (surface, presenter, config) = slot.gpu.as_mut().unwrap();
+            presenter.inherit_proof(&gpu.presenter);
             if config.width != width || config.height != height {
                 config.width = width;
                 config.height = height;

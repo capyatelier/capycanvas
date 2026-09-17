@@ -23,3 +23,5 @@ mod source_edit;
 
 #[cfg(target_os = "android")]
 mod color_preferences;
+#[cfg(target_os = "android")]
+mod proof;

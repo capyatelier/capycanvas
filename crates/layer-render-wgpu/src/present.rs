@@ -83,6 +83,10 @@ impl ViewportPresenter {
     /// Explicit viewport captures share immutable samples and the same viewing
     /// options; they do not allocate another LUT. Export never calls this path.
     pub fn inherit_proof(&mut self, source: &Self) {
+        if self.proof_buffer == source.proof_buffer && self.proof_uniform == source.proof_uniform {
+            self.proof_options = source.proof_options;
+            return;
+        }
         self.proof_buffer = source.proof_buffer.clone();
         self.proof_uniform = source.proof_uniform.clone();
         self.proof_options = source.proof_options;
