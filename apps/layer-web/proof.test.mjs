@@ -75,6 +75,13 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await invoke('redo');await settle();assert.deepEqual(await histogram(),painted);
     const clips=[{x:point.x-85,y:point.y-12,width:170,height:24,scale:1},await evaluate(`(()=>{const r=[...document.querySelectorAll('.navigator-overview')].find(n=>n.getBoundingClientRect().width>0).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()` )];
     const screenshots=async()=>{const images=[];for(const clip of clips)images.push((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,clip})).data);return images;};
+    const sameView=async(actual,expected,label)=>{
+      // Fractional DPR and the Android compositor can round antialiased edges
+      // differently after device recreation. Exact backing/export assertions
+      // remain byte-for-byte; this checks the presented screenshot separately.
+      const diff=await evaluate(`(async()=>{const read=async data=>{const b=await createImageBitmap(await(await fetch('data:image/png;base64,'+data)).blob());const c=new OffscreenCanvas(b.width,b.height),x=c.getContext('2d');x.drawImage(b,0,0);b.close();return x.getImageData(0,0,c.width,c.height).data};const a=await read(${JSON.stringify(actual)}),b=await read(${JSON.stringify(expected)});if(a.length!==b.length)throw Error('Screenshot extent changed');let max=0,sum=0;for(let i=0;i<a.length;i++){const d=Math.abs(a[i]-b[i]);max=Math.max(max,d);sum+=d}return {max,mean:sum/a.length}})()`);
+      assert.ok(diff.max<=8&&diff.mean<=.5,`${label}: ${JSON.stringify(diff)}`);
+    };
     await settle();const proofShots=await screenshots();
     await invoke('soft_proof');await settle();const normalShots=await screenshots();
     proofShots.forEach((shot,i)=>assert.notEqual(shot,normalShots[i],i?'Navigator must show proof viewing':'Canvas must show proof viewing'));
@@ -95,7 +102,11 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     await invoke('soft_proof');await ready();assert.deepEqual(await histogram(),painted);
     await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready() && layerApp.startupTimes.complete!==null');await ready();await settle();
     const recoveredShots=await screenshots();
-    recoveredShots.forEach((shot,i)=>assert.equal(shot,proofShots[i],i?'Navigator recovers its proof resources':'Canvas recovers its proof resources'));
+    for(let i=0;i<2;i++)await sameView(recoveredShots[i],proofShots[i],i?'Navigator recovers its proof resources':'Canvas recovers its proof resources');
+    await invoke('soft_proof');await settle();
+    const recoveredNormal=await screenshots();
+    for(let i=0;i<2;i++)await sameView(recoveredNormal[i],normalShots[i],i?'Recovered Navigator remains live':'Recovered canvas remains live');
+    await invoke('soft_proof');await ready();
     assert.deepEqual(await histogram(),painted);assert.deepEqual(await exportPng(),on);
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);
     console.log('Proofed editing/history, toggle dirty state, histograms, portable native save/reopen, independent PNG bytes and GPU replacement passed');

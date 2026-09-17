@@ -263,6 +263,30 @@ class AndroidRasterTest {
         assertEquals(target.getString("name"),current().getString("name"));assertEquals(painted,hist())
         assertNull(host.failure);assertNull(host.actionError)
         println("Proofed editing/history, clean viewing toggles, exact histogram/export, portable save/reopen and GPU/Activity replacement passed")
+        // Cancel while the native CPU worker is preparing, then reject a fully
+        // prepared result whose dialog request has been dismissed.
+        val retained=current().toString()
+        repeat(2){case->
+            setup()
+            val flag=Native.captureControl()
+            val task=native{h->val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
+            try{
+                if(case==0){
+                    val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+                    val started=java.util.concurrent.CountDownLatch(1)
+                    val worker=kotlin.concurrent.thread{started.countDown();try{Native.proofWork(task)}catch(e:Throwable){failure.set(e)}}
+                    assertTrue(started.await(5,java.util.concurrent.TimeUnit.SECONDS))
+                    SystemClock.sleep(20);Native.captureCancel(flag);worker.join(30_000)
+                    assertFalse("Cancelled proof worker must stop",worker.isAlive)
+                    assertNotNull("Cancellation must reject preparation",failure.get())
+                }else Native.proofWork(task)
+                compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+                assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
+                assertEquals(retained,current().toString())
+                assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
+            }finally{Native.proofRelease(task);Native.captureFree(flag)}
+        }
+        println("Native preparation cancellation and stale-result rejection passed")
     }
 
     private fun summary(values: org.json.JSONArray): JSONObject? {

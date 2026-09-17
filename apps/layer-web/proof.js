@@ -3,7 +3,7 @@ import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
 export function createProof({app,dialog,element,button,applyChange,wake}) {
-  let work=null,setup=false;
+  let work=null,setup=null;
   const label=element("output","proof-status");label.id="proof-status";label.hidden=true;
   document.getElementById("canvas-status").prepend(label);
   function cancel(){work?.cancel();}
@@ -36,7 +36,7 @@ export function createProof({app,dialog,element,button,applyChange,wake}) {
   }
   document.addEventListener("visibilitychange",()=>{if(document.hidden)cancel();else sync();});
   async function run(id){
-    setup=true;cancel();
+    const token={id};setup=token;cancel();
     let candidate=null,closed=false,committing=false;
     try{
       const model=app.proof_form(),original=model.document_profile;
@@ -88,7 +88,7 @@ export function createProof({app,dialog,element,button,applyChange,wake}) {
         form.closest("dialog").addEventListener("cancel",e=>{if(committing)e.preventDefault();else{closed=true;cancel();}});
         refresh().catch(e=>{issue.textContent=String(e);});
       });
-    }finally{closed=true;cancel();setup=false;sync();}
+    }finally{closed=true;if(setup===token){cancel();setup=null;sync();}}
   }
   return {run,sync,cancel};
 }

@@ -312,7 +312,7 @@ impl WebApp {
                 }
                 yield_browser().await?;
             }
-            let presenter = ViewportPresenter::new(renderer.device(), config.format);
+            let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
             let gpu = WebGpu {
                 renderer,
                 instance,

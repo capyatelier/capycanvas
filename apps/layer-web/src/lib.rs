@@ -87,7 +87,12 @@ impl CanvasRenderer for WebRenderer {
         self.0.as_ref().map(|gpu| gpu.renderer.document_color()).unwrap_or_default()
     }
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
-        self.renderer()?.adopt_prepared_color(color)
+        let changed = self.renderer()?.adopt_prepared_color(color)?;
+        if changed {
+            let gpu = self.0.as_mut().unwrap();
+            gpu.presenter = ViewportPresenter::for_renderer(&gpu.renderer, gpu.config.format);
+        }
+        Ok(changed)
     }
     fn supports_tiled_sources(&self) -> bool {
         self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_tiled_sources())
@@ -595,9 +600,9 @@ impl WebGpu {
             web_sys::console::error_1(&js(error))
         }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let presenter = ViewportPresenter::new(&device, config.format);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
+        let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
         if let Some(error) = validation.pop().await {
