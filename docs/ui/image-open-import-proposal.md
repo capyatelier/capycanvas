@@ -3,11 +3,17 @@
 [Workspace and UI](README.md) · [Color requirements](color-management.md) ·
 [GTK implementation and measurements](../development/image-placement-gtk-progress.md)
 
+**Published:** the approved GTK implementation is in `8de027b7`, integrated with
+newer upstream renderer changes in `522db8dc` and pushed to `origin/main`.
+See the [Web/Android handoff](../development/image-placement-web-android-handoff.md).
+The reassessment below records the starting point and approval scope.
+
 **Reassessed 2026-09-16; HEAD now equals the fetched `origin/main` at `bef744d3`.**
 The latest sync fast-forwarded from `448c1ee4`, preserving 130 changed paths
 byte-for-byte and reconciling five overlapping renderer files. Backups and merge
-verification are in `/tmp/capy-plan-refresh-r0zjgxlf/`. Local implementation remains
-uncommitted. Focused verification is complete, and the user has approved the result.
+verification are in `/tmp/capy-plan-refresh-r0zjgxlf/`. The implementation is
+committed and published as recorded above. Focused verification is complete,
+and the user has approved the result.
 
 ## Completed GTK goal
 

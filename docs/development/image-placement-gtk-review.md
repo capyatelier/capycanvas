@@ -11,6 +11,12 @@ complete. Restart an older running instance to load this renderer.
 
 ## Run and review
 
+The implementation was subsequently committed as `8de027b7` and pushed to
+`origin/main` with merge `522db8dc`. The merge retains upstream watercolor batching
+and layer-local coordinates; 33 selected GPU checks and the GTK compile check pass.
+The package hash and native timings below identify the original approved build.
+Next-platform work is described in the [Web/Android handoff](image-placement-web-android-handoff.md).
+
 From the repository root:
 
 ```sh
@@ -131,8 +137,8 @@ this hardware and workload, rather than physical pen latency or a continuous
   workloads remain further qualification, outside the focused core review.
 
 The user approved the delivered GTK workflow and responsiveness with these limits
-disclosed. Further qualification remains tracked separately. The implementation
-and all local work remain uncommitted.
+disclosed. Further qualification remains tracked separately. The approved
+implementation is committed and published as recorded above.
 
 ## Evidence and captures
 

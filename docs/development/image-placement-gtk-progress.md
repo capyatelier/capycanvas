@@ -5,6 +5,14 @@ starting from `c6e616f5`. Latest upstream sync: **`bef744d3`, 2026-09-16**.
 
 ## Current goal closeout
 
+Publication: implementation commit `8de027b7` and upstream integration `522db8dc`
+are on `origin/main`. The integration resolves the watercolor compositor overlap
+with layer-local target coordinates, preserving upstream pass/copy batching.
+Post-merge validation passes 19 placement-related GPU checks, 13 watercolor
+checks, one selected wet-brush check and `cargo check --locked --offline -p layer-linux`.
+The hardware benchmark stays explicitly ignored in that correctness run.
+See the [Web/Android handoff](image-placement-web-android-handoff.md).
+
 **Complete and user-approved.** The user explicitly replied “Approved” to the
 review request covering the delivered GTK Open/Import/Drop workflow and
 large-photo responsiveness. The approved package still matches the verified
