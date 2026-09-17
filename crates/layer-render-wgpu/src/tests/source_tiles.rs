@@ -5,9 +5,9 @@ use layer_core::color::{IntegerDepth, source::*};
 fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_cache() {
     use layer_core::{color::PixelDescriptor, raster::*};
     use layer_render::{RegionRequest, RegionSource};
-    let extent = [2560, 768];
+    let extent = [2560, 1792];
     let mut builder = SourceBuilder::new(
-        [2305, 513],
+        [2305, 1537], // Seventy original tiles exceed the 64-tile cache.
         SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: IntegerDepth::U16,
@@ -17,7 +17,7 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         16 * 1024 * 1024,
     )
     .unwrap();
-    for y in 0..513 {
+    for y in 0..1537 {
         let row: Vec<_> = (0..2305)
             .flat_map(|x| {
                 let rgba: [u16; 4] = if x == 1024 || y == 256 {
@@ -57,7 +57,7 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         ([700, 100], [640, 0, 1024, 256], false),
         ([350, 100], [320, 0, 640, 200], true),
         ([350, 100], [320, 0, 640, 200], true),
-        ([2400, 700], [0, 0, 2560, 768], false),
+        ([2400, 1700], [0, 0, 2560, 1792], false),
     ] {
         let limit = limited.then(|| {
             layer_core::Selection::polygon(vec![
@@ -89,12 +89,12 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         // Transparent document padding connects below and to the right of the
         // partial source. Its bounding rectangle includes opaque source pixels.
         let padding = seed[0] == 2400;
-        let expected_bounds = if padding { [0, 0, 2560, 768] } else { bounds };
+        let expected_bounds = if padding { [0, 0, extent[0], extent[1]] } else { bounds };
         assert_eq!(pixels.bounds(), expected_bounds);
         for y in 0..extent[1] {
             for x in 0..extent[0] {
                 let expected = if padding {
-                    x >= 2305 || y >= 513
+                    x >= 2305 || y >= 1537
                 } else {
                     x >= bounds[0] && x < bounds[2] && y >= bounds[1] && y < bounds[3]
                 };
@@ -110,9 +110,10 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         );
         assert_eq!(r.composite_revision, revision);
     }
-    assert!(r.scene.as_ref().unwrap().source_cache_work()[1] > 30);
+    assert!(r.scene.as_ref().unwrap().source_cache_work()[1] > 70,
+        "repeated raw queries must exercise cache eviction");
     assert!(
-        r.regions.as_ref().unwrap().storage_bytes() < 11 * 1024 * 1024,
+        r.regions.as_ref().unwrap().storage_bytes() < u64::from(extent[0]) * u64::from(extent[1]) * 6,
         "raw query owns packed labels/coverage, not a full color image"
     );
     assert!((1..=4).contains(&r.regions.as_ref().unwrap().raw.binding_count()));
@@ -416,7 +417,7 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
 
 #[test]
 fn tiled_sources_stream_through_fixed_slots_and_materialize_only_painted_pages() {
-    let extent = [2049, 513]; // 27 tiles: exceeds the 16-slot/upload bound.
+    let extent = [2049, 513]; // 27 tiles: crosses a 16-tile display submission.
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgb,
         depth: IntegerDepth::U8,
@@ -482,9 +483,9 @@ fn tiled_sources_stream_through_fixed_slots_and_materialize_only_painted_pages()
         r.metrics.source_upload_submissions
     );
     assert!(r.metrics.source_upload_peak_bytes <= 16 * 1024 * 1024);
-    // The seventeenth tile drains capacity; the final eleven join the ordinary
-    // frame submission without another source-only wait.
-    assert_eq!(r.metrics.source_upload_submissions, 1);
+    // These packed U8 uploads fit the 16 MiB staging ceiling. Display batches
+    // already bound composition; there must be no extra source-only wait.
+    assert_eq!(r.metrics.source_upload_submissions, 0);
     let before = layers[0].raster.clone();
     let dab = test_dab([100., 100.], [1., 0., 0., 1.], 0.5);
     let batch = DabBatch {

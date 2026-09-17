@@ -90,6 +90,38 @@ fn code(bytes: &[u8], i: usize, depth: IntegerDepth) -> u32 {
     }
 }
 
+fn canonical_coverage(actual: f32, code: u32, maximum: u32) -> bool {
+    let expected = f64::from(code) / f64::from(maximum);
+    let nearest = expected as f32;
+    // WGSL division permits 2.5 ULP, not a fixed absolute error:
+    // https://www.w3.org/TR/WGSL/#floating-point-accuracy
+    let ulp = if f64::from(nearest) >= expected {
+        f64::from(nearest) - f64::from(nearest.next_down())
+    } else {
+        f64::from(nearest.next_up()) - f64::from(nearest)
+    };
+    (0.0..=1.0).contains(&actual)
+        && (f64::from(actual) - expected).abs() <= 2.5 * ulp
+        && (f64::from(actual) * f64::from(maximum)).round() == f64::from(code)
+}
+
+#[test]
+fn canonical_coverage_oracle_rejects_changed_integer_codes() {
+    for maximum in [255, 65535] {
+        for code in 0..=maximum {
+            let decoded = (f64::from(code) / f64::from(maximum)) as f32;
+            assert!(canonical_coverage(decoded, code, maximum));
+            assert!(!canonical_coverage(decoded.next_up().next_up().next_up().next_up(), code, maximum));
+            for neighbor in [code.saturating_sub(1), (code + 1).min(maximum)] {
+                if neighbor != code {
+                    let wrong = (f64::from(neighbor) / f64::from(maximum)) as f32;
+                    assert!(!canonical_coverage(wrong, code, maximum));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(false); }
 #[test]
@@ -164,13 +196,13 @@ fn scalar_corpus(in_place: bool) {
                     );
                     let actual =
                         f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
-                    let expected = if inside {
-                        expected as f64 / maximum as f64
-                    } else if in_place { f64::from(*value) } else { -7. };
-                    assert!(
-                        (actual as f64 - expected).abs() < 6e-8,
-                        "canonical pixel {i}: {actual} vs {expected}"
-                    );
+                    if inside {
+                        assert!(canonical_coverage(actual, expected, maximum),
+                            "canonical pixel {i}: {actual} vs {expected}/{maximum}");
+                    } else {
+                        assert_eq!(actual, if in_place { *value } else { -7. },
+                            "untouched canonical pixel {i}");
+                    }
                 }
             }
         }
@@ -387,8 +419,10 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
             })
             .collect();
     }
-    assert!(r.metrics.source_upload_peak_bytes <= 16 * 256 * 256 * 4);
-    assert!(r.metrics.source_upload_submissions >= 16);
+    // The shared staging ceiling is byte-based, including still-in-flight
+    // submissions. Completed restores release their charge asynchronously;
+    // the number of forced drains therefore depends on GPU progress.
+    assert!((1..=16 * 1024 * 1024).contains(&r.metrics.source_upload_peak_bytes));
     // Descriptor and late data failures leave live pages/candidates untouched
     // when no earlier bounded chunk was submitted. A following retry succeeds.
     let before = page_bytes(&r, &working[0]);
@@ -466,8 +500,13 @@ fn scalar_slots(in_place: bool) {
                         else if depth == IntegerDepth::U8 { 0x39 } else { 0x3939 };
                     assert_eq!(code(&bytes, i, depth), expected, "slot {slot} pixel {i}");
                     let actual = f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
-                    let expected = if inside { f64::from(expected) / f64::from(depth.maximum()) } else if in_place { f64::from(*value) } else { -7. };
-                    assert!((f64::from(actual) - expected).abs() < 6e-8, "canonical slot {slot} pixel {i}");
+                    if inside {
+                        assert!(canonical_coverage(actual, expected, depth.maximum()),
+                            "canonical slot {slot} pixel {i}: {actual} vs {expected}/{}", depth.maximum());
+                    } else {
+                        assert_eq!(actual, if in_place { *value } else { -7. },
+                            "untouched canonical slot {slot} pixel {i}");
+                    }
                 }
             }
         }

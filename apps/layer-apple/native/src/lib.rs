@@ -445,8 +445,8 @@ pub unsafe extern "C" fn capy_apple_poll_renderer(app: *mut CapyApple) -> i32 {
 }
 
 /// # Safety
-/// Debug fixtures only; affects this editor's device, never the system GPU.
-#[cfg(debug_assertions)]
+/// Debug fixtures and unit tests only; affects this editor's device, never the system GPU.
+#[cfg(any(test, debug_assertions))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_test_gpu_fault(app: *mut CapyApple, validation: u32) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else { return -1; };

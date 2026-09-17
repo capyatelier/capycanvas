@@ -491,7 +491,14 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     expected.add(&reference).unwrap();
     assert_eq!(reader.histogram().unwrap(), expected);
     let peaks = control.allocation_peaks().unwrap();
-    assert!(peaks.observations > 0 && peaks.reserved_bytes >= peaks.allocated_bytes);
+    let allocation_reports = reader.renderer.device.generate_allocator_report().is_some();
+    assert_eq!(peaks.observations > 0, allocation_reports);
+    assert!(peaks.reserved_bytes >= peaks.allocated_bytes);
+    if !allocation_reports {
+        // Metal does not expose wgpu allocator reports. Absence must not be
+        // represented as an observed zero-byte allocation.
+        assert_eq!((peaks.allocated_bytes, peaks.reserved_bytes), (0, 0));
+    }
 
     // Budget rejections happen during dependency planning. Let exactly the
     // original 16-row request fit and require the wider band to shrink to it.
@@ -510,7 +517,7 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     assert_eq!(pixels, reference[..width as usize * 16]);
     assert_eq!(
         control.allocation_peaks().unwrap().observations,
-        observations + 1
+        observations + u64::from(allocation_reports)
     );
     reader.control().cancel();
     assert!(reader.read_band(0).is_err());

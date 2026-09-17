@@ -460,6 +460,9 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     layer.source = Some(Arc::new(builder.finish().unwrap()));
     layer.properties.placement = Affine([0.0625, 0., 0., 0.0625, 0., 0.]);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    // Exercise the admitted cache independently of host policy. Metal defaults
+    // to the bounded tile fallback until its host supplies an allowance.
+    r.set_complete_display_allowance(32 * 1024 * 1024 + 128 * 128 * 16);
     submit(&mut r, &[layer.clone()], &[], &[], true);
     let cache = |r: &WgpuRasterizer| {
         r.scene

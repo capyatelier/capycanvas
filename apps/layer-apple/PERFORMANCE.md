@@ -122,6 +122,10 @@ difference report are identical between baseline and candidate. These are open
 baseline qualification issues; the full suite is not a pass, and no assertion
 or reference image was weakened. Evidence is in
 `artifacts/apple-watercolor-gpu-v1/ipad-profile/` and `batched-copies/`.
+The subsequent [renderer qualification](../../docs/development/apple-filter-qualification.md#current-renderer-follow-up--2026-09-16)
+corrects nine test assumptions and reports 259 passes, with the unchanged Linux
+atlas as the sole failure. Production rendering and these performance results
+are unchanged; the independent Metal images pass scoped perceptual review.
 
 ## Watercolor render-pass batching — 2026-09-16
 

@@ -32,7 +32,8 @@ The existing recovery coordinator also preserves full SDR source, paint,
 correction and mask data through a no-drawable flush and fresh-owner restore on
 Mac Metal with both Apple policies. Both physical review apps are updated with
 previous drawings preserved; see the [recovery record](apple-handoff.md#sdr-recovery-and-current-review-builds).
-Grouped physical drawing, background/return and local save/reopen is pending.
+The user confirms grouped physical drawing, Undo/Redo, background/return and
+local Save As/reopen on both hosts with the ProPhoto U16 review drawing.
 A separate 9504×6336 synthetic-JPEG regression passes G-Pen photo preservation,
 exact history/save/reopen and GPU destruction/replacement on Mac Metal with both
 Apple policies. It does not qualify physical iPad or large-photo performance.
@@ -97,13 +98,19 @@ Do not replace a missing result with a catalog entry or build success.
 
 ## Feature closure map
 
-Renderer qualification also retains ten failures reproduced on published
-`cd4134cd` during the batching follow-up: scalar canonical-float precision,
-cache/upload accounting, snapshot allocation accounting and the filter reference
-atlas. The candidate has 249 passing tests and identical baseline filter output;
-this does not close those failures or establish a passing full renderer suite.
-Resolve them under R7 before final acceptance. See the
-[comparison record](../../apps/layer-apple/PERFORMANCE.md#watercolor-tile-copy-batching--2026-09-16).
+The renderer follow-up resolves nine stale test assumptions about scalar
+precision, cache capacity, upload accounting and optional allocator reports.
+After shared retained-photo integration `522db8dc`, the Mac renderer run has
+275 passes, the unchanged Linux atlas failure and one new cache-fixture failure.
+An explicit fixture allowance corrects the latter with its unchanged pixel/history
+checks passing; the Apple bridge also passes all 68 nonignored tests. Current
+filter captures reproduce all 163 images from the independent Metal comparison,
+whose representative pairs have no perceptible mismatch. Keep the strict atlas,
+physical iPad and cross-platform limits distinct; see the
+[current qualification](apple-filter-qualification.md#retained-photo-integration--2026-09-16).
+Earlier physical performance results remain scoped to their recorded source.
+The new shared placement, brush-coordinate and preview paths require focused
+performance/device requalification before updating artist review apps.
 
 ### Retained visual evidence
 

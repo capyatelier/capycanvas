@@ -69,9 +69,21 @@ batching further lowers short-run misses to **1.764%/15.893%**. Optional GPU que
 timing does not explain the iPad gap: disabling it gives **15.740%**. Physical GPU
 attribution then identifies costly interleaved tile copies. Batching those copies
 reduces matching timer-off runs to **1.030%/12.868%** on Mac/iPad with exact replay
-pixels and less production code. The broader renderer suite exposes ten failures
-also reproduced on published main; these remain open qualification issues. See the
-[current record](../../apps/layer-apple/PERFORMANCE.md#watercolor-tile-copy-batching--2026-09-16).
+pixels and less production code. Nine broader-suite test-assumption failures are
+then corrected without changing production rendering; 259 tests pass and the
+unchanged Linux filter atlas remains the sole failure. The current independent
+Metal comparison covers all 160 complete images with maximum raw difference two
+levels, and representative pairs pass perceptual review. See the
+[filter qualification](apple-filter-qualification.md#current-renderer-follow-up--2026-09-16) and
+[current performance record](../../apps/layer-apple/PERFORMANCE.md#watercolor-tile-copy-batching--2026-09-16).
+The subsequent fetch integrates shared retained-photo placement at `522db8dc`.
+Apple bridge checks pass 68 tests; the integrated renderer's new preview fixture
+passes after explicitly supplying its test allowance. All 163 filter images
+reproduce the preceding comparison. See the
+[integration qualification](apple-filter-qualification.md#retained-photo-integration--2026-09-16).
+Installed artist review apps retain their earlier qualified builds. Physical
+performance numbers above remain source-scoped; qualify the incoming renderer
+before replacing those apps or claiming current hardware performance.
 Continue with that GPU/display diagnosis, remaining current SDR profiles, provider/
 background workflows in step 4 and remaining physical SDR controls/display checks. Device
 performance and provider delivery are not fully closed.

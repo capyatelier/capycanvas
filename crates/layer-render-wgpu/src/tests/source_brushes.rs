@@ -3,7 +3,7 @@ use layer_core::color::{IntegerDepth, source::*};
 
 #[test]
 fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_prediction() {
-    let extent = [2305, 769]; // Forty original tiles, more than two cache turns.
+    let extent = [2305, 1793]; // Eighty original tiles exceed the 64-tile cache.
     let mut builder = SourceBuilder::new(
         extent,
         SourceInterpretation {
@@ -197,7 +197,8 @@ fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_predic
             );
             assert!(r.metrics.source_upload_peak_bytes <= 16 * 1024 * 1024);
         }
-        assert!(r.scene.as_ref().unwrap().source_cache_work()[1] > 40);
+        assert!(r.scene.as_ref().unwrap().source_cache_work()[1] > source.tiles.len() as u64,
+            "brush and prediction reads must exercise cache eviction");
     }
     assert_eq!(
         original_digests,
