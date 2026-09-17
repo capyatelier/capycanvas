@@ -14,9 +14,125 @@ These are retained Diagnostics values, not a controlled capture. They do not dem
 of the large-photo tail or establish a hardware floor. A five-minute CPU/Metal
 attachment completes without restarting the drawing, but contains no target GPU
 execution or CPU encoder rows. No drawing-completion reply is received during
-that window. The retained trace cannot attribute the reported cost; coordinate
-the next short recording with the user's readiness before selecting a change.
-Evidence is `artifacts/apple-photo-cost-v4/`; the same review process remains live.
+that window. That preliminary trace cannot attribute the reported cost.
+Evidence is `artifacts/apple-photo-cost-v4/`; the controlled device replay below
+supersedes the need for another uncoordinated Pencil recording.
+
+## Physical iPad reproduction without another Pencil retry
+
+A private iPad wrapper now runs the existing `photo_interaction` replay at
+`56c19fc8`, whose runtime sources match the preceding `20cecad7` integration.
+It reads the same saved 9504×6336 drawing, uses 570.7 px G-Pen, 180 on-canvas
+drawing updates with eight synthetic samples each, manual 8 ms prediction and
+the same fixed 768 MiB display admission as the local comparisons. It adds a
+native autorelease pool around each frame, matching the host's task lifetime;
+no production renderer or input path is changed.
+
+Completed drawing updates have median/p95/p99 **30.966/42.919/55.964 ms**,
+maximum **65.270 ms**. The three slowest are final pen-up and early updates 2
+and 5. Composition's elapsed intervals account for 4.702 of 5.564 seconds
+(84.5%); they include command finalization and waits for earlier GPU work.
+This reproduces a similar tail on the actual iPad without UIKit input or the
+Diagnostics panel. This unprofiled run alone does not identify the expensive
+GPU passes.
+
+The following 360 cached zoom updates have median/p99 **1.820/8.213 ms**.
+Exact native Undo/Redo passes, and the original drawing file is unchanged.
+Evidence is `artifacts/apple-photo-ipad-replay-v1/`. The eight-sample batching,
+fixed admission and offscreen completion measurement remain explicit limits:
+this is neither a replay of the user's current Pencil gesture nor native
+presentation/perceptual acceptance. Use this reproducible device workload for
+pass attribution before requesting another physical drawing retry.
+
+A subsequent five-second Metal/CPU recording correlates 83,936 GPU intervals
+to 112 replay updates, with no observed identity/order conflicts. All observed
+encoders have GPU matches in the first 111 updates; the last update is partial.
+Those 111 updates contain a median **529 observed encoders**, **15.357 ms** of
+GPU active time and **41.684 ms** total completion. In the slow captured early
+updates, observed GPU activity is 17–19 ms within 78–88 ms completion intervals.
+This capture ends before pen-up. GPU stages overlap, so per-label durations are
+unioned and must not be added together.
+
+Command finalization appears in **1,537 of 2,260 ms** of sampled running render
+CPU stacks (68.0%). These inclusive samples overlap their enclosing composition
+stacks. Copies, scene draws, committed/predicted painting and display reduction
+all contribute GPU work. This makes command count and CPU/driver materialization
+a measured optimization target; it does not establish a memory-bandwidth floor
+or promise that the frame can reach its observed GPU-active duration.
+
+Profiling increases elapsed time, so retain the unprofiled distribution above
+as the baseline. The first recorder's observer expired during finalization and
+its incomplete trace is rejected. The successful retry keeps the same recorder
+alive through processing and preserves exact final artwork and Undo/Redo.
+The ordinary published review is restored with all eleven recoveries, saved
+files and settings preserved. No new physical Pencil acceptance is claimed.
+
+### Rejected source-upload copy removal
+
+One shared candidate decodes native U8/U16 samples directly from an uploaded
+storage buffer, removing the temporary integer textures and their upload copy.
+Five existing decoder regressions pass, including exhaustive integer-code,
+profile, alpha, ownership and upload-bound checks. The separate standalone
+decode benchmark remains ignored. Numerical tolerances are unchanged; the
+resident-byte assertion changes only by the removed texture allocation.
+
+Sixteen Mac replays compare four workloads in both execution orders: ordinary
+and smaller input batches, a small zigzag brush and a wider circular brush.
+Final native pixels, exact Undo/Redo and primary work counts match. The large
+brush's median completion does not improve meaningfully. A subsequent unprofiled
+iPad replay confirms **30.966 → 30.959 ms** median, **55.964 → 53.678 ms** p99 and
+**65.270 → 65.708 ms** maximum. This is one device run per version, separated by
+profiling/build preparation, not a repeated controlled device pair. The small
+tail movement cannot establish a reliable improvement; one cached-zoom source
+miss also differs and remains in the comparison record.
+
+The candidate is rejected as a performance change. After its removal, all 404
+qualified runtime source hashes match the published baseline. No new product
+path or test is retained. Evidence and the exact rejected patch remain private under
+`artifacts/apple-photo-buffer-decode-v1/`. The ordinary iPad Release is restored
+with all eleven recoveries, saved files and settings intact.
+
+A subsequent fast-forward to `a1150ece` brings shared proof-rendering and
+Web/Android proofing changes. The measurements above remain scoped to
+`56c19fc8`; the installed ordinary review is unchanged. They are not a performance
+qualification of the newer main revision. All 454 shared UI tests, the focused
+Metal proof/CPU-reference regression and the Apple bridge compile check pass on
+the newer source. Neither Apple Release nor device performance is requalified by
+those checks.
+
+The algorithm review therefore supports the existing sparse architecture, not a
+claim of optimal frame time. A typical replay update composites 4.26 million
+pixels, rather than the full 60.22 million. Contact evaluation, ordered blending,
+prediction and mip work remain necessary. The physical trace now identifies
+CPU/driver command preparation as substantial additional work. Any next
+optimization should reduce commands across those shared stages and demonstrate
+repeatable gains on multiple workloads; another isolated upload tweak or a
+larger queue is not justified. Preserve pixel/history semantics and existing
+memory ceilings. The GPU-active interval is neither a frame-time lower bound nor
+a promised target. Large-brush perceptual acceptance remains open; a high p99
+alone does not override the user's smooth-drawing/rare-miss criterion.
+
+### Rejected source-decode scheduling extension
+
+At `a1150ece`, a second small candidate moves pending source decoding before
+preceding independent clears/draws so normal layers can share their existing
+render pass. It stops at a reader of the reused cache texture and introduces
+no storage or shader path. Sixteen reversed-order Mac replays preserve native
+artwork, Undo/Redo and primary work counts, but show no repeatable speed gain:
+ordinary-brush medians are **25.764 → 26.256 ms** and **25.724 → 25.265 ms**;
+wide-brush medians are **47.298 → 47.207 ms** and **46.805 → 47.130 ms**.
+Small-brush medians regress in both pairs. The first ordinary baseline's
+113.781 ms p99 remains in the report, rather than being filtered away.
+
+The candidate and its unexecuted additional regression are removed; no device
+installation is warranted by these results. Evidence is
+`artifacts/apple-source-order-v1/`. The native-root comparisons alone do not
+qualify composite output. Retain the existing simpler ordering. These two
+negative experiments narrow the next performance action: another scheduling
+micro-change is not supported, and a broader batching design needs evidence
+commensurate with its complexity. Continue the remaining feature/parity gates
+while retaining the unresolved large-brush acceptance; do not keep changing
+the renderer merely to obtain a lower diagnostic percentile.
 
 ## Corrected workload and remaining avoidable passes
 
@@ -165,10 +281,10 @@ estimates below isolate illustrative transfer costs; they do not predict a
 complete frame or prove how much faster this workload can become.
 
 Recommendation: keep the current architecture and qualified shared changes.
-Do not declare the remaining 50 ms unavoidable. If the tail still visibly
-interrupts drawing, make one bounded investigation of GPU pass execution and
-idle gaps on the installed build, then retain only a broadly useful change
-with repeatable replay gains, unchanged pixels/history and bounded memory.
+Do not declare the remaining 50 ms unavoidable. The physical replay attribution
+above now supplies the bounded GPU/CPU investigation. Use it to focus any further
+work on shared command batching, retaining only a broadly useful change with
+repeatable replay gains, unchanged pixels/history and bounded memory.
 If drawing meets the accepted smoothness standard, prioritize the remaining
 release gates. There is no evidence here that another architecture or larger
 cache is necessary to finish the Apple goal.

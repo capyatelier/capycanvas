@@ -181,4 +181,8 @@ Target smooth iPad 120 Hz; current Mac evidence is 90 Hz, with 120 Hz hardware
 qualification still deferred. Document actual refresh, missed frames and latency;
 do not label CPU submission as presentation. Preserve users' files/recovery,
 identify the installed build, commit significant checkpoints, and publish a
-short acceptance record with remaining hardware gaps. Print proofing/HDR is later.
+short acceptance record with remaining hardware gaps. The subsequent shared
+proof milestone now enables Proof Setup/Colors/Gamut Warning on Apple, matching
+Web/Android; see the [proof record](apple-handoff.md#shared-print-proofing--2026-09-17).
+Its scoped worker/native/UIKit passes do not close physical provider, print-color
+accuracy or managed-display acceptance. HDR remains later.

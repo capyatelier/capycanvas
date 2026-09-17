@@ -32,6 +32,14 @@ int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
 int32_t capy_project_export_options(const CapyProjectTask *task, const char *recipe_json); /* worker */
+/* Proof preparation borrows no editor. Build and profile copying run on the
+   worker; check/apply/failed run on the owner. Request 0 restores viewing only. */
+CapyProjectTask *capy_apple_proof_task(CapyApple *app, uint32_t request, const char *recipe_json);
+int32_t capy_project_proof_build(const CapyProjectTask *task);
+int32_t capy_project_proof_preservation(const CapyProjectTask *task, const uint8_t **bytes, size_t *count);
+int32_t capy_apple_proof_check(CapyApple *app, const CapyProjectTask *task);
+int32_t capy_apple_proof_apply(CapyApple *app, const CapyProjectTask *task, bool preserved);
+int32_t capy_apple_proof_failed(CapyApple *app, const CapyProjectTask *task, const char *message);
 int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *name); /* -1: new */
 int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);

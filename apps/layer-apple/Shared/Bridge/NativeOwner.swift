@@ -304,6 +304,32 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
+    func proofTask(id: UInt64, recipe: JSON?, completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        let text: String
+        do { text = try (recipe ?? JSON()).encoded() }
+        catch { completion(nil, error.localizedDescription); return }
+        queue.async { [self] in
+            let pointer = text.withCString { capy_apple_proof_task(handle, UInt32(id), $0) }
+            completion(pointer.map(NativeProjectTask.init), pointer == nil
+                ? capy_apple_error(handle).map(String.init(cString:)) ?? "Proof is unavailable" : nil)
+        }
+    }
+    func checkProof(_ task: NativeProjectTask, completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            do { try check(capy_apple_proof_check(handle, task.handle)); completion(nil) }
+            catch { completion(error.localizedDescription) }
+        }
+    }
+    func finishProof(_ task: NativeProjectTask, preserved: Bool = false, failure: String? = nil,
+        completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            do {
+                if let failure { try failure.withCString { try check(capy_apple_proof_failed(handle, task.handle, $0)) } }
+                else { try check(capy_apple_proof_apply(handle, task.handle, preserved)) }
+                try publish(); completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+    }
     private func applySharedSettings() throws {
         // A global notification must not roll back a newer local edit whose
         // write is still pending. Apply the newest committed settings once all

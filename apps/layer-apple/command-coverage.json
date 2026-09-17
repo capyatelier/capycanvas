@@ -3,15 +3,10 @@
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {
-      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable.",
-      "soft_proof_setup": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
-      "soft_proof": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
-      "gamut_warning": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff."
+      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable."
     },
     "mac": {
-      "soft_proof_setup": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
-      "soft_proof": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
-      "gamut_warning": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff."
+
     }
   },
   "groups": [
@@ -31,11 +26,11 @@
       "mac": "partial: shared/native-owner batch retention, failure/cancellation and exact history checks pass. Native Mac multi-selection, Original Size, Apply/Cancel, controls with panels hidden and cross-application canvas/layer-row drops pass with preserved source bytes. The scoped 61 MP synthetic-JPEG G-Pen/history/save/reopen/GPU-replacement regression passes on Mac Metal. Remaining provider/clipboard and physical large-photo acceptance stay open."
     },
     {
-      "name": "Print proofing (GTK-only)",
+      "name": "Print proofing",
       "commands": ["soft_proof_setup", "soft_proof", "gamut_warning"],
-      "checks": ["../../crates/layer-ui/src/lib.rs", "../../docs/development/color-management-m2-apple-handoff.md"],
-      "ios": "unavailable: existing shared policy limits these commands to GTK, matching Web/Android's unavailable capability. The Apple phase-2 handoff places print proofing/HDR later; this entry records the catalog boundary and does not claim native proofing acceptance.",
-      "mac": "unavailable: existing shared policy limits these commands to GTK, matching Web/Android's unavailable capability. The Apple phase-2 handoff places print proofing/HDR later; this entry records the catalog boundary and does not claim native proofing acceptance."
+      "checks": ["native/src/proof_tests.rs", "tests/proof-owner.swift", "Shared/Editor/ProofForm.swift", "../../crates/layer-ui/src/session_color_tests.rs"],
+      "ios": "partial: the native form, cancellable worker, exact ICC preservation and viewport presentation consume shared proof policy. Native bridge and both-policy Swift/Metal checks pass RGB/CMYK preparation, cancellation, stale rejection, exact artwork/ICC preservation, history, save/reopen and scene pause/resume. Native Mac Apply and six physical UIKit form captures plus iPad preparation/presentation/history pass. Physical touch/ICC-provider delivery and print/display accuracy remain open.",
+      "mac": "partial: the native form, cancellable worker, exact ICC preservation and viewport presentation consume shared proof policy. Native bridge and both-policy Swift/Metal checks pass RGB/CMYK preparation, cancellation, stale rejection, exact artwork/ICC preservation, history, save/reopen and scene pause/resume. Native Mac Apply and six physical UIKit form captures plus iPad preparation/presentation/history pass. Physical touch/ICC-provider delivery and print/display accuracy remain open."
     },
     {
       "name": "Document color and properties",

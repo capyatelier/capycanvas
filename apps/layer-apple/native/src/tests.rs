@@ -16,6 +16,8 @@ mod inspection;
 mod correction;
 #[path = "export_tests.rs"]
 mod export;
+#[path = "proof_tests.rs"]
+mod proof;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {

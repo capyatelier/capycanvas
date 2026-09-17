@@ -3,7 +3,7 @@
 fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_jobs() {
     use crate::proof_workflow::{ProofPreparation, ProofView};
     use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};
-    for platform in [Platform::Web, Platform::Android] {
+    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut s = session(); s.set_platform(platform);
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
         let original = ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(bytes.clone().into()));
@@ -44,7 +44,7 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
         assert_eq!(s.engine.document().proof, Some(original));
         assert!(!s.state.document_file.modified);
         assert!(prepare.validate(&s).is_err());
-        // First use is enabled on both ports and leaves toggles off until Apply.
+        // First use is enabled on these ports and leaves toggles off until Apply.
         s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
         assert!(s.engine.document().proof.is_none());
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
@@ -113,7 +113,7 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     assert_eq!(s.engine.document().proof, Some(recipe.clone()));
     assert!(!s.state.document_file.modified);
     assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
-    for platform in [Platform::Ios, Platform::Mac, Platform::Windows] {
+    for platform in [Platform::Windows] {
         s.set_platform(platform);
         assert!(!s.command(CommandId::SoftProofSetup).enabled);
         assert!(s.set_proof_recipe(Some(recipe.clone())).is_err());

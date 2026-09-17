@@ -1184,3 +1184,21 @@ validation. Both platforms must complete the expanded acceptance matrix.
 
 For a fresh environment, start with the concise
 [Mac/iPad testing and debugging handoff](../../docs/development/apple.md#testing-and-debugging-on-local-hardware).
+
+### Print proofing
+
+Proof Setup, Proof Colors and Gamut Warning use shared Rust preparation and
+viewport policy. The native worker prepares the LUT without blocking input;
+replacing an embedded ICC first preserves its exact bytes in Saved Profiles.
+Library visibility affects proof-profile menus. Viewing flags do not alter
+artwork, sampling or exports; recipe changes use normal document history.
+
+```sh
+cargo test -p layer-apple tests::proof -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/proof-owner.swift
+```
+
+The owner fixture uses the installed macOS generic CMYK profile, disposable
+storage and an isolated native form for both Apple policies. Optional
+`CAPY_PROOF_CAPTURE` records only that owned window. Physical UIKit qualification
+and its provider/display limits are in the Apple handoff.

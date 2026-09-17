@@ -6,7 +6,7 @@ still applies in full to **both** hosts. Historical checkpoint lists in the
 test plans. The goal is incomplete.
 
 Main now includes shared SDR color/photo work and workflow centralization through
-`f074b83d`. Apple's export drafts, ICC-library policy and New Drawing preference
+`a1150ece`. Apple's export drafts, ICC-library policy and New Drawing preference
 changes now use those shared services; see the
 [integration record](apple-handoff.md#shared-workflow-adoption--2026-09-17).
 Photo Open and batch Place/Paste now also consume shared preparation/adoption
@@ -18,6 +18,10 @@ candidate validity and renderer rollback; see the
 Artwork recovery now executes shared storage tickets, including durable-origin
 retirement and native close cancellation; see the
 [recovery policy record](apple-handoff.md#shared-recovery-policy--2026-09-17).
+Proof Setup, Proof Colors and Gamut Warning now consume shared policy, worker
+preparation and viewport rendering on both hosts; see the
+[proof record](apple-handoff.md#shared-print-proofing--2026-09-17) for native,
+physical UIKit and remaining provider/display scope.
 External canvas/layer drops now use the same shared placement path;
 see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
 Native Mac drag delivery passes; physical UIKit placement/provider acceptance remains open. The
@@ -289,11 +293,11 @@ The source catalog is [command-coverage.json](../../apps/layer-apple/command-cov
 The current Metal-backed enumeration at `37f81472` has **76 commands in 19 groups**, **11 panels**,
 **six Settings pages with 21 rows**, and **43 layer/filter property scenarios**
 per Apple policy. Original Size joins the already-qualified photo-placement
-group. The three print-proofing commands are GTK-only under shared policy,
-also unavailable on Web/Android; the Apple color-management handoff places
-print proofing/HDR in a later milestone. This records the existing boundary,
-without claiming native proofing acceptance. Both policies retain their expected
-unavailable commands and accept
+group. The current proof milestone enables all three print-proofing commands
+on both hosts using the same policy as Web/Android. The fresh Metal-backed
+catalog still has 76 commands in 19 groups; only iPad full-screen is unavailable.
+Native worker/control and physical UIKit proof checks have scoped passes in the
+[proof record](apple-handoff.md#shared-print-proofing--2026-09-17). Both policies accept
 every initially enabled command at the shared-model boundary. The catalog also
 records non-command creation/export options, tagged paint/palettes, corrections
 and masks, color policies, display details and the ICC library.
@@ -326,7 +330,7 @@ not the physical/native workflow gates listed in the table.
 | --- | --- | --- |
 | Document transport | Local native save/open/export/cancel; painted recovery; OS URL delivery; native Mac invalid-Open preservation/retry and both-policy owner checks below | Provider/destination/interruption cases are owned by R4. |
 | Retained photo input | Shared Open policy and atomic batch Place/Paste/Drop with Original Size, Apply/Cancel and one-step history; both-policy source preservation, missing-profile retry, stale/failed-member rejection and delayed-provider cancellation; native Mac cross-application canvas/row drops, multi-selection and controls with panels hidden; scoped 61 MP synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal; current Mac Release native large-photo Open/draw/exact history/local save/reopen/continued input/Quit | Physical UIKit picker/clipboard/drop delivery, Pencil placement and large-photo execution. Provider/lifecycle cases are shared with R4. |
-| Print proofing (GTK-only) | Shared policy makes Proof Setup, Proof Colors and Gamut Warning unavailable on both Apple hosts, Web and Android | Later print-proofing/HDR milestone under the existing Apple color-management handoff; no native acceptance claim. |
+| Print proofing | Shared worker and viewport integration; both-policy RGB/CMYK, cancellation/stale-result, exact artwork/history and ICC preservation checks; native Mac Apply and six physical UIKit form captures plus actual iPad preparation/presentation/history pass | Physical touch and ICC-provider delivery, managed-display appearance and print-color accuracy remain separate from these programmatic checks. HDR remains outside this SDR milestone. |
 | Document color and properties | Shared/native-owner profile/depth operations, complete comparisons, atomic adoption, exact history and flattened master preservation; native Mac forms | Physical UIKit property/color forms and SDR appearance; lifecycle cases remain under R4. |
 | Retained source editing | Source-profile repair, ICC import, full-extent rasterization, exact history/save/reopen and native Mac controls | Physical UIKit source/ICC workflows and provider delivery. |
 | Drawing tools | All 34 current presets mapped to retained native control passes: 30 painting/erasing and four Blend/Liquify; Mac artwork/history and catalog-wide numeric bridge edits | No unaccounted catalog brush/group or setting-dispatch route remains. Physical sensors, hover/proximity and interruption belong to R3; perceptual coverage belongs to R5. |

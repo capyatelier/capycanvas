@@ -278,7 +278,56 @@ This migration has not been installed in either artist app; the pending iPad
 performance/save retest remains on the preceding combined review. Physical OS interruption, background expiration
 and the remaining scene transitions stay open in R4.
 
+## Shared print proofing — 2026-09-17
+
+Proof Setup, Proof Colors and Gamut Warning now use the shared workflow on both
+Apple hosts, closing the implementation gap introduced by main's Web/Android
+proof milestone. Native controls expose saved/embedded/builtin profiles, rendering
+intent, black-point compensation and paper/ink simulation. A cancellable CPU
+worker prepares the shared LUT; the owner rejects stale results and applies one
+history step. Replaced embedded ICC bytes are saved atomically before publication.
+Library visibility uses shared policy. Proof and warning affect viewport display,
+including the Navigator, without modifying paint, sampling or export.
+
+All 454 shared UI and 71 active Apple bridge tests pass; the separate 61 MP
+stress case stays ignored. Both-policy Swift/Metal checks pass RGB and actual
+CMYK preparation, invalid-profile retry, cancellation, exact ICC preservation,
+visibility persistence, history, local save/reopen and pause/resume. The mounted
+Mac form accepts its native default Apply action. Both Release builds finish
+without warnings. The current catalog retains 76 commands in 19 groups; only
+iPad's accepted native full-screen boundary remains unavailable.
+
+The physical iPad fixture passes actual preparation, Metal presentation, error/
+retry/cancel and history, with six reviewed light/dark and narrow/wide UIKit form
+captures. This is programmatic native qualification, not a physical touch,
+ICC-provider or print-color accuracy claim. The normal proof Release is restored
+at Recovered Drawings with all eleven recovery records, saved files and settings
+preserved; the Mac artist app is unchanged. Evidence is under
+`artifacts/apple-proof-v1/`. Remaining provider/display and performance gates
+stay open. In particular, proof integration does not resolve the reported
+approximately 60 ms large-brush tail or requalify sustained iPad cadence.
+
 ## Large-photo composition review — 2026-09-17
+
+The latest [physical replay and algorithm review](apple-drawing-performance-review.md#physical-ipad-reproduction-without-another-pencil-retry)
+reproduces the user's approximately 60 ms tail without another Pencil retry:
+unprofiled completion median/p99 is 30.966/55.964 ms. A successful CPU/Metal trace
+finds substantial command preparation cost, not an established bandwidth floor.
+The direct-buffer source-decoder candidate produces no meaningful large-brush
+median gain on Mac or iPad and is reverted; all 404 qualified runtime source
+hashes match the published baseline after that removal. Preserve the sparse
+architecture and use the existing replay for any further shared command-batching
+investigation.
+Evidence is `artifacts/apple-photo-ipad-replay-v1/` and
+`artifacts/apple-photo-buffer-decode-v1/`. Ordinary iPad review is restored with
+all eleven recoveries, saved files and settings intact. Perceptual large-brush
+acceptance remains open. These review notes accompany the proof milestone;
+the paragraphs below record earlier implemented improvements and their scope.
+Main subsequently fast-forwards to `a1150ece` for shared proof-rendering and
+Web/Android proofing changes. The timing evidence retains its `56c19fc8` source
+scope, and the ordinary review app stays on its qualified runtime. All 454 shared
+UI tests, the focused Metal proof regression and the Apple bridge compile check
+pass after this integration; no new Release/device qualification is inferred.
 
 The [first-principles review](apple-drawing-performance-review.md#composition-attribution-and-finalization-overlap)
 does not establish the user's roughly 50 ms iPad p99 as a hardware floor.

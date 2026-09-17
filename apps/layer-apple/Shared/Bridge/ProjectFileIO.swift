@@ -66,6 +66,12 @@ final class NativeProjectTask: @unchecked Sendable {
     func configureExport(_ recipe: JSON) throws {
         try check(try recipe.encoded().withCString { capy_project_export_options(handle, $0) })
     }
+    func buildProof() throws { try check(capy_project_proof_build(handle)) }
+    func proofPreservation() throws -> Data? {
+        var bytes: UnsafePointer<UInt8>?, count = 0
+        try check(capy_project_proof_preservation(handle, &bytes, &count))
+        return bytes.map { Data(bytes: $0, count: count) }
+    }
     func details() throws -> JSON {
         guard let text = capy_project_details(handle) else { try check(-1); return JSON() }
         defer { capy_apple_string_free(text) }

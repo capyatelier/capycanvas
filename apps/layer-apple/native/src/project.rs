@@ -31,6 +31,9 @@ pub use export::*;
 #[path = "project_preferences.rs"]
 mod preferences;
 pub use preferences::*;
+#[path = "project_proof.rs"]
+mod proof;
+pub use proof::*;
 
 struct Environment {
     adapter: wgpu::Adapter,
@@ -46,6 +49,7 @@ enum Payload {
     Source(Box<source::Task>),
     Info(layer_color::DocumentInfo),
     Inspection(Box<inspection::Task>),
+    Proof(Box<proof::Task>),
     Save {
         snapshot: Option<Project>,
         project: Option<Project>,
