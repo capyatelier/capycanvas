@@ -287,6 +287,21 @@ class AndroidRasterTest {
             }finally{Native.proofRelease(task);Native.captureFree(flag)}
         }
         println("Native preparation cancellation and stale-result rejection passed")
+        InstrumentationRegistry.getArguments().getString("proofPortableFile")?.let{path->
+            val bytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")).use{it.readBytes()}
+            val portable=File(files,"proof-from-web.capy").apply{writeBytes(bytes)}
+            open(portable);compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+            assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
+            assertEquals(target.getJSONObject("profile").toString(),current().getJSONObject("profile").toString())
+            assertEquals("",status().getString("text"))
+            val plain=png("web-portable-normal.png");val exact=hist()
+            action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
+            assertEquals(exact,hist());assertEquals(hash(plain),hash(png("web-portable-proof.png")))
+            val archive=manifest(save("proof-from-web-resaved.capy"))
+            assertEquals(1,archive.getJSONObject("tiled_sources").getJSONArray("profiles").length())
+            assertEquals("DisplayP3",archive.getJSONObject("document").getJSONObject("color").getString("space"))
+            println("Web-created P3/U16 file opened, proofed, resaved and exported on Android without installed profiles")
+        }
     }
 
     private fun summary(values: org.json.JSONArray): JSONObject? {
