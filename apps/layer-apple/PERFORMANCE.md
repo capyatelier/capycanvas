@@ -323,6 +323,75 @@ latency, recorder-off overhead, other color depths, memory pressure or current
 iPad watercolor/large-photo performance. No renderer change accompanies this
 qualification; the pending physical iPad result remains the next device step.
 
+## Mac recorder-off recovery and idle — 2026-09-17
+
+The same qualified Release, with runtime hashes matching `eafd1d51`, completes
+45 measured seconds of `wet-watercolor-4k` with `CAPY_TRACE_SECONDS=0`.
+The existing configuration disables the complete recorder, including its GPU
+timer; no tracing path or benchmark-only runtime change is added. The native
+workload reaches its completion and postlude without a failure marker, and no
+trace file is created. Canvas, Navigator and layer preview show the expected
+painted artwork. The production reader validates the private recovery at revision
+84 with all nine layers, 4096² extent and sRGB/U8 backing.
+
+During a subsequent 15.45-second idle observation, process CPU time increases
+by 0.04 seconds (about 0.26% of one core). Artwork/recovery bytes and persisted
+workspace content remain unchanged. The initial all-files digest assertion
+incorrectly included SQLite's normal ownership-lease renewal. Inspection of the
+same live process shows only the expected lease changes; a semantic comparison
+of all tables preserves every other value. No runtime fix or repeated workload
+is needed. The owned app is then closed and existing artist processes remain
+unchanged. The iPad review is untouched.
+
+This qualifies one current Mac recorder-off drawing/recovery/idle case. It does
+not measure unrecorded cadence, GPU power, thermal behavior, calibrated recorder
+overhead or physical input latency, and does not qualify iPad. Evidence is
+`artifacts/apple-recorder-off-v1/`.
+
+## Current iPad sustained watercolor — 2026-09-17
+
+The qualified physical iPad Release has runtime source hashes matching
+`eafd1d51` (the retained build was made at `f3a93595` with the export-draft fix).
+It completes the existing `wet-watercolor-4k` workload for 45 seconds and then
+**600.0083 measured seconds**: 4096² sRGB/U8, eight paint layers plus paper,
+320 px Wet Watercolor, prediction and 240 synthetic samples/second. Each launch
+uses the ordinary editor and a fresh isolated cache directory. CPU/presentation
+recording is enabled; GPU timestamps are disabled. No compiler or other test
+runs during either measurement.
+
+| Measurement | 45 seconds | 600 seconds |
+| --- | --- | --- |
+| Long continuous-active intervals at 120 Hz, including 5% tolerance | 213/4,865 (4.378%) | 4,121/63,405 (6.499%) |
+| Active presentation p99 / maximum | 16.667 / 16.667 ms | 16.667 / 25.000 ms |
+| CPU owner-service p99 / maximum | 9.158 / 9.996 ms | 9.190 / 17.454 ms |
+| Accepted nonpredicted samples | 10,131 | 135,003 |
+| Measured peak footprint | 2.113 GB | 2.309 GB |
+
+Both measured windows have no rejected input, missing/zero-time presentations,
+frame errors or dropped trace records. Thermals remain nominal. During the long
+run, per-minute long-interval rates range from 5.144% to 7.369%, while CPU owner
+p99 remains between 9.170 and 9.221 ms. Measured footprint grows 273 MB from its
+first to last sample, but peaks during minute two and declines to a 2.097 GB
+peak in minute ten. This is not a memory-pressure test or proof of a permanent
+bound. The complete long trace retains startup/postlude costs separately:
+203.431 ms maximum owner service, 3.654 GB peak footprint and two zero-time
+presentation callbacks, all outside the measured window.
+
+Final watercolor artwork, Navigator and layer previews are reviewed. Both
+isolated recovery archives pass the production reader and validation with all
+nine layers, at revisions 84 and 431. The workload processes are verified closed.
+The ordinary review app is restored at Recovered Drawings with recording disabled;
+all eleven artist recoveries, normal settings and pre-existing saved files are
+byte-identical to their backups. The other editors are unchanged.
+Evidence is retained in `artifacts/apple-ipad-current-qualification-v1/`.
+
+This supplies current sustained iPad evidence, but does not meet a strict 120 Hz
+p99 target or establish perceptual acceptance under the user's rare-miss standard.
+The lower long-interval rate than the older 12.456% short run is not a controlled
+A/B speedup. It does not qualify the separate 570 px G-Pen/large-photo gesture,
+other profiles/depths, recorder-off overhead or physical Pencil latency. Keep
+the shared renderer and measure remaining costs before choosing another change.
+
 ## Integrated renderer GPU follow-up — 2026-09-16
 
 At `a5f57e2c`, the 512-frame 4K watercolor replay reproduces the preceding

@@ -323,6 +323,40 @@ workload, not iPad performance, other color depths, memory pressure, recorder
 overhead or physical input latency. The combined physical iPad large-photo
 retest is still pending. Evidence is `artifacts/apple-watercolor-sustained-v1/`.
 
+The same runtime also completes a 45-second Mac 4K watercolor run with the entire
+recorder disabled. Final artwork/previews and the nine-layer recovery's production
+reader pass. A 15.45-second idle observation consumes 0.04 CPU seconds; artwork
+and workspace content remain unchanged apart from expected ownership-lease
+renewal. The initial all-files assertion included that normal SQLite write;
+the same process is inspected and qualified without repeating the workload or
+changing production code. The owned app is closed and artist processes remain
+unchanged. This closes one recorder-off recovery/idle case, not overhead, cadence,
+GPU power or iPad acceptance. Evidence is `artifacts/apple-recorder-off-v1/`.
+
+## Current iPad sustained watercolor — 2026-09-17
+
+The physical Release now has runtime hashes matching `eafd1d51`, including the
+shared recovery policy and export-draft fix. Its existing isolated workload mode
+completes 45 seconds and then ten measured minutes of 4K sRGB/U8 watercolor.
+The long run has 6.499% long active intervals at 120 Hz, presentation p99
+16.667 ms, maximum 25.000 ms and CPU owner p99 9.190 ms. Thermals remain nominal;
+memory peaks early and declines. Artwork/previews and both production-read
+recovery archives pass. See [Performance](../../apps/layer-apple/PERFORMANCE.md#current-ipad-sustained-watercolor--2026-09-17)
+for the full measurements, startup costs and limits.
+
+This closes missing current sustained evidence, not the remaining cadence or
+physical large-photo acceptance. No renderer code changes, extra app slot or
+artist-app uninstall is needed. The user’s 570 px G-Pen case remains separate;
+the watercolor run cannot establish its performance floor.
+
+The approved review bundle is updated in place without consuming another app
+slot. All eleven normal recoveries, saved files and settings remain byte-identical
+through installation and both isolated workloads. Ordinary review is foregrounded
+at Recovered Drawings with recording disabled; the other two editors are unchanged.
+A prepared physical UIKit preview fixture is not installed: preflight observes
+a new live ordinary review process and preserves it. No additional form pass is
+claimed. Evidence is `artifacts/apple-ipad-current-qualification-v1/`.
+
 ## Prediction policy during document adoption
 
 The user reports iPadOS prediction using the saved manual 64 ms amount after
