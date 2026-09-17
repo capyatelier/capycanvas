@@ -137,10 +137,10 @@ within its separately documented
 
 ## Current-code decision
 
-Rechecking main at `37f81472` confirms that the sparse planner and finalization
-overlap are already present; the composition source has the same SHA-256 as the
-qualified scheduling change. The earlier algorithm table below describes the
-build that motivated those changes, not additional unimplemented work.
+Rechecking main at `1f96d5a6` confirms that the sparse planner, finalization
+overlap and both clear-pass simplifications are already present. The earlier
+algorithm table below describes the build that motivated those changes, not
+additional unimplemented work.
 
 | Current stage | Remaining cost | Decision |
 | --- | --- | --- |
@@ -172,6 +172,52 @@ with repeatable replay gains, unchanged pixels/history and bounded memory.
 If drawing meets the accepted smoothness standard, prioritize the remaining
 release gates. There is no evidence here that another architecture or larger
 cache is necessary to finish the Apple goal.
+
+## Diagnostics overhead and interpretation of the repeated 60 ms report
+
+The displayed percentiles cover the last 120 drawing updates, rather than a
+time window or every screen refresh. With a full window, p99 is the second
+slowest update. Values remain while idle. A roughly 60 ms p99 does not establish
+60 ms on every frame, and these observations do not measure Pencil-to-screen
+latency. This is an interpretation of the metric, not dismissal of a slow update.
+
+A bounded comparison at `1f96d5a6` uses one private replay executable with
+renderer timestamps off/on, then on/off. Each run draws 180 frames with eight
+samples per frame, the same saved large photo, 570.7 px brush, on-canvas circles,
+manual prediction and fixed 768 MiB display admission. Completion medians are
+26.15/25.86 ms in the first off/on pair and 25.81/25.75 ms in the second on/off
+pair. Whole-run p99 is respectively 88.19/54.43 and 53.89/54.38 ms. The larger
+first off-run spikes are retained; the result does not show a repeatable timing
+penalty or justify removing GPU Diagnostics. All four runs preserve identical
+paint roots, work counts and exact Undo/Redo. The source drawing is unchanged,
+all replay processes are closed and the temporary example edit is restored.
+
+Reexamining both earlier qualified eight-sample candidate runs locates their
+five slowest updates at frames 0, 1, 2, 5 and final pen-up (179). Those updates
+take approximately 52–62 ms, principally inside composition's wall interval,
+which includes submission/waiting for earlier GPU work. Startup and pen-up
+therefore deserve separate attribution from steady motion; they remain part
+of the user experience and the reported full-run statistics. This is local Mac
+evidence, not proof that the physical iPad's spikes have the same cause. The
+comparison also excludes native panel/recorder overhead and physical input.
+Evidence is `artifacts/apple-photo-telemetry-v1/`.
+
+The ordinary iPad review subsequently receives the complete published milestone. All
+eleven recoveries, saved files and settings are verified byte-identical through
+installation, and the restored Recovered Drawings screen is reviewed. Recording
+is disabled. A preceding private UIKit preview fixture terminated before any
+capture; it supplies no form acceptance and has been replaced by the ordinary
+Release. Restoration evidence is `artifacts/apple-ipad-final-qualification-v1/`.
+No new physical performance pass is claimed. Keep the remaining investigation
+focused on the actual slow Pencil frames; another general renderer rewrite or
+uncoordinated device trace is not supported by these results.
+
+The later populated-form hardware review succeeds, and the integrated ordinary
+Release at `20cecad7` is restored with all eleven recoveries and artist files
+preserved. Its separate sustained ProPhoto/U16 watercolor run does not reproduce
+the 570 px G-Pen workload or close this remaining tail. See the
+[current qualification record](apple-handoff.md#large-photo-composition-review--2026-09-17)
+for the source-scoped checks and remaining limits.
 
 ## Evidence and its limits
 

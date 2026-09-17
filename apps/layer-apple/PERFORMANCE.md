@@ -429,6 +429,46 @@ accepted rare-miss standard. It does not establish iPad large-brush performance,
 physical pen latency, imposed memory pressure or recorder-off overhead. Retain
 the existing sRGB/U8 and physical user workflow evidence separately.
 
+## Sustained iPad ProPhoto 16-bit watercolor — 2026-09-17
+
+The physical iPad Release at `1f96d5a6` completes a 45-second preflight and
+**600.0081 measured seconds** of the same 4096² ProPhoto/U16 workload: eight
+paint layers plus paper, 320 px Wet Watercolor, manual prediction and 240
+synthetic samples/second. Ordinary previews and recovery remain enabled in
+isolated storage. CPU/presentation recording is enabled; GPU timestamps are off.
+No on-device profiler or container transfer overlaps measurement. Integration
+checks and Release builds run concurrently on the Mac, using its own GPU.
+
+At 120 Hz, **2,610/65,205 (4.003%)** continuous-active intervals exceed the
+budget plus the existing 5% tolerance. Presentation median/p95/p99 are
+**8.3333/8.3335/16.6668 ms**, maximum **25.0000 ms**. CPU owner-service p99 is
+**9.124 ms**, maximum **17.581 ms**. The short preflight has 3.494% long
+intervals and 9.126 ms CPU owner p99. The long run accepts 135,003 measured
+nonpredicted samples and records 65,581 actual presentations, without rejected
+batches, missing/zero-time measured presentations, frame errors or dropped
+records. These figures do not establish the accepted smooth/rare-miss standard;
+watercolor cadence acceptance remains open.
+
+Thermals remain nominal across all 600 measured memory samples. Measured
+footprint peaks at **2.358 GB** in the first minute; the last four minute peaks
+are **1.969, 1.938, 1.936 and 1.909 GB**. First-to-last footprint falls by
+23.6 MB, with no continuing late growth. The full trace retains a **3.952 GB**
+startup peak, 10.217 seconds before measurement, and two zero-time presentations
+before measurement. Postlude activity becomes idle about 28 ms after pen-up.
+
+Final canvas, Navigator and layer-preview captures agree. Both recovery archives
+pass the production reader with nine ProPhoto/U16 layers and **1,930 native
+16-bit color tiles**; the long-run document reaches revision 431. Both workload
+processes close. A subsequent ordinary review process is inspected at Recovered
+Drawings and backed up before the update; all normal recoveries, saved drawings
+and settings files are preserved. Evidence is
+`artifacts/apple-ipad-prophoto-sustained-v1/`.
+
+This supplies sustained physical iPad evidence for the 16-bit profile, with
+artwork, recovery, nominal thermals and bounded observed memory. It does not
+close the separate 570 px large-photo tail, watercolor cadence acceptance,
+imposed memory pressure, recorder overhead or physical Pencil latency.
+
 ## Current iPad sustained watercolor — 2026-09-17
 
 The qualified physical iPad Release has runtime source hashes matching

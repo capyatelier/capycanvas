@@ -394,6 +394,18 @@ apps remain untouched. See the [pass review](apple-drawing-performance-review.md
 and `artifacts/apple-photo-pass-v5/`. Group this small correction with the next
 milestone instead of requiring a separate device installation/retest.
 
+The ordinary iPad review subsequently receives the complete published
+`1f96d5a6` milestone during grouped qualification. All eleven recoveries, saved
+files and settings remain byte-identical, and its Recovered Drawings screen is
+reviewed with recording disabled. A private populated-form fixture fails before
+capture and is replaced by the ordinary Release; no physical form pass is
+claimed. Restoration evidence is `artifacts/apple-ipad-final-qualification-v1/`.
+A separate four-run Mac comparison finds no repeatable renderer timestamp
+penalty for the same saved photo and 570.7 px circles; exact artwork/history and
+work counts match. Existing replay tails cluster near startup and pen-up.
+Neither result closes physical iPad drawing performance. See the
+[Diagnostics review](apple-drawing-performance-review.md#diagnostics-overhead-and-interpretation-of-the-repeated-60-ms-report).
+
 The corresponding Mac Release now passes a native large-photo file journey in
 isolated storage: Open the saved 9504×6336 sRGB/U8 drawing, select 570.7 px G-Pen,
 draw through native mouse events, Undo/Redo, Save As a new local file, Save,
@@ -421,6 +433,27 @@ and `artifacts/apple-prophoto-sustained-v1/`. This closes one remaining format
 qualification, not the iPad tail, physical latency or imposed memory-pressure
 cases. The shared render cleanup, corrected replay and native photo/16-bit
 qualification are grouped as one milestone; remaining release gates stay open.
+
+The physical iPad follow-up now completes the same ProPhoto/U16 watercolor
+preflight and ten-minute run at `1f96d5a6`. Artwork/previews and both production
+recovery reads pass, with nine layers and 1,930 native 16-bit color tiles.
+The long run has 4.003% long active intervals at 120 Hz, 16.667 ms presentation
+p99, 9.124 ms CPU owner p99, nominal thermals and declining late memory.
+Cadence acceptance remains open, as does the separate 570 px large-photo case.
+See [Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-ipad-prophoto-16-bit-watercolor--2026-09-17)
+and `artifacts/apple-ipad-prophoto-sustained-v1/`.
+
+Main then incorporates Windows integration `20cecad7`. Apple host sources and
+the drawing workload/render paths are unchanged; Windows joins existing shared
+feature predicates, and the equivalent proof-shader indexing passes its Metal
+CPU-reference comparison. All 453 shared UI tests and both Release builds pass
+without compiler diagnostics. The separate licensed CMYK shadow-grid test stays
+ignored. Evidence is `artifacts/apple-ipad-qualification-integration-v1/`;
+physical timing remains tied to its measured revision, rather than relabeled as
+a new-build performance run. The ordinary iPad review is then updated in place
+to this integrated Release and inspected at Recovered Drawings. All eleven
+recoveries, saved files and settings are preserved; recording is disabled.
+The other editor installations are unchanged.
 
 The approved review bundle is updated in place without consuming another app
 slot. All eleven normal recoveries, saved files and settings remain byte-identical
@@ -1157,6 +1190,18 @@ can be produced. It is removed after the failed run; no UIKit preview pass is
 claimed and no simulator-specific renderer path is added. Physical UIKit
 preview/form acceptance remains open. Both artist apps and their drawings are
 untouched, including the pending physical iPad performance/save review.
+
+The physical UIKit follow-up at `1f96d5a6` now supplies and passes normal-size
+review of all forty equivalent captures: both themes, both form sizes, complete
+preview access through top/bottom scrolling, export/ICC errors and pinned
+actions. Exact viewport/scroll bounds and both worker previews are verified.
+Cancellation preserves the document-file model. The fixture uses the ordinary
+SwiftUI window lifecycle after its custom UIKit wrappers fail before capture;
+no product workaround is added. All eleven artist recoveries, saved files and
+settings remain byte-identical, and the ordinary Release is restored and reviewed.
+Evidence is `artifacts/apple-ipad-form-qualification-v3/`. This closes populated
+UIKit form appearance on hardware; physical touch/menu/typing, actual narrow
+iPad window management and performance remain separate.
 
 ## Settings-link rejection and retry — 2026-09-17
 
