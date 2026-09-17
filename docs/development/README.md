@@ -48,6 +48,10 @@ still have [documented gaps](../ui/drag-inventory.md).
 universal entry point for every application; native bridges live with their hosts.
 The shared UI can also be called directly from Rust or WebAssembly bindings.
 
+The [shared workflow centralization handoff](shared-workflow-centralization-handoff.md)
+tracks portable color/photo, export, profile-library and recovery rules that Web
+and Android should consolidate before Windows adds the same workflows.
+
 ## Validate a change
 
 The [testing guide](testing.md) separates model tests, native interaction checks

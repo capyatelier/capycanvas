@@ -11,6 +11,13 @@ Read the [current scope and remaining work](../history/color-management-m2-port-
 Use [Windows acceptance](windows-acceptance.md) for unrelated native gaps;
 historical success on older shared code does not qualify this color port.
 
+The [shared workflow centralization handoff](shared-workflow-centralization-handoff.md)
+is the prerequisite Web/Android cleanup for portable workflow rules. Consume its
+shared services as they land rather than copying the existing app-local color,
+source, export, profile-library or recovery state machines into Windows. The
+references below remain useful integration examples, not instructions to duplicate
+their business or rendering decisions.
+
 ## Implement in this order
 
 1. Fix `apps/layer-windows/EffectView.cpp` and `GradientView.cpp`: they still read
