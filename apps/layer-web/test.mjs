@@ -1,4 +1,5 @@
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
+import {checkHdrLimits} from "./hdr-limits.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
@@ -226,7 +227,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--image-placement")) {
+  if (process.argv.includes("--hdr-limits")) {
+    await checkHdrLimits({evaluate});
+    checkRasterErrors();
+  } else if (process.argv.includes("--image-placement")) {
     await checkImagePlacement({call,evaluate,settle});
     checkRasterErrors();
   } else if (process.argv.includes("--photo-paint")) {

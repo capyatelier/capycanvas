@@ -1096,6 +1096,19 @@ mod tests {
         encoder.submit(&r.queue);
         r.filter_previews = None;
         request.request_id = 5;
+        assert!(r.request_filter_previews(request.clone()).unwrap());
+        assert_eq!(finish(&mut r).image.bytes, expected);
+        let source_updates = r.filter_previews.as_ref().unwrap().source_updates;
+        r.set_ui_rendition(Some(layer_core::color::hdr::SdrRendition {
+            exposure: -2., ..Default::default()
+        })).unwrap();
+        request.request_id = 6;
+        assert!(r.request_filter_previews(request.clone()).unwrap());
+        assert_ne!(finish(&mut r).image.bytes, expected);
+        assert_eq!(r.filter_previews.as_ref().unwrap().source_updates, source_updates,
+            "rendition changes repaint previews without decoding/reprobing artwork");
+        r.set_ui_rendition(None).unwrap();
+        request.request_id = 7;
         assert!(r.request_filter_previews(request).unwrap());
         assert_eq!(finish(&mut r).image.bytes, expected);
     }

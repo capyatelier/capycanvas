@@ -6,6 +6,33 @@ use std::io::Cursor;
 
 mod placement;
 
+#[test]
+fn hdr_flattened_storage_ignores_sdr_rendition() {
+    use layer_core::color::hdr;
+    let mut document = Document::new("HDR flattened copy", 3, 1);
+    document.color.depth = SampleDepth::F16;
+    document.layers[1].visible = false;
+    let target = SourceInterpretation { channels: SourceChannels::Rgba,
+        depth: SampleDepth::F16, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
+    let input = [[8., -0.125, 2., 0.5], [4., 2., 1., 1.], [1. / 65536., -1., 4., 1. / 65536.]];
+    let mut builder = SourceBuilder::new([3, 1], target.clone(), 1024 * 1024).unwrap();
+    builder.push_row(&input.into_iter().flat_map(|p| hdr::encode_pixel(p).unwrap()).flat_map(u16::to_le_bytes).collect::<Vec<_>>()).unwrap();
+    document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
+    let id = document.allocate_layer_id();
+    let mut layer = Layer::paint(id, "+1 EV");
+    layer.kind = LayerKind::Effect;
+    let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
+    effect.set("exposure", layer_core::EffectValue::Number(1.)).unwrap();
+    layer.effect = Some(Arc::new(effect));
+    document.layers.insert(0, layer);
+    document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., knee: 0.5 };
+    let mut renderer = SnapshotRenderer::new(Project { document, assets: Default::default() }, [0.; 4], 0., Default::default()).unwrap();
+    let mut bytes = vec![0; 24];
+    renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();
+    let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
+    assert_eq!(bytes, expected, "flattening a floating master must retain HDR values");
+}
+
 fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
     let mut document = Document::new("snapshot fixture", extent[0], extent[1]);
     document.color = color;

@@ -37,6 +37,67 @@ fn effect(w: &Rc<Workspace>, name: &str, key: &str, value: layer_core::EffectVal
     });
     ready(w);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_hdr_delivery_failure_and_cancellation_preserve_destination() {
+    let app = native_test_app("art.capycanvas.HdrDeliveryAtomicity");
+    let mut p = new_drawing(64, 64).unwrap();
+    p.document.color.depth = SampleDepth::F16;
+    let w = Workspace::with_project(&app, Some((p, None)));
+    w.window.present();
+    ready(&w);
+    let before = snapshot(&w);
+    let path = std::env::temp_dir().join(format!("capy-hdr-atomic-{}.png", std::process::id()));
+    std::fs::write(&path, b"existing destination").unwrap();
+    let run = |format, cancelled| {
+        let gpu = w.snapshot_gpu().unwrap();
+        let snapshot = DocumentExport {
+            project: project(&w),
+            background: [100., 100., 100., 1.],
+            time: 0.,
+        };
+        let recipe = ExportRecipe {
+            format,
+            depth: SampleDepth::U16,
+            ..ExportRecipe::web_share()
+        };
+        let job = crate::files::export::ExportJob::default();
+        if cancelled {
+            assert!(job.cancel());
+        }
+        let path = path.clone();
+        glib::MainContext::default()
+            .block_on(gtk::gio::spawn_blocking(move || {
+                crate::files::export::write_snapshot(gpu, snapshot, recipe, &path, &job)
+            }))
+            .unwrap()
+    };
+    assert!(
+        run(ExportFormat::PngHdr, false)
+            .unwrap_err()
+            .contains("exceeds BT.2020 PQ")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
+    assert!(
+        run(ExportFormat::PngHdrMapped, true)
+            .unwrap_err()
+            .to_lowercase()
+            .contains("cancel")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"existing destination");
+    assert_eq!(run(ExportFormat::PngHdrMapped, false).unwrap(), 64 * 64 * 3);
+    let delivered = layer_color::photo::read_photo(
+        std::io::BufReader::new(std::fs::File::open(&path).unwrap()),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(delivered.interpretation.depth, SampleDepth::F16);
+    assert_eq!(snapshot(&w), before);
+    w.window.destroy();
+    pump(100);
+    std::fs::remove_file(path).unwrap();
+}
 #[allow(deprecated)]
 fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u32) {
     invoke(w, CommandId::ExportDocument);
@@ -231,6 +292,35 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo, CommandId::Redo);
     ready(&photo);
     assert_eq!(project(&photo).document.sdr_rendition, recipe);
+    // The host eyedropper samples artwork, independent of mapped presentation.
+    photo.dispatch(UiAction::Layer {
+        action: LayerAction::Tool {
+            tool: LayerCanvasTool::PickVisible,
+        },
+    });
+    photo.dispatch(UiAction::SetColorSampleSize { width: 1 });
+    photo.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Definition {
+            color: layer_core::color::RgbColor::WHITE,
+        },
+    });
+    native_pen_path(&photo, &[[400.5, 200.5], [400.5, 200.5]]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state(&photo).colors.definition() == layer_core::color::RgbColor::WHITE {
+        pump(10);
+        assert!(Instant::now() < deadline, "HDR eyedropper completion");
+    }
+    let sampled = state(&photo)
+        .colors
+        .definition()
+        .linear_in(RgbSpace::Srgb)
+        .unwrap();
+    let expected = painted[200 * 512 + 400];
+    for (actual, expected) in sampled.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 2e-6 + expected.abs() * 2e-5);
+    }
+    assert!(sampled[..3].iter().any(|value| *value > 1.));
+    assert_eq!(pixels(&photo), painted);
     invoke(&photo, CommandId::Histogram);
     finish(&photo);
     let inspector = photo.histogram.borrow().as_ref().unwrap().clone();

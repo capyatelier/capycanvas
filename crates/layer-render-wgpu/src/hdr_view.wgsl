@@ -3,8 +3,11 @@
 fn hdr_artwork(paint:vec4<f32>)->vec4<f32> {
     if hdr_view.w<=1. {return hdr_map_sdr(paint,hdr_view);}
     if paint.a<=0. {return paint;}
-    let rgb=max(paint.rgb/paint.a,vec3(0.));
-    let peak=max(rgb.r,max(rgb.g,rgb.b));
+    // Signed scRGB channels carry wide-gamut colors outside the sRGB cube.
+    // Scale them together; clipping negative channels would change chromaticity.
+    let rgb=paint.rgb/paint.a;
+    let magnitude=abs(rgb);
+    let peak=max(magnitude.r,max(magnitude.g,magnitude.b));
     if peak==0. {return vec4(vec3(0.),paint.a);}
     let knee=hdr_view.w*0.75;
     var mapped=peak;

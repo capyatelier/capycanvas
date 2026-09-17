@@ -27,7 +27,7 @@ impl PhotoOpenPolicy {
 }
 
 impl Settings {
-    pub(super) fn color_groups(&self) -> Vec<PreferenceGroup> {
+    pub(super) fn color_groups(&self, platform: Platform) -> Vec<PreferenceGroup> {
         use PreferenceId::*;
         let choice = |id, title: &str, description: &str, options: &[&str], selected| {
             row(
@@ -61,8 +61,9 @@ impl Settings {
                         NewBitDepth,
                         "Bit depth",
                         "16-bit improves precision for subsequent edits.",
-                        &["8-bit SDR", "16-bit SDR"],
-                        u32::from(defaults.color.depth == SampleDepth::U16),
+                        if platform == Platform::Gtk { &["8-bit SDR", "16-bit SDR", "16-bit float HDR"] }
+                        else { &["8-bit SDR", "16-bit SDR"] },
+                        match defaults.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2 },
                     ),
                     choice(
                         NewBackground,
@@ -99,11 +100,7 @@ impl Settings {
         match id {
             NewColorSpace => self.new_document.defaults.color.space = RgbSpace::ALL[value as usize],
             NewBitDepth => {
-                self.new_document.defaults.color.depth = if value == 0 {
-                    SampleDepth::U8
-                } else {
-                    SampleDepth::U16
-                }
+                self.new_document.defaults.color.depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][value as usize]
             }
             NewBackground => {
                 self.new_document.defaults.background = if value == 0 {

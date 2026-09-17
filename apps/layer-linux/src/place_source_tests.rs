@@ -437,7 +437,7 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
         (
             CommandId::PasteImage,
             b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
-            "HDR import is not supported",
+            "Gain-map import is not supported",
         ),
     ] {
         // A valid ordinary JPEG with a recognized richer-container declaration.

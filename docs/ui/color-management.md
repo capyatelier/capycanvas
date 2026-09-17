@@ -236,7 +236,7 @@ monitor moves. **Display Details…** reports active management and capabilities
 show limitations truthfully. Do not offer a monitor profile as a working-space
 fix or ask users to configure technical display settings on every launch.
 
-**8. Edit HDR and provide an intentional SDR version — future milestone**
+**8. Edit HDR and provide an intentional SDR version — GTK review candidate**
 
 **Open HDR → edit → preview SDR rendition → export SDR or supported HDR.**
 
@@ -251,8 +251,17 @@ least one tested route, with an authored SDR base for gain-map delivery where
 supported. Pixel edits must update the gain map; an imported map is not reusable
 unchanged merely because its metadata was retained.
 
-“16-bit float” describes the initial HDR storage candidate, not a user promise
-that all HDR workflows or 32-bit source values fit. Full 32-bit float, scene-based
+GTK's review implementation uses linear half-float storage with Float32
+processing and fixed reference white of 203 cd/m². It supports noninterlaced
+16-bit PQ PNG input and BT.2020 PQ PNG output, plus authored SDR PNG/TIFF/JPEG.
+The footer reports HDR headroom or mapped SDR presentation. The SDR preview
+switch is transient; rendition changes are saved and undoable. Numeric Linear
+RGB/HDR entry accepts above-white and negative values; the graphical wheel
+retains its SDR range. Other hosts explicitly reject HDR masters for now.
+See [the GTK validation and limits](../history/color-management-gtk-m4-validation.md)
+for the qualified workflow and outstanding physical-display/device evidence.
+
+“16-bit float” is not a promise that all HDR workflows or 32-bit source values fit. Full 32-bit float, scene-based
 VFX/OCIO and specialist EXR processing remain separately scoped.
 
 **Settings, scope and delivery**

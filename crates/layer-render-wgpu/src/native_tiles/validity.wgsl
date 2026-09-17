@@ -37,5 +37,5 @@ fn half_bits(value:f32)->u32 {
 fn half_value(bits:u32)->f32 {
     let magnitude=bits&32767u;let sign=select(1.,-1.,(bits&32768u)!=0u);
     if magnitude<1024u {return sign*f32(magnitude)*(1./16777216.);}
-    return bitcast<f32>(((bits&32768u)<<16u)|(((bits>>10u)&31u)+112u)<<23u|(bits&1023u)<<13u);
+    return bitcast<f32>(((bits&32768u)<<16u)|((((bits>>10u)&31u)+112u)<<23u)|((bits&1023u)<<13u));
 }

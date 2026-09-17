@@ -1,6 +1,43 @@
 use super::*;
 use layer_core::color::{SampleDepth, RgbSpace};
 
+#[test]
+fn hdr_rasterization_retains_range_alpha_and_rejects_overflow() {
+    use layer_core::color::hdr;
+    for space in RgbSpace::ALL {
+        let interpretation = SourceInterpretation {
+            channels: SourceChannels::Rgba, depth: SampleDepth::F16,
+            profile: ColorProfile::Builtin(space), profile_assumed: false,
+        };
+        let pixels = [[8., -0.125, 2., 0.5], [1. / 65536., 4., -2., 1. / 65536.], [8., -1., 4., 0.]];
+        let bytes: Vec<_> = pixels.into_iter().flat_map(|p| hdr::encode_pixel(p).unwrap())
+            .flat_map(u16::to_le_bytes).collect();
+        let mut builder = SourceBuilder::new([3, 1], interpretation, 1024 * 1024).unwrap();
+        builder.push_row(&bytes).unwrap();
+        let original = builder.finish().unwrap();
+        for target in RgbSpace::ALL {
+            let (raster, stats) = rasterize_source(&original,
+                DocumentColor { space: target, depth: SampleDepth::F16 }, 1024 * 1024, || false).unwrap();
+            assert_eq!(stats.clipped_channels, 0);
+            let mut actual = vec![0; raster.row_bytes()];
+            raster.rows().read(0, &mut actual).unwrap();
+            if target == space { assert_eq!(actual, bytes); }
+            let matrix = space.linear_transform(target);
+            for (input, output) in pixels.into_iter().zip(actual.chunks_exact(8)) {
+                let expected = layer_core::color::rgb::apply(matrix, [input[0] as f64, input[1] as f64, input[2] as f64]);
+                let output = hdr::decode_pixel(std::array::from_fn(|c| u16::from_le_bytes([output[c * 2], output[c * 2 + 1]]))).unwrap();
+                for c in 0..3 { assert!((f64::from(output[c]) - expected[c]).abs() <= expected[c].abs() / 1024. + 1. / 16777216.); }
+                assert_eq!(output[3], input[3]);
+            }
+        }
+        assert!(rasterize_source(&original, DocumentColor { space, depth: SampleDepth::F16 }, 1024 * 1024, || true).is_err());
+    }
+    let target = SourceInterpretation { channels: SourceChannels::Rgba, depth: SampleDepth::F16,
+        profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
+    let encoder = WorkingEncoder::new(RgbSpace::Srgb, &target, Default::default()).unwrap();
+    assert!(encoder.encode_straight(&[[65505., 0., 0., 1.]], &mut [0; 8], None, [0, 0]).is_err());
+}
+
 fn fixture(depth: SampleDepth, space: RgbSpace, extent: [u32; 2]) -> SourceImage {
     let mut builder = SourceBuilder::new(
         extent,

@@ -1495,7 +1495,7 @@ async function startGpu() {
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
     showGpuNotice({ container: notice, error, element, button });
-    console.warn("GPU canvas unavailable:", error);
+    console.warn("GPU canvas unavailable:", error?.message ?? error);
   } finally {
     gpuStarting = false;
   }

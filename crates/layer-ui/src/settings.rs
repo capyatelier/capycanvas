@@ -896,7 +896,7 @@ impl Settings {
                 group.rows.retain(|row| row.id != ShowClock);
             }
         }
-        groups.insert(2, self.color_groups());
+        groups.insert(2, self.color_groups(platform));
         SettingsPage::ALL
             .into_iter()
             .zip(groups)

@@ -264,3 +264,12 @@ and complete a supported HDR/gain-map interchange route.
 RAW development, layered PSD interchange, native CMYK layers, OCIO/ACES and full
 Float32 documents remain separately scoped follow-on work. No current milestone
 is marked complete merely because its UI exists or its offscreen render succeeds.
+
+## Phase 4 GTK review evidence — 2026-09-17
+
+[GTK HDR validation](color-management-gtk-m4-validation.md) records the implemented
+half-float/PQ/SDR journey, numerical/native/browser regression tests and measured
+workstation budgets. GTK mapped-SDR operation is qualified within that envelope.
+Physical HDR display/monitor moves, constrained/mobile devices and other hosts'
+HDR integration remain outstanding; this is not a cross-platform phase-4 signoff.
+User feature feedback precedes any push to origin/master.

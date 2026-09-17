@@ -1,6 +1,6 @@
 # HDR phase 4: GTK implementation and qualification
 
-Work in progress, 2026-09-17. Base: origin/main `173f760f`. The base fails to
+Implementation/review contract, 2026-09-17. Base: origin/main `173f760f`. The base fails to
 compile GTK after a shared workflow signature change; `1c0f531f` supplies the
 missing source memory budget and is the runnable parent baseline.
 
@@ -18,9 +18,9 @@ missing source memory budget and is the runnable parent baseline.
 - GTK describes only SDR P3/sRGB surfaces. ICC proof LUTs are bounded to SDR.
   Neither is an HDR presentation/mapping implementation.
 
-## Proposed contracts (acceptance tests precede enabling the UI)
+## Implemented contracts
 
-Use display-referred linear half-float RGB, fixed portable reference white of
+The implementation uses display-referred linear half-float RGB, fixed portable reference white of
 203 cd/m² (RGB 1), with Float32 processing and premultiplied working surfaces.
 Stored RGB is straight, finite, within [-65504,65504]; coverage is half-float
 [0,1]. Zero coverage is canonical transparent black on edit publication. Retained
@@ -93,3 +93,5 @@ Compare sustained repeated runs and recorded GPU temperatures/power/throttle
 status; no laptop/mobile thermal qualification is inferred from this workstation.
 Other-device budgets and HDR qualification remain outstanding, and their HDR
 editor adoption is rejected explicitly until integrated and measured.
+
+Results and remaining qualification: [GTK M4 validation](../history/color-management-gtk-m4-validation.md).
