@@ -62,6 +62,8 @@ class AndroidPhotoNavigationBenchmarkTest {
             val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera")
             val area=camera.getJSONArray("work_area");val cx=area.getDouble(0)+area.getDouble(2)/2;val cy=area.getDouble(1)+area.getDouble(3)/2
             val output=activity.getExternalFilesDir(null)!!;val results=JSONArray()
+            val gpuTiming=InstrumentationRegistry.getArguments().getString("proofTiming")=="true"
+            if(gpuTiming)native{Native.presentationTimings(it,true)}
             repeat(3){run ->
                 report(true)
                 val done=CountDownLatch(1);var index=0
@@ -81,6 +83,12 @@ class AndroidPhotoNavigationBenchmarkTest {
                 }
                 check(done.await(60,TimeUnit.SECONDS));SystemClock.sleep(200)
                 val measured=report(false);measured.put("input_vsync_ns",cadence);measured.put("run",run)
+                if(gpuTiming){
+                    val timing=native{JSONArray(Native.presentationTimings(it,true))}
+                    assertTrue("Expected presentation GPU samples",timing.length()>20)
+                    assertTrue("Valid GPU timestamp pairs",(0 until timing.length()).all{timing.getJSONArray(it).getInt(2)==1})
+                    measured.put("presentation_gpu",timing)
+                }
                 measured.put("renderer",native{JSONObject(Native.query(it,obj("type" to "renderer_stats").toString()))})
                 output.resolve("photo-navigation-$run.json").writeText(measured.toString())
                 results.put(obj("run" to run,"frames" to measured.getJSONArray("frames").length(),"input_ticks" to cadence.length()))

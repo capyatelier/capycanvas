@@ -14,6 +14,12 @@ struct Task {
     control: CaptureControl,
     lut: Option<Arc<layer_color::ProofLut>>,
 }
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_presentationTimings(
+    mut env: JNIEnv, _: JClass, handle: jlong, enabled: jboolean,
+) -> jstring {
+    string(&mut env, Ok(unsafe { app(handle) }.presentation_timings(enabled != 0).to_string()))
+}
 unsafe fn task<'a>(id: jlong) -> &'a mut Task {
     unsafe { &mut *(id as *mut Task) }
 }

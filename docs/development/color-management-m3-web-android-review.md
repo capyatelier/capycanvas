@@ -4,6 +4,8 @@ Review builds and raw evidence are in `artifacts/color-m3-web-android/`.
 The [validation record](../history/color-management-web-android-m3-validation.md)
 describes the tested flows, performance, failures and untested cases. GTK's
 accepted workflow is preserved; Web/Android user acceptance is still pending.
+The current builds include the shared shader optimization qualified in the
+[navigation investigation](../history/color-management-proof-navigation-investigation.md).
 
 ## Run
 
@@ -104,7 +106,9 @@ adb -s 5ll21u1002931 shell am instrument -w -r \
 ```
 
 `AndroidPhotoNavigationBenchmarkTest` accepts `-e photoBenchmark true` and the
-optional `-e proofProfile …`. Its documented photo fixture goes in the isolated
+optional `-e proofProfile …`. Add `-e proofTiming true` for bounded, nonblocking
+presentation-pass GPU samples (up to 256 per run, not display latency).
+Its documented photo fixture goes in the isolated
 app's `files/photo-benchmark.jpg`; generated reports go to its external files
 folder. Sample `dumpsys meminfo` and `/proc/meminfo` in a separate run, keeping raw
 first/warm runs and whole-browser attribution limits visible.

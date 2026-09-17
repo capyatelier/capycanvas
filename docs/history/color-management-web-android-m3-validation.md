@@ -7,6 +7,11 @@
 workflow. It enables Web and Android only; HDR and other hosts are outside scope.
 User review is pending; these are implementation and automated-test results.
 
+The later [navigation investigation](color-management-proof-navigation-investigation.md)
+isolates an avoidable GPU shader cost and records the optimized builds: Web proof
+navigation improves from about 78 to 100 updates/s on the same tablet. The original
+measurements below remain the baseline; they do not describe the updated shader.
+
 ## Implementation
 
 - `1c89f091` shares proof preparation, adoption/preservation requirements, stale

@@ -75,6 +75,7 @@ internal object Native {
     @JvmStatic external fun captureControl(): Long
     @JvmStatic external fun proofStatus(handle: Long): String
     @JvmStatic external fun proofForm(handle: Long): String
+    @JvmStatic external fun presentationTimings(handle: Long, enabled: Boolean): String
     @JvmStatic external fun proofTask(handle: Long, id: Int, recipe: String, control: Long): Long
     @JvmStatic external fun proofWork(task: Long)
     @JvmStatic external fun proofCheck(handle: Long, task: Long)

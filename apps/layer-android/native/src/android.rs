@@ -44,6 +44,13 @@ pub(crate) struct OverviewSlot {
 }
 
 impl App {
+    pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
+        let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
+            (Some(surface), Some(renderer)) => surface.presenter.gpu_timings(renderer, enabled),
+            _ => Vec::new(),
+        };
+        serde_json::json!(samples.into_iter().map(|s| [s.frame, s.elapsed_ns, s.status]).collect::<Vec<_>>())
+    }
     pub(crate) fn project_adopted(&mut self) {
         self.cursor = Default::default();
         // The file worker has already rendered this candidate and waited for
