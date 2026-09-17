@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "LayersView.h"
+#include "ExternalImages.h"
+#include "WorkspaceQuery.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <array>
 
@@ -36,6 +38,18 @@ void LayerRow::init(){
     root.BorderBrush(fill({255,53,132,228}));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     AutomationProperties::SetName(root,L"Layer row");
+    root.AllowDrop(true);
+    root.DragOver([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&self->current()&&fileDrag(event)){
+        event.Handled(true);auto fraction=float(event.GetPosition(self->root).Y/std::max(1.,self->root.ActualHeight()));auto deferral=event.GetDeferral();
+        if(!QueryWorkspace(self->data->query,O({{L"type",S(L"image_layer_drop")},{L"target",N(self->id)},{L"fraction",N(fraction)}}),
+            [event,deferral](J reply){auto position=str(object(reply,L"result"),L"position");
+                event.AcceptedOperation(position.empty()?winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::None:winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
+                event.DragUIOverride().Caption(position==L"into"?L"Place images in group":position==L"above"?L"Place images above layer":L"Place images below layer");deferral.Complete();}))deferral.Complete();
+    }});
+    root.Drop([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&self->current()&&fileDrag(event)){
+        auto action=imageDrop(self->data->state);A row;row.Append(N(self->id));row.Append(N(event.GetPosition(self->root).Y/std::max(1.,self->root.ActualHeight())));action.Insert(L"layer",row);
+        receiveImageDrop(event,action,self->data->document);
+    }});
     // Include the two-DIP gaps only beside visible flex items. Empty mask and
     // indentation columns must not add their own gaps.
     for(auto width:{26.,26.,0.,5.,32.,14.,32.,-1.,14.,12.}){

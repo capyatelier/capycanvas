@@ -565,7 +565,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
         matches!(
             self.state.platform,
-            Platform::Gtk | Platform::Android | Platform::Web
+            Platform::Gtk | Platform::Android | Platform::Web | Platform::Windows
         ) && self
             .state
             .customization
@@ -1365,7 +1365,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 floating: (whole && source_floating).then_some(source_id),
                 preview: (matches!(
                     self.state.platform,
-                    Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                    Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
                 ) && whole
                     && source_floating)
                     .then_some(source_bounds),
@@ -1434,7 +1434,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // has no visible panel size, so it keeps the measured/default size.
             let preserve_size = matches!(
                 self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
             ) && !drag.source_is_icon
                 && !(drag.panel.kind() == PanelKind::Tiles
                     && self.state.workspace.layout.group_panels(group)?.len() == 1);
@@ -1461,7 +1461,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             drag.torn_off = true;
             drag.preview = matches!(
                 self.state.platform,
-                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
             )
             .then_some(floated.bounds);
             drag.item = DockItem::Group { group };
@@ -3918,7 +3918,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
-        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios)
+        if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
             && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
                 [("Point sample", 1), ("3×3 average", 3), ("5×5 average", 5)]

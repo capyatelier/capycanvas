@@ -1,5 +1,7 @@
 # Phase 2 handoff: Windows
 
+2026-09-17 implementation update: see the [Windows feature parity port](windows-feature-parity-progress.md) for the current shared-core integration and validation. The historical acceptance below is not automatically extended to the new workflows.
+
 2026-09-16. Bring WinUI/D3D12 to complete SDR color/photo editing. Shared phase 2
 and GTK/Web/Android implementations are available through `a8b3cd76`; Windows
 still has incompatible existing color controls and uses the old attachment

@@ -899,7 +899,7 @@ impl Settings {
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
-            .filter(|(id, _)| *id != SettingsPage::Color || matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac))
+            .filter(|(id, _)| *id != SettingsPage::Color || matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows))
             .map(|(id, groups)| PreferencePage {
                 id,
                 title: id.title().into(),

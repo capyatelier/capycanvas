@@ -8,6 +8,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+layer-color = { path = "../../../crates/layer-color" }
 layer-core = { path = "../../../crates/layer-core" }
 layer-engine = { path = "../../../crates/layer-engine" }
 layer-render = { path = "../../../crates/layer-render", features = ["png"] }

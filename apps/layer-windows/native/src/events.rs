@@ -121,6 +121,14 @@ mod tests {
         }
     }
     #[test]
+    fn predicted_future_does_not_reject_next_real_history_batch() {
+        let mut predicted=point(2);predicted.timestamp_ns=20_000_000;predicted.flags|=1;
+        validate_batch(&[point(1),predicted]).unwrap();
+        validate_batch(&[point(3)]).unwrap();
+        assert!(predicted.event().flags.contains(SampleFlags::PREDICTED));
+        assert!(!point(3).event().flags.contains(SampleFlags::PREDICTED));
+    }
+    #[test]
     fn invalid_tail_rejects_entire_batch_before_consumption() {
         let mut batch = [point(1), point(2), point(3)];
         batch[2].pressure = f32::NAN;

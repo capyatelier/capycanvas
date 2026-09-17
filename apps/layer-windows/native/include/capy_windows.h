@@ -61,6 +61,10 @@ __declspec(dllimport) bool capy_navigator_image(float width, float height, uint3
    Hit result: 0 none, 1 hue, 2 field. Free returned strings with capy_string_free.
    Field output is exactly side*side*4 writable RGBA8 bytes, side in 1..=2048. */
 __declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t projection);
+__declspec(dllimport) CapyPreview* capy_document_preview(CapyHost* host, char const* json);
+__declspec(dllimport) char* capy_export_draft(char const* json);
+__declspec(dllimport) bool capy_color_raster(uint32_t side, float hue, uint32_t projection, uint32_t space, bool guide, uint8_t* output, size_t length);
+__declspec(dllimport) char* capy_color_ui(char const* json);
 __declspec(dllimport) char* capy_color_layout(float size);
 __declspec(dllimport) char* capy_color_hue_stops(uint32_t projection);
 __declspec(dllimport) bool capy_color_field(uint32_t side, float hue, uint32_t projection, uint8_t* output, size_t length);
@@ -78,7 +82,8 @@ __declspec(dllimport) int32_t capy_action(CapyHost*, const char* json);
 /* Typed document dialog responses, queued to the same render owner as actions.
    capy_finish_services cancels outstanding document work and joins its callback. */
 __declspec(dllimport) int32_t capy_document_action(CapyHost*, const char* json);
-__declspec(dllimport) int32_t capy_input(CapyHost*, const char* json);
+__declspec(dllimport) int32_t capy_native_prediction(CapyHost* host, bool available);
+int32_t capy_input(CapyHost*, const char* json);
 /* Physical anchor, logical wheel deltas, current composition density. */
 __declspec(dllimport) int32_t capy_scroll(CapyHost*, float x, float y, float dx, float dy, float density, bool zoom, bool horizontal);
 /* 0=refresh, 1=motion, 2=contact, 3=leave. Returns handled/dismiss bits. */

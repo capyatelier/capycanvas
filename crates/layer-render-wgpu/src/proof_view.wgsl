@@ -27,7 +27,9 @@ fn proof_artwork(paint: vec4<f32>) -> vec4<f32> {
     var distances = previous.distances;
     for (var i = 0u; i < 3u; i += 1u) {
         let axis = axes[i];
-        low[axis] += 1u;
+        // FXC cannot address a dynamically indexed vector component as an l-value.
+        // A component mask preserves the tetrahedron walk on every backend.
+        low += select(vec3(0u), vec3(1u), vec3(axis) == vec3(0u, 1u, 2u));
         let next = proof_at(low);
         rgb += t[axis] * (next.rgb - previous.rgb);
         distances += t[axis] * (next.distances - previous.distances);

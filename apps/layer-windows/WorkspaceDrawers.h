@@ -12,6 +12,7 @@ public:
     void Apply();
     void Reset();
     void AppendOverviews(CapyUi::A& slots)const;
+    CapyUi::A PanelMeasurements()const;
     winrt::Microsoft::UI::Xaml::FrameworkElement Anchor(std::wstring const& control)const;
 private:
     struct Impl;
