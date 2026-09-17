@@ -10,6 +10,10 @@ fn initialized(platform: u32) -> App {
     assert_eq!(unsafe { capy_project_new(new.0, options.as_ptr()) }, 0);
     adopt(&app, &new);
     app.place_rgba("Retained photograph", 7, 5, &[123, 231, 45, 213].repeat(35));
+    // Placement leaves Move selected. Add document-space ink explicitly;
+    // moving the retained photo is not a painted color-conversion fixture.
+    app.invoke("add_layer");
+    app.invoke("pen");
     app.action(json!({"type":"color","action":{"op":"set_slot","slot":"foreground","color":{"space":"DisplayP3","rgba":[0.9,0.23,0.1,0.73]}}}));
     let blank=app.pixels();
     stroke_inside(&app); app.draw_until_idle();

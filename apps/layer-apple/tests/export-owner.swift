@@ -138,7 +138,7 @@ import UniformTypeIdentifiers
             var destination: URL? = master
             var chosenType: UTType?
             var staging: URL?
-            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { $0(nil) }, save: { _,type,done in
+            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _,type,done in
                 chosenType = type; done(destination)
             }, create: { _,done in done(JSON(["extent": [64,48], "color": ["space": "DisplayP3", "depth": "U16"], "background": "Transparent"])) },
                 export: platform == 0 ? { url,done in

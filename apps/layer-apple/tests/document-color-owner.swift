@@ -41,7 +41,7 @@ import QuartzCore
                 try await Task.sleep(for:.milliseconds(10))
             }
             let master=root.appendingPathComponent("Editable.capy")
-            store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{$0(nil)},save:{_,_,done in done(master)},create:{_,done in
+            store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([])},save:{_,_,done in done(master)},create:{_,done in
                 done(JSON(["extent":[128,96],"color":["space":"DisplayP3","depth":"U16"],"background":"White"]))
             }))
             func invoke(_ command:String) async throws { try await edit(store,["type":"invoke","command":command]) }

@@ -130,7 +130,7 @@ private final class DisplayCaptureLayer: CAMetalLayer, @unchecked Sendable {
             try tag()
             let master = root.appendingPathComponent("Master.capy")
             var space = "Srgb"
-            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { $0(nil) }, save: { _, _, done in done(master) }, create: { _, done in
+            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(master) }, create: { _, done in
                 done(JSON(["extent": [128, 128], "color": ["space": space, "depth": "U16"], "background": "White"]))
             }))
             func invoke(_ command: String) async throws { try await edit(store, ["type": "invoke", "command": command]) }

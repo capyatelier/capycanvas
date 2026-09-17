@@ -26,8 +26,12 @@ import UniformTypeIdentifiers
         let deadline = Date().addingTimeInterval(45)
         while !ready() {
             try require(Date() < deadline && store.failure == nil, store.failure ?? "Timed out: \(label)")
-            let prepared = await withCheckedContinuation { done in store.native!.flushPersistence { done.resume(returning: $0) } }
-            try require(prepared, "Prepare recovery: \(label)")
+            // Pending placement cannot be captured for recovery until Apply.
+            // Poll ordinary frames; explicit flush below tests durability.
+            let now = FrameTrace.now()
+            await withCheckedContinuation { done in
+                store.native!.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -78,9 +82,9 @@ import UniformTypeIdentifiers
         let files = RecoveryFiles(root: root), scene = UUID().uuidString
         var store: EditorStore? = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
         let layer = try await attach(store!)
-        store!.projectFiles = ProjectFiles(store: store!, dialogs: .init(open: { $0(nil) }, save: { _, _, done in done(nil) }, create: { _, done in
+        store!.projectFiles = ProjectFiles(store: store!, dialogs: .init(open: { _, done in done([]) }, save: { _, _, done in done(nil) }, create: { _, done in
             done(JSON(["extent": [128, 96], "color": ["space": space, "depth": depth], "background": "White"]))
-        }, paste: { $0(.success(photo)) }))
+        }, paste: { $0(.success([PhotoClipboard.Item { $0(.success(photo)) }])) }))
         func invoke(_ command: String) async throws { try await edit(store!, ["type": "invoke", "command": command]) }
         func idle() async throws {
             try await wait("Document completion", store!) { !store!.projectFiles.busy && store!.state["requests"].array.isEmpty }
@@ -88,6 +92,7 @@ import UniformTypeIdentifiers
         }
         try await invoke("new_document"); try await idle()
         try await invoke("paste_image"); try await idle()
+        try await invoke("apply_transform"); try await idle()
         try await edit(store!, ["type": "color", "action": ["op": "definition", "color": ["space": "DisplayP3", "rgba": [0.8, 0.25, 0.1, 0.5]]]])
         try await invoke("select_all")
         try await edit(store!, ["type": "layer", "action": ["op": "fill_selection"]])

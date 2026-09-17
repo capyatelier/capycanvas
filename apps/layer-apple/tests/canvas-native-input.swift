@@ -54,7 +54,7 @@ private final class TabletEvent: NSEvent {
         let project = root.appendingPathComponent("rulers.capy")
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         store.projectFiles = ProjectFiles(store: store, dialogs: .init(
-            open: { $0(nil) }, save: { _, type, done in done(type == .capyProject ? project : png) },
+            open: { _, done in done([]) }, save: { _, type, done in done(type == .capyProject ? project : png) },
             create: { _, done in done(JSON(["extent": [128, 128], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])) }, exportOptions: { $0.choose($0.recipe) }))
         let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 1200, height: 870),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)

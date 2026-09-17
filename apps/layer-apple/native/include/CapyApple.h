@@ -35,6 +35,7 @@ int32_t capy_project_export_options(const CapyProjectTask *task, const char *rec
 int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *name); /* -1: new */
 int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);
+char *capy_photo_formats(void);
 char *capy_project_profile(const CapyProjectTask *task); /* owned JSON interpretation or null */
 int32_t capy_project_assume_profile(const CapyProjectTask *task, const char *profile_json);
 int32_t capy_project_edit_work(const CapyProjectTask *task, const char *choice_json, bool copy);

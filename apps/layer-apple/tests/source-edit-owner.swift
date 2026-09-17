@@ -66,9 +66,9 @@ import UniformTypeIdentifiers
                 try await Task.sleep(for:.milliseconds(10))
             }
             let saved=root.appendingPathComponent("Edited-\(platform).capy")
-            store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{$0(imageURL)},save:{_,_,done in done(saved)},create:{_,done in
+            store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([imageURL])},save:{_,_,done in done(saved)},create:{_,done in
                 done(JSON(["extent":[64,48],"color":["space":"Srgb","depth":"U8"],"background":"White"]))
-            },paste:{$0(.success(photo))}))
+            },paste:{$0(.success([PhotoClipboard.Item { $0(.success(photo)) }]))}))
             func invoke(_ command:String) async throws {try await edit(store,["type":"invoke","command":command])}
             func idle() async throws {
                 try await wait("Document completion",store:store) {!store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"}}
@@ -86,6 +86,7 @@ import UniformTypeIdentifiers
             }
             try await invoke("new_document");try await idle()
             try await invoke("paste_image");try await idle()
+            try await invoke("apply_transform");try await idle()
             let count=store.state["layers"].array.count
             let target=store.state["layer_tools"]["editing_layer"]["id"].uint
             var editor=try await dialog("repair_source_profile")

@@ -224,13 +224,21 @@ impl ImageImportBatch {
         result
     }
     pub fn interpret(&mut self, profile: ColorProfile, cancelled: bool) -> Result<(), String> {
+        if cancelled {
+            self.invalidate();
+            return Err("Image import cancelled".into());
+        }
+        // A rejected form choice must remain editable without decoding the
+        // batch again. Validate before consuming the pending original.
+        let (_, source) = self.pending.as_ref().ok_or("No pending image interpretation")?;
+        let source = layer_color::assume_source_profile(source.clone(), profile)?;
         let result = (|| {
-            let (name, source) = self
+            let (name, _) = self
                 .pending
                 .take()
                 .ok_or("No pending image interpretation")?;
-            self.check(cancelled)?;
-            self.push(name, layer_color::assume_source_profile(source, profile)?)
+            self.check(false)?;
+            self.push(name, source)
         })();
         if result.is_err() {
             self.invalidate();
@@ -402,6 +410,8 @@ mod tests {
         let mut batch = ImageImportBatch::new(policy, RgbSpace::DisplayP3, Default::default());
         batch.append("first".into(), source.clone(), false).unwrap();
         assert!(batch.pending_source().is_some());
+        assert!(batch.interpret(ColorProfile::Icc(Vec::new().into()), false).is_err());
+        assert_eq!(batch.pending_source(), Some(&source));
         batch
             .interpret(ColorProfile::Builtin(RgbSpace::Srgb), false)
             .unwrap();

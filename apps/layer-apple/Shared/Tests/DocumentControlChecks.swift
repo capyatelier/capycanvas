@@ -114,6 +114,8 @@ extension XCTestCase {
         CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
         XCTAssertTrue(CGImageDestinationFinalize(output))
         let source = try Data(contentsOf: url)
+        let second = root.appendingPathComponent("Second blue.png")
+        try source.write(to: second)
         let layers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let importImage = app.buttons["layer-Import image as layer"]
         let open = app.windows.buttons["OKButton"].firstMatch
@@ -124,20 +126,42 @@ extension XCTestCase {
         XCTAssertTrue(open.waitForNonExistence(timeout: 10))
         XCTAssertEqual(layers.count, 2)
         XCTAssertEqual(editorPixels(in: app), paper, "Cancelling image selection must preserve the drawing")
-        workspaceActivate(importImage)
-        XCTAssertTrue(open.waitForExistence(timeout: 15))
-        app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
-        workspaceActivate(open)
-        XCTAssertTrue(open.waitForNonExistence(timeout: 15))
-        expectation(for: NSPredicate(format: "count == 3"), evaluatedWith: layers)
-        expectation(for: NSPredicate { _, _ in
-            let pixels = self.editorPixels(in: app); return Int(pixels[2]) > Int(pixels[0]) + 100
-        }, evaluatedWith: app)
-        waitForExpectations(timeout: 30)
+        func chooseBatch() {
+            workspaceActivate(importImage)
+            XCTAssertTrue(open.waitForExistence(timeout: 15))
+            // Go to the first file, which selects it in the native browser.
+            // Column-view filenames are editable text fields, not static labels.
+            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
+            expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: open)
+            waitForExpectations(timeout: 15)
+            app.typeKey("a", modifierFlags: .command); workspaceActivate(open)
+            XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+            expectation(for: NSPredicate(format: "count == 4"), evaluatedWith: layers)
+            expectation(for: NSPredicate { _, _ in
+                let pixels = self.editorPixels(in: app); return Int(pixels[2]) > Int(pixels[0]) + 100
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 30)
+        }
+        chooseBatch()
+        let apply = app.buttons["photo-placement-apply"], cancel = app.buttons["photo-placement-cancel"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10)); XCTAssertTrue(cancel.isHittable)
+        editorMenu(in: app, menu: "View", id: "zen_mode", label: "Zen mode")
+        XCTAssertTrue(apply.isHittable); XCTAssertTrue(cancel.isHittable)
+        attachEditor(in: app, name: "native-photo-placement-panels-hidden")
+        workspaceActivate(cancel)
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
+        editorMenu(in: app, menu: "View", id: "zen_mode", label: "Zen mode")
+        expectation(for: NSPredicate(format: "count == 2"), evaluatedWith: layers)
+        waitForExpectations(timeout: 15)
+        XCTAssertEqual(editorPixels(in: app), paper, "Cancel removes the complete provisional batch")
+        chooseBatch()
+        workspaceActivate(app.buttons["photo-placement-original-size"])
+        workspaceActivate(apply)
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.exists, "Use the selected photo name for its layer")
         let imported = editorPixels(in: app)
         attachEditor(in: app, name: "native-image-imported")
-        for (command, count, expected) in [("Undo", 2, paper), ("Redo", 3, imported)] {
+        for (command, count, expected) in [("Undo", 2, paper), ("Redo", 4, imported)] {
             editorHistory(command, in: app)
             expectation(for: NSPredicate { _, _ in
                 layers.count == count && self.editorPixels(in: app) == expected
@@ -145,6 +169,7 @@ extension XCTestCase {
             waitForExpectations(timeout: 15)
         }
         XCTAssertEqual(try Data(contentsOf: url), source)
+        XCTAssertEqual(try Data(contentsOf: second), source)
         XCTAssertFalse(app.alerts.firstMatch.exists); XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachEditor(in: app, name: "native-image-redone")
     }

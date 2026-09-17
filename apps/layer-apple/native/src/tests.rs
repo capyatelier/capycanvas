@@ -1015,6 +1015,9 @@ impl App {
             .unwrap();
     }
     fn draw_until_idle(&self) {
+        self.draw_until_prepared(false);
+    }
+    fn draw_until_prepared(&self, active_operation: bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             self.draw_frame();
@@ -1023,7 +1026,7 @@ impl App {
             if unsafe { &*self.0 }.host.startup.brush_ready
                 && !engine.backend().0.as_ref().unwrap().startup_needs_update(
                     engine.document(), engine.brush(), engine.transform_preview().is_some())
-                && session.require_document_idle().is_ok()
+                && (active_operation || session.require_document_idle().is_ok())
                 && !engine.has_pending_document_edits()
             {
                 return;

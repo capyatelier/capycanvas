@@ -12,6 +12,7 @@ impl App {
         let job = place_job(self);
         read_bytes(&job, name, &bytes);
         adopt(self, &job, false);
+        self.invoke("apply_transform"); self.draw_until_idle();
     }
 }
 fn place_job(app: &App) -> ProjectJob {
@@ -27,7 +28,7 @@ fn read_bytes(job: &ProjectJob, name: &str, bytes: &[u8]) {
 fn adopt(app: &App, job: &ProjectJob, opened: bool) {
     assert_eq!(unsafe { capy_apple_project_adopt(app.0, job.0, c"Photo.tiff".as_ptr(),
         if opened { c"file:///source/Photo.tiff".as_ptr() } else { c"".as_ptr() }) }, 0, "{:?}", job.error());
-    app.draw_until_idle();
+    app.draw_until_prepared(true);
 }
 fn source(space: RgbSpace, depth: IntegerDepth) -> SourceImage {
     let interpretation = SourceInterpretation { channels: SourceChannels::Rgba, depth,
@@ -196,6 +197,7 @@ fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
             let target_color = unsafe { &*app.0 }.host.session.engine().document().color;
             let blank = app.pixels();
             let job = place_job(&app); read_bytes(&job, "Retained.tiff", &bytes); adopt(&app, &job, false);
+            app.invoke("apply_transform"); app.draw_until_idle();
             let document = unsafe { &*app.0 }.host.session.engine().document();
             assert_eq!(document.color, target_color, "Place must preserve the receiving document's space/depth");
             assert_eq!(source_samples(document.layers.iter().find_map(|l| l.source.as_ref()).unwrap()), source_samples(&original));
@@ -270,5 +272,77 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
             assert_eq!(unsafe { capy_apple_document_complete(app.0, id as u32, 0) }, 0);
             app.layer_action(json!({"op":"select","id":1,"mask":false}));
         }
+    }
+}
+
+#[test]
+fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
+    let images: Vec<_> = [(RgbSpace::DisplayP3, IntegerDepth::U8), (RgbSpace::ProPhoto, IntegerDepth::U16)]
+        .into_iter().map(|(space, depth)| {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            layer_color::photo::write_tiff(&mut encoded, &source(space, depth)).unwrap();
+            let bytes = encoded.into_inner();
+            let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+            (bytes, decoded)
+        }).collect();
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        let new = ProjectJob::new(&app, true);
+        assert_eq!(new.create([7, 5]), 0); adopt(&app, &new, false);
+        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        for apply in [false, true] {
+            let job = place_job(&app);
+            for (index, (bytes, _)) in images.iter().enumerate() {
+                read_bytes(&job, &format!("Photo-{}.tiff", index + 1), bytes);
+                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before,
+                    "Nothing enters the live drawing during batch preparation");
+            }
+            adopt(&app, &job, false);
+            let session = &unsafe { &*app.0 }.host.session;
+            assert!(!session.engine().can_undo(), "Provisional placement has no artwork history");
+            assert!(session.capture_project_recovery().is_err(), "Pending placement cannot enter recovery");
+            let placed: Vec<_> = session.engine().document().layers.iter().filter(|l| l.source.is_some()).collect();
+            assert_eq!(placed.len(), 2);
+            for (index, layer) in placed.iter().enumerate() {
+                assert_eq!(layer.name.as_ref(), format!("Photo-{}", index + 1));
+                assert_eq!(layer.source.as_deref(), Some(&images[index].1));
+                assert!((layer.properties.placement.0[0] - 7. / 13.).abs() < 0.00001);
+                let center = layer.properties.placement.map(layer_core::Point { x: 6.5, y: 4.5 });
+                assert!((center.x - 3.5).abs() < 0.00001 && (center.y - 2.5).abs() < 0.00001);
+            }
+            app.invoke("placement_original_size"); app.draw_until_prepared(true);
+            for layer in unsafe { &*app.0 }.host.session.engine().document().layers.iter().filter(|l| l.source.is_some()) {
+                assert_eq!(&layer.properties.placement.0[..4], &layer_core::Affine::IDENTITY.0[..4]);
+            }
+            if !apply {
+                app.invoke("cancel_transform"); app.draw_until_idle();
+                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+                assert!(!unsafe { &*app.0 }.host.session.engine().can_undo());
+            } else {
+                app.invoke("apply_transform"); app.draw_until_idle();
+                let committed = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+                let pixels = app.pixels();
+                app.invoke("undo"); app.draw_until_idle();
+                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+                assert!(!unsafe { &*app.0 }.host.session.engine().can_undo(), "The entire batch is one Undo");
+                app.invoke("redo"); app.draw_until_idle();
+                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, committed);
+                assert_eq!(app.pixels(), pixels);
+                let mut archive = Vec::new();
+                unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap().write(&mut archive).unwrap();
+                let opened = ProjectJob::new(&app, true); read_bytes(&opened, "Batch.capy", &archive); adopt(&app, &opened, false);
+                assert_eq!(app.pixels(), pixels);
+                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, committed);
+            }
+        }
+        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let job = place_job(&app); read_bytes(&job, "First.tiff", &images[0].0);
+        assert_eq!(unsafe { capy_project_read_bytes(job.0, b"broken".as_ptr(), 6, c"Second.png".as_ptr()) }, -1);
+        assert_eq!(unsafe { capy_project_read_bytes(job.0, images[1].0.as_ptr(), images[1].0.len(), c"Retry.tiff".as_ptr()) }, -1,
+            "A failed batch cannot resume as a partial insertion");
+        assert_eq!(unsafe { capy_apple_project_adopt(app.0, job.0, c"".as_ptr(), c"".as_ptr()) }, -1);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
     }
 }

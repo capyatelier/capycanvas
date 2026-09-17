@@ -163,10 +163,19 @@ source hashes, failed intermediate assertions and final pixel comparisons.
 
 The dry-contact planner visits each contact's intersected tiles once and inserts
 them into an ordered map. With K contact/tile intersections and T distinct tiles,
-its map work is O(K log T), followed by O(T) tile preparation. It no longer
+its map work is O(K log T), producing T tile preparation entries. It no longer
 allocates the entire enclosing rectangle or rescans every contact independently
 for each destination tile. Exact coverage still belongs to the shader; the
 conservative bounds do not discard painted pixels.
+
+That complexity describes tile planning, not the entire renderer. The current
+paint encoder still locates resident pages with linear searches, so those
+lookups can cost O(TN) for N resident pages. Composition still visits the dirty
+rectangle's tile coordinates and tests membership in the sparse set before
+encoding a tile. Neither traversal proves a dominant cost: the composition
+interval also contains GPU waits. Replacing containers or iterating the sparse
+set directly should follow attribution, with clipping and row-order requirements
+preserved.
 
 This is not a proof of optimality. Each tile retains a first-to-last contact
 range, so a path that leaves and revisits a tile can cause its shader to test

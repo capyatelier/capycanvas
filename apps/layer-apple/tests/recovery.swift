@@ -208,7 +208,7 @@ import QuartzCore
             // the intermediate manual-save request, without another Open picker.
             let manual = root.appendingPathComponent("before-recovery.capy")
             reopened.projectFiles = ProjectFiles(store: reopened, dialogs: .init(
-                open: { _ in preconditionFailure("Recovery must retain its selected archive through Save") },
+                open: { _, _ in preconditionFailure("Recovery must retain its selected archive through Save") },
                 save: { _, _, complete in complete(manual) },
                 export: platform == 0 ? { source, complete in
                     do { try FileManager.default.copyItem(at: source, to: manual); complete(manual) }

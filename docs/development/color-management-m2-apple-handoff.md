@@ -25,6 +25,11 @@ Swift/Metal owner and full Mac UI checks pass; see the
 device coverage. Retained photo Open/Place/Paste now share the native worker and
 profile/depth policies, replacing the lossy sRGB8 import path; see the
 [photo workflow record](apple-handoff.md#retained-photo-open-place-and-paste).
+The subsequent [batch milestone](apple-handoff.md#interactive-photo-batches--2026-09-17)
+adopts shared Open policy and interactive multi-image Place/Paste with
+Original Size, Apply/Cancel and one-step history. Native format filters use shared
+decoder capabilities; clipboard loading is sequential. External canvas/layer
+drops and physical placement/provider acceptance remain open.
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 now use the same worker, with complete before/after previews, source-safe flattened
 copies and exact shared history; see the

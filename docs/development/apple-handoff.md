@@ -120,13 +120,60 @@ device timing is inferred from upstream Android results.
 The current physical review apps are retained; this is not device acceptance of
 the new controls or a new performance qualification.
 
-Apple's remaining shared-service migrations are color/source transactions,
-photo preparation/adoption and recovery (C1–C3/C6 in the
-[centralization handoff](shared-workflow-centralization-handoff.md)). Interactive
-multi-image Place/Paste/Drop with Apply/Cancel is a concrete remaining parity
-gap: Apple's current worker still calls immediate `import_layer_source`.
-Keep provider/device acceptance and the pending iPad performance/save retest
-separate from these local integrations.
+Apple's remaining shared-service migrations are color/source transactions and
+recovery (C1/C2/C6 in the
+[centralization handoff](shared-workflow-centralization-handoff.md)). The next
+photo milestone below replaces immediate insertion with shared batch placement.
+External canvas/layer drops remain a concrete parity gap. Keep provider/device
+acceptance and the pending iPad performance/save retest separate from local
+integration.
+
+## Interactive photo batches — 2026-09-17
+
+Open now consumes shared import policy for input kind, missing-profile choices,
+editing depth and safe adoption. Place/Paste capture their target before native
+selection or clipboard loading, decode the entire batch through
+`ImageImportBatch`, and enter the existing shared placement transaction only
+after every member succeeds. Apply creates one history step; Cancel removes the
+whole provisional batch. Original Size restores source scale without changing
+original samples. Controls remain available with workspace panels hidden and
+use the existing shared palette/button style with 44-point targets.
+
+Native file and clipboard filters come from the actual shared decoder
+capabilities. Clipboard representations load and decode sequentially, allowing
+the shared memory limit or a failed member to stop later reads. Neither host
+re-encodes photographs through an OS bitmap. Invalid profile choices retain the
+pending source for correction in the shared batch policy. The old Apple
+source-kind/depth/assumption branches and immediate insertion path are removed.
+
+Qualification is retained under `artifacts/apple-photo-placement-v1/`.
+All 448 shared UI tests pass. The both-policy Swift/Metal coordinator checks
+coordinated reads, complete batch cancellation, Apply/history, malformed second
+members, lazy clipboard failure, stale targets, source-safe Save/reopen and
+invalid-profile retry. The native Mac journey passes real multi-selection,
+Original Size, Apply/Cancel, one-step history and controls with panels hidden;
+its final appearance is reviewed. Fixture corrections preserve assertions about
+artwork while excluding renderer generations and temporary multi-selection from
+history comparisons. Drawing fixtures explicitly leave Move for Pen, and normal
+frame polling no longer tries to capture a provisional placement for recovery.
+
+Main advances to `f074b83d`, adding retained mip levels for shared photo movement.
+The integrated full Apple bridge suite passes 69 active tests with the separate
+61 MP case ignored. Four focused mip tests pass their numerical/pixel reference;
+both final Release builds pass without compiler warnings, and Web Wasm checks
+pass with the documented LLVM toolchain. Mac UI controls are unchanged by this
+renderer integration; those captures precede it. No Android timing is treated as
+Apple performance evidence.
+
+Retained-source editing also passes its existing both-policy Swift/Metal
+workflow. Four SDR recovery cases pass Display P3/U8 and ProPhoto/U16 on both
+policies, preserving the complete archive payload, source samples, corrections,
+masks and continued Undo after a fresh owner. Their explicit no-drawable
+persistence barrier remains part of the check.
+
+External file drops into the canvas/layer list, physical UIKit/provider delivery
+and Pencil placement remain open. The existing artist review apps and drawings
+are preserved; local integration does not establish new device performance.
 
 ## Prediction policy during document adoption
 

@@ -30,7 +30,7 @@ import QuartzCore
             native.attach(surface, width: 128, height: 128, scale: 1)
             defer { native.detach(); withExtendedLifetime(surface) {} }
             try await wait("Metal startup", store: store) { store.snapshot["shaders_ready"].bool }
-            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { $0(nil) }, save: { _,_,done in done(nil) }, create: { _,done in
+            store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) }, save: { _,_,done in done(nil) }, create: { _,done in
                 done(JSON(["extent":[32,24],"color":["space":"DisplayP3","depth":"U16"],"background":"Transparent"]))
             }))
             try await edit(store, ["type":"invoke","command":"new_document"])

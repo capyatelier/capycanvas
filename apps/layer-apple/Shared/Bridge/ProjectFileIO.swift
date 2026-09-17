@@ -5,7 +5,18 @@ import UniformTypeIdentifiers
 
 extension UTType {
     static let capyProject = UTType(exportedAs: "art.capycanvas.project", conformingTo: .data)
-    static let capyPhotoTypes: [UTType] = [.png, .jpeg, .tiff]
+    static let capyPhotoTypes: [UTType] = {
+        guard let text = capy_photo_formats() else { return [] }
+        defer { capy_apple_string_free(text) }
+        guard let formats = try? JSON.decode(String(cString: text)) else { return [] }
+        var types: [UTType] = []
+        for format in formats.array {
+            for ext in format["extensions"].array {
+                if let type = UTType(filenameExtension: ext.string), !types.contains(type) { types.append(type) }
+            }
+        }
+        return types
+    }()
 }
 
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.

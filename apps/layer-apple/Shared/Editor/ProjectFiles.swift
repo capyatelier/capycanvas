@@ -33,7 +33,7 @@ import UIKit
     var closeWindow: (() -> Void)?
     private var handledClose = false
     private var activeTask: NativeProjectTask?
-    private var pickerCompletion: ((URL?) -> Void)?
+    private var pickerCompletion: (([URL]) -> Void)?
     private var cancelled = false
     private var finishing = false
     private var externalOpen: (url: URL, submitted: Bool)?
@@ -42,11 +42,11 @@ import UIKit
     /// Dialog dependency keeps editor/file effects testable without driving
     /// platform panels. The app uses the native implementation by default.
     struct Dialogs {
-        var open: (@escaping (URL?) -> Void) -> Void
+        var open: (Bool, @escaping ([URL]) -> Void) -> Void
         var save: (String, UTType, @escaping (URL?) -> Void) -> Void
         var create: ((JSON, @escaping (JSON?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
-        var paste: ((@escaping (Result<Data, Error>) -> Void) -> Void)? = nil
+        var paste: ((@escaping (Result<[PhotoClipboard.Item], Error>) -> Void) -> Void)? = nil
         var exportOptions: ((ExportController) -> Void)? = nil
     }
     private let dialogs: Dialogs?
@@ -55,6 +55,7 @@ import UIKit
         let id = UUID()
         let export: URL?
         let types: [UTType]
+        var multiple = false
     }
     init(store: EditorStore, dialogs: Dialogs? = nil) { self.store = store; self.dialogs = dialogs; self.preferences = store.colorPreferences }
     var title: String {
@@ -91,25 +92,33 @@ import UIKit
         case "export": beginExport(name: document["name"].string)
         case "open":
             if let url = externalOpen?.url { externalOpen = nil; open(url) }
-            else { chooseOpen { [weak self] url in
+            else { chooseOpen { [weak self] urls in
                 guard let self else { return }
-                if let url { open(url) } else { finish() }
+                if let url = urls.first { open(url) } else { finish() }
             } }
-        case "place": chooseOpen(photosOnly: true) { [weak self] url in
-            guard let self else { return }
-            if let url { open(url, placing: true) } else { finish() }
-        }
-        case "paste":
-            let id = requestID
-            let completed: (Result<Data, Error>) -> Void = { [weak self] result in
-                guard let self, requestID == id else { return }
-                if cancelled { finish(); return }
-                switch result {
-                case .success(let data): open(nil, placing: true, image: data)
-                case .failure(let error): fail(error.localizedDescription)
+        case "place":
+            task(opening: true, placing: true) { [weak self] task in
+                self?.chooseOpen(photosOnly: true) { [weak self] urls in
+                    guard let self else { return }
+                    if urls.isEmpty { finish() } else { place(task, inputs: urls.map(PhotoInput.file)) }
                 }
             }
-            if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
+        case "paste":
+            task(opening: true, placing: true) { [weak self] task in
+                guard let self else { return }
+                let id = requestID
+                let completed: (Result<[PhotoClipboard.Item], Error>) -> Void = { [weak self] result in
+                    guard let self, requestID == id else { return }
+                    if cancelled { finish(); return }
+                    switch result {
+                    case .success(let images):
+                        if images.isEmpty { fail("The clipboard contains no supported images") }
+                        else { place(task, inputs: images.map(PhotoInput.image)) }
+                    case .failure(let error): fail(error.localizedDescription)
+                    }
+                }
+                if let paste = dialogs?.paste { paste(completed) } else { PhotoClipboard.read(completed) }
+            }
         case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
             guard let store else { fail("The canvas session is unavailable"); return }
             let editor = DocumentColorController(store: store, request: document, expected: approved) { [weak self] result in
@@ -304,7 +313,7 @@ import UIKit
                         if self.cancelled { Self.removeStaging(staging); completion(nil); return }
                         let completed: (URL?) -> Void = { url in Self.removeStaging(staging); completion(url) }
                         if let export = self.dialogs?.export { export(staging, completed) }
-                        else { self.pickerCompletion = completed; self.picker = Picker(export: staging, types: []) }
+                        else { self.pickerCompletion = { completed($0.first) }; self.picker = Picker(export: staging, types: []) }
                     }
                 } catch { let message = error.localizedDescription
                     DispatchQueue.main.async { self?.report(message); completion(nil) }
@@ -335,16 +344,31 @@ import UIKit
             }
         }
     }
-    private func open(_ url: URL?, options: JSON? = nil, placing: Bool = false, image: Data? = nil) {
-        let recovery = recovering
-        task(opening: true, placing: placing) { [weak self] task in
-            self?.prepare(task, url: url, recovery: recovery) {
-                if let image { try task.read(image: image) }
-                else { try task.read(from: url, options: options) }
+    private enum PhotoInput { case file(URL), image(PhotoClipboard.Item) }
+    private func place(_ task: NativeProjectTask, inputs: [PhotoInput], index: Int = 0) {
+        guard index < inputs.count else { prepare(task, url: nil, recovery: nil) {}; return }
+        let next: () -> Void = { [weak self] in
+            self?.place(task, inputs: inputs, index: index + 1)
+        }
+        switch inputs[index] {
+        case .file(let url):
+            prepare(task, url: nil, recovery: nil, next: next) { try task.read(from: url) }
+        case .image(let item):
+            let id = requestID
+            item.load { [weak self] result in
+                guard let self, requestID == id else { return }
+                if cancelled { finish(); return }
+                prepare(task, url: nil, recovery: nil, next: next) { try task.read(image: result.get()) }
             }
         }
     }
-    private func prepare(_ task: NativeProjectTask, url: URL?, recovery: RecoveryRecord?, work: @escaping () throws -> Void) {
+    private func open(_ url: URL?, options: JSON? = nil) {
+        let recovery = recovering
+        task(opening: true) { [weak self] task in
+            self?.prepare(task, url: url, recovery: recovery) { try task.read(from: url, options: options) }
+        }
+    }
+    private func prepare(_ task: NativeProjectTask, url: URL?, recovery: RecoveryRecord?, next: (() -> Void)? = nil, work: @escaping () throws -> Void) {
         NativeProjectTask.io.async { [weak self] in
             do {
                 try work()
@@ -359,11 +383,12 @@ import UIKit
                             guard let self else { return }
                             guard let choice else { self.finish(); return }
                             self.interpreting = true
-                            self.prepare(task, url: url, recovery: recovery) { try task.assumeProfile(choice) }
+                            self.prepare(task, url: url, recovery: recovery, next: next) { try task.assumeProfile(choice) }
                         }
                         return
                     }
                     self.profileCompletion = nil; self.pendingProfile = nil
+                    if let next { next(); return }
                     self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url,
                         recovered: recovery != nil) { [weak self] error in
                         DispatchQueue.main.async {
@@ -419,15 +444,15 @@ import UIKit
             if requestID == nil { recovering = nil; externalOpen = nil }
         }
     }
-    private func chooseOpen(photosOnly: Bool = false, _ completion: @escaping (URL?) -> Void) {
-        if let dialogs { dialogs.open(completion); return }
+    private func chooseOpen(photosOnly: Bool = false, _ completion: @escaping ([URL]) -> Void) {
+        if let dialogs { dialogs.open(photosOnly, completion); return }
         #if os(macOS)
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = photosOnly
         panel.canChooseDirectories = false
-        panel.begin { response in completion(response == .OK ? panel.url : nil) }
+        panel.begin { response in completion(response == .OK ? panel.urls : []) }
         #else
-        pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes)
+        pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes, multiple: photosOnly)
         #endif
     }
     private func chooseSave(name: String, type: UTType, _ completion: @escaping (URL?) -> Void) {
@@ -442,9 +467,9 @@ import UIKit
         completion(nil) // iPad uses the export picker above.
         #endif
     }
-    func picked(_ url: URL?) {
+    func picked(_ urls: [URL]) {
         let completion = pickerCompletion; pickerCompletion = nil; picker = nil
-        completion?(url)
+        completion?(urls)
     }
     private nonisolated static func removeStaging(_ url: URL) {
         NativeProjectTask.io.async { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -498,7 +523,7 @@ struct ProjectFilesModifier: ViewModifier {
             // Files may deliver its URL after SwiftUI dismisses this sheet.
             // Only the document-picker delegate completes selection or cancellation.
             .sheet(item: $files.picker) { picker in
-                NativeDocumentPicker(export: picker.export, contentTypes: picker.types) { files.picked($0) }.ignoresSafeArea()
+                NativeDocumentPicker(export: picker.export, contentTypes: picker.types, multiple: picker.multiple) { files.picked($0) }.ignoresSafeArea()
             }
             #endif
     }
@@ -511,20 +536,21 @@ private extension ProjectFiles {
 struct NativeDocumentPicker: UIViewControllerRepresentable {
     let export: URL?
     let contentTypes: [UTType]
-    let completion: (URL?) -> Void
+    let multiple: Bool
+    let completion: ([URL]) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(completion) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let controller = export.map { UIDocumentPickerViewController(forExporting: [$0], asCopy: false) }
             ?? UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: false)
-        controller.allowsMultipleSelection = false; controller.delegate = context.coordinator
+        controller.allowsMultipleSelection = multiple; controller.delegate = context.coordinator
         return controller
     }
     func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let completion: (URL?) -> Void
-        init(_ completion: @escaping (URL?) -> Void) { self.completion = completion }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { completion(urls.first) }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { completion(nil) }
+        let completion: ([URL]) -> Void
+        init(_ completion: @escaping ([URL]) -> Void) { self.completion = completion }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { completion(urls) }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { completion([]) }
     }
 }
 #endif

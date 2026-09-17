@@ -729,13 +729,19 @@ hierarchy, rename, blend/opacity/locks/references, shared menu enablement, image
 import and GPU thumbnails. Imported pixels round-trip exactly through undo/redo.
 Numeric expressions and slider mapping use a stateless shared-policy entry point.
 
-Open, Place and Paste share the retained photo decoder in `layer-color` for
-PNG, JPEG and TIFF. Decoding keeps original profiles, integer depth and samples;
-Open selects the source working space and a separate native Save destination,
-while Place/Paste preserve the receiving document's space and add one undoable
-layer. The missing-profile preference can pause preparation for an explicit
-interpretation without changing source samples. Reads use the same coordinated,
-security-scoped file access as native projects, off the UI/render owner.
+Open, Place and Paste use shared import policy and the retained photo decoder
+in `layer-color`. Native filters follow its compiled format capabilities.
+Decoding keeps original profiles, integer depth and samples; Open selects the
+source working space and a separate native Save destination. Place/Paste preserve
+the receiving document's space and prepare a complete image batch before entering
+shared placement. Apply commits one undoable edit; Cancel removes every member.
+Original Size and Apply/Cancel remain available with workspace panels hidden.
+The missing-profile preference can pause preparation for an explicit
+interpretation, and invalid choices remain editable. Reads use the same
+coordinated, security-scoped file access as native projects, off the UI/render
+owner. Clipboard items load and decode sequentially without OS bitmap conversion;
+a failed member stops subsequent reads and leaves the document unchanged.
+External canvas/layer drops remain an integration task.
 
 Run the focused Metal and Swift owner workflows without simulator automation:
 

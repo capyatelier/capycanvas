@@ -33,6 +33,9 @@ struct EditorView<Canvas: View>: View {
                     }.placed(store.snapshot["layout"]["status"])
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
+                if store.command("placement_original_size")["enabled"].bool {
+                    PhotoPlacementControls(store: store)
+                }
             }
             HistogramPresentation(model: store.histogram, palette: palette)
             if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
@@ -135,6 +138,33 @@ struct EditorView<Canvas: View>: View {
         let error = accepted ? nil : "Could not open the link"
         store.dispatch(["type": "complete_request", "id": id, "error": error as Any? ?? NSNull()])
         if let error { store.failure = error }
+    }
+}
+
+private struct PhotoPlacementControls: View {
+    @ObservedObject var store: EditorStore
+    private func action(_ command: String, _ label: String, _ identifier: String) -> some View {
+        let enabled = store.command(command)["enabled"].bool
+        return Button { store.invoke(command) } label: {
+            Text(label).font(.system(size: 44 / 3, weight: .bold))
+                .padding(.horizontal, 17).frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(EditorControlButtonStyle()).disabled(!enabled).opacity(enabled ? 1 : 0.36)
+            .accessibilityIdentifier("photo-placement-" + identifier)
+    }
+    private var actions: some View {
+        Group {
+            action("placement_original_size", "Original Size (100%)", "original-size")
+            action("cancel_transform", "Cancel", "cancel")
+            action("apply_transform", "Apply", "apply")
+        }
+    }
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { actions }.fixedSize()
+            VStack(spacing: 8) { actions }
+        }.padding(8).modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 12)))
+            .padding(.horizontal, 12).padding(.bottom, 48)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 }
 

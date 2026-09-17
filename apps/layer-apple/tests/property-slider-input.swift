@@ -126,7 +126,7 @@ import QuartzCore
                     try require(field.isDescendant(of: host) && field.stringValue == "37 %",
                         "An ordinary tool-value update must preserve its active draft")
                     store.projectFiles = ProjectFiles(store: store, dialogs: .init(
-                        open: { $0(nil) }, save: { _, _, completed in completed(nil) },
+                        open: { _, done in done([]) }, save: { _, _, completed in completed(nil) },
                         create: { _, completed in completed(JSON(["extent": [256, 256], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])) }))
                     store.invoke("new_document")
                     let deadline = Date().addingTimeInterval(30)

@@ -58,7 +58,7 @@ import ImageIO
             var creationOptions: JSON? = JSON(["extent": [63, 47], "color": ["space": "Srgb", "depth": "U8"], "background": "White"])
             var beforeOpen: (() -> Void)?
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(
-                open: { choices += 1; beforeOpen?(); $0(openLocation) },
+                open: { _, done in choices += 1; beforeOpen?(); done(openLocation.map { [$0] } ?? []) },
                 save: { _, _, callback in choices += 1; callback(saveLocation) },
                 create: { spec, callback in
                     precondition(spec["extent"][0].uint == 2048 && spec["maximum"].uint == 8192)
@@ -111,7 +111,7 @@ import ImageIO
                 let cold = EditorStore(platform: platform, persistence: EditorPersistence(root:
                     root.appendingPathComponent("startup-\(platform)-\(published)")))
                 cold.projectFiles = ProjectFiles(store: cold, dialogs: .init(
-                    open: { _ in preconditionFailure("An external URL must not open a picker") },
+                    open: { _, _ in preconditionFailure("An external URL must not open a picker") },
                     save: { _, _, _ in preconditionFailure("Startup must not save a blank drawing") }))
                 if published {
                     try await wait("Initial editor state missing") { !cold.state.isNull }

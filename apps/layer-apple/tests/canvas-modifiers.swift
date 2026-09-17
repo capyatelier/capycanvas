@@ -201,7 +201,7 @@ private final class ContactEvent: UIEvent {
     private func artwork(store: EditorStore, canvas: CanvasView, root: URL) async throws {
         let native = store.native!, png = root.appendingPathComponent("artwork.png")
         store.projectFiles = ProjectFiles(store: store, dialogs: .init(
-            open: { $0(nil) }, save: { _, _, done in done(nil) },
+            open: { _, done in done([]) }, save: { _, _, done in done(nil) },
             export: { staging, done in
                 do { try FileManager.default.copyItem(at: staging, to: png); done(png) }
                 catch { store.failure = error.localizedDescription; done(nil) }
