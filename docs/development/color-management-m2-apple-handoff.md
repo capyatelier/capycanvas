@@ -64,8 +64,14 @@ the next batch removes terminal CPU stalls. Heavy 4K watercolor still has
 12.803%/28.347% long intervals on Mac/iPad in short runs. Removing redundant
 watercolor composition passes lowers these to **3.688%/17.929%**, with exact
 replay captures, 13 Metal regressions and both Release builds passing. Remaining
-heavy-watercolor performance is still the immediate blocker; see the
-[current record](../../apps/layer-apple/PERFORMANCE.md#watercolor-composition-passes--2026-09-16).
+heavy-watercolor performance is still the immediate blocker. Shared render-pass
+batching further lowers short-run misses to **1.764%/15.893%**. Optional GPU queue
+timing does not explain the iPad gap: disabling it gives **15.740%**. Physical GPU
+attribution then identifies costly interleaved tile copies. Batching those copies
+reduces matching timer-off runs to **1.030%/12.868%** on Mac/iPad with exact replay
+pixels and less production code. The broader renderer suite exposes ten failures
+also reproduced on published main; these remain open qualification issues. See the
+[current record](../../apps/layer-apple/PERFORMANCE.md#watercolor-tile-copy-batching--2026-09-16).
 Continue with that GPU/display diagnosis, remaining current SDR profiles, provider/
 background workflows in step 4 and remaining physical SDR controls/display checks. Device
 performance and provider delivery are not fully closed.

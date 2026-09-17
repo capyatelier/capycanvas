@@ -1605,8 +1605,15 @@ impl Scene {
                         depth_or_array_layers: 1,
                     },
                 ),
-                Job::Draw { target, .. } | Job::Effect { target, .. } => {
-                    let end=(i+1..self.jobs.len()).find(|&j|!matches!(&self.jobs[j],Job::Draw{target:next,..}|Job::Effect{target:next,..} if next==target)).unwrap_or(self.jobs.len());
+                Job::Draw { target, .. }
+                | Job::Effect { target, .. }
+                | Job::Watercolor { target, .. } => {
+                    let end = (i + 1..self.jobs.len())
+                        .find(|&j| !matches!(&self.jobs[j],
+                            Job::Draw { target: next, .. }
+                            | Job::Effect { target: next, .. }
+                            | Job::Watercolor { target: next, .. } if next == target))
+                        .unwrap_or(self.jobs.len());
                     let load = if i > 0
                         && let Job::Clear(previous, color) = &self.jobs[i - 1]
                         && previous == target
@@ -1624,6 +1631,15 @@ impl Scene {
                         self.effect_passes += 1;
                     }
                     for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                        if let Job::Watercolor { binding, record, coordinate, .. } = job {
+                            pass.set_pipeline(&r.pipelines.watercolor_composite);
+                            pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
+                            pass.set_bind_group(1, &r.target_bind_group, &[r.target_offset(*coordinate)]);
+                            pass.set_bind_group(2, binding, &[]);
+                            pass.set_scissor_rect(0, 0, PAGE_SIZE, PAGE_SIZE);
+                            pass.draw(0..3, 0..1);
+                            continue;
+                        }
                         let sources = match job {
                             Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
                             _ => unreachable!(),
@@ -1690,26 +1706,6 @@ impl Scene {
                         pass.draw(0..3, 0..1);
                     }
                     encoded_through = end;
-                }
-                Job::Watercolor {
-                    target,
-                    binding,
-                    record,
-                    coordinate,
-                } => {
-                    let load = match i.checked_sub(1).and_then(|j| self.jobs.get(j)) {
-                        Some(Job::Clear(previous, color)) if previous == target => {
-                            wgpu::LoadOp::Clear(*color)
-                        }
-                        _ => wgpu::LoadOp::Load,
-                    };
-                    let attachments = [Some(attachment(target, load))];
-                    let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
-                    pass.set_pipeline(&r.pipelines.watercolor_composite);
-                    pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
-                    pass.set_bind_group(1, &r.target_bind_group, &[r.target_offset(*coordinate)]);
-                    pass.set_bind_group(2, binding, &[]);
-                    pass.draw(0..3, 0..1);
                 }
             }
         }

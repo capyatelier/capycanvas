@@ -68,6 +68,102 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Watercolor tile-copy batching — 2026-09-16
+
+A two-second Metal System Trace on the physical iPad identifies interleaved
+tile-preservation copies and draws as a substantial part of the remaining work.
+The trace matches all observed encoders in 220 native frames; their GPU active
+interval union has median 4.918 ms and p99 7.650 ms. Blits occupy 322.780 ms of
+the complete observed window, transport 247.033 ms, viewport 241.617 ms and
+composition 199.582 ms. These label totals overlap and must not be added as
+cost shares. The trace has 38 GPU intervals without CPU encoder metadata and
+intervals outside matched frames; it diagnoses work, not performance acceptance.
+
+Persistent and predicted brush batches now preserve independent tile generations
+before drawing them. Watercolor transport does the same for its first stage.
+Source neighborhoods are still prepared and consumed one draw at a time so the
+bounded cache cannot evict a pending binding. Generation changes, scissor bounds,
+shader math and memory limits are unchanged. A shared whole-surface copy helper
+replaces the repeated copy descriptors.
+
+The 512-frame replay remains byte-identical, including all per-frame work counts
+and the 4096-square RGBA capture. Against render-pass batching alone, active-frame
+median encoded GPU span improves from 5.068 to 4.650 ms, p99 from 9.351 to
+7.279 ms, and preparation plus completion median from 8.276 to 7.751 ms.
+A 23.781 ms preparation outlier remains; the synchronous replay is not a
+presentation or physical input-latency measurement.
+
+Both Release builds pass with empty build logs. Each physical host completes
+45 measured seconds of the same full-editor `wet-watercolor-4k` workload with
+optional GPU queue timing disabled:
+
+| Host | Long active intervals | Previous copy ordering | Preparation p99 / max, ms |
+| --- | ---: | ---: | ---: |
+| Mac, 90 Hz | 39 / 3,786 (**1.030%**) | 2.082% | 5.666 / 7.963 |
+| iPad, 120 Hz | 582 / 4,523 (**12.868%**) | 15.740% | 4.258 / 8.806 |
+
+Both have nominal thermals, no rejected input, renderer errors, dropped records
+or missing/zero measured presentation callbacks. Reviewed captures retain the
+artwork, Navigator and layer previews. This is a short improvement comparison;
+the remaining iPad heavy-watercolor gap and sustained qualification stay open.
+Event recording remains enabled, so it does not qualify full instrumentation
+overhead. Together with render-pass batching, the change removes 130 net lines
+of production code without new shaders, caches or scheduling paths.
+
+All ten iPad recoveries and 57 pre-existing files remain intact after installation
+and testing; only the workload trace is added. Ordinary review is restored with
+recording disabled. The Mac artist review is not restarted.
+
+The complete renderer library run reports **249 passed, 10 failed, 28 ignored**.
+All ten failures reproduce individually on published `cd4134cd`: four scalar
+canonical-float checks, four cache/upload accounting checks, one snapshot
+allocation-accounting check and the filter reference atlas. The filter image and
+difference report are identical between baseline and candidate. These are open
+baseline qualification issues; the full suite is not a pass, and no assertion
+or reference image was weakened. Evidence is in
+`artifacts/apple-watercolor-gpu-v1/ipad-profile/` and `batched-copies/`.
+
+## Watercolor render-pass batching — 2026-09-16
+
+Consecutive ordinary, effect and watercolor draws to the same target now share
+the existing scene render pass. The separate watercolor pass encoder is removed;
+uploads, copies and target changes still end a batch. Brush shaders, input,
+memory limits and native scheduling are unchanged.
+
+A fresh 512-frame replay against `cd4134cd` preserves all damage/upload/page
+counts and every byte of the 4096-square RGBA capture. Across 360 active frames,
+median encoded GPU span drops from 5.703 to 5.068 ms; preparation plus completion
+drops from 9.055 to 8.276 ms. One candidate CPU outlier remains in the evidence.
+All 45 nonignored layer-composition regressions and 13 watercolor regressions
+pass; 12 separate opt-in hardware benchmarks remain excluded. Both Release
+builds pass with empty build logs.
+
+Each full-editor run measures 45 seconds of `wet-watercolor-4k`:
+
+| Host | Optional GPU queue timer | Long active intervals |
+| --- | --- | ---: |
+| Mac, 90 Hz | Enabled | 66 / 3,741 (**1.764%**) |
+| Mac, 90 Hz | Disabled | 78 / 3,747 (**2.082%**) |
+| iPad, 120 Hz | Enabled | 698 / 4,392 (**15.893%**) |
+| iPad, 120 Hz | Disabled | 688 / 4,371 (**15.740%**) |
+
+The preceding runtime measured 3.688%/17.929% with queue timing enabled.
+All four current runs have nominal thermals, no rejected input, frame errors,
+dropped records or missing/zero measured callbacks. Captures retain artwork,
+Navigator and layer previews. The short timer comparison does not explain the
+remaining iPad gap. Event recording stays enabled in both modes, so these runs
+do not establish full recorder overhead or physical pen-to-screen latency.
+Sustained heavy-watercolor acceptance remains open, especially on iPad.
+
+The iPad update preserves ten recoveries and all 54 existing files. A subsequent
+preflight detects a new background app process; its saved state is backed up
+before testing continues. All 55 files present before the second workload remain
+identical afterward, with only that workload's trace added. Ordinary review is
+restored with recording disabled; the Mac review app is not restarted. Exact
+source/build identities and evidence are in
+`artifacts/apple-watercolor-gpu-v1/merged/`. This joins tile-copy batching in the
+grouped performance milestone.
+
 ## Watercolor composition passes — 2026-09-16
 
 The shared compositor unnecessarily rendered aligned watercolor into a temporary
