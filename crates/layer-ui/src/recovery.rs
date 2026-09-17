@@ -74,12 +74,18 @@ pub enum RecoveryEvent {
         success: bool,
     },
     Close,
+    /// A native window can veto an already prepared close. Resume only after
+    /// its accepted storage work finishes, then checkpoint the live drawing.
+    Resume,
 }
 #[derive(Default, Serialize)]
 pub struct RecoveryUpdate {
     pub work: Option<RecoveryWork>,
     pub offer: Option<String>,
     pub busy: bool,
+    /// The latest observation (or accepted close) has completed all storage
+    /// work, including retirement of an adopted recovery origin.
+    pub current: bool,
     pub release: Vec<String>,
 }
 impl RecoveryState {
@@ -188,7 +194,7 @@ impl RecoveryState {
                 match work.kind {
                     RecoveryWorkKind::Capture if success => {
                         if !self.retire {
-                            self.checkpoint = work.document;
+                            self.checkpoint = work.document.filter(|document| document.modified);
                         }
                         if let Some(Origin::Restored(key)) = self.origin.take() {
                             self.origin = Some(Origin::Durable(key));
@@ -228,6 +234,15 @@ impl RecoveryState {
             RecoveryEvent::Close => {
                 self.closed = true;
             }
+            RecoveryEvent::Resume => {
+                if self.pending.is_some() {
+                    return Err("Recovery work is still pending".into());
+                }
+                self.closed = false;
+                self.retire = false;
+                self.discard_origin = false;
+                self.checkpoint = None;
+            }
         }
         if update.work.is_none() && advance {
             update.work = self.next();
@@ -239,6 +254,10 @@ impl RecoveryState {
             _ => None,
         };
         update.busy = self.pending.is_some() || matches!(self.origin, Some(Origin::Restoring(_)));
+        update.current = !update.busy
+            && !self.retire
+            && self.origin.is_none()
+            && (self.closed || self.checkpoint == self.document);
         Ok(update)
     }
 }
@@ -332,6 +351,125 @@ mod tests {
         let retire = finish(&mut state, &capture, false).work.unwrap();
         assert_eq!(retire.kind, RecoveryWorkKind::Retire);
         assert!(finish(&mut state, &retire, true).work.is_none());
+    }
+    #[test]
+    fn current_status_waits_for_latest_idle_observation_and_successful_storage() {
+        let mut state = RecoveryState::default();
+        let first = observe(&mut state, 1, true).unwrap();
+        let busy = RecoveryDocument {
+            epoch: 1,
+            revision: 2,
+            modified: true,
+            busy: true,
+        };
+        assert!(
+            !state
+                .event(RecoveryEvent::Observe {
+                    document: busy,
+                    owned: true
+                })
+                .unwrap()
+                .current
+        );
+        let completed = finish(&mut state, &first, true);
+        assert!(!completed.current && completed.work.is_none());
+        let latest = observe(&mut state, 2, true).unwrap();
+        assert!(!finish(&mut state, &latest, false).current);
+        let retry = observe(&mut state, 2, true).unwrap();
+        assert!(finish(&mut state, &retry, true).current);
+    }
+    #[test]
+    fn cancelled_native_close_recaptures_the_live_drawing_after_retirement() {
+        let mut state = RecoveryState::default();
+        let capture = observe(&mut state, 1, true).unwrap();
+        state
+            .event(RecoveryEvent::Retire {
+                discard_origin: true,
+            })
+            .unwrap();
+        state.event(RecoveryEvent::Close).unwrap();
+        assert!(
+            state.event(RecoveryEvent::Resume).is_err(),
+            "accepted storage finishes before a close veto"
+        );
+        let retire = finish(&mut state, &capture, true).work.unwrap();
+        assert_eq!(retire.kind, RecoveryWorkKind::Retire);
+        assert!(finish(&mut state, &retire, true).current);
+        let resumed = state.event(RecoveryEvent::Resume).unwrap();
+        assert!(!resumed.current);
+        assert_eq!(
+            resumed.work.as_ref().unwrap().kind,
+            RecoveryWorkKind::Capture
+        );
+        assert!(finish(&mut state, &resumed.work.unwrap(), true).current);
+    }
+    #[test]
+    fn adopted_origin_is_not_current_until_its_replacement_and_retirement_finish() {
+        let mut state = RecoveryState::default();
+        state
+            .event(RecoveryEvent::Observe {
+                document: RecoveryDocument {
+                    epoch: 2,
+                    revision: 1,
+                    modified: true,
+                    busy: false,
+                },
+                owned: false,
+            })
+            .unwrap();
+        let adopted = state
+            .event(RecoveryEvent::Adopted {
+                key: "previous owner".into(),
+            })
+            .unwrap();
+        assert!(!adopted.current && adopted.work.is_none());
+        let capture = state
+            .event(RecoveryEvent::Ownership { owned: true })
+            .unwrap()
+            .work
+            .unwrap();
+        let published = finish(&mut state, &capture, true);
+        assert!(!published.current && published.release.is_empty());
+        let retire = published.work.unwrap();
+        assert!(matches!(retire.kind, RecoveryWorkKind::RetireOrigin { .. }));
+        let completed = finish(&mut state, &retire, true);
+        assert!(completed.current);
+        assert_eq!(completed.release, ["previous owner"]);
+    }
+    #[test]
+    fn a_clean_adopted_drawing_retires_its_replacement_after_preserving_the_origin() {
+        let mut state = RecoveryState::default();
+        state
+            .event(RecoveryEvent::Observe {
+                document: RecoveryDocument {
+                    epoch: 2,
+                    revision: 1,
+                    modified: false,
+                    busy: false,
+                },
+                owned: false,
+            })
+            .unwrap();
+        state
+            .event(RecoveryEvent::Adopted {
+                key: "saved origin".into(),
+            })
+            .unwrap();
+        let capture = state
+            .event(RecoveryEvent::Ownership { owned: true })
+            .unwrap()
+            .work
+            .unwrap();
+        assert_eq!(capture.kind, RecoveryWorkKind::Capture);
+        let origin = finish(&mut state, &capture, true).work.unwrap();
+        assert!(matches!(origin.kind, RecoveryWorkKind::RetireOrigin { .. }));
+        let removed = finish(&mut state, &origin, true);
+        assert_eq!(removed.release, ["saved origin"]);
+        let own_copy = removed
+            .work
+            .expect("clean drawing must not leave an unnecessary recovery copy");
+        assert_eq!(own_copy.kind, RecoveryWorkKind::Retire);
+        assert!(finish(&mut state, &own_copy, true).current);
     }
     #[test]
     fn recovery_origin_survives_failed_replacement_until_a_durable_copy_exists() {

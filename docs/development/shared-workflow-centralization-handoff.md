@@ -274,9 +274,12 @@ for evidence and remaining physical acceptance. Apple now also consumes C3's
 photo Open/batch placement/drop policy and C1/C2's color/source transactions;
 see the [transaction record](apple-handoff.md#shared-colorsource-transactions--2026-09-17).
 Source preparation accepts an executor budget so Apple's measured allowance is
-preserved; Android/GTK retain their existing cap. Apple C6 and Windows's host
-migrations remain open; they need native executors, picker/storage adapters
-and device-lifetime observations. Existing
+preserved; Android/GTK retain their existing cap. Apple now also executes C6's
+shared recovery tickets with native file/lifecycle adapters; see the
+[recovery integration record](apple-handoff.md#shared-recovery-policy--2026-09-17).
+Its physical interruption/expiration acceptance remains open. Windows's host
+migrations still need native executors, picker/storage adapters and device-lifetime
+observations. Existing
 lower-level renderer, session, recipe and settings APIs remain available.
 C7 stays a Windows task: consume tagged color values, converted swatches and the
 shared gradient samples from `layer-ui::color::form`. No additional core model is

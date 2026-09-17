@@ -120,11 +120,11 @@ device timing is inferred from upstream Android results.
 The current physical review apps are retained; this is not device acceptance of
 the new controls or a new performance qualification.
 
-The subsequent milestones below migrate photo batches/drops and color/source
-transactions to the shared services. Artwork recovery (C6 in the
-[centralization handoff](shared-workflow-centralization-handoff.md)) remains the
-shared-service migration still to implement. Keep provider/device acceptance and
-the pending iPad performance/save retest separate from local integration.
+The subsequent milestones below migrate photo batches/drops, color/source
+transactions and artwork recovery to the shared services. Apple now consumes
+C1–C6 from the [centralization handoff](shared-workflow-centralization-handoff.md).
+Keep provider/device acceptance and the pending iPad performance/save retest
+separate from local integration.
 
 ## Interactive photo batches — 2026-09-17
 
@@ -247,6 +247,35 @@ recovery/settings files also remain byte-identical across installation. The Mac
 artist app is unchanged. The user is asked for one grouped large-photo 570 px
 G-Pen/Diagnostics and local Save As/reopen check. That physical result is pending;
 local Mac timing improvements do not establish the new iPad p99.
+
+## Shared recovery policy — 2026-09-17
+
+Apple's recovery coordinator now executes the existing shared `RecoveryState`
+work tickets. Rust decides capture freshness, successful publication, clean-copy
+retirement and when a restored origin can be removed. Swift retains scene
+ownership, debounce/lifecycle timing, file execution and the completed-storage
+barrier. The separate Swift revision keys and retirement decisions are removed;
+the atomic file helpers and recovery format are unchanged.
+
+The shared policy reports when the latest observation has completed storage and
+supports resuming after a native close veto. Cancelling app-wide close does not
+interrupt a checkpoint in a window whose close was not yet prepared. A shared
+regression also exposes an unnecessary recovery copy when an adopted drawing
+is saved before its first checkpoint: replacement still becomes durable before
+the old origin is removed, then the clean replacement is retired. The regression
+fails before the small shared fix and passes afterward.
+
+All seven shared recovery tests and the final both-policy Swift/Metal owner
+fixture pass, including failed writes/retry, edits during capture, scene release,
+restore migration, close during an accepted write, native close veto and
+cancellation in an unprepared window. Four SDR owner cases pass Display P3/U8
+and ProPhoto/U16 on both policies, preserving the full archive payload, source
+samples, paint, masks and corrections through a no-drawable flush and fresh owner;
+continued Undo also passes. Both Release builds finish without compiler warnings,
+and Web compilation passes. Evidence is in `artifacts/apple-shared-recovery-v1/`.
+This migration has not been installed in either artist app; the pending iPad
+performance/save retest remains on the preceding combined review. Physical OS interruption, background expiration
+and the remaining scene transitions stay open in R4.
 
 ## Large-photo composition review — 2026-09-17
 

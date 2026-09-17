@@ -266,6 +266,43 @@ import QuartzCore
             precondition(removed)
             let afterClose = try await io { try files.list().records }
             precondition(afterClose.isEmpty)
+
+            // A native window can veto a prepared close after its recovery copy
+            // was retired. Resuming must checkpoint the still-live artwork.
+            await withCheckedContinuation { done in reopened.cancelPreparedClose { done.resume() } }
+            let resumed = await flush(reopened); precondition(resumed)
+            let resumedRecords = try await io { try files.list().records }
+            precondition(resumedRecords.count == 1 && reopened.recovery.hasCurrentCopy)
+            precondition(reopened.state["layers"].array.count == 13)
+
+            // Accept a close while a new capture waits on the file executor.
+            // Neither lifecycle callback may finish until that write and its
+            // retirement have both completed.
+            let closeGate = DispatchSemaphore(value: 0)
+            NativeProjectTask.io.async { precondition(closeGate.wait(timeout: .now() + 20) == .success) }
+            reopened.invoke("add_layer")
+            try await wait("Close-race edit missing") { reopened.state["layers"].array.count == 14 }
+            var written: Bool?, retired: Bool?
+            reopened.recovery.flush { written = $0 }
+            try await wait("Close-race capture missing") { reopened.recovery.saving }
+            // Let the observation reply enter MainActor and issue its storage
+            // ticket before accepting close; the file executor stays blocked.
+            await withCheckedContinuation { done in
+                reopened.native!.submit(2, JSON(["type": "recovery_document"])) { _ in
+                    DispatchQueue.main.async { done.resume() }
+                }
+            }
+            // App-wide close cancellation also visits windows which have not
+            // prepared a close. It must not interrupt an ordinary capture.
+            await withCheckedContinuation { done in reopened.cancelPreparedClose { done.resume() } }
+            precondition(written == nil && reopened.recovery.error == nil)
+            reopened.recovery.close { retired = $0 }
+            precondition(written == nil && retired == nil)
+            closeGate.signal()
+            try await wait("Close-race callbacks missing") { written != nil && retired != nil }
+            precondition(written == true && retired == true)
+            let afterRace = try await io { try files.list().records }
+            precondition(afterRace.isEmpty)
             withExtendedLifetime((layer, reopenedLayer)) {}
             print("Artwork recovery passes for Apple platform \(platform)")
         }

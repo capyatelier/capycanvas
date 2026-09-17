@@ -380,6 +380,16 @@ not switch an iPad window back to the saved manual lookahead. Shared Open/recove
 regressions and both-policy Apple/Metal preview/history checks cover this path.
 Evidence is `artifacts/apple-prediction-adoption-v1/`.
 
+Apple now uses `layer-ui::recovery::RecoveryState` through opaque C-ABI state.
+The shared policy owns checkpoint freshness, durable replacement before origin
+retirement, clean-copy retirement and native close resumption. Swift executes
+the tickets with the existing atomic file helpers and supplies owner observations,
+timers and lifecycle barriers. Cancelling app-wide close leaves ordinary captures
+in unprepared windows alone. Accepted storage work finishes before an actual
+prepared close is resumed. File formats, runtime storage identities and guarded
+generation removal are unchanged; no alternate recovery path is introduced.
+See the [integration record](../../docs/development/apple-handoff.md#shared-recovery-policy--2026-09-17).
+
 The recovery checks use actual Swift owners and the Metal bridge for both platform
 policies. They verify private file modes, cancelled capture, newest-revision flush
 under queued edits, stale removal, malformed-record isolation, failed-write retry,

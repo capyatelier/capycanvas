@@ -51,6 +51,7 @@ int32_t capy_project_preview(const CapyProjectTask *task, bool after, CapyProjec
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
 int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */
+char *capy_recovery_update(const char *state_json, const char *event_json); /* shared policy; opaque state, owned result/error JSON */
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_document_complete(CapyApple *app, uint32_t id, uint32_t succeeded);
 int32_t capy_apple_document_close(CapyApple *app, uint32_t id, uint32_t decision);

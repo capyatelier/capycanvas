@@ -39,8 +39,10 @@ records the native integration and qualification scope. Both final Release build
 shared/native/Swift owner checks and Web compilation pass. The combined iPad
 review includes the subsequent composition scheduling correction, with all eleven
 recovery records and saved files preserved; physical drawing/Diagnostics and
-large-photo local save/reopen are pending. Artwork recovery remains the next
-shared-service migration.
+large-photo local save/reopen are pending. Artwork recovery now also executes
+the shared policy's storage tickets; see the
+[recovery integration](apple-handoff.md#shared-recovery-policy--2026-09-17).
+Physical lifecycle interruption/expiration remains open.
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 now use the same worker, with complete before/after previews, source-safe flattened
 copies and exact shared history; see the

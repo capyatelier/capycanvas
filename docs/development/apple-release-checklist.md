@@ -15,7 +15,10 @@ policy and interactive Apply/Cancel; see the
 Color/source transactions now use the shared services, including comparison,
 candidate validity and renderer rollback; see the
 [transaction record](apple-handoff.md#shared-colorsource-transactions--2026-09-17).
-Artwork recovery remains the shared-service migration to finish. External canvas/layer drops now use the same shared placement path;
+Artwork recovery now executes shared storage tickets, including durable-origin
+retirement and native close cancellation; see the
+[recovery policy record](apple-handoff.md#shared-recovery-policy--2026-09-17).
+External canvas/layer drops now use the same shared placement path;
 see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
 Native Mac drag delivery passes; physical UIKit placement/provider acceptance remains open. The
 [Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate

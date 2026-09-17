@@ -301,6 +301,28 @@ pub unsafe extern "C" fn capy_apple_prepare_recovery(app: *mut CapyApple, now: u
     })
     .unwrap_or(-1)
 }
+
+/// # Safety
+/// Borrows NUL-terminated opaque state/event JSON; returns owned result/error
+/// JSON. Storage, timing and native scene ownership remain host observations.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_recovery_update(
+    state: *const c_char,
+    event: *const c_char,
+) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let event =
+            serde_json::from_str(unsafe { read_title(event) }?).map_err(|e| e.to_string())?;
+        layer_ui::recovery::recovery_update(unsafe { read_title(state) }?, event)
+    })();
+    CString::new(
+        result
+            .unwrap_or_else(|error| serde_json::json!({"error":error}))
+            .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
 /// # Safety
 /// The task must remain alive. Compare the UI's approved document with the
 /// actual owner capture so intervening edits cannot bypass an unsaved prompt.
