@@ -26,6 +26,22 @@ Check the libraries visible to the build:
 pkg-config --modversion gtk4 libadwaita-1 wayland-client
 ```
 
+### Omarchy
+
+Omarchy includes the native build and runtime libraries above in its base
+installation. Install its supported Rust development environment, then build
+normally:
+
+```bash
+omarchy install dev-env rust
+source "$HOME/.cargo/env"
+cargo run --locked --release -p layer-linux
+```
+
+Capy Canvas runs directly in Omarchy's Wayland session. No XWayland override or
+Hyprland window rule is required; the application advertises
+`art.capycanvas.CapyCanvas`, matching its desktop entry and icon.
+
 Running the canvas requires a Wayland session and a hardware Vulkan driver with
 mailbox presentation and premultiplied-alpha surface support. The app has no X11,
 GLES or CPU canvas fallback. GTK chooses its own renderer for controls; that is
