@@ -1,7 +1,7 @@
 # Maintainer: Jordan Hubbard <jkh@FreeBSD.org>
 
 pkgname=capycanvas-git
-pkgver=r881.g173f760f
+pkgver=r883.g20cecad7
 pkgrel=1
 pkgdesc='GPU-accelerated drawing and painting application (development version)'
 arch=('x86_64')
