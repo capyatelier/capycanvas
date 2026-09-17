@@ -41,6 +41,11 @@ fn native_penup_and_following_strokes() {
         }
         assert!(Instant::now() < deadline, "native pen-up fixture startup");
     }
+    let proof = super::proof::benchmark_proof(&w);
+    if let Some(proof) = proof {
+        std::fs::write(format!("{}.proof.json", std::env::var("LAYER_PACING_REPORT").unwrap()),
+            serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
+    }
     let stats = w
         .gpu
         .borrow()

@@ -100,7 +100,6 @@ window, label, text { font-size: var(--ui-text-size); }
 .zen-section { border-radius: 8px; }
 .content-drawer > scrolledwindow + scrolledwindow { border-left: 1px solid alpha(var(--window-fg-color), .12); }
 .panel-context-menu { font-size: var(--ui-text-size); }
-.workspace-menu-item { font-weight: 400; }
 .dock-tabs { background: var(--tabbar-bg); font-size: inherit; }
 .dock-panel.collapsed-column > button { min-height: 24px; min-width: 0; padding: 0; }
 .collapsed-column .tile-button { min-width: 36px; min-height: 36px; padding: 0; }
@@ -200,8 +199,6 @@ window, label, text { font-size: var(--ui-text-size); }
 .layer-preferences.touch-input .navigation-sidebar row:hover:not(:selected):not(:active) { background: transparent; }
 .layer-preferences.touch-input .navigation-sidebar row:selected:hover:not(:active) { background: alpha(currentColor, .10); }
 .shortcut-hint { font-weight: 400; }
-/* Reset is a normal menu action, with a dim trailing default value. */
-.preference-reset { font-weight: 400; }
 /* Adjustment tiles share the editor's compact 36px tool-cell rhythm. */
 /* Inset content, not the scroller: its scrollbar belongs at the panel edge. */
 .filter-picker-header { margin: 6px 6px 0; }

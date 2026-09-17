@@ -181,6 +181,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             tools: tools::ToolMemory::default(),
             files: document_files::DocumentFiles::default(),
             state: UiState {
+                soft_proof: false,
+                gamut_warning: false,
                 revision: 0,
                 fullscreen: false,
                 workspace: WorkspaceState::default(),
@@ -1750,6 +1752,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SoftProof => document.proof.is_some()
+                || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
+            CommandId::GamutWarning => document.proof.is_some(),
             CommandId::ResetLayout if self.managed_workspace.is_some() => {
                 self.require_workspace_idle().is_ok()
                     && self
@@ -1852,6 +1858,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
+            || (id == CommandId::SoftProof && self.state.soft_proof)
+            || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
             || (id == CommandId::TransformAspect && self.operation.aspect)
@@ -3392,6 +3400,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::SoftProofSetup => {
+                self.request(HostRequestKind::SoftProofSetup)?;
+                Ok((HOST, false))
+            }
+            CommandId::SoftProof if self.engine.document().proof.is_none() => {
+                self.request(HostRequestKind::SoftProofSetup)?;
+                Ok((HOST, false))
+            }
+            CommandId::SoftProof | CommandId::GamutWarning => {
+                if self.engine.document().proof.is_none() { return Err("Choose a proof target first".into()); }
+                if command == CommandId::SoftProof { self.state.soft_proof = !self.state.soft_proof; }
+                else { self.state.gamut_warning = !self.state.gamut_warning; }
+                Ok((COMMANDS, true))
+            }
             CommandId::Histogram => {
                 self.request(HostRequestKind::Histogram)?;
                 Ok((HOST, false))
@@ -4077,6 +4099,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn refresh_document(&mut self) {
         self.refresh_file_state();
+        if self.engine.document().proof.is_none() {
+            self.state.soft_proof = false;
+            self.state.gamut_warning = false;
+        }
         self.reconcile_transform();
         self.source_preview_revisions.update(&self.engine.document().layers);
         if self
@@ -13782,7 +13808,7 @@ mod tests {
         assert_eq!(s.engine.backend().dabs, dabs);
     }
     #[test]
-    fn menu_sections_are_nonempty_unique_and_keep_toggles_together() {
+    fn menu_sections_are_nonempty_unique_and_keep_related_commands_together() {
         assert_eq!(
             MENUS
                 .iter()
@@ -13802,7 +13828,6 @@ mod tests {
             for &section in sections {
                 assert!(!section.is_empty());
                 for &command in section {
-                    assert_eq!(command.is_toggle(), section[0].is_toggle());
                     assert!(!seen.contains(&command));
                     seen.push(command);
                 }
@@ -13821,6 +13846,7 @@ mod tests {
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
                 ["histogram"],
+                ["soft_proof_setup", "soft_proof", "gamut_warning"],
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],

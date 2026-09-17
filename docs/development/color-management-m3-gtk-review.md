@@ -1,0 +1,83 @@
+# GTK print proofing: manual review
+
+The user accepted the GTK app review on 2026-09-17. Automated qualification and its
+measured limits are in the [acceptance record](../history/color-management-gtk-m3-validation.md).
+Other platforms and HDR have not been enabled by this work.
+
+## Run the review build
+
+From the repository root:
+
+```sh
+bash artifacts/color-m3/profile-review-2/review/launch.sh
+```
+
+The launcher opens a separate app instance with its own app settings, workspace,
+profile library and recovery directory. It shares your normal desktop file picker
+and title-bar preferences. Existing app windows and their drawings stay open. Review files and crash recovery remain under
+`artifacts/color-m3/profile-review-2/review/state/`; normal Save As writes to your chosen location.
+`artifacts/color-m3/profile-review-2/review/build.json` records the source and executable identity.
+Saved profiles from the previous review session have been copied into this one.
+
+## Review the print journey
+
+1. Open a photograph or drawing. For a quick prepared example, open
+   `artifacts/color-m3/gtk-journey/variant.capy`, which contains the tested CMYK
+   recipe and a small edited drawing. Reopening starts in normal viewing.
+2. Choose **View → Proof Colors** (`Ctrl+Alt+P`). With no saved proof profile,
+   this opens **Proof Setup**; cancelling leaves the preview off. To change an
+   existing setup, choose **View → Proof Setup…** (no default shortcut). Open the single
+   **Proof profile** picker. Select a saved profile or use **Add Profile…** to
+   choose an `.icc`/`.icm` file; it is saved to the library and selected immediately.
+   Re-adding the same file reuses its entry. Standard color spaces have their own
+   group. The profile's name supplies the proof indicator automatically.
+3. Choose rendering intent, black point compensation and **Print simulation**:
+   **Colors only**, **Black ink**, or **Paper and ink**. Paper and ink includes
+   both simulations; absolute intent disables BPC. **Manage Profiles…**
+   lives inside the picker. Its row menu offers **Show in Profile Menus** and
+   **Remove**. Hiding or removing an entry leaves selected and embedded profiles intact. The same picker is used for source interpretation and delivery,
+   with independent selections.
+4. Choose **Apply**. Check the visible **Proof: target** indicator.
+   The canvas and Navigator should change together. Try paper/ink settings on
+   both a neutral ramp and saturated colors. Preparing a complex profile can
+   take several seconds; Cancel leaves the saved setup unchanged.
+5. Compare with **View → Proof Colors** (`Ctrl+Alt+P`) and **Gamut Warning**
+   (`Ctrl+Shift+Y`). Warning gray is a viewing overlay. Toggling must leave the
+   document's saved/dirty state unchanged. These shortcuts preserve `Ctrl+Y` redo.
+6. Use **Save As** for a print variant, then paint or adjust colors while proofing.
+   Check undo/redo for both the edit and a changed proof setup. Reopen the saved
+   variant: the recipe must remain available, with temporary view toggles off.
+   Each file embeds only its active proof profile. When trying a replacement,
+   the original stays under **Document Profile**. Applying the replacement saves
+   the original in this machine's **Saved Profiles**, so it remains available
+   after saving and reopening. Cancelling setup does not save the original to
+   the library. Taking the updated file to another machine brings only the
+   replacement profile.
+7. Export using the lab's **explicit delivery profile** and requested file/depth
+   settings. A CMYK proof can accompany an sRGB or Adobe RGB delivery. Importing
+   a proof target does not choose an export profile. Compare exports made with
+   proof/warnings on and off; simulation and warning gray must never enter them.
+8. Try cancelling setup and switching **View → Proof Colors** off and on. Turning
+   both viewing options off hides the proof status and retains its settings.
+   An invalid or unsupported ICC must produce
+   an actionable error. Open Drawing and Add Profile should use the desktop picker
+   and remember their own last-used folders, including from another app window.
+
+The test corpus uses `/usr/share/color/icc/krita/cmyk.icm` and downloaded WhiteWall
+and ICC targets under `artifacts/color-m3/references/`. Use the profile supplied
+for your actual printer/paper or lab when judging the workflow.
+
+## Limits to keep visible during review
+
+- Proofing supports bounded SDR RGB artwork in all four working spaces and both
+  integer depths. Extended composed values are clamped for this preview and
+  marked by Gamut Warning. Exact artwork and export retain their normal contract.
+- Supported targets are usable bidirectional ICC v2/v4 RGB matrix/LUT or CMYK LUT
+  image profiles. Profiles exceeding memory or interpolation limits fail explicitly.
+- Gamut decisions near the documented threshold are ambiguous. A warning is not
+  a measurement of physical print error.
+- Calibrated-display matching and physical print comparison are unverified.
+  The performance record includes cold preparation, first-use latency and brief
+  save/export contention. Dirty-image regeneration remains a separate limitation.
+
+This accepted GTK review does not authorize another platform or HDR work.

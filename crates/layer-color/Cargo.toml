@@ -30,3 +30,6 @@ sysinfo = { version = "=0.37.2", default-features = false, features = ["system",
 name = "portable_smoke"
 crate-type = ["cdylib"]
 test = false
+
+[dev-dependencies]
+serde_json = "1"

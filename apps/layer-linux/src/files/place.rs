@@ -106,7 +106,7 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
             .filters(&filters)
             .default_filter(&filter)
             .build();
-        match dialog.open_multiple_future(Some(&w.window)).await {
+        match super::chooser::open_multiple(&dialog, &w.window, super::chooser::Folder::Artwork).await {
             Ok(files) => files.iter::<gio::File>().map(|file|
                 file.map_err(|e| e.to_string())?.path().ok_or("Choose images on this device".into())
             ).collect::<Result<Vec<_>, String>>()?,

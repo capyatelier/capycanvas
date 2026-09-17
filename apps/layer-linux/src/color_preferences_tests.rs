@@ -2,7 +2,7 @@ use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, respon
 use super::*;
 use layer_core::color::*;
 
-fn dialog(w: &Rc<Workspace>, name: &str) -> adw::AlertDialog {
+fn dialog(w: &Rc<Workspace>, name: &str) -> adw::Dialog {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         pump(20);
@@ -11,7 +11,7 @@ fn dialog(w: &Rc<Workspace>, name: &str) -> adw::AlertDialog {
             .visible_dialog()
             .filter(|d| d.widget_name() == name)
         {
-            return dialog.downcast().unwrap();
+            return dialog;
         }
         assert!(
             Instant::now() < deadline,
@@ -180,18 +180,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     invoke(&w, CommandId::OpenDocument);
     choose(&path);
     dialog(&w, "untagged-profile-dialog");
-    combo(&w, "untagged-profile-space").set_selected(4);
-    click_named(
-        w.window.visible_dialog().unwrap().upcast_ref(),
-        "source-profile-choose",
-    );
-    let select = dialog(&w, "profile-library-choose");
-    let choices = find_named(select.upcast_ref(), "profile-library-choices")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
-        .unwrap();
-    choices.select_row(choices.row_at_index(0).as_ref());
-    response(&w, "use");
+    super::new_photo::profile_action(&w, "source", "saved-0");
     dialog(&w, "untagged-profile-dialog");
     capture_ui(&w, &output, "untagged-profile.png");
     response(&w, "use");
@@ -218,19 +207,10 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     // The same library entry serves delivery, with the exact profile embedded.
     invoke(&w, CommandId::ExportDocument);
     dialog(&w, "export-options");
-    combo(&w, "export-space").set_selected(4);
-    click_named(
-        w.window.visible_dialog().unwrap().upcast_ref(),
-        "export-profile-choose",
-    );
-    let select = dialog(&w, "profile-library-choose");
-    let choices = find_named(select.upcast_ref(), "profile-library-choices")
-        .unwrap()
-        .downcast::<gtk::ListBox>()
+    super::new_photo::profile_action(&w, "export", "saved-0");
+    let export = dialog(&w, "export-options")
+        .downcast::<adw::AlertDialog>()
         .unwrap();
-    choices.select_row(choices.row_at_index(0).as_ref());
-    response(&w, "use");
-    let export = dialog(&w, "export-options");
     let deadline = Instant::now() + Duration::from_secs(10);
     while !export.is_response_enabled("export") {
         pump(20);
@@ -265,8 +245,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         .unwrap()
         .downcast::<gtk::ListBox>()
         .unwrap();
-    list.select_row(list.row_at_index(0).as_ref());
-    click_named(manager.upcast_ref(), "profile-library-remove");
+    super::new_photo::profile_manager_action(&w, 0, "remove");
     let deadline = Instant::now() + Duration::from_secs(10);
     while list.row_at_index(0).is_some() {
         pump(20);
@@ -297,7 +276,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     assert_eq!(super::place_source::snapshot(&w), original);
     invoke(&w, CommandId::PasteImage);
     dialog(&w, "untagged-profile-dialog");
-    combo(&w, "untagged-profile-space").set_selected(1);
+    super::new_photo::profile_action(&w, "source", "builtin-1");
     response(&w, "use");
     finish(&w);
     ready(&w);

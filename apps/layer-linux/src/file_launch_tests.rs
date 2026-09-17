@@ -353,11 +353,14 @@ fn native_application_file_launch() {
         );
         let dialog = launch_window(&app).unwrap().visible_dialog().unwrap();
         if accept {
-            let space = find_named(dialog.upcast_ref(), "untagged-profile-space")
-                .unwrap()
-                .downcast::<adw::ComboRow>()
-                .unwrap();
-            space.set_selected(1); // Display P3
+            let window = launch_window(&app).unwrap();
+            new_photo::profile_action_window(&window, "source", "manage");
+            until(|| window.visible_dialog().is_some_and(|d| d.widget_name() == "profile-library-manager"),
+                "profile library on launch parent");
+            click(&find_button(window.visible_dialog().unwrap().upcast_ref(), "Done").unwrap());
+            until(|| window.visible_dialog().is_some_and(|d| d.widget_name() == "untagged-profile-dialog"),
+                "return to launch profile prompt");
+            new_photo::profile_action_window(&window, "source", "builtin-1"); // Display P3
         }
         click(
             &find_button(

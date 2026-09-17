@@ -11,6 +11,7 @@ pub(crate) mod open;
 pub(crate) mod launch;
 mod properties;
 mod color;
+mod proof;
 mod place;
 pub(crate) mod drop;
 pub(crate) mod profile;
@@ -18,6 +19,7 @@ mod source;
 mod preview;
 mod rasterize;
 mod reader;
+mod chooser;
 
 pub(crate) type OpenDocument =
     Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
@@ -124,6 +126,7 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::SoftProofSetup => proof::run(&w).await,
                                 HostRequestKind::Histogram => {
                                     crate::histogram::show(&w);
                                     Ok(())
@@ -302,10 +305,10 @@ async fn choose_file(
     dialog.set_filters(Some(&filters));
     dialog.set_default_filter(Some(&filter));
     let result = match request {
-        DocumentRequest::Open => dialog.open_future(Some(&w.window)).await,
+        DocumentRequest::Open => chooser::open(&dialog, &w.window, chooser::Folder::Artwork).await,
         DocumentRequest::Save { name, .. } => {
             dialog.set_initial_name(Some(name));
-            dialog.save_future(Some(&w.window)).await
+            chooser::save(&dialog, &w.window, chooser::Folder::Save).await
         }
         _ => unreachable!(),
     };

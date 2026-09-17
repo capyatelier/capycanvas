@@ -1,7 +1,7 @@
 //! Correct retained source interpretation without changing its original samples.
 use super::profile::{ProfileChooser, ProfilePurpose};
 use super::*;
-use layer_core::{LayerId, color::RgbSpace};
+use layer_core::LayerId;
 
 pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
     let (epoch, revision, layer, working, project, background, time) = {
@@ -46,26 +46,10 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
         .build();
     current.set_use_markup(false);
     group.add(&current);
-    let space = adw::ComboRow::builder()
-        .title("Correct source profile")
-        .model(&gtk::StringList::new(&[
-            "sRGB",
-            "Display P3",
-            "Adobe RGB (1998)",
-            "ProPhoto RGB",
-            "Custom ICC",
-        ]))
-        .use_subtitle(true)
-        .build();
-    space.set_widget_name("source-profile-space");
+    let chooser = ProfileChooser::new(w, "Correct source profile", "source-profile-space", working,
+        ProfilePurpose::Source(original.interpretation.clone()));
+    let space = chooser.row.clone();
     group.add(&space);
-    let chooser = ProfileChooser::new(
-        &w.window,
-        &space,
-        working,
-        ProfilePurpose::Source(original.interpretation.clone()),
-    );
-    group.add(&chooser.row);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&group);
     content.append(&chooser.error);
@@ -110,15 +94,15 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
     )));
     let selected = chooser.selected.clone();
     let source_for_preview = original.clone();
-    space.connect_selected_notify(glib::clone!(
+    space.connect_subtitle_notify(glib::clone!(
         #[weak]
         w,
         #[weak]
         comparison,
         #[weak]
         hint,
-        move |space| {
-            let result = selected(space.selected()).and_then(|profile| {
+        move |_| {
+            let result = selected().and_then(|profile| {
                 let mut corrected = (*source_for_preview).clone();
                 corrected.interpretation.profile = profile.profile;
                 corrected.interpretation.profile_assumed = false;
@@ -144,21 +128,17 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
             }
         }
     ));
-    let index = match original.interpretation.profile {
-        layer_core::color::ColorProfile::Builtin(space) => {
-            RgbSpace::ALL.iter().position(|s| *s == space).unwrap() as u32
-        }
-        _ => 4,
-    };
-    space.set_selected(index);
-    space.notify("selected");
+    let embedded = original.interpretation.profile.clone();
+    let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
+        .map_err(|_| "Profile reader failed")??;
+    (chooser.restore)(profile);
     let response = crate::alert::choose(dialog, &w.window).await;
     comparison.close();
     comparison.finish().await;
     if response != "apply" {
         return Ok(false);
     }
-    let profile = (chooser.selected)(space.selected())?;
+    let profile = (chooser.selected)()?;
     let mut corrected = (*original).clone();
     corrected.interpretation.profile = profile.profile;
     corrected.interpretation.profile_assumed = false;

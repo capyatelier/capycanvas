@@ -50,7 +50,7 @@ pub(super) fn view(t: RendererTelemetry) -> StatsView {
         StatRow {
             label: "Canvas storage",
             value: format!("{:.1} MiB", t.resident_bytes as f64 / 1048576.),
-            description: "Tracked paint, preview, masks, effect parameters, composite and scene scratch allocation. Excludes driver overhead and imported assets; not total VRAM use.",
+            description: "Tracked paint, preview, proof, masks, effect parameters, composite and scene scratch allocation. Excludes driver overhead and imported assets; not total VRAM use.",
         },
         StatRow {
             label: "Dabs",

@@ -8,6 +8,8 @@ mod profile;
 pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, ProfileChannels, RenderingIntent};
 mod output;
 pub use output::{OutputDither, OutputEncoding};
+mod proof;
+pub use proof::ProofRecipe;
 pub mod source;
 pub mod histogram;
 

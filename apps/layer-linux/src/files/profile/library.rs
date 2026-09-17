@@ -12,10 +12,11 @@ static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug)]
 pub(super) struct Entry {
-    path: PathBuf,
-    name: String,
-    channels: Option<ProfileChannels>,
-    issue: Option<String>,
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+    pub(super) channels: Option<ProfileChannels>,
+    pub(super) issue: Option<String>,
+    pub(super) visible: bool,
     bytes: u64,
 }
 impl Entry {
@@ -23,15 +24,16 @@ impl Entry {
         if let Some(issue) = &self.issue {
             return issue.clone();
         }
-        format!(
-            "{} · {:.1} KiB",
-            match self.channels.unwrap() {
-                ProfileChannels::Rgb => "RGB",
-                ProfileChannels::Gray => "Grayscale",
-                ProfileChannels::Cmyk => "CMYK",
-            },
-            self.bytes as f64 / 1024.
-        )
+        let channels = match self.channels.unwrap() {
+            ProfileChannels::Rgb => "RGB",
+            ProfileChannels::Gray => "Grayscale",
+            ProfileChannels::Cmyk => "CMYK",
+        };
+        if self.visible {
+            channels.into()
+        } else {
+            format!("{channels} · Hidden")
+        }
     }
 }
 pub(super) fn directory() -> PathBuf {
@@ -50,6 +52,23 @@ fn digest(bytes: &[u8]) -> String {
     glib::compute_checksum_for_data(glib::ChecksumType::Sha256, bytes)
         .unwrap()
         .into()
+}
+// Display metadata only: the ICC bytes and digest remain authoritative.
+fn saved_name(path: &Path, description: String) -> String {
+    if description != UNNAMED_PROFILE {
+        return description;
+    }
+    let mut name = String::new();
+    if std::fs::File::open(path.with_extension("name"))
+        .and_then(|file| file.take(1024).read_to_string(&mut name))
+        .is_ok()
+    {
+        let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
+        if !name.trim().is_empty() {
+            return name.trim().to_owned();
+        }
+    }
+    description
 }
 fn read_profile(path: &Path) -> Result<(Vec<u8>, String, ProfileChannels), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -101,7 +120,7 @@ pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
                 if path.file_stem().unwrap().to_str() != Some(&digest(&bytes)) {
                     return Err("Profile changed on disk; remove or reimport it".into());
                 }
-                Ok((name, channels))
+                Ok((saved_name(&path, name), channels))
             })
         };
         let (name, channels, issue) = match value {
@@ -116,6 +135,7 @@ pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
             ),
         };
         result.push(Entry {
+            visible: !path.with_extension("hidden").exists(),
             path,
             name,
             channels,
@@ -127,8 +147,20 @@ pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
     Ok(result)
 }
 fn import(directory: &Path, source: &Path) -> Result<Vec<Entry>, String> {
+    let (bytes, mut name, _) = read_profile(source)?;
+    if name == UNNAMED_PROFILE {
+        name = source
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+    }
+    store(directory, &bytes, &name)
+}
+
+// Store exactly the bytes the picker validated, without reopening the source.
+pub(super) fn store(directory: &Path, bytes: &[u8], name: &str) -> Result<Vec<Entry>, String> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    let (bytes, _, _) = read_profile(source)?;
     let mut entries = list(directory)?;
     let target = directory.join(format!("{}.icc", digest(&bytes)));
     if entries
@@ -148,6 +180,10 @@ fn import(directory: &Path, source: &Path) -> Result<Vec<Entry>, String> {
         return Err("The profile library limit is 128 profiles and 64 MiB".into());
     }
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+    let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
+    layer_core::atomic_write(&target.with_extension("name"), |file| {
+        file.write_all(name.as_bytes()).map_err(|e| e.to_string())
+    })?;
     layer_core::atomic_write(&target, |file| {
         file.write_all(&bytes).map_err(|e| e.to_string())
     })?;
@@ -159,41 +195,33 @@ fn remove(directory: &Path, path: &Path) -> Result<Vec<Entry>, String> {
     if !list(directory)?.iter().any(|e| e.path == path) {
         return Err("Select an imported profile".into());
     }
+    for extension in ["name", "hidden"] {
+        match std::fs::remove_file(path.with_extension(extension)) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
     std::fs::remove_file(path).map_err(|e| e.to_string())?;
     list(directory)
 }
-fn rows(list: &gtk::ListBox, entries: &[Entry]) {
-    while let Some(child) = list.first_child() {
-        list.remove(&child);
+
+fn set_visible(directory: &Path, path: &Path, visible: bool) -> Result<Vec<Entry>, String> {
+    let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
+    if !list(directory)?.iter().any(|e| e.path == path) {
+        return Err("This profile is no longer saved".into());
     }
-    for entry in entries {
-        let row = adw::ActionRow::builder()
-            .title(&entry.name)
-            .subtitle(entry.description())
-            .use_markup(false)
-            .build();
-        list.append(&row);
+    let marker = path.with_extension("hidden");
+    if visible {
+        match std::fs::remove_file(marker) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
+    } else {
+        layer_core::atomic_write(&marker, |_| Ok(()))?;
     }
-}
-fn view(entries: &[Entry]) -> (gtk::ListBox, gtk::ScrolledWindow) {
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::Single)
-        .build();
-    list.add_css_class("boxed-list");
-    rows(&list, entries);
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(340)
-        .min_content_height(100)
-        .child(&list)
-        .build();
-    (list, scroll)
-}
-pub(super) enum Selection {
-    Cancel,
-    Browse,
-    File(PathBuf),
+    list(directory)
 }
 pub(super) fn read_entry(
     path: &Path,
@@ -207,191 +235,53 @@ pub(super) fn read_entry(
     if path.file_stem().and_then(|s| s.to_str()) != Some(&digest(bytes)) {
         return Err("The imported profile changed on disk; reimport it before use".into());
     }
-    profile.name = layer_color::profile_description(&profile.profile)?;
+    profile.name = saved_name(path, layer_color::profile_description(&profile.profile)?);
     Ok(profile)
 }
-pub(super) async fn select(parent: &adw::ApplicationWindow, entries: &[Entry]) -> Selection {
-    let entries: Vec<_> = entries
-        .iter()
-        .filter(|e| e.issue.is_none())
-        .cloned()
-        .collect();
-    let (list, scroll) = view(&entries);
-    list.set_widget_name("profile-library-choices");
-    let dialog = adw::AlertDialog::builder().heading("Choose ICC profile").body("Choose an imported profile or browse for a file. Its compatibility is checked before use.").extra_child(&scroll).build();
-    dialog.set_widget_name("profile-library-choose");
-    dialog.add_responses(&[
-        ("cancel", "Cancel"),
-        ("browse", "Browse…"),
-        ("use", "Use Profile"),
-    ]);
-    dialog.set_close_response("cancel");
-    dialog.set_response_enabled("use", false);
-    list.connect_row_selected(glib::clone!(
-        #[weak]
-        dialog,
-        move |_, row| dialog.set_response_enabled("use", row.is_some())
-    ));
-    match crate::alert::choose(dialog, parent).await.as_str() {
-        "browse" => Selection::Browse,
-        "use" => list
-            .selected_row()
-            .and_then(|row| entries.get(row.index() as usize))
-            .map_or(Selection::Cancel, |e| Selection::File(e.path.clone())),
-        _ => Selection::Cancel,
-    }
-}
-
-pub(crate) async fn manage(w: &Rc<Workspace>) -> Result<(), String> {
-    let initial = gio::spawn_blocking(|| list(&directory()))
-        .await
-        .map_err(|_| "Profile library reader failed")??;
-    let entries = Rc::new(RefCell::new(initial));
-    let (list, scroll) = view(&entries.borrow());
-    list.set_widget_name("profile-library-list");
-    let error = gtk::Label::builder().wrap(true).xalign(0.).build();
-    error.set_widget_name("profile-library-status");
-    error.set_label(if entries.borrow().is_empty() {
-        "No imported profiles"
-    } else {
-        ""
-    });
-    let add = gtk::Button::with_label("Import…");
-    add.set_widget_name("profile-library-import");
-    let remove_button = gtk::Button::with_label("Remove");
-    remove_button.set_widget_name("profile-library-remove");
-    remove_button.set_sensitive(false);
-    let busy = Rc::new(Cell::new(false));
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.append(&add);
-    buttons.append(&remove_button);
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    body.append(&scroll);
-    body.append(&buttons);
-    body.append(&error);
-    let dialog = adw::AlertDialog::builder().heading("Color Profiles").body("Imported ICC profiles are available for source interpretation and profiled export. Removing a library profile leaves source files and profiles embedded in drawings unchanged.").extra_child(&body).content_width(480).build();
-    dialog.set_widget_name("profile-library-manager");
-    dialog.add_response("close", "Close");
-    dialog.set_close_response("close");
-    list.connect_row_selected(glib::clone!(
-        #[weak]
-        remove_button,
-        #[strong]
-        busy,
-        move |_, row| remove_button.set_sensitive(row.is_some() && !busy.get())
-    ));
-    for (button, importing) in [(&add, true), (&remove_button, false)] {
-        button.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            #[weak]
-            list,
-            #[weak]
-            add,
-            #[weak]
-            remove_button,
-            #[weak]
-            error,
-            #[strong]
-            entries,
-            #[strong]
-            busy,
-            move |_| {
-                if busy.replace(true) {
-                    return;
-                }
-                add.set_sensitive(false);
-                remove_button.set_sensitive(false);
-                let selected = list.selected_row().and_then(|row| {
-                    entries
-                        .borrow()
-                        .get(row.index() as usize)
-                        .map(|e| e.path.clone())
-                });
-                glib::MainContext::default().spawn_local(glib::clone!(
-                    #[strong]
-                    w,
-                    #[strong]
-                    list,
-                    #[strong]
-                    add,
-                    #[strong]
-                    remove_button,
-                    #[strong]
-                    error,
-                    #[strong]
-                    entries,
-                    #[strong]
-                    busy,
-                    async move {
-                        let result = if importing {
-                            let chooser = gtk::FileDialog::builder()
-                                .title("Import ICC profile")
-                                .build();
-                            let filter = gtk::FileFilter::new();
-                            filter.set_name(Some("ICC color profiles"));
-                            filter.add_suffix("icc");
-                            filter.add_suffix("icm");
-                            chooser.set_default_filter(Some(&filter));
-                            match chooser.open_future(Some(&w.window)).await {
-                                Ok(file) => match file.path() {
-                                    Some(path) => {
-                                        gio::spawn_blocking(move || import(&directory(), &path))
-                                            .await
-                                            .map_err(|_| "Profile import worker failed".to_string())
-                                            .and_then(|r| r)
-                                            .map(Some)
-                                    }
-                                    None => Err("Choose a local profile file".into()),
-                                },
-                                Err(e)
-                                    if e.matches(gtk::DialogError::Dismissed)
-                                        || e.matches(gtk::DialogError::Cancelled) =>
-                                {
-                                    Ok(None)
-                                }
-                                Err(e) => Err(e.to_string()),
-                            }
-                        } else if let Some(path) = selected {
-                            gio::spawn_blocking(move || remove(&directory(), &path))
-                                .await
-                                .map_err(|_| "Profile removal worker failed".to_string())
-                                .and_then(|r| r)
-                                .map(Some)
-                        } else {
-                            Ok(None)
-                        };
-                        match result {
-                            Ok(Some(values)) => {
-                                rows(&list, &values);
-                                *entries.borrow_mut() = values;
-                                error.set_label(if entries.borrow().is_empty() {
-                                    "No imported profiles"
-                                } else {
-                                    ""
-                                });
-                            }
-                            Ok(None) => (),
-                            Err(message) => error.set_label(&message),
-                        }
-                        busy.set(false);
-                        add.set_sensitive(true);
-                        remove_button.set_sensitive(list.selected_row().is_some());
-                    }
-                ));
-            }
-        ));
-    }
-    crate::alert::choose(dialog, &w.window).await;
-    while busy.get() {
-        glib::timeout_future(std::time::Duration::from_millis(5)).await;
-    }
-    Ok(())
-}
+mod manager;
+pub(crate) use manager::{manage, manage_for_window};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unnamed_profiles_keep_the_filename_when_reused() {
+        let root =
+            std::env::temp_dir().join(format!("capy-unnamed-profile-{}", std::process::id()));
+        let directory = root.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let original = root.join("My printer and paper.icm");
+        let mut bytes =
+            layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
+        let count = u32::from_be_bytes(bytes[128..132].try_into().unwrap()) as usize;
+        for tag in bytes[132..132 + count * 12].chunks_exact_mut(12) {
+            if &tag[..4] == b"desc" {
+                tag[..4].copy_from_slice(b"zzzz");
+            }
+        }
+        assert_eq!(
+            layer_color::profile_description(&ColorProfile::Icc(bytes.clone().into())).unwrap(),
+            UNNAMED_PROFILE
+        );
+        std::fs::write(&original, &bytes).unwrap();
+        let chosen = read(&original, RgbSpace::Srgb, &ProfilePurpose::Output).unwrap();
+        assert_eq!(chosen.name, "My printer and paper.icm");
+        let entries = import(&directory, &original).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, chosen.name);
+        let saved = read_entry(&entries[0].path, RgbSpace::Srgb, &ProfilePurpose::Output).unwrap();
+        assert_eq!(saved.name, chosen.name);
+        assert_eq!(saved.profile, ColorProfile::Icc(bytes.clone().into()));
+        assert_eq!(std::fs::read(&entries[0].path).unwrap(), bytes);
+        let duplicate = root.join("Renamed.icc");
+        std::fs::write(&duplicate, &bytes).unwrap();
+        assert_eq!(import(&directory, &duplicate).unwrap()[0].name, chosen.name);
+        assert!(remove(&directory, &entries[0].path).unwrap().is_empty());
+        assert!(!entries[0].path.with_extension("name").exists());
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn library_preserves_bytes_deduplicates_and_never_removes_the_original() {
         let root =
@@ -405,6 +295,17 @@ mod tests {
         let entries = import(&store, &original).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].channels, Some(ProfileChannels::Rgb));
+        assert!(entries[0].visible);
+        assert!(!set_visible(&store, &entries[0].path, false).unwrap()[0].visible);
+        assert!(!list(&store).unwrap()[0].visible);
+        assert_eq!(
+            read_entry(&entries[0].path, RgbSpace::Srgb, &ProfilePurpose::Output)
+                .unwrap()
+                .profile,
+            ColorProfile::Icc(bytes.clone().into())
+        );
+        assert!(set_visible(&store, &entries[0].path, true).unwrap()[0].visible);
+        assert!(set_visible(&store, &original, false).is_err());
         assert_eq!(std::fs::read(&entries[0].path).unwrap(), bytes);
         assert_eq!(import(&store, &original).unwrap().len(), 1);
         std::fs::write(&entries[0].path, b"damaged").unwrap();

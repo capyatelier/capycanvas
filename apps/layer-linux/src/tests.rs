@@ -9,6 +9,8 @@ mod native_navigation;
 mod color_panel;
 #[path = "color_management_tests.rs"]
 mod color_management;
+#[path = "proof_tests.rs"]
+mod proof;
 #[path = "effect_color_tests.rs"]
 mod effect_color;
 #[path = "export_resize_tests.rs"]
@@ -685,7 +687,7 @@ fn native_document_files() {
             }
             for (name, selected) in [
                 ("export-preset", "Web / Share"), ("export-format", "PNG"),
-                ("export-space", "sRGB"), ("export-depth", "8-bit SDR"),
+                ("export-depth", "8-bit SDR"),
                 ("export-background", "Keep transparency"),
             ] {
                 let row = find_named(options.upcast_ref(), name).unwrap()
@@ -701,8 +703,7 @@ fn native_document_files() {
                     .downcast::<adw::ComboRow>().unwrap().selected(), 1);
                 assert!(!find_named(options.upcast_ref(), "export-dither").unwrap()
                     .downcast::<adw::SwitchRow>().unwrap().is_sensitive());
-                find_named(options.upcast_ref(), "export-space").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(3);
+                new_photo::profile_action(&w, "export", "builtin-3");
             }
             if path == &jpeg_path {
                 find_named(options.upcast_ref(), "export-format").unwrap()
@@ -718,8 +719,7 @@ fn native_document_files() {
                 assert!(!options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
                 background.set_selected(2);
                 assert!(options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
-                find_named(options.upcast_ref(), "export-space").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(1);
+                new_photo::profile_action(&w, "export", "builtin-1");
                 let quality = find_named(options.upcast_ref(), "export-jpeg-quality").unwrap()
                     .downcast::<adw::SpinRow>().unwrap();
                 assert!(quality.is_visible());
@@ -755,11 +755,8 @@ fn native_document_files() {
                 adjustment.set_value(0.);
             }
             if let Some((_, profile_path, _, channels)) = custom_exports.iter().find(|(p, _, _, _)| p == path) {
-                let space = find_named(options.upcast_ref(), "export-space").unwrap().downcast::<adw::ComboRow>().unwrap();
-                space.set_selected(4);
                 let alert = options.clone().downcast::<adw::AlertDialog>().unwrap();
-                assert!(!alert.is_response_enabled("export"));
-                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::Button>().unwrap();
+                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap();
                 let wait_profile = || {
                     let deadline = Instant::now() + Duration::from_secs(15);
                     while Instant::now() < deadline && !button.is_sensitive() { pump(5); }
@@ -767,11 +764,11 @@ fn native_document_files() {
                 };
                 // Cancellation and invalid metadata retain the sheet and do not
                 // enable delivery with a silently assumed profile.
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
-                assert!(!alert.is_response_enabled("export"));
-                button.emit_clicked();
+                assert!(alert.is_response_enabled("export"));
+                new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(&bad_profile)).unwrap();
                 pump(250);
@@ -779,14 +776,14 @@ fn native_document_files() {
                 wait_profile();
                 assert!(find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
                 assert!(!alert.is_response_enabled("export"));
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(profile_path)).unwrap();
                 pump(250);
                 file.response(gtk::ResponseType::Accept);
                 wait_profile();
                 assert!(!find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
                 assert!(alert.is_response_enabled("export"));
@@ -8495,7 +8492,12 @@ fn native_menu_sections() {
     let app = native_test_app("dev.layer.MenuTest");
     let w = fixture_workspace(&app);
     w.window.present();
-    pump(500);
+    new_photo::ready(&w);
+    // Exercise both the menu bar and the configurable Main Menu component.
+    let mut workspace = state(&w).workspace;
+    workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu]).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(300);
     let dir = "../../artifacts/ui/menus";
     std::fs::create_dir_all(dir).unwrap();
     let open = |id: ApplicationMenu| {
@@ -8536,11 +8538,16 @@ fn native_menu_sections() {
                         &item.sections,
                     );
                 } else {
-                    assert_eq!(
+                    assert!(
                         section
                             .item_attribute_value(i as i32, "custom", None)
-                            .is_some(),
-                        !item.hint.is_empty()
+                            .is_none()
+                    );
+                    assert_eq!(
+                        section
+                            .item_attribute_value(i as i32, "accel", None)
+                            .and_then(|v| v.get::<String>()),
+                        item.bindings.first().map(native_accelerator)
                     );
                     assert!(
                         section
@@ -8645,16 +8652,6 @@ fn native_menu_sections() {
             .session
             .application_menu(id);
         check(&menu.menu_model().unwrap(), &expected.sections);
-        assert!(
-            expected
-                .sections
-                .iter()
-                .flatten()
-                .find(|i| i.label == CommandId::Settings.label())
-                .unwrap()
-                .hint
-                .is_empty()
-        );
         menu.popdown();
     }
     w.window.destroy();
@@ -9821,29 +9818,15 @@ fn native_preferences_and_shortcuts() {
             popup.is_visible(),
             "reset menu must survive the editor losing focus"
         );
-        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
-            .unwrap()
-            .downcast()
-            .unwrap();
+        let reset_label = format!("Reset to Default ({})", theme.default_base());
+        let reset = find_menu_item(popup.upcast_ref(), &reset_label).unwrap();
         assert!(reset.is_sensitive());
-        let labels = reset.child().unwrap();
-        assert_eq!(
-            labels
-                .last_child()
-                .and_downcast::<gtk::Label>()
-                .unwrap()
-                .text(),
-            theme.default_base().to_string()
-        );
         capture_popover(popup.upcast_ref(), &format!("{dir}/gtk-reset-{suffix}.png"));
-        click(&reset);
+        popup.activate_action("field.reset", None).unwrap();
         assert_eq!(state(&w).palette.bg, theme.default_base());
         hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
         pump(100);
-        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
-            .unwrap()
-            .downcast()
-            .unwrap();
+        let reset = find_menu_item(popup.upcast_ref(), &reset_label).unwrap();
         assert!(!reset.is_sensitive());
         popup.popdown();
         entry.grab_focus();
@@ -13781,6 +13764,20 @@ fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture, points: &[Poin
 
 #[path = "workspace_switcher_tests.rs"]
 mod workspace_switcher_tests;
+
+fn find_menu_item(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
+    if root.type_().name() == "GtkModelButton" && root.property::<String>("text") == label {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = find_menu_item(&widget, label) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
 
 fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
     if let Some(b) = root.downcast_ref::<gtk::Button>()

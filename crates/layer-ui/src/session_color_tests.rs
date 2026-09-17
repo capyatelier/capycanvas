@@ -1,5 +1,72 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let original = s.engine.document().clone();
+    let checkpoint = s.engine.checkpoint();
+    assert!(s.command(CommandId::SoftProof).enabled);
+    assert!(!s.command(CommandId::GamutWarning).enabled);
+
+    // Opening another document blocks first-use setup just like explicit setup.
+    s.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap();
+    assert!(!s.command(CommandId::SoftProof).enabled);
+    assert!(s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).is_err());
+    let id = s.state.requests.first().unwrap().id;
+    s.complete_document_request(id, Ok(false)).unwrap();
+
+    // Cancelling setup leaves the preview off and allows trying again.
+    for _ in 0..2 {
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
+        assert_eq!(s.state.requests.len(), 1);
+        let request = s.state.requests.first().unwrap();
+        assert!(matches!(request.kind, HostRequestKind::SoftProofSetup));
+        let id = request.id;
+        assert!(!s.state.soft_proof && !s.state.gamut_warning);
+        assert!(!s.command(CommandId::SoftProof).selected);
+        s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+        assert_eq!(s.engine.document(), &original);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert!(s.command(CommandId::SoftProof).enabled);
+    }
+}
+
+#[test]
+fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
+    use layer_core::color::{ColorProfile, ProofRecipe};
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    let original = s.engine.document().clone();
+    assert!(s.command(CommandId::SoftProof).enabled);
+    let recipe = ProofRecipe::new("Lab paper".into(), ColorProfile::default());
+    s.set_proof_recipe(Some(recipe.clone())).unwrap();
+    assert!(s.state.soft_proof);
+    assert!(s.state.document_file.modified);
+    assert_eq!(s.engine.document().layers, original.layers);
+    s.files.saved_checkpoint = s.engine.checkpoint();
+    s.refresh_file_state();
+    let saved = s.engine.document().clone();
+    for command in [CommandId::SoftProof, CommandId::GamutWarning, CommandId::SoftProof, CommandId::GamutWarning] {
+        s.dispatch(UiAction::Invoke { command }).unwrap();
+        assert_eq!(s.engine.document(), &saved);
+        assert!(!s.state.document_file.modified);
+    }
+    s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+    assert!(s.engine.document().proof.is_none());
+    assert!(!s.state.soft_proof && !s.state.gamut_warning);
+    assert_eq!(s.engine.document().layers, original.layers);
+    s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+    assert_eq!(s.engine.document().proof, Some(recipe.clone()));
+    assert!(!s.state.document_file.modified);
+    assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
+    for platform in [Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
+        s.set_platform(platform);
+        assert!(!s.command(CommandId::SoftProofSetup).enabled);
+        assert!(s.set_proof_recipe(Some(recipe.clone())).is_err());
+    }
+}
+
+#[test]
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
     use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace}};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {

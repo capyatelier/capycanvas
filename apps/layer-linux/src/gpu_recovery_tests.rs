@@ -61,6 +61,8 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
             g.session.engine().backend().startup.complete && !g.session.state().filter_load.pending
         })
     });
+    let proof = super::proof::benchmark_proof(&w);
+    let proof_cache = w.proof.cache_info();
     w.dispatch(UiAction::Customize {
         action: CustomizationAction::SetPanelVisible {
             panel: Panel::Stats,
@@ -211,6 +213,10 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     let after = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 8002))
         .unwrap();
+    if proof.is_some() {
+        super::proof::wait_proof(&w, "Proof:");
+        assert_eq!(w.proof.cache_info(), proof_cache, "GPU recovery reuses the validated CPU transform");
+    }
     assert_eq!(
         w.gpu
             .borrow()

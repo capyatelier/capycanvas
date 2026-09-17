@@ -59,7 +59,101 @@ pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
         .downcast()
         .unwrap()
 }
+pub(super) fn menu_has_action(model: &gtk::gio::MenuModel, action: &str) -> bool {
+    (0..model.n_items()).any(|index| {
+        model
+            .item_attribute_value(index, "action", None)
+            .and_then(|v| v.get::<String>())
+            .as_deref()
+            == Some(action)
+            || ["section", "submenu"].iter().any(|link| {
+                model
+                    .item_link(index, link)
+                    .is_some_and(|child| menu_has_action(&child, action))
+            })
+    })
+}
+pub(super) fn profile_action(w: &Rc<Workspace>, prefix: &str, action: &str) {
+    profile_action_window(&w.window, prefix, action);
+}
+
+pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &str, action: &str) {
+    let menu = find_named(
+        window.visible_dialog().unwrap().upcast_ref(),
+        &format!("{prefix}-profile-choose"),
+    )
+    .unwrap()
+    .downcast::<gtk::MenuButton>()
+    .unwrap();
+    menu.popup();
+    let popup = menu
+        .popover()
+        .unwrap()
+        .downcast::<gtk::PopoverMenu>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let action = format!("profile.{action}");
+    while !menu_has_action(&popup.menu_model().unwrap(), &action) {
+        pump(10);
+        assert!(
+            Instant::now() < deadline,
+            "profile action: {prefix}/{action}"
+        );
+    }
+    popup.activate_action(&action, None).unwrap();
+    if action != "profile.add" && action != "profile.manage" {
+        while !menu.is_sensitive() {
+            pump(10);
+            assert!(Instant::now() < deadline, "profile read");
+        }
+    }
+}
+pub(super) fn profile_manager_action(w: &Rc<Workspace>, index: u32, action: &str) {
+    let dialog = w.window.visible_dialog().unwrap();
+    let menu = find_named(
+        dialog.upcast_ref(),
+        &format!("profile-library-menu-{index}"),
+    )
+    .unwrap()
+    .downcast::<gtk::MenuButton>()
+    .unwrap();
+    menu.popup();
+    pump(30);
+    menu.popover()
+        .unwrap()
+        .activate_action(&format!("saved.{action}"), None)
+        .unwrap();
+    let list = find_named(dialog.upcast_ref(), "profile-library-list").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !list.is_sensitive() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+}
+pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
+    find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
+        .unwrap()
+        .downcast::<adw::ActionRow>()
+        .unwrap()
+        .subtitle()
+        .unwrap()
+        .into()
+}
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
+    if id == "close"
+        && w.window
+            .visible_dialog()
+            .is_some_and(|d| d.widget_name() == "profile-library-manager")
+    {
+        let dialog = w.window.visible_dialog().unwrap();
+        click(&find_button(dialog.upcast_ref(), "Done").unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dialog.is_mapped() {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+        return;
+    }
     let dialog = w
         .window
         .visible_dialog()
@@ -99,25 +193,37 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
     let directory = std::env::temp_dir().join(format!("capy-cancel-open-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let photo = directory.join("photo.png");
-    layer_color::photo::write_png(std::fs::File::create(&photo).unwrap(), &super::place_source::source()).unwrap();
+    layer_color::photo::write_png(
+        std::fs::File::create(&photo).unwrap(),
+        &super::place_source::source(),
+    )
+    .unwrap();
     let native = directory.join("master.capy");
     std::fs::write(&native, &original).unwrap();
     let cancelled = Rc::new(Cell::new(0));
     let count = cancelled.clone();
-    let signal = w.window.connect_notify_local(Some("visible-dialog"), move |window, _| {
-        let Some(dialog) = window.visible_dialog()
-            .filter(|dialog| dialog.widget_name() == "document-open-progress")
-            .and_downcast::<adw::AlertDialog>() else { return; };
-        let count = count.clone();
-        // Cancel on the next owner iteration, before accepting the worker's
-        // completion. This exercises the final cancellation/publication boundary
-        // deterministically even when this small fixture decodes immediately.
-        glib::idle_add_local_full(glib::Priority::HIGH, move || {
-            count.set(count.get() + 1);
-            find_button(dialog.upcast_ref(), "Cancel").unwrap().emit_clicked();
-            glib::ControlFlow::Break
+    let signal = w
+        .window
+        .connect_notify_local(Some("visible-dialog"), move |window, _| {
+            let Some(dialog) = window
+                .visible_dialog()
+                .filter(|dialog| dialog.widget_name() == "document-open-progress")
+                .and_downcast::<adw::AlertDialog>()
+            else {
+                return;
+            };
+            let count = count.clone();
+            // Cancel on the next owner iteration, before accepting the worker's
+            // completion. This exercises the final cancellation/publication boundary
+            // deterministically even when this small fixture decodes immediately.
+            glib::idle_add_local_full(glib::Priority::HIGH, move || {
+                count.set(count.get() + 1);
+                find_button(dialog.upcast_ref(), "Cancel")
+                    .unwrap()
+                    .emit_clicked();
+                glib::ControlFlow::Break
+            });
         });
-    });
     for path in [&photo, &native, &photo] {
         invoke(&w, CommandId::OpenDocument);
         let file = chooser();
@@ -125,9 +231,15 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
         pump(150);
         file.response(gtk::ResponseType::Accept);
         finish(&w);
-        assert!(created.borrow().is_none(), "cancelled Open published a window");
+        assert!(
+            created.borrow().is_none(),
+            "cancelled Open published a window"
+        );
         assert_eq!(super::place_source::snapshot(&w), original);
-        assert!(!w.servicing.get(), "reader has not acknowledged cancellation");
+        assert!(
+            !w.servicing.get(),
+            "reader has not acknowledged cancellation"
+        );
     }
     assert_eq!(cancelled.get(), 3);
     w.window.disconnect(signal);
@@ -140,7 +252,10 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
     finish(&w);
     let (project, location) = created.borrow_mut().take().unwrap();
     assert!(location.is_none());
-    assert_eq!(project.document.layers[0].source.as_deref(), Some(&super::place_source::source()));
+    assert_eq!(
+        project.document.layers[0].source.as_deref(),
+        Some(&super::place_source::source())
+    );
     assert_eq!(super::place_source::snapshot(&w), original);
     w.window.destroy();
     pump(100);
@@ -368,6 +483,7 @@ fn native_new_presets_and_profiled_photo_master() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
+    pump(350);
     capture_ui(&photo, &output, "opened-prophoto-details.png");
     response(&photo, "done");
     finish(&photo);
@@ -448,7 +564,7 @@ fn native_new_presets_and_profiled_photo_master() {
     let delivery = output.join(format!("Photo delivery-{}.tif", std::process::id()));
     invoke(&restored, CommandId::ExportDocument);
     combo(&restored, "export-preset").set_selected(2);
-    combo(&restored, "export-space").set_selected(3);
+    profile_action(&restored, "export", "builtin-3");
     response(&restored, "export");
     let save = chooser();
     save.set_current_folder(Some(&gtk::gio::File::for_path(&output)))

@@ -116,9 +116,35 @@ fn native_large_photo_navigation() {
         }
         assert!(Instant::now() < deadline, "photo startup must settle");
     }
+    let proof = super::proof::benchmark_proof(&w);
     let settle_ms = std::env::var("LAYER_NAVIGATION_SETTLE_MS")
         .ok().map(|v| v.parse::<u64>().unwrap()).unwrap_or(0);
     pump(settle_ms);
+    let concurrent = (std::env::var("LAYER_NAVIGATION_CONCURRENT").as_deref() == Ok("1")).then(|| {
+        let gpu = w.snapshot_gpu().unwrap();
+        let snapshot = {
+            let g = w.gpu.borrow();
+            let session = &g.as_ref().unwrap().session;
+            DocumentExport { project: session.capture_project_recovery().unwrap(),
+                background: session.engine().view().background_rgba_linear,
+                time: session.engine().animation_time() }
+        };
+        let prefix = std::path::PathBuf::from(std::env::var("LAYER_PACING_REPORT").unwrap());
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let project = prefix.with_extension("capy");
+            layer_core::atomic_write(&project, |file| snapshot.project.write(file)).unwrap();
+            let saved_ms = start.elapsed().as_secs_f64() * 1000.;
+            let reopened = layer_core::Project::read(std::fs::File::open(&project).unwrap(), Default::default()).unwrap();
+            assert_eq!(reopened.document.proof, snapshot.project.document.proof);
+            let recipe = ExportRecipe::further_editing(snapshot.project.document.color);
+            let delivery = prefix.with_extension("tif");
+            crate::files::export::write_snapshot(gpu, snapshot, recipe, &delivery, &Default::default()).unwrap();
+            serde_json::json!({"save_ms": saved_ms, "save_export_ms": start.elapsed().as_secs_f64()*1000.,
+                "master_bytes": std::fs::metadata(project).unwrap().len(),
+                "delivery_bytes": std::fs::metadata(delivery).unwrap().len()})
+        })
+    });
     let original = w
         .gpu
         .borrow()
@@ -254,7 +280,8 @@ fn native_large_photo_navigation() {
             .all(|v| v.2 == stats.camera_views[0].2),
         "navigation must not change the artwork preview revision"
     );
-    let report = serde_json::json!({
+    let mut report = serde_json::json!({
+        "proof": proof,
         "extent": extent, "space": "ProPhoto", "depth": 16, "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "requests": requests, "camera_views": stats.camera_views,
@@ -272,6 +299,7 @@ fn native_large_photo_navigation() {
         "canvas_presentation": stats.presented,
     });
     drop(stats);
+    if let Some(worker) = concurrent { report["concurrent"] = worker.join().unwrap(); }
     std::fs::write(
         std::env::var("LAYER_PACING_REPORT").unwrap(),
         serde_json::to_vec_pretty(&report).unwrap(),

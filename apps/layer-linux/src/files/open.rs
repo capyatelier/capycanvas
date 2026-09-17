@@ -95,32 +95,17 @@ async fn interpret_window(
     {
         return Ok(Some(source));
     }
-    let space = adw::ComboRow::builder()
-        .title("Interpret as")
-        .use_subtitle(true)
-        .build();
-    space.set_expression(Some(gtk::PropertyExpression::new(
-        gtk::StringObject::static_type(),
-        None::<gtk::Expression>,
-        "string",
-    )));
-    space.set_model(Some(&gtk::StringList::new(&[
-        "sRGB",
-        "Display P3",
-        "Adobe RGB (1998)",
-        "ProPhoto RGB",
-        "Custom ICC",
-    ])));
-    space.set_widget_name("untagged-profile-space");
-    let chooser = super::profile::ProfileChooser::new(
-        window,
-        &space,
-        working,
+    let chooser = super::profile::ProfileChooser::for_window(
+        window, "Interpret as", "untagged-profile-space", working,
         super::profile::ProfilePurpose::Source(source.interpretation.clone()),
     );
+    let space = chooser.row.clone();
     let group = adw::PreferencesGroup::new();
     group.add(&space);
-    group.add(&chooser.row);
+    let current = source.interpretation.profile.clone();
+    let profile = gio::spawn_blocking(move || super::profile::describe(current)).await
+        .map_err(|_| "Profile reader failed")??;
+    (chooser.restore)(profile);
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     body.append(&group);
     body.append(&chooser.error);
@@ -130,19 +115,19 @@ async fn interpret_window(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("use"));
     dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
-    space.connect_selected_notify(glib::clone!(
+    space.connect_subtitle_notify(glib::clone!(
         #[weak]
         dialog,
         #[strong(rename_to=select)]
         chooser.selected,
-        move |space| {
-            dialog.set_response_enabled("use", select(space.selected()).is_ok());
+        move |_| {
+            dialog.set_response_enabled("use", select().is_ok());
         }
     ));
     if crate::alert::choose(dialog, window).await != "use" {
         return Ok(None);
     }
-    source.interpretation.profile = (chooser.selected)(space.selected())?.profile;
+    source.interpretation.profile = (chooser.selected)()?.profile;
     source.interpretation.profile_assumed = false;
     // Validate the chosen source transform on a worker before adoption.
     gio::spawn_blocking(move || {

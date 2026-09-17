@@ -1498,7 +1498,6 @@ impl Workspace {
             sections: Vec<Vec<layer_ui::ContextMenuItem>>,
             prefix: &str,
             actions: &gtk::gio::SimpleActionGroup,
-            children: &mut Vec<(String, gtk::Widget)>,
         ) -> gtk::gio::Menu {
             let root = gtk::gio::Menu::new();
             for (s, items) in sections.into_iter().enumerate() {
@@ -1509,7 +1508,7 @@ impl Workspace {
                 for (i, item) in items.into_iter().enumerate() {
                     let id = format!("{prefix}-{s}-{i}");
                     if item.action.is_none() {
-                        let submenu = model(w, popup, item.sections, &id, actions, children);
+                        let submenu = model(w, popup, item.sections, &id, actions);
                         section.append_submenu(Some(&item.label), &submenu);
                         continue;
                     }
@@ -1524,34 +1523,13 @@ impl Workspace {
                         gtk::gio::SimpleAction::new(&id, None)
                     };
                     action.set_enabled(item.enabled);
-                    if !item.hint.is_empty() {
-                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-                        let title = gtk::Label::builder()
-                            .label(&item.label)
-                            .xalign(0.0)
-                            .hexpand(true)
-                            .build();
-                        let hint = gtk::Label::new(Some(&item.hint));
-                        hint.add_css_class("dim-label");
-                        hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        hint.set_max_width_chars(28);
-                        row.append(&title);
-                        row.append(&hint);
-                        let button: gtk::Widget = if item.selected.is_some() {
-                            let button = gtk::CheckButton::new();
-                            button.set_action_name(Some(&format!("context.{id}")));
-                            button.set_child(Some(&row));
-                            button.upcast()
-                        } else {
-                            let button = gtk::Button::new();
-                            button.add_css_class("flat");
-                            button.set_action_name(Some(&format!("context.{id}")));
-                            button.set_child(Some(&row));
-                            button.upcast()
-                        };
-                        button.add_css_class("workspace-menu-item");
-                        model.set_attribute_value("custom", Some(&id.to_variant()));
-                        children.push((id.clone(), button));
+                    // Native rows share indicator gutters, padding and shortcut
+                    // alignment across commands, toggles and menu sections.
+                    if let Some(key) = item.bindings.first() {
+                        model.set_attribute_value(
+                            "accel",
+                            Some(&native_accelerator(key).to_variant()),
+                        );
                     }
                     let dispatch = item.action.unwrap();
                     action.connect_activate(glib::clone!(
@@ -1572,20 +1550,15 @@ impl Workspace {
             root
         }
         let actions = gtk::gio::SimpleActionGroup::new();
-        let mut children = Vec::new();
         let root = model(
             self,
             popover,
             menu.sections,
             "item",
             &actions,
-            &mut children,
         );
         popover.insert_action_group("context", Some(&actions));
         popover.set_menu_model(Some(&root));
-        for (id, child) in children {
-            popover.add_child(&child, &id);
-        }
     }
 }
 

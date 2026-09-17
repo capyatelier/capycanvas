@@ -9,12 +9,24 @@ pub(crate) use library::manage;
 
 #[derive(Clone)]
 pub(super) enum ProfilePurpose {
+    Proof,
     Output,
     Source(SourceInterpretation),
 }
 impl ProfilePurpose {
-    pub(super) fn validate(&self, profile: &ExportProfile, working: RgbSpace) -> Result<(), String> {
+    pub(super) fn validate(
+        &self,
+        profile: &ExportProfile,
+        working: RgbSpace,
+    ) -> Result<(), String> {
         match self {
+            Self::Proof => {
+                let recipe = layer_core::color::ProofRecipe::new(
+                    profile.name.clone(),
+                    profile.profile.clone(),
+                );
+                layer_color::ProofTransform::new(working, &recipe)?;
+            }
             Self::Output => {
                 // An input profile need not be usable for delivery.
                 let recipe = ExportRecipe {
@@ -59,210 +71,39 @@ impl ProfilePurpose {
     }
 }
 
-pub(super) struct ProfileChooser {
-    pub row: adw::ActionRow,
-    pub error: gtk::Label,
-    pub selected: Rc<dyn Fn(u32) -> Result<ExportProfile, String>>,
-    /// Restore a profile already validated by the preset-loading worker.
-    pub restore: Rc<dyn Fn(ExportProfile)>,
-}
-impl ProfileChooser {
-    pub fn new(
-        parent: &adw::ApplicationWindow,
-        space: &adw::ComboRow,
-        working: RgbSpace,
-        purpose: ProfilePurpose,
-    ) -> Self {
-        let is_output = matches!(purpose, ProfilePurpose::Output);
-        let prefix = if is_output { "export" } else { "source" };
-        let role = if is_output { "delivery" } else { "source" };
-        let row = adw::ActionRow::builder()
-            .title("ICC profile")
-            .subtitle(if is_output {
-                "Choose an RGB, grayscale or CMYK delivery profile"
-            } else {
-                "Choose a profile matching the original image channels"
-            })
-            .visible(false)
-            .build();
-        row.set_use_markup(false);
-        row.set_widget_name(&format!("{prefix}-profile-file"));
-        let button = gtk::Button::with_label("Choose…");
-        button.set_widget_name(&format!("{prefix}-profile-choose"));
-        button.set_valign(gtk::Align::Center);
-        row.add_suffix(&button);
-        row.set_activatable_widget(Some(&button));
-        let error = gtk::Label::builder()
-            .wrap(true)
-            .xalign(0.)
-            .visible(false)
-            .build();
-        error.add_css_class("error");
-        error.set_widget_name(&format!("{prefix}-profile-error"));
-        let profile = Rc::new(RefCell::new(None));
-        let loading = Rc::new(Cell::new(false));
-        space.connect_selected_notify(glib::clone!(
-            #[weak]
-            row,
-            #[weak]
-            error,
-            move |space| {
-                row.set_visible(space.selected() == 4);
-                error.set_visible(space.selected() == 4 && !error.label().is_empty());
-            }
-        ));
-        let selection_purpose = purpose.clone();
-        button.connect_clicked(glib::clone!(
-            #[weak]
-            parent,
-            #[weak]
-            row,
-            #[weak]
-            error,
-            #[weak]
-            space,
-            #[strong]
-            profile,
-            #[strong]
-            loading,
-            move |button| {
-                if loading.replace(true) {
-                    return;
-                }
-                button.set_sensitive(false);
-                space.notify("selected");
-                let purpose = purpose.clone();
-                glib::MainContext::default().spawn_local(glib::clone!(
-                    #[weak]
-                    parent,
-                    #[weak]
-                    row,
-                    #[weak]
-                    error,
-                    #[weak]
-                    space,
-                    #[weak]
-                    button,
-                    #[strong]
-                    profile,
-                    #[strong]
-                    loading,
-                    async move {
-                        error.set_label("");
-                        let result = choose(&parent, working, purpose).await;
-                        match result {
-                            Ok(Some(value)) => {
-                                let model = match value.channels {
-                                    ProfileChannels::Rgb => "RGB",
-                                    ProfileChannels::Gray => "Grayscale",
-                                    ProfileChannels::Cmyk => "CMYK",
-                                };
-                                row.set_subtitle(&format!("{} · {model}", value.name));
-                                *profile.borrow_mut() = Some(value);
-                            }
-                            Ok(None) => (),
-                            Err(message) => error.set_label(&message),
-                        }
-                        loading.set(false);
-                        button.set_sensitive(true);
-                        space.notify("selected");
-                    }
-                ));
-            }
-        ));
-        let restore = Rc::new(glib::clone!(
-            #[weak] row,
-            #[weak] error,
-            #[weak] space,
-            #[strong] profile,
-            move |value: ExportProfile| {
-                let index = match value.profile {
-                    ColorProfile::Builtin(rgb) => RgbSpace::ALL.iter().position(|s| *s == rgb).unwrap() as u32,
-                    ColorProfile::Icc(_) => 4,
-                };
-                row.set_subtitle(if index == 4 { &value.name } else { "Choose an ICC profile" });
-                error.set_label("");
-                // A builtin choice must not masquerade as a selected custom ICC.
-                *profile.borrow_mut() = (index == 4).then_some(value);
-                space.set_selected(index);
-                space.notify("selected");
-            }
-        ));
-        let selected = Rc::new(move |index| {
-            if loading.get() {
-                return Err(format!("Reading the {role} profile…"));
-            }
-            let chosen = RgbSpace::ALL
-                .get(index as usize)
-                .map(|space| ExportProfile::builtin(*space))
-                .or_else(|| profile.borrow().clone())
-                .ok_or_else(|| format!("Choose an ICC {role} profile"))?;
-            // Custom profiles already passed the role's actual CMM transform on
-            // the worker. Reject a builtin RGB interpretation for CMYK cheaply.
-            if let ProfilePurpose::Source(source) = &selection_purpose
-                && source.channels == layer_core::color::source::SourceChannels::Cmyk
-                && matches!(chosen.profile, ColorProfile::Builtin(_))
-            {
-                return Err("Choose a CMYK source profile".into());
-            }
-            Ok(chosen)
-        });
-        Self {
-            row,
-            error,
-            selected,
-            restore,
-        }
-    }
-}
+mod picker;
+pub(super) use picker::ProfileChooser;
+pub(super) const UNNAMED_PROFILE: &str = "Embedded ICC profile";
 
-async fn choose(
-    parent: &adw::ApplicationWindow,
-    working: RgbSpace,
-    purpose: ProfilePurpose,
-) -> Result<Option<ExportProfile>, String> {
-    let entries = gio::spawn_blocking(|| library::list(&library::directory())).await.map_err(|_| "Profile library reader failed")??;
-    if !entries.is_empty() {
-        match library::select(parent, &entries).await {
-            library::Selection::Cancel => return Ok(None),
-            library::Selection::File(path) => return gio::spawn_blocking(move || library::read_entry(&path, working, &purpose)).await.map_err(|_| "Profile reader failed".to_string())?.map(Some),
-            library::Selection::Browse => (),
-        }
-    }
-    choose_file(parent, working, purpose).await
-}
-
-async fn choose_file(parent: &adw::ApplicationWindow, working: RgbSpace, purpose: ProfilePurpose) -> Result<Option<ExportProfile>, String> {
-    let dialog = gtk::FileDialog::builder()
-        .title(if matches!(purpose, ProfilePurpose::Output) {
-            "Choose delivery profile"
-        } else {
-            "Choose source profile"
-        })
-        .modal(true)
-        .build();
-    let filter = gtk::FileFilter::new();
-    filter.set_name(Some("ICC color profiles"));
-    filter.add_suffix("icc");
-    filter.add_suffix("icm");
-    let filters = gio::ListStore::new::<gtk::FileFilter>();
-    filters.append(&filter);
-    dialog.set_filters(Some(&filters));
-    dialog.set_default_filter(Some(&filter));
-    let file = match dialog.open_future(Some(parent)).await {
-        Ok(file) => file,
-        Err(e)
-            if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) =>
-        {
-            return Ok(None);
-        }
-        Err(e) => return Err(e.to_string()),
+// Keep a replaced proof locally; the project continues to embed only its active proof.
+pub(super) async fn preserve_replaced_proof(
+    previous: Option<&layer_core::color::ProofRecipe>,
+    next: &layer_core::color::ProofRecipe,
+) -> Result<(), String> {
+    let Some(previous) = previous.filter(|p| p.profile != next.profile) else {
+        return Ok(());
     };
-    let path = file.path().ok_or("Choose a local ICC profile file")?;
-    gio::spawn_blocking(move || read(&path, working, &purpose))
+    let ColorProfile::Icc(bytes) = &previous.profile else {
+        return Ok(());
+    };
+    let bytes = bytes.clone();
+    let name = previous.name.clone();
+    gio::spawn_blocking(move || library::store(&library::directory(), &bytes, &name).map(|_| ()))
         .await
-        .map_err(|_| "Profile reader failed".to_string())?
-        .map(Some)
+        .map_err(|_| "Profile library worker failed".to_string())?
+        .map_err(|error| {
+            format!("Could not save the previous proof profile to Saved Profiles: {error}")
+        })
+}
+
+pub(super) fn describe(profile: ColorProfile) -> Result<ExportProfile, String> {
+    let channels = layer_color::profile_channels(&profile)?;
+    let name = layer_color::profile_description(&profile)?;
+    Ok(ExportProfile {
+        profile,
+        channels,
+        name,
+    })
 }
 
 pub(super) fn read(
@@ -281,13 +122,17 @@ pub(super) fn read(
     }
     let profile = ColorProfile::Icc(bytes.into());
     let channels = layer_color::profile_channels(&profile)?;
-    let name = path
+    let fallback: String = path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .chars()
         .take(128)
         .collect();
+    let name = layer_color::profile_description(&profile)
+        .ok()
+        .filter(|name| !name.trim().is_empty() && name != UNNAMED_PROFILE)
+        .unwrap_or(fallback);
     let result = ExportProfile {
         profile,
         channels,
@@ -320,7 +165,10 @@ mod tests {
             let path = dir.join(name);
             std::fs::write(&path, &bytes).unwrap();
             let loaded = read(&path, RgbSpace::DisplayP3, &ProfilePurpose::Output).unwrap();
-            assert_eq!(loaded.name, name);
+            assert_eq!(
+                loaded.name,
+                layer_color::profile_description(&profile).unwrap()
+            );
             assert_eq!(loaded.channels, channels);
             assert_eq!(loaded.profile, ColorProfile::Icc(bytes.into()));
         }

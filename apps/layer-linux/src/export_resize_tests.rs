@@ -412,7 +412,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     };
     invoke(&w, CommandId::ExportDocument);
     combo(&w, "export-preset").set_selected(4);
-    assert_eq!(combo(&w, "export-space").selected(), 4);
+    assert_eq!(super::new_photo::profile_name(&w, "export-space"), custom.profile.name);
     assert_eq!(combo(&w, "export-format").selected(), 1);
     assert_eq!(combo(&w, "export-depth").selected(), 1);
     assert_eq!(combo(&w, "export-resolution").selected(), 1);

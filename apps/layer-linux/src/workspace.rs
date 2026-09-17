@@ -796,6 +796,7 @@ pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
+    pub(crate) proof: Rc<crate::proof_view::ProofView>,
     pub(crate) recovery: Rc<crate::recovery::Recovery>,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
@@ -917,6 +918,8 @@ impl Workspace {
         let system_status = crate::system_status::SystemStatus::new();
         let view_info = gtk::Label::new(Some("100% · 0°"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let proof = crate::proof_view::ProofView::new();
+        status_bar.append(&proof.label);
         status_bar.add_css_class("workspace-status");
         view_info.add_css_class("status-bubble");
         view_info.set_hexpand(true);
@@ -984,6 +987,7 @@ impl Workspace {
             gpu: RefCell::new(None),
             image_drop: RefCell::new(None),
             image_drop_label,
+            proof,
             recovery: Rc::new(crate::recovery::Recovery::default()),
             surface,
             palette_css,
@@ -1722,6 +1726,7 @@ impl Workspace {
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(change) => {
+                self.proof.sync(self);
                 let publication = self
                     .gpu
                     .borrow()

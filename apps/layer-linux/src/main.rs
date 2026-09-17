@@ -1,6 +1,7 @@
 mod alert;
 mod canvas;
 mod display_color;
+mod proof_view;
 mod effects;
 mod files;
 mod histogram;
@@ -55,7 +56,12 @@ fn main() -> gtk::glib::ExitCode {
 fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
     let app = adw::Application::builder()
         .application_id(id)
-        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
+        // Review instances keep desktop settings and accept application file opens.
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN | if std::env::var_os("CAPY_NEW_INSTANCE").is_some() {
+            gtk::gio::ApplicationFlags::NON_UNIQUE
+        } else {
+            gtk::gio::ApplicationFlags::FLAGS_NONE
+        })
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {

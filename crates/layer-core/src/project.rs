@@ -328,6 +328,14 @@ fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<()
 
 pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
     if let Some(resolution) = doc.resolution { resolution.validate()?; }
+    if let Some(recipe) = &doc.proof {
+        recipe.validate()?;
+        if let color::ColorProfile::Icc(bytes) = &recipe.profile
+            && (bytes.is_empty() || bytes.len() > color::source::MAX_PROFILE_BYTES)
+        {
+            return Err("Invalid proof profile size".into());
+        }
+    }
     if doc.width == 0
         || doc.height == 0
         || doc.width > limits.dimension
