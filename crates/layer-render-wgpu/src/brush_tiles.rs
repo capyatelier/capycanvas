@@ -39,3 +39,19 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     }
     tiles.into_values().collect()
 }
+
+/// A source tile's influence on the document composite. Placed display images
+/// reduce by at most 256; include one such texel for the bilinear footprint.
+/// Identity placement reads aligned pixels and needs no sampling halo.
+pub(super) fn document_damage(layers: &[Layer], id: LayerId, local: PixelRect, extent: [u32; 2]) -> PixelRect {
+    let transform = layer_core::target_transform(layers, id);
+    if transform == layer_core::Affine::IDENTITY {
+        return local.intersect(PixelRect::full(extent));
+    }
+    if local.is_empty() { return PixelRect::EMPTY; }
+    let halo = PAGE_SIZE as f32;
+    pixel_rect(transform.bounds(layer_core::Rect {
+        min: layer_core::Point { x: local.min_x() as f32 - halo, y: local.min_y() as f32 - halo },
+        max: layer_core::Point { x: local.max_x() as f32 + halo, y: local.max_y() as f32 + halo },
+    }), extent)
+}

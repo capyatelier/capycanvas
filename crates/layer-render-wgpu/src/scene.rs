@@ -1097,7 +1097,6 @@ impl Scene {
         let layer = &packet.layers[index];
         if layer.kind != LayerKind::Paint
             || layer.properties.blend != layer_core::LayerBlend::Normal
-            || (r.preview_layer_id == Some(layer.id) && !r.preview_requires_base)
         {
             return Ok(false);
         }
@@ -1105,8 +1104,9 @@ impl Scene {
         // A completed local image is already one texture. Sample its affine
         // directly in the ordinary source-over draw instead of materializing
         // a transformed scratch tile and then blending that tile.
-        if mask.is_none() && r.preview_layer_id != Some(layer.id)
-            && self.placement_display && self.cached_composition()
+        // prepare_placement_mips includes the current prediction and restores
+        // its previous damage. The same complete image is valid while drawing.
+        if mask.is_none() && self.placement_display && self.cached_composition()
             && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
         {
             let scale = (1 << mip.image.plan.level) as f32;
@@ -1123,7 +1123,8 @@ impl Scene {
             data[28..30].copy_from_slice(&inverse[4..]);
             return Ok(true);
         }
-        if layer.properties.placement != layer_core::Affine::IDENTITY
+        if (r.preview_layer_id == Some(layer.id) && !r.preview_requires_base)
+            || layer.properties.placement != layer_core::Affine::IDENTITY
             || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
         {
             return Ok(false);

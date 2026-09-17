@@ -176,6 +176,73 @@ class AndroidRasterTest {
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    private fun summary(values: org.json.JSONArray): JSONObject? {
+        if(values.length()==0)return null
+        val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()
+        return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"max" to sorted.last())
+    }
+    private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0): JSONObject {
+        fun measurements(reset: Boolean): JSONObject {
+            val done = java.util.concurrent.CountDownLatch(1)
+            var result: JSONObject? = null
+            host.measurements(reset) { result = it; done.countDown() }
+            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            return result!!
+        }
+        fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ).use { it.readBytes().decodeToString() }
+        // Read the published state; Native.snapshot would consume the
+        // publication before Compose can receive it.
+        compose.waitForIdle()
+        val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera");val zoom=camera.getDouble("zoom");val translation=camera.getJSONArray("translation")
+        var origin=androidx.compose.ui.geometry.Offset.Zero
+        scenario.onActivity { origin=host.surfaceOrigin }
+        val cx=(center.first*zoom+translation.getDouble(0)+origin.x).toFloat();val cy=(center.second*zoom+translation.getDouble(1)+origin.y).toFloat()
+        val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
+        measurements(true)
+        val duration = if (steps >= 180) InstrumentationRegistry.getArguments()
+            .getString("motionDurationMs")?.toLong()?.coerceIn(5_000L, 30_000L) ?: 5_000L else 1_000L
+        var i = 0
+        while (true) {
+            val elapsed = SystemClock.uptimeMillis() - start
+            val phase=when {i==0->android.view.MotionEvent.ACTION_DOWN;elapsed>=duration->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
+            val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply {id=7;toolType=tool})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
+            val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
+            val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
+            try {assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
+            if (phase == android.view.MotionEvent.ACTION_UP) break
+            i++; SystemClock.sleep(4)
+        }
+        // The host's Choreographer is the only frame producer during
+        // motion. Capture its timeline independently of GPU timings.
+        SystemClock.sleep(100)
+        native { Unit } // Drain delivered input, without creating a frame.
+        val timeline = measurements(false)
+        assertNull(host.failure)
+        if (timeline.getJSONArray("inputs").length() == 0) {
+            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
+                try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { screenshot.recycle() }
+            }
+        }
+        assertTrue("The canvas received input at ($cx,$cy), camera=$camera; state=${host.snapshot?.getJSONObject("state")?.getJSONObject("layer_tools")}", timeline.getJSONArray("inputs").length() > 0)
+        val layer = shell("dumpsys SurfaceFlinger --list").lineSequence()
+            .firstOrNull { it.contains("SurfaceView[${activity.packageName}/") && it.contains("(BLAST)") }
+            ?.removePrefix("RequestedLayerState{")?.substringBefore(" parentId=")
+        // UiAutomation executes an argument vector; shell quote marks
+        // would become part of this layer name (which has no spaces).
+        val latency = layer?.let { shell("dumpsys SurfaceFlinger --latency $it") }
+        val stats=native { JSONObject(Native.query(it,obj("type" to "renderer_stats").toString())) }
+
+        return obj("tool" to tool,"cpu_ms" to summary(stats.getJSONArray("samples")),"gpu_ms" to summary(stats.getJSONArray("gpu_samples")),
+            "camera" to camera, "input_origin" to org.json.JSONArray(listOf(cx,cy)),
+            "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency,
+            "tracked_canvas_bytes" to stats.getLong("resident_bytes"),"process_pss_bytes" to android.os.Debug.getPss().toLong()*1024,
+            "process_mappings" to File("/proc/self/maps").useLines { it.count() })
+    }
+
     @Test fun imagePlacementBatchHistoryAndStaleRequests() {
         fun invoke(command: String) { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
         native { Native.dispatch(it,obj("type" to "preferences","action" to obj("type" to "edit","id" to "missing_profile","value" to 0)).toString()) }
@@ -271,70 +338,6 @@ class AndroidRasterTest {
             }
             fun action(value: JSONObject) { native { Native.dispatch(it,value.toString()) }; scenario.onActivity {host.documentChanged()};tick() }
             fun stats(): JSONObject = native { JSONObject(Native.query(it,obj("type" to "renderer_stats").toString())) }
-            fun summary(values: org.json.JSONArray): JSONObject? {
-                if(values.length()==0)return null
-                val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()
-                return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"max" to sorted.last())
-            }
-            fun motion(tool: Int, steps: Int): JSONObject {
-                fun measurements(reset: Boolean): JSONObject {
-                    val done = java.util.concurrent.CountDownLatch(1)
-                    var result: JSONObject? = null
-                    host.measurements(reset) { result = it; done.countDown() }
-                    assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
-                    return result!!
-                }
-                fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
-                    InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
-                ).use { it.readBytes().decodeToString() }
-                // Read the published state; Native.snapshot would consume the
-                // publication before Compose can receive it.
-                compose.waitForIdle()
-                val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera");val zoom=camera.getDouble("zoom");val translation=camera.getJSONArray("translation")
-                var origin=androidx.compose.ui.geometry.Offset.Zero
-                scenario.onActivity { origin=host.surfaceOrigin }
-                val cx=(1000*zoom+translation.getDouble(0)+origin.x).toFloat();val cy=(750*zoom+translation.getDouble(1)+origin.y).toFloat()
-                val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
-                measurements(true)
-                val duration = if (steps >= 180) 5_000L else 1_000L
-                var i = 0
-                while (true) {
-                    val elapsed = SystemClock.uptimeMillis() - start
-                    val phase=when {i==0->android.view.MotionEvent.ACTION_DOWN;elapsed>=duration->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
-                    val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply {id=7;toolType=tool})
-                    val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
-                    val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
-                    val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
-                    try {assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
-                    if (phase == android.view.MotionEvent.ACTION_UP) break
-                    i++; SystemClock.sleep(4)
-                }
-                // The host's Choreographer is the only frame producer during
-                // motion. Capture its timeline independently of GPU timings.
-                SystemClock.sleep(100)
-                native { Unit } // Drain delivered input, without creating a frame.
-                val timeline = measurements(false)
-                assertNull(host.failure)
-                if (timeline.getJSONArray("inputs").length() == 0) {
-                    InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
-                        try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
-                        finally { screenshot.recycle() }
-                    }
-                }
-                assertTrue("The canvas received input at ($cx,$cy), camera=$camera; state=${host.snapshot?.getJSONObject("state")?.getJSONObject("layer_tools")}", timeline.getJSONArray("inputs").length() > 0)
-                val layer = shell("dumpsys SurfaceFlinger --list").lineSequence()
-                    .firstOrNull { it.contains("SurfaceView[${activity.packageName}/") && it.contains("(BLAST)") }
-                    ?.removePrefix("RequestedLayerState{")?.substringBefore(" parentId=")
-                // UiAutomation executes an argument vector; shell quote marks
-                // would become part of this layer name (which has no spaces).
-                val latency = layer?.let { shell("dumpsys SurfaceFlinger --latency $it") }
-                val stats=stats()
-                if(steps>=180)assertTrue("Warm native diagnostics contain 120 rendered updates",stats.getJSONArray("samples").length()>=120)
-                return obj("tool" to tool,"cpu_ms" to summary(stats.getJSONArray("samples")),"gpu_ms" to summary(stats.getJSONArray("gpu_samples")),
-                    "camera" to camera, "input_origin" to org.json.JSONArray(listOf(cx,cy)),
-                    "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency,
-                    "tracked_canvas_bytes" to stats.getLong("resident_bytes"),"process_pss_bytes" to android.os.Debug.getPss().toLong()*1024)
-            }
             try {
                 action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "stats","visible" to true)))
                 val statsGroup=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
@@ -579,6 +582,29 @@ class AndroidRasterTest {
             DocumentController.nativeFileJobsForTest = true
             for (uri in uris) resolver.delete(uri, null, null)
         }
+    }
+
+    @Test fun largePhotoSustainedDrawing() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("photoWorkflow") == "true")
+        val photo = File(activity.filesDir, "photo-benchmark.jpg")
+        assertTrue(photo.isFile)
+        open(photo)
+        fun action(value: JSONObject) { native { Native.dispatch(it,value.toString()) }; scenario.onActivity { host.documentChanged() }; tick(); compose.waitForIdle() }
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+        val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, .5))))
+        val runs=org.json.JSONArray()
+        val output=File(activity.getExternalFilesDir(null), "large-photo-drawing.json")
+        repeat(3) {
+            runs.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0))
+            output.writeText(obj("extent" to org.json.JSONArray(listOf(9504, 6336)), "runs" to runs).toString(2))
+        }
+        assertNull(host.failure)
+        save("large-photo-sustained.capy")
     }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {

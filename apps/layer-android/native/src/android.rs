@@ -376,8 +376,16 @@ pub extern "system" fn Java_art_capycanvas_Native_frameCost(
     handle: jlong,
     array: jni::objects::JLongArray,
 ) {
+    let app = unsafe { app(handle) };
+    let mut costs = [0i64; 11];
+    costs[..5].copy_from_slice(&app.frame_cost);
+    if let Some(gpu) = &app.host.session.engine().backend().0 {
+        for (target, ms) in costs[5..].iter_mut().zip(gpu.metrics().frame_cpu_ms) {
+            *target = (ms * 1_000_000.) as i64;
+        }
+    }
     let result = env
-        .set_long_array_region(&array, 0, &unsafe { app(handle) }.frame_cost)
+        .set_long_array_region(&array, 0, &costs)
         .map_err(error);
     fail(&mut env, result);
 }

@@ -4,7 +4,10 @@ use ash::vk;
 use core::{mem, ops::Range};
 use hashbrown::hash_map::Entry;
 
-const ALLOCATION_GRANULARITY: u32 = 16;
+// Android's reset policy releases completed buffers instead of retaining the
+// free list. Allocate on demand there: the other fifteen buffers in the usual
+// batch would otherwise be allocated and freed without ever recording work.
+const ALLOCATION_GRANULARITY: u32 = if cfg!(target_os = "android") { 1 } else { 16 };
 const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
 impl super::Texture {
@@ -186,23 +189,21 @@ impl crate::CommandEncoder for super::CommandEncoder {
             unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
         }
         // Adreno can accumulate host mappings across pool resets until command
-        // recording fails, even with ample RAM. Free the completed buffers as
-        // well as releasing pool storage: reset alone and periodic reclamation
-        // still failed during sustained large-photo editing. This is wgpu's
-        // existing all-completed boundary, before the pool is reused.
-        let reset_flags = if cfg!(target_os = "android") {
+        // recording fails, even with ample RAM. Free every completed buffer:
+        // resetting alone and periodic buffer reclamation were insufficient.
+        // Keep reusable pool storage: RELEASE_RESOURCES recreated it even on
+        // empty resets and dominated CPU time in sustained drawing. This is
+        // wgpu's existing all-completed boundary, before the pool is reused.
+        if cfg!(target_os = "android") {
             if !self.free.is_empty() {
                 unsafe { self.device.raw.free_command_buffers(self.raw, &self.free) };
                 self.free.clear();
             }
-            vk::CommandPoolResetFlags::RELEASE_RESOURCES
-        } else {
-            vk::CommandPoolResetFlags::default()
-        };
+        }
         let _ = unsafe {
             self.device
                 .raw
-                .reset_command_pool(self.raw, reset_flags)
+                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
         };
     }
 

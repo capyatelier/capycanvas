@@ -63,20 +63,22 @@ the `supports32BitFloatFiltering` qualification for older iPad GPU families.
 Devices without that capability still report it unavailable. No texture
 precision, publication, rendering or presentation algorithm is changed.
 
-`wgpu-android-command-memory.patch` frees completed buffers and requests
-`RELEASE_RESOURCES` on every Android Vulkan command-pool reset, at wgpu's existing
-all-completed boundary. Large photo preparation followed
+`wgpu-android-command-memory.patch` frees completed Android Vulkan command
+buffers at wgpu's existing all-completed boundary and allocates replacements
+on demand. Large photo preparation followed
 by save/reopen and editing exhausted host mappings in Adreno command recording on
 the Wacom DTHA140: one failing process reached 64,039 mappings despite available
 RAM. Resetting pools alone and periodic buffer reclamation still failed during
 the long workload; freeing completed buffers on every reset passed.
 The renderer also submits cold placement previews in batches of 64 tiles;
 resetting pools alone did not bound command storage while recording a new preview.
-The [Vulkan reset flag](https://docs.vulkan.org/refpages/latest/refpages/source/VkCommandPoolResetFlagBits.html)
-returns the pool's resources to the system; submission ownership and completion
-synchronization remain unchanged. This workaround trades pool reuse for bounded
-retention on Android, with a substantial CPU cost on this tablet. Other targets
-keep their existing reset flags. See the
+The pool itself now retains reusable storage with the ordinary reset flags.
+Profiling the initial `RELEASE_RESOURCES` policy showed repeated driver
+allocation/reset costs: full 61 MP drawing took roughly 14–16 ms per host
+callback despite only 1–2 ms of GPU work. Retaining pool storage while still
+freeing every completed buffer reduced median callbacks to about 4.6 ms and
+reached 8.33 ms presentation intervals. Submission ownership and completion
+synchronization remain unchanged. Other targets retain their existing policy. See the
 [host qualification](../docs/development/image-placement-web-android-progress.md).
 
 Remove each patch when an upstream release supplies its equivalent fix, and

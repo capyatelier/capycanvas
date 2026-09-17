@@ -296,3 +296,77 @@ composition bandwidth, synchronization or host publication cost. The report
 predates the final shared-workflow changes and is a baseline, not acceptance of
 those changes. Android large-canvas drawing/stability and then Web latency are
 the next requested milestones.
+
+## Android drawing latency milestone after workflow centralization
+
+The shared renderer now uses the complete retained photo image during active
+prediction as well as movement. That image already incorporates prediction and
+restores its old damage. The previous preview exclusion forced transformed
+scratch/blend passes for every output tile. Sparse contact composition now maps
+its existing layer-coordinate tile plan into document coordinates, with a
+conservative sampling halo. Scaled/rotated photos and masks therefore redraw
+only affected tiles. Removing a transformed prediction also invalidates its old
+document coverage. Neither change introduces a new shader or rendering mode;
+Web, Android and GTK use the same implementation and retain Float32 display
+pixels, exact source samples and native history.
+
+The existing Android Vulkan workaround still frees every completed command
+buffer. It now allocates buffers on demand and retains reusable **pool** storage
+with ordinary reset flags. Sampling the tablet render thread identified
+allocation and `RELEASE_RESOURCES` reset work as the major CPU cost. Removing
+that pool-storage churn reduced full-canvas drawing callbacks from 14–16 ms to
+4.5–4.8 ms. Keeping pool storage is distinct from retaining completed command
+buffers; the latter caused the earlier mapping exhaustion. The pinned patch
+records this narrowly scoped driver workaround.
+
+Measured on the same DTHA140/SM8635/2880 × 1800 tablet, normal Choreographer only,
+real OS input at approximately 240 samples/s. Three 15-second strokes on an
+opened **9504 × 6336 document** produced 118.7–118.9 callbacks/s, 8.33 ms median
+and p95 vsync intervals, and 8.33 ms median SurfaceFlinger presentation intervals.
+Callback p95 was 6.16–6.25 ms; input worker-queue median was about 1 ms. Process
+mappings were 11,634, 11,646 and 11,685 after those strokes. GPU medians were
+0.71–0.75 ms; these measure drawing submissions, not physical pen-to-photon delay.
+
+For the separate 2000 × 1500 document with retained 61 MP/24 MP photos, each warm
+stylus movement and drawing run lasted 15 seconds:
+
+| Source | Scale / fit | Moving callback p50 | Moving callbacks/s | Drawing callback p50 | Drawing callbacks/s |
+| --- | --- | --- | --- | --- | --- |
+| 9504 × 6336 | 1.1 | 7.70 ms | 75.3 | 5.14 ms | 115.0 |
+| 9504 × 6336 | 1.2 | 6.40 ms | 97.2 | 5.46 ms | 110.0 |
+| 9504 × 6336 | 2.0 | 6.05 ms | 118.0 | 5.30 ms | 117.5 |
+| 4000 × 6000 | 1.1 | 5.81 ms | 119.5 | 5.13 ms | 119.8 |
+| 4000 × 6000 | 1.2 | 5.84 ms | 118.0 | 5.24 ms | 117.8 |
+| 4000 × 6000 | 2.0 | 5.76 ms | 117.1 | 5.20 ms | 119.5 |
+| Both visible | Final drawing | — | — | 5.31 ms | 116.4 |
+
+Drawing previously took 56–95 ms per callback in this placed-photo workload.
+Current drawing GPU medians are 2.15–3.05 ms. Mapping counts rose from 35,393 to
+39,058 across the placement/save/reopen/history workload, below the earlier
+approximately 64,000-mapping failure. Process PSS remained approximately
+0.9–1.1 GiB. The full 349-second instrumentation run passed, including exact
+source identity, paint Undo/Redo, native save/reopen, and deliberate GPU loss and
+recovery. This qualifies these workloads, not arbitrary memory pressure.
+
+**120 Hz movement is still incomplete near fit for the 61 MP source.** Its
+moving GPU medians remain 8.53 ms at 1.1× and 6.99 ms at 1.2×; host publication
+also consumes time. The figures above retain missed frames rather than claiming
+that an 8.33 ms median alone proves sustained 120 Hz.
+
+Validation: 285 renderer unit tests plus 4 contact and 6 project integration
+tests pass when run serially. The live Float32 pixel oracle covers partial edges,
+fractional/rotated/mirrored placements, translucent paint/erase prediction,
+exact cancellation, and masked composition; sparse output is compared with a
+full redraw. Android build and lint pass. The initial unconstrained parallel GPU
+test invocation exhausted device resources; its device-creation failures were
+resolved by serial execution.
+
+Session reports: `/tmp/capy-android-drawing-baseline.json`,
+`/tmp/capy-full-photo-baseline.json`, `/tmp/capy-full-photo-pool.json`, and
+`/tmp/capy-pool-reset-device.json`. Use
+`tools/performance/android-frame-report.py REPORT.json` for per-run callback,
+input queue and presentation timing. Rolling renderer histories can contain
+earlier operations; the report treats the run's host timeline as authoritative
+and filters compositor timestamps to its input interval. Android instrumentation
+now includes shared renderer CPU phases and process mapping counts, and accepts
+`-e motionDurationMs 15000` (5–30 seconds) for longer sustained checks.

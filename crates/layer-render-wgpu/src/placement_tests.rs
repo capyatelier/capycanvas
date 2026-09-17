@@ -460,7 +460,7 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
     behind.id = LayerId(2);
     behind.opacity = 0.78;
     behind.properties.placement = Affine([0.3, 0., 0., 0.3, 140.25, 87.5]);
-    let canvas = [519, 337]; // Both partial edge tiles and full interior tiles.
+    let canvas = [1031, 777]; // Both partial edge tiles and full interior tiles.
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cached = None;
     for (step, transform) in [
@@ -493,6 +493,84 @@ fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
             .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
             .fold(0.0f32, f32::max);
         assert!(maximum < 0.0001, "pose {step}: live pixel error {maximum}");
+    }
+    // Both overlay-only and destination-reading prediction must use the same
+    // complete cached image, including translucent paint and layer opacity.
+    for (opacity, mode, mask) in [(1., DabMode::Paint, false), (0.63, DabMode::Paint, false),
+        (1., DabMode::Erase, false), (0.63, DabMode::Erase, true)] {
+        photo.opacity = opacity;
+        if mask {
+            photo.properties.placement = Affine([0.35, 0.15, -0.15, 0.35, 120.25, -38.5]);
+            photo.mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 10.25, y: 20.5 }));
+        }
+        let layers = [photo.clone(), behind.clone()];
+        let mut ink = dab([0.1, 0.7, 0.2, 0.45]);
+        ink.center = Point { x: 230., y: 180. };
+        ink.radii = [32.; 2];
+        ink.contact = [1., 0., 0., 0.];
+        let mut stroke = batch(1);
+        stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+        stroke.kind = DabBatchKind::Preview;
+        stroke.style.mode = mode;
+        stroke.style.brush_to_layer = layer_core::target_transform(&layers, stroke.layer_id).inverse().unwrap();
+        stroke.damage = ink.bounds();
+        let mut baseline = None;
+        for prediction in [false, true, false] {
+            let mut images = Vec::new();
+            for tiled in [false, true] {
+                r.scene.as_mut().unwrap().set_tiled_composition(tiled);
+                let before = r.metrics.composited_pixels;
+                r.submit(FramePacket {
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1],
+                        background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                    document_extent: canvas, layers: &layers,
+                    dabs: if prediction { std::slice::from_ref(&ink) } else { &[] },
+                    dab_batches: if prediction { std::slice::from_ref(&stroke) } else { &[] },
+                    restore_rasters: &[], reset_layers: false,
+                    composite_all: tiled || baseline.is_none(), time_seconds: 0.,
+                }).unwrap();
+                if prediction && !tiled {
+                    assert!(r.metrics.composited_pixels - before < u64::from(canvas[0]) * u64::from(canvas[1]),
+                        "a placed contact must not rebuild the entire canvas");
+                }
+                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+            }
+            let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
+                .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+                .fold(0.0f32, f32::max);
+            assert!(maximum < 0.0001, "prediction={prediction}, {mode:?}, opacity={opacity}: {maximum}");
+            if let Some(before) = &baseline {
+                if prediction { assert!(&images[0] != before, "prediction changes live pixels"); }
+                else { assert!(&images[0] == before, "cancel restores live pixels exactly"); }
+            } else { baseline = Some(images.remove(0)); }
+        }
+        if mask {
+            // Mask strokes are committed contacts (the engine disables mask
+            // prediction). Compare one edit with a later full recomposition;
+            // replaying the same mask edit would legitimately accumulate it.
+            stroke.layer_id = LayerId(9);
+            stroke.kind = DabBatchKind::Persistent;
+            stroke.style.brush_to_layer = layer_core::target_transform(&layers, stroke.layer_id).inverse().unwrap();
+            let mut images = Vec::new();
+            for full in [false, true] {
+                r.scene.as_mut().unwrap().set_tiled_composition(full);
+                r.submit(FramePacket {
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1],
+                        background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                    document_extent: canvas, layers: &layers,
+                    dabs: if full { &[] } else { std::slice::from_ref(&ink) },
+                    dab_batches: if full { &[] } else { std::slice::from_ref(&stroke) },
+                    restore_rasters: &[], reset_layers: false,
+                    composite_all: full, time_seconds: 0.,
+                }).unwrap();
+                images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+            }
+            assert!(images[0] != baseline.unwrap(), "mask painting changes live pixels");
+            let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
+                .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+                .fold(0.0f32, f32::max);
+            assert!(maximum < 0.0001, "transformed mask damage matches full tiled composition: {maximum}");
+        }
     }
 }
 

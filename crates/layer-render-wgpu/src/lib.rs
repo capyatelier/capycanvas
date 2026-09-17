@@ -4770,13 +4770,10 @@ impl CanvasRenderer for WgpuRasterizer {
         // retain complete damage propagation.
         let local_contacts = scene_required && !original_batches.is_empty()
             && watercolor_style_dirty.is_empty()
-            && old_preview_layer.is_none_or(|id|
-                layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY)
             && original_batches.iter().all(|b| {
                 matches!(b.kind, DabBatchKind::Persistent | DabBatchKind::Preview)
                     && b.style.execution == BrushExecution::Dry && b.style.contact.is_some()
                     && !b.style.rendering.edge_after_stroke
-                    && layer_core::target_transform(packet.layers, b.layer_id) == layer_core::Affine::IDENTITY
             });
         let mut composite_tiles = (!reset && !packet.composite_all
             && (local_contacts || (dirty.is_empty() && !self.transform_damage.is_empty()
@@ -4786,8 +4783,19 @@ impl CanvasRenderer for WgpuRasterizer {
             }))
         .then(std::collections::BTreeSet::new);
         if local_contacts && let Some(tiles) = &mut composite_tiles {
-            tiles.extend(page_coordinates(old_preview_damage));
-            tiles.extend(batch_tiles.iter().flatten().map(|tile| tile.coordinate));
+            // Brush allocation stays in layer coordinates; composition always
+            // uses document coordinates, including rotated/scaled photos and
+            // their masks. Reuse the same sparse contact plan for every host.
+            dirty = PixelRect::EMPTY;
+            let mut include = |id, local| {
+                let bounds = brush_tiles::document_damage(packet.layers, id, local, packet.document_extent);
+                dirty = dirty.union(bounds);
+                tiles.extend(page_coordinates(bounds));
+            };
+            if let Some(id) = old_preview_layer { include(id, old_preview_damage); }
+            for (batch, planned) in original_batches.iter().zip(&batch_tiles) {
+                for tile in planned { include(batch.layer_id, page_rect(tile.coordinate)); }
+            }
         }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(
@@ -4808,9 +4816,8 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(previews) = &mut self.filter_previews {
             previews.note_frame(FramePacket { view: requested_view, ..packet }, self.filter_source_epoch);
         }
-        if packet.dab_batches.iter().any(|batch| layer_core::target_transform(packet.layers, batch.layer_id) != layer_core::Affine::IDENTITY)
-            || self.preview_layer_id.is_some_and(|id| layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY)
-        {
+        if composite_tiles.is_none() && (packet.dab_batches.iter().any(|batch| layer_core::target_transform(packet.layers, batch.layer_id) != layer_core::Affine::IDENTITY)
+            || self.preview_layer_id.into_iter().chain(old_preview_layer).any(|id| layer_core::target_transform(packet.layers, id) != layer_core::Affine::IDENTITY)) {
             dirty = PixelRect::full(packet.document_extent);
         }
         if packet.composite_all || reset {
