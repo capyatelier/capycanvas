@@ -32,6 +32,8 @@ mod canvas_preview;
 mod color_sample;
 mod source_access;
 mod material_sources;
+mod brush_tiles;
+use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
 mod working_color;
@@ -418,6 +420,7 @@ impl BrushEncodingTarget {
 struct BrushEncodingContext<'a> {
     batches: &'a [DabBatch],
     dabs: &'a [Dab],
+    tiles: &'a [BrushTile],
     document_extent: [u32; 2],
     target: BrushEncodingTarget,
 }
@@ -1651,18 +1654,14 @@ impl WgpuRasterizer {
     fn destination_pages(
         &self,
         batches: &[DabBatch],
+        tiles: &[Vec<BrushTile>],
     ) -> std::collections::BTreeSet<(LayerId, [u32; 2])> {
         let mut destination_pages = std::collections::BTreeSet::new();
-        for batch in batches.iter().filter(|batch| {
+        for (batch, tiles) in batches.iter().zip(tiles).filter(|(batch, _)| {
             batch.kind == DabBatchKind::Persistent
                 && BrushPassPlan::for_style(&batch.style).requires_destination()
         }) {
-            let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
-            if !damage.is_empty() {
-                destination_pages.extend(
-                    page_coordinates(damage).map(|coordinate| (batch.layer_id, coordinate)),
-                );
-            }
+            destination_pages.extend(tiles.iter().map(|tile| (batch.layer_id, tile.coordinate)));
             // Pen-up edges revisit the whole stroke, including companions
             // retired since the pointer left those pages.
             if batch.stroke_end && BrushPassPlan::for_style(&batch.style).stroke_edge {
@@ -1677,8 +1676,8 @@ impl WgpuRasterizer {
         destination_pages
     }
 
-    fn ensure_destination_companions(&mut self, batches: &[DabBatch]) {
-        let destination_pages = self.destination_pages(batches);
+    fn ensure_destination_companions(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) {
+        let destination_pages = self.destination_pages(batches, tiles);
         for layer_index in 0..self.paint_layers.len() {
             let layer_id = self.paint_layers[layer_index].id;
             let missing = self.paint_layers[layer_index]
@@ -1792,13 +1791,11 @@ impl WgpuRasterizer {
         }
     }
 
-    fn ensure_persistent_pages(&mut self, batches: &[DabBatch]) -> Result<(), GpuRasterError> {
-        for batch in batches
-            .iter()
-            .filter(|batch| batch.kind == DabBatchKind::Persistent && batch.dab_count != 0)
+    fn ensure_persistent_pages(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) -> Result<(), GpuRasterError> {
+        for (batch, tiles) in batches.iter().zip(tiles)
+            .filter(|(batch, _)| batch.kind == DabBatchKind::Persistent && batch.dab_count != 0)
         {
-            let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
-            if damage.is_empty() {
+            if tiles.is_empty() {
                 continue;
             }
             let layer_index = self
@@ -1806,7 +1803,8 @@ impl WgpuRasterizer {
                 .iter()
                 .position(|layer| layer.id == batch.layer_id)
                 .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-            for coordinate in page_coordinates(damage) {
+            for tile in tiles {
+                let coordinate = tile.coordinate;
                 if self.paint_layers[layer_index]
                     .pages
                     .iter()
@@ -1820,15 +1818,14 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn ensure_paint_state_pages(&mut self, batches: &[DabBatch]) -> Result<(), GpuRasterError> {
-        for batch in batches.iter().filter(|batch| {
+    fn ensure_paint_state_pages(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) -> Result<(), GpuRasterError> {
+        for (batch, tiles) in batches.iter().zip(tiles).filter(|(batch, _)| {
             batch.kind == DabBatchKind::Persistent
                 && batch.dab_count != 0
                 && BrushPassPlan::for_style(&batch.style).uses_paint_state()
         }) {
             let plan = BrushPassPlan::for_style(&batch.style);
-            let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
-            if damage.is_empty() {
+            if tiles.is_empty() {
                 continue;
             }
             let layer_index = self
@@ -1836,7 +1833,8 @@ impl WgpuRasterizer {
                 .iter()
                 .position(|layer| layer.id == batch.layer_id)
                 .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-            for coordinate in page_coordinates(damage) {
+            for tile in tiles {
+                let coordinate = tile.coordinate;
                 if plan.state.coverage
                     && self.paint_layers[layer_index]
                         .coverage_pages
@@ -2534,7 +2532,7 @@ impl WgpuRasterizer {
                         encoder,
                         batch_index,
                         batch,
-                        damage,
+                        context.tiles,
                         &context.dabs[start..end],
                     )?;
                 }
@@ -2545,11 +2543,12 @@ impl WgpuRasterizer {
                     batch_index,
                     batch,
                     damage,
+                    context.tiles,
                     &context.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize],
                 )?,
                 BrushEncodingTarget::Preview {
                     from_persistent: false,
-                } => self.encode_preview_material_batch(encoder, batch_index, batch, damage,
+                } => self.encode_preview_material_batch(encoder, batch_index, batch, context.tiles,
                     &context.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize])?,
             }
             if watercolor_last {
@@ -2675,11 +2674,13 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
-        damage: PixelRect,
+        tiles: &[BrushTile],
         batch_dabs: &[Dab],
     ) -> Result<(), GpuRasterError> {
         struct Job {
             coordinate: [u32; 2],
+            local: PixelRect,
+            dabs: std::ops::Range<u32>,
             destination_secondary: bool,
             coverage_destination_secondary: Option<bool>,
             has_scalar_state: bool,
@@ -2721,7 +2722,8 @@ impl WgpuRasterizer {
         }
 
         if plan.state.coverage {
-            for coordinate in page_coordinates(damage) {
+            for tile in tiles {
+                let coordinate = tile.coordinate;
                 let page = self.paint_layers[layer_index]
                     .coverage_pages
                     .iter_mut()
@@ -2750,7 +2752,9 @@ impl WgpuRasterizer {
         }
 
         let mut jobs = Vec::new();
-        for coordinate in page_coordinates(damage) {
+        for tile in tiles {
+            let coordinate = tile.coordinate;
+            let local = tile.local;
             let page = self.paint_layers[layer_index]
                 .pages
                 .iter()
@@ -2773,6 +2777,8 @@ impl WgpuRasterizer {
             }
             jobs.push(Job {
                 coordinate,
+                local,
+                dabs: tile.dabs.clone(),
                 destination_secondary: !page.active_secondary,
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_scalar_state: if plan.state.watercolor_wetness {
@@ -2791,7 +2797,7 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, false, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), false, encoder,
             )?;
             let page = self.paint_layers[layer_index]
                 .pages
@@ -2802,12 +2808,7 @@ impl WgpuRasterizer {
             // Initialize the inactive wetness target once for the submitted
             // update. Every internal deposition microbatch accumulates into it
             // with fixed-function MAX blending before transport begins.
-            let local = damage
-                .intersect(page_rect(job.coordinate))
-                .page_local(job.coordinate);
-            if local.is_empty() {
-                continue;
-            }
+            let local = job.local;
             let texture_set = self
                 .texture_sets
                 .iter()
@@ -3391,11 +3392,13 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
-        damage: PixelRect,
+        tiles: &[BrushTile],
         batch_dabs: &[Dab],
     ) -> Result<(), GpuRasterError> {
         struct Job {
             coordinate: [u32; 2],
+            local: PixelRect,
+            dabs: std::ops::Range<u32>,
             destination_secondary: bool,
             coverage_destination_secondary: Option<bool>,
             has_watercolor_wetness: bool,
@@ -3403,7 +3406,9 @@ impl WgpuRasterizer {
 
         let plan = BrushPassPlan::for_style(&batch.style);
         let mut jobs = Vec::new();
-        for coordinate in page_coordinates(damage) {
+        for tile in tiles {
+            let coordinate = tile.coordinate;
+            let local = tile.local;
             let page = self
                 .preview_pages
                 .iter()
@@ -3428,6 +3433,8 @@ impl WgpuRasterizer {
             }
             jobs.push(Job {
                 coordinate,
+                local,
+                dabs: tile.dabs.clone(),
                 destination_secondary: !page.active_secondary,
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_watercolor_wetness: plan.state.watercolor_wetness,
@@ -3437,7 +3444,7 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, true, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), true, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3448,12 +3455,7 @@ impl WgpuRasterizer {
             // The preview update uses the same one-snapshot contract as
             // persistent watercolor. Initialization happens once before its
             // first microbatch.
-            let local = damage
-                .intersect(page_rect(job.coordinate))
-                .page_local(job.coordinate);
-            if local.is_empty() {
-                continue;
-            }
+            let local = job.local;
             let texture_set = self
                 .texture_sets
                 .iter()
@@ -3565,13 +3567,16 @@ impl WgpuRasterizer {
         batch_index: usize,
         batch: &DabBatch,
         damage: PixelRect,
+        tiles: &[BrushTile],
         batch_dabs: &[Dab],
     ) -> Result<(), GpuRasterError> {
         let plan = BrushPassPlan::for_style(&batch.style);
         let texture_key = Self::texture_set_key(&batch.style);
         for coordinate in page_coordinates(damage) {
+            let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
+                .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, coordinate, false, encoder,
+                batch_index, batch, batch_dabs, coordinate, range, false, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3982,7 +3987,6 @@ impl CanvasRenderer for WgpuRasterizer {
             // paint, allocating the composite, or submitting any part of a frame.
             scene::windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?;
         }
-        self.trim_native_color_cache(packet.dab_batches);
         if packet.layers.iter().any(|l| l.source.is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
             // capture spare pool during loading, before the first stroke needs it.
@@ -4070,6 +4074,14 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
+        let batch_tiles = original_batches.iter().map(|batch| {
+            let start = batch.first_dab as usize;
+            let end = start.checked_add(batch.dab_count as usize)
+                .ok_or(GpuRasterError::InvalidDabRange)?;
+            let dabs = packet.dabs.get(start..end).ok_or(GpuRasterError::InvalidDabRange)?;
+            Ok(brush_tiles::plan(batch, dabs, self.target_extent(batch.layer_id)))
+        }).collect::<Result<Vec<_>, GpuRasterError>>()?;
+        self.trim_native_color_cache(packet.dab_batches, &batch_tiles);
         let reset = packet.reset_layers || resized;
         if reset {
             self.layer_masks.pages.clear();
@@ -4125,11 +4137,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 ..packet
             },
             reset,
+            &batch_tiles,
         )?;
         self.transform_damage.extend(raster_damage);
-        self.ensure_persistent_pages(packet.dab_batches)?;
-        self.ensure_destination_companions(packet.dab_batches);
-        self.ensure_paint_state_pages(packet.dab_batches)?;
+        self.ensure_persistent_pages(packet.dab_batches, &batch_tiles)?;
+        self.ensure_destination_companions(packet.dab_batches, &batch_tiles);
+        self.ensure_paint_state_pages(packet.dab_batches, &batch_tiles)?;
 
         let old_preview_damage = self.preview_damage;
         let old_preview_layer = self.preview_layer_id;
@@ -4140,16 +4153,10 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut new_preview_requires_base = false;
         let mut preview_is_watercolor = false;
 
-        // Validate every range and accumulate metrics once before encoding.
+        // Ranges were validated during tile planning; accumulate metrics once.
         for batch in packet.dab_batches {
             let start = batch.first_dab as usize;
-            let end = start
-                .checked_add(batch.dab_count as usize)
-                .ok_or(GpuRasterError::InvalidDabRange)?;
-            let dabs = packet
-                .dabs
-                .get(start..end)
-                .ok_or(GpuRasterError::InvalidDabRange)?;
+            let dabs = &packet.dabs[start..start + batch.dab_count as usize];
             let batch_dirty = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
             let visual_dirty = if batch.style.execution == BrushExecution::Watercolor {
                 batch_dirty.expand(
@@ -4499,6 +4506,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 BrushEncodingContext {
                     batches: packet.dab_batches,
                     dabs: packet.dabs,
+                    tiles: &batch_tiles[index],
                     document_extent: self.target_extent(batch.layer_id),
                     target: BrushEncodingTarget::Persistent,
                 },
@@ -4731,6 +4739,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     BrushEncodingContext {
                         batches: packet.dab_batches,
                         dabs: packet.dabs,
+                        tiles: &batch_tiles[index],
                         document_extent: self.target_extent(batch.layer_id),
                         target: BrushEncodingTarget::Preview {
                             from_persistent: new_preview_from_persistent,
@@ -4778,14 +4787,7 @@ impl CanvasRenderer for WgpuRasterizer {
         .then(std::collections::BTreeSet::new);
         if local_contacts && let Some(tiles) = &mut composite_tiles {
             tiles.extend(page_coordinates(old_preview_damage));
-            for batch in original_batches {
-                let start = batch.first_dab as usize;
-                let end = start + batch.dab_count as usize;
-                for dab in &packet.dabs[start..end] {
-                    tiles.extend(page_coordinates(pixel_rect(
-                        batch.style.brush_to_layer.bounds(dab.bounds()), packet.document_extent)));
-                }
-            }
+            tiles.extend(batch_tiles.iter().flatten().map(|tile| tile.coordinate));
         }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(

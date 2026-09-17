@@ -9,8 +9,8 @@ fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterErr
 }
 
 #[test]
-fn display_batches_wait_only_when_another_tile_needs_encoding() {
-    for tiles in [16, 17, 32] {
+fn display_batches_submit_complete_halves_and_leave_final_tiles_with_the_frame() {
+    for tiles in [8, 9, 16, 17, 32] {
         let doc = layer_core::Document::new("paper batches", tiles * PAGE_SIZE, PAGE_SIZE);
         let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
         r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
@@ -22,7 +22,7 @@ fn display_batches_wait_only_when_another_tile_needs_encoding() {
         };
         submit(&mut r, &doc, v, true);
         assert!(r.live_display.is_some());
-        assert_eq!(r.metrics.display_composition_submissions, u64::from((tiles - 1) / 16));
+        assert_eq!(r.metrics.display_composition_submissions, u64::from((tiles - 1) / 8));
         assert_eq!(r.metrics.composited_pixels, u64::from(doc.width) * u64::from(doc.height));
         let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
             SdrSurfaceColor::ExtendedLinearSrgb).unwrap();

@@ -117,7 +117,7 @@ impl WgpuRasterizer {
     /// This cache target is not a hard active-stroke/transform allocation limit;
     /// those workloads need separate scheduling. No backing wait or readback
     /// happens here.
-    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch]) {
+    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) {
         if let Some(native) = &self.native_edit {
             if self.transform_preview.is_some()
                 || self.transforms.as_ref().is_some_and(|t| t.has_preview())
@@ -133,7 +133,7 @@ impl WgpuRasterizer {
             if bytes <= native.color_cache_bytes {
                 return;
             }
-            let destinations = self.destination_pages(batches);
+            let destinations = self.destination_pages(batches, tiles);
             // An inactive blend surface is cheaper to recreate than a canonical
             // page is to decompress. Retire scratch first, even on changed pages:
             // their active surface stays pinned until capture completes. Keep

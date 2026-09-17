@@ -230,11 +230,21 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         label: &'static str,
     ) -> Result<(), GpuRasterError> {
+        let submission = Self::submit_commands(r, encoder, label);
+        Self::wait_submission(r, submission)
+    }
+    fn submit_commands(
+        r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder,
+        label: &'static str,
+    ) -> wgpu::SubmissionIndex {
         let next = crate::submission::CommandEncoder::new(&r.device,
             &wgpu::CommandEncoderDescriptor { label: Some(label) });
         let previous = std::mem::replace(encoder, next);
         r.uploads.finish(&previous);
-        let submission = previous.submit(&r.queue);
+        previous.submit(&r.queue)
+    }
+    fn wait_submission(r: &WgpuRasterizer, submission: wgpu::SubmissionIndex) -> Result<(), GpuRasterError> {
         // Native hosts run this work on their render owner. Wait for this exact
         // chunk before releasing/replacing resources charged to its ceiling.
         #[cfg(not(target_arch = "wasm32"))]
@@ -250,7 +260,7 @@ impl Scene {
             }).map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = submission; // Browser queue draining needs separate host qualification.
+        let _ = (r, submission); // Browser queue draining needs separate host qualification.
         Ok(())
     }
     pub fn initialize_source_paint(&mut self, r: &mut WgpuRasterizer, layers: &[Layer], encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
@@ -1089,7 +1099,7 @@ impl Scene {
             || layer.properties.placement != layer_core::Affine::IDENTITY
             || layer.properties.blend != layer_core::LayerBlend::Normal
             || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
-            || r.preview_layer_id == Some(layer.id)
+            || (r.preview_layer_id == Some(layer.id) && !r.preview_requires_base)
         {
             return Ok(false);
         }
@@ -1101,10 +1111,20 @@ impl Scene {
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(true);
         };
-        if stored.watercolor.is_some() {
+        if stored.watercolor.is_some()
+            || packet.dab_batches.iter().any(|b| b.layer_id == layer.id
+                && b.kind == DabBatchKind::Preview && b.style.execution == BrushExecution::Watercolor)
+        {
             return Ok(false);
         }
-        let view = if let Some(page) = stored.pages.iter().find(|p| p.coordinate == tile) {
+        // Destination-reading previews already contain the complete layer
+        // tile. Composite them directly just like persistent paint, instead
+        // of allocating a scratch layer and blending it in another pass.
+        let predicted = (r.preview_layer_id == Some(layer.id)
+            && !r.preview_damage.intersect(page_rect(tile)).is_empty())
+            .then(|| r.preview_pages.iter().find(|p| p.coordinate == tile))
+            .flatten();
+        let view = if let Some(page) = predicted.or_else(|| stored.pages.iter().find(|p| p.coordinate == tile)) {
             page.active().view.clone()
         } else if let Some(view) = self.source_tile(r, layer, tile)? {
             view
@@ -1435,14 +1455,19 @@ impl Scene {
         }
         let mut composited = 0;
         let mut display_tiles = 0;
+        let mut submitted = None;
         for tile in page_coordinates(dirty) {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
             }
-            if display_tiles == SOURCE_SLOTS {
-                // Bound command/driver storage before encoding another batch.
-                // Submit the final batch with the frame, without a CPU wait.
-                Self::submit_chunk(r, encoder, "bounded display composition")?;
+            if display_tiles == SOURCE_SLOTS / 2 {
+                // Keep the same total tile bound: one half executing while
+                // the CPU prepares the other. Wait before submitting another
+                // half, rather than immediately stalling after every submit.
+                if let Some(previous) = submitted.take() {
+                    Self::wait_submission(r, previous)?;
+                }
+                submitted = Some(Self::submit_commands(r, encoder, "bounded display composition"));
                 r.metrics.display_composition_submissions += 1;
                 display_tiles = 0;
             }
@@ -1514,6 +1539,8 @@ impl Scene {
             self.free(output);
         }
         self.encode_jobs(r, encoder)?;
+        // The final half goes with the frame. Together with the submitted half
+        // it fits the original tile ceiling; no terminal CPU wait is needed.
         r.metrics.composited_pixels += composited;
         Ok(())
     }

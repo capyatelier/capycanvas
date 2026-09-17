@@ -57,7 +57,14 @@ existing drawings preserved. The user then reports fast 570 px G-Pen circles
 lagging by up to one second and repeatable mid-zoom stalls. The attached trace
 and paired replay identify redundant contact/composition work and discarded
 zoom cache pixels. Shared fixes pass focused integrity checks and both Release
-builds; physical iPad retesting is next. See the
+builds. The user confirms smooth repeated zoom. Subsequent shared preview and
+paint-region changes improve drawing further, with roughly 50 ms p99 reported;
+drawing performance remains open. The requested
+[algorithm review](apple-drawing-performance-review.md) identifies remaining
+preparation/submission opportunities and does not establish a hardware floor.
+The shared tile-plan/bounded-overlap follow-up improves paired local replay with
+exact artwork/history and passes final host builds. The iPad is updated with all
+drawings preserved; physical drawing and large-photo local save/reopen are pending. See the
 [performance record](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
 and `artifacts/apple-photo-lag-v1/`. Large-photo local save/reopen remains
 unconfirmed.

@@ -111,7 +111,9 @@ The coalesced stress frame contains 267 ms of input at 240 Hz. Both sides have
 131 ms result is not a normal-frame cadence claim. The second and third zoom
 sweeps perform zero recomposition after the fix. Final ordinary two/eight-sample
 replays also preserve exact history; the eight-sample result matches baseline
-committed roots. Physical iPad retesting remains required.
+committed roots. The physical iPad follow-up confirms smooth repeated zoom;
+fast-circle drawing improves but still reports about 100 ms frame generation.
+This remaining drawing cost is not an established hardware lower bound.
 
 Regression coverage includes atlas retention, partial admission, sparse contact
 composition versus a full rebuild, and long contact batches across tile edges.
@@ -123,11 +125,78 @@ test pass. Both final Apple Release builds and the WebAssembly check pass
 without compiler warnings.
 The iPad candidate is installed in place with all eleven recoveries preserved
 and every saved file byte-identical across installation. The ordinary review
-app is open at Recovered Drawings with recording disabled; the user has been
-asked to repeat both gestures. The Mac artist app remains untouched.
+app preserves the user's working drawing. The Mac artist app remains untouched.
 Evidence, paired results and private traces are in
-`artifacts/apple-photo-lag-v1/`. Large-photo physical acceptance and the wider
+`artifacts/apple-photo-lag-v1/`; remaining drawing diagnosis is under
+`artifacts/apple-photo-lag-v2/`. The milestone is published as `6da20d05`.
+Large-photo drawing acceptance and the wider
 Apple release goal remain open.
+
+## Remaining large-photo drawing cost — 2026-09-17
+
+The physical follow-up accepts smooth repeated zoom but reports about 100 ms
+frame generation during fast drawing. A short rolling trace retains the tail
+of drawing, not the whole requested stroke: ten viewport encoders and 1,392
+scene passes. Its CPU stacks concentrate in command materialization/submission;
+brush GPU stages are much shorter than in the original capture. This supports
+reducing pass overhead, not a theoretical memory-bandwidth or latency bound.
+
+The shared normal-layer compositor now accepts complete destination-reading
+preview tiles directly. Overlay-only previews and watercolor retain their
+existing composition. Dry contact paint jobs also clip to the union of actual
+contact bounds within each tile, skipping untouched tiles inside the batch's
+bounding rectangle. Both persistent and predicted painting share that helper.
+No input samples, precision, brush detail or memory allowance are reduced.
+
+Paired Mac Metal replays preserve exact committed tile roots and Undo/Redo.
+At eight input samples per frame, the repeated baseline has 12.98 ms median /
+34.06 ms p95 completion; both changes reach 10.58 / 26.97 ms. In the retained
+64-sample stress case, median/p95 move from 131.43/186.71 to 60.65/84.92 ms.
+Cold maxima remain variable (the new stress maximum is 734 ms, concentrated in
+first-frame preparation); these measurements do not close startup stalls or
+physical iPad performance. A shader early-exit experiment preserved pixels but
+showed no benefit and was removed. Evidence is `artifacts/apple-photo-lag-v2/`.
+The renderer suite reports 282 passes, 29 ignored and the same pre-existing
+filter-reference mismatch (maximum byte error 56). Both Release builds and the
+WebAssembly check pass without compiler warnings. All four contact integration
+tests pass. The iPad candidate is installed in place with all eleven recoveries
+and saved files preserved byte-for-byte across installation. Mac review apps
+remain unchanged. The pre-update screenshot retains CPU median/p95/p99 of
+40.93/119.61/144.47 ms and GPU interval 35.11/106.54/125.63 ms; GPU intervals
+include scheduling gaps and are not equivalent to active execution time.
+
+The user now confirms faster drawing, with roughly 50 ms p99. The post-test
+capture reports CPU median/p95/p99 of 12.08/47.32/55.75 ms and GPU intervals of
+10.89/44.93/54.30 ms. Gesture, artwork and camera differ, so these captures are
+not a controlled device A/B. The user requests an algorithm review before
+accepting this as a limit; no repeat test is pending. The
+[first-principles review](../../docs/development/apple-drawing-performance-review.md)
+finds remaining rectangular allocation/source preparation and frequent bounded
+submission waits. Retain the tiled architecture and memory limits; pursue those
+shared opportunities before considering a rewrite. Physical performance closure
+remains open. Local CPU sampling and arithmetic are in `artifacts/apple-photo-lag-v3/`.
+
+The shared follow-up replaces repeated contact scans with one tile plan used by
+allocation, paint/state updates, shader ranges, history and sparse composition.
+It also overlaps CPU encoding with GPU execution using two eight-tile halves of
+the existing 16-tile ceiling. Byte-based source staging and command-buffer bounds
+remain intact; the last half submits with the frame without a terminal wait.
+After integrating main `1cb1ebb8`, paired local completion medians improve across
+ordinary input, 96 px zigzags, 1024 px circles and the coalesced 571 px case.
+The latter moves from 59.58/79.10 ms median/p95 to 40.38/59.82 ms. Every retained
+canonical tile is identical, omitted tiles are proven fully transparent, and
+Undo/Redo is exact. Ordinary-input p99 is slightly higher in this pair; physical
+improvement is still unqualified. The [review](../../docs/development/apple-drawing-performance-review.md#shared-implementation-follow-up)
+records the complete matrix and limits.
+
+Final qualification reports 284 renderer passes, 30 ignored and only the unchanged
+filter-reference mismatch (maximum byte error 56); four contact integration tests,
+both Release builds and the Web check pass. The bounded-display fixture now checks
+8/9/16/17/32-tile boundaries and complete output pixels. The iPad is updated in
+place with all eleven recovery records and saved files preserved byte-for-byte.
+Ordinary review is open, recording disabled; physical fast-circle/Diagnostics and
+large-photo local Save As/reopen confirmation are pending. Mac artist apps remain
+unchanged.
 
 ## Metal display admission — 2026-09-16
 

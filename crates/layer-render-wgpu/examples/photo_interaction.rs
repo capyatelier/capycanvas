@@ -1,5 +1,5 @@
 //! Reproduce large-photo interaction without host UI automation.
-//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [cache-MiB] [stroke-frames]
+//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [cache-MiB] [stroke-frames] [brush-px] [circles|zigzag]
 //! Reads a copy of a project; never modifies its input. Timings include an
 //! offscreen managed presentation and queue completion, not display latency.
 use layer_core::*;
@@ -45,7 +45,11 @@ fn main() -> Result<()> {
     let samples: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(2);
     let allowance: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(0);
     let frames: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(360);
+    let diameter: f32 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(570.7);
+    let path = args.next().unwrap_or_else(|| "circles".into());
     assert!((1..=256).contains(&samples) && frames > 0);
+    assert!(diameter.is_finite() && diameter > 0.);
+    assert!(matches!(path.as_str(), "circles" | "zigzag"));
     let project = Project::read(BufReader::new(std::fs::File::open(input)?), Default::default())?;
     let extent = [project.document.width, project.document.height];
     let mut gpu = WgpuRasterizer::new_native_headless(project.document.color)?;
@@ -59,7 +63,7 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
     let mut brush = default_brush(DefaultBrushPreset::GPen);
-    brush.diameter = 570.7;
+    brush.diameter = diameter;
     brush.color_rgba_linear = [0.8, 0.04, 0.2, 1.];
     engine.set_brush(brush)?;
     engine.render_frame()?;
@@ -87,11 +91,15 @@ fn main() -> Result<()> {
                     let index = frame * samples + j;
                     let t = index as f32 / 240.;
                     let angle = t * std::f32::consts::TAU * 2.;
+                    let position = if path == "zigzag" {
+                        let triangle = |phase: f32| 1. - 4. * (phase.fract() - 0.5).abs();
+                        [triangle(t * 2.), triangle(t * 0.7 + 0.25)]
+                    } else { [angle.cos(), angle.sin()] };
                     sequence += 1;
                     input.push(PenEvent { device_id: 1, sequence,
                         timestamp_ns: 1_000_000_000 + index * 4_166_667, view_revision: 0,
-                        surface_position: Point { x: SIZE[0] as f32 * (0.5 + 0.42*angle.cos()),
-                            y: SIZE[1] as f32 * (0.5 + 0.42*angle.sin()) },
+                        surface_position: Point { x: SIZE[0] as f32 * (0.5 + 0.42*position[0]),
+                            y: SIZE[1] as f32 * (0.5 + 0.42*position[1]) },
                         pressure: 1., tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
                         tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
                         phase: if index == 0 { PenPhase::Down }

@@ -668,8 +668,30 @@ identical committed pixels; repeated zoom sweeps stop recomposing the image.
 These are offscreen measurements, not physical iPad acceptance. Both Release
 builds and focused contact/photo integrity checks pass. The candidate is installed
 on iPad with all eleven recovery drawings preserved and saved files byte-identical
-across installation. The ordinary app is open at Recovered Drawings with recording
-disabled; the requested physical retest remains pending. See the [measured causes and limits](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
+across installation. The user confirms repeated zoom is now smooth on this
+build. Fast-circle drawing is improved but still reports about 100 ms frame
+generation; drawing performance remains open, with no established hardware
+lower bound. The shared milestone is published as `6da20d05`; follow-up
+measurement is under `artifacts/apple-photo-lag-v2/`. The next shared candidate
+removes redundant preview composition and untouched dry-contact paint passes.
+Exact committed pixels/history remain unchanged in local replay. Both Release
+builds, Web compilation and focused contact/preview checks pass; the renderer
+suite retains only the pre-existing filter-reference mismatch. The candidate
+is installed on iPad with all eleven recoveries and saved files preserved.
+The user confirms faster drawing and roughly 50 ms p99; the post-test capture
+has CPU/GPU p99 of 55.75/54.30 ms. These overlapping intervals do not establish
+pen-to-screen latency or a hardware floor. The requested
+[algorithm review](apple-drawing-performance-review.md) identifies remaining
+rectangular preparation and bounded submission waits as general optimization
+opportunities. The follow-up unifies tile planning through allocation, painting,
+history and composition, and overlaps two halves of the existing bounded display
+batch. Paired local replay improves ordinary, small-zigzag, wide-brush and
+coalesced workloads with exact pixels/history. Both Release builds and Web
+compilation pass; the renderer has 284 passes and only its unchanged filter
+reference failure. Main `1cb1ebb8` is integrated. The updated iPad review retains
+all eleven recoveries and byte-identical saved files; recording is disabled.
+Physical fast circles/Diagnostics and large-photo local Save As/reopen are now
+pending. Drawing performance closure remains open. See the [measured causes and limits](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
 and `artifacts/apple-photo-lag-v1/`. Local save/reopen of this large image remains
 unconfirmed; the earlier small ProPhoto workflow stays passed.
 

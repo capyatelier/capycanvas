@@ -617,6 +617,7 @@ impl WgpuRasterizer {
         &mut self,
         packet: FramePacket<'_>,
         reset: bool,
+        tiles: &[Vec<BrushTile>],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let mut runtime = self.raster.take().unwrap_or_default();
         let result = (|| {
@@ -738,10 +739,11 @@ impl WgpuRasterizer {
                     }
                 }
             }
-            for batch in packet
+            for (batch, tiles) in packet
                 .dab_batches
                 .iter()
-                .filter(|b| b.kind != DabBatchKind::Preview)
+                .zip(tiles)
+                .filter(|(b, _)| b.kind != DabBatchKind::Preview)
             {
                 if let Some(target) = runtime.targets.get_mut(&batch.layer_id) {
                     // Transport is included in batch damage. Terminal edge work
@@ -749,8 +751,12 @@ impl WgpuRasterizer {
                     // already accumulated their changed pages in this target.
                     // Operation damage already includes selection bounds and
                     // transformed source/destination footprints.
-                    let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
-                    target.changed.extend(page_coordinates(damage));
+                    if batch.kind == DabBatchKind::Persistent {
+                        target.changed.extend(tiles.iter().map(|tile| tile.coordinate));
+                    } else {
+                        let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
+                        target.changed.extend(page_coordinates(damage));
+                    }
                     if batch.stroke_end
                         && batch.style.rendering.edge_after_stroke
                         && let Some(layer) =

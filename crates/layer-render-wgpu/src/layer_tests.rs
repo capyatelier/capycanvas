@@ -2596,6 +2596,107 @@ fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
 }
 
 #[test]
+fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    for native in [false, true] {
+        let mut r = if native {
+            WgpuRasterizer::new_native_headless(DocumentColor {
+                space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
+            }).unwrap()
+        } else { WgpuRasterizer::new_headless().unwrap() };
+        let layers = [Layer::paint(LayerId(1), "sparse contacts")];
+        let mut first = dab([0.2, 0.4, 0.8, 0.7]);
+        first.center = Point { x: 90., y: 90. };
+        first.radii = [25.; 2];
+        first.contact = [1., 0., 0., 0.];
+        let mut last = first;
+        last.center = Point { x: 890., y: 890. };
+        let mut stroke = batch(1);
+        stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+        stroke.dab_count = 2;
+        stroke.damage = first.bounds().union(last.bounds());
+        let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view: view(), document_extent: [1024; 2], layers: &layers,
+                dabs, dab_batches: batches, restore_rasters: &[], reset_layers: reset,
+                time_seconds: 0., composite_all: true,
+            }).unwrap();
+        };
+        render(&mut r, &[first, last], &[stroke.clone()], true);
+        let together = r.readback_srgb_rgba8().unwrap();
+        let paint = &r.paint_layers[0];
+        assert_eq!(paint.pages.len(), 2, "native={native}");
+        assert_eq!(paint.coverage_pages.len(), 2, "native={native}");
+        assert!(paint.pages.iter().all(|p| p.secondary.is_some()));
+        assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
+        assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
+        assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
+        // Independent per-contact submissions establish pixels, including the
+        // untouched interior; no reference renderer or second runtime path.
+        stroke.dab_count = 1;
+        stroke.stroke_end = false;
+        stroke.damage = first.bounds();
+        render(&mut r, &[first], &[stroke.clone()], true);
+        stroke.stroke_start = false;
+        stroke.stroke_end = true;
+        stroke.damage = last.bounds();
+        render(&mut r, &[last], &[stroke], false);
+        assert_eq!(together, r.readback_srgb_rgba8().unwrap(), "native={native}");
+    }
+}
+
+#[test]
+fn destination_preview_matches_committed_masked_translucent_paint_and_cancels_exactly() {
+    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    for native in [false, true] {
+        let mut r = if native {
+            WgpuRasterizer::new_native_headless(DocumentColor {
+                space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
+            }).unwrap()
+        } else {
+            WgpuRasterizer::new_headless().unwrap()
+        };
+        for inverted in [false, true] {
+            for mode in [DabMode::Paint, DabMode::Erase] {
+                let mut layer = Layer::paint(LayerId(1), "masked translucent preview");
+                layer.opacity = 0.63;
+                let mut mask = left_mask(9);
+                mask.inverted = inverted;
+                layer.mask = Some(mask);
+                let layers = [layer];
+                let base = dab([1., 0.1, 0.2, 0.8]);
+                let mut ink = dab([0.1, 0.2, 0.9, 0.7]);
+                ink.radii = [20.; 2];
+                ink.contact = [1., 0., 0., 0.];
+                let mut stroke = batch(1);
+                stroke.stroke_id = StrokeId(2);
+                stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+                stroke.style.mode = mode;
+                stroke.damage = ink.bounds();
+                submit(&mut r, &layers, &[base], &[batch(1)], true);
+                let original = r.readback_srgb_rgba8().unwrap();
+                submit(&mut r, &layers, &[ink], &[stroke.clone()], false);
+                let committed = r.readback_srgb_rgba8().unwrap();
+                assert_ne!(committed, original);
+                submit(&mut r, &layers, &[base], &[batch(1)], true);
+                let persistent = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+                stroke.kind = DabBatchKind::Preview;
+                stroke.stroke_end = false;
+                submit(&mut r, &layers, &[ink], &[stroke], false);
+                assert!(r.preview_requires_base);
+                let predicted = r.readback_srgb_rgba8().unwrap();
+                let maximum = predicted.iter().zip(&committed)
+                    .map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                assert!(maximum <= 1, "native={native}, inverted={inverted}, mode={mode:?}: {maximum}");
+                assert_eq!(persistent, page_bytes(&r, &r.paint_layers[0].pages[0].active().texture));
+                submit(&mut r, &layers, &[], &[], false);
+                assert_eq!(r.readback_srgb_rgba8().unwrap(), original);
+            }
+        }
+    }
+}
+
+#[test]
 fn mask_scene_destination_preview_preserves_untouched_color() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
