@@ -152,14 +152,14 @@ pub(crate) fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
     #[test]
     fn photo_open_preserves_source_depth_profile_and_master_separation() {
         let directory =
             std::env::temp_dir().join(format!("capy-open-photo-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let profile = ColorProfile::Icc(
                     layer_color::profile_bytes(&ColorProfile::Builtin(space))
                         .unwrap()
@@ -179,7 +179,7 @@ mod tests {
                 let codes = [
                     65535u16, 0, 32767, 1, 12345, 54321, 1001, 50000, 7654, 65535, 12456, 0,
                 ];
-                let row: Vec<u8> = if depth == IntegerDepth::U8 {
+                let row: Vec<u8> = if depth == SampleDepth::U8 {
                     codes.map(|v| (v / 257) as u8).to_vec()
                 } else {
                     codes.into_iter().flat_map(u16::to_le_bytes).collect()
@@ -220,7 +220,7 @@ mod tests {
                     Default::default(),
                 )
                 .unwrap();
-                assert_eq!(promoted.document.color.depth, IntegerDepth::U16);
+                assert_eq!(promoted.document.color.depth, SampleDepth::U16);
                 assert_eq!(promoted.document.layers[0].source.as_deref(), Some(&source));
                 let mut master = Vec::new();
                 project.write(&mut master).unwrap();
@@ -255,7 +255,7 @@ mod tests {
             [3, 1],
             SourceInterpretation {
                 channels: SourceChannels::Rgb,
-                depth: IntegerDepth::U8,
+                depth: SampleDepth::U8,
                 profile: ColorProfile::default(),
                 profile_assumed: true,
             },

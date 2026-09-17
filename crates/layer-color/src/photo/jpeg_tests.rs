@@ -6,7 +6,7 @@ fn pattern(channels: SourceChannels, space: RgbSpace) -> SourceImage {
         [257, 17],
         SourceInterpretation {
             channels,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(space),
             profile_assumed: false,
         },
@@ -66,7 +66,7 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                 let decoded = read_jpeg(Cursor::new(&bytes), DecodeLimits::default()).unwrap();
                 assert_eq!(decoded.extent, source.extent);
                 assert_eq!(decoded.interpretation.channels, channels);
-                assert_eq!(decoded.interpretation.depth, IntegerDepth::U8);
+                assert_eq!(decoded.interpretation.depth, SampleDepth::U8);
                 assert!(!decoded.interpretation.profile_assumed);
                 let profile = if channels == SourceChannels::Gray {
                     crate::gray_profile(space).unwrap()
@@ -110,10 +110,10 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
 fn jpeg_validation_provider_failure_and_truncation_do_not_publish_fake_success() {
     let source = pattern(SourceChannels::Rgb, RgbSpace::Srgb);
     for (depth, channels, quality) in [
-        (IntegerDepth::U16, SourceChannels::Rgb, 90),
-        (IntegerDepth::U8, SourceChannels::Rgba, 90),
-        (IntegerDepth::U8, SourceChannels::Rgb, 0),
-        (IntegerDepth::U8, SourceChannels::Rgb, 101),
+        (SampleDepth::U16, SourceChannels::Rgb, 90),
+        (SampleDepth::U8, SourceChannels::Rgba, 90),
+        (SampleDepth::U8, SourceChannels::Rgb, 0),
+        (SampleDepth::U8, SourceChannels::Rgb, 101),
     ] {
         let target = SourceInterpretation {
             depth,
@@ -219,7 +219,7 @@ fn baseline_60mp_jpeg_checks_full_image_memory_before_decoding() {
     let extent = [8192, 7324];
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgb,
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         profile: ColorProfile::default(),
         profile_assumed: false,
     };

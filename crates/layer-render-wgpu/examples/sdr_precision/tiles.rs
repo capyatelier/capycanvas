@@ -1,7 +1,7 @@
 //! Native straight integer tiles through physical Float32 working boundaries.
 //! This measures the codec choice before it becomes the durable edit contract.
 use super::*;
-use layer_core::color::IntegerDepth;
+use layer_core::color::SampleDepth;
 
 const SHADER: &str = r#"
 struct Transfer { info:vec4<u32>, entries:array<vec2<f32>> }
@@ -83,9 +83,9 @@ pub fn run(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), Box<dyn std
     });
     let working = texture(device, wgpu::TextureFormat::Rgba32Float);
     let working_view = working.create_view(&Default::default());
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let maximum = depth.maximum();
-        let format = if depth == IntegerDepth::U8 {
+        let format = if depth == SampleDepth::U8 {
             wgpu::TextureFormat::Rgba8Uint
         } else {
             wgpu::TextureFormat::Rgba16Uint
@@ -157,7 +157,7 @@ pub fn run(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), Box<dyn std
                     resource: table.as_entire_binding(),
                 }],
             });
-            let alphas = if depth == IntegerDepth::U8 {
+            let alphas = if depth == SampleDepth::U8 {
                 vec![0, 1, 2, 17, 128, 255]
             } else {
                 vec![0, 1, 2, 17, 257, 32768, 65535]
@@ -252,7 +252,7 @@ pub fn run(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), Box<dyn std
                             source.iter().zip(actual.chunks_exact(4 * depth.bytes()))
                         {
                             for c in 0..4 {
-                                let value = if depth == IntegerDepth::U8 {
+                                let value = if depth == SampleDepth::U8 {
                                     u32::from(actual[c])
                                 } else {
                                     u32::from(u16::from_le_bytes(
@@ -408,7 +408,7 @@ fn draw_bound(
 fn verify_boundaries(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     space: RgbSpace,
     pipelines: &[(
         wgpu::RenderPipeline,
@@ -495,7 +495,7 @@ fn verify_boundaries(
                 .enumerate()
             {
                 for c in 0..3 {
-                    let value = if depth == IntegerDepth::U8 {
+                    let value = if depth == SampleDepth::U8 {
                         u32::from(actual[c])
                     } else {
                         u32::from(u16::from_le_bytes(actual[c * 2..c * 2 + 2].try_into()?))

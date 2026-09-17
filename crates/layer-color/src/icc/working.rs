@@ -8,6 +8,7 @@ pub struct WorkingDecoder {
     kind: DecoderKind,
 }
 enum DecoderKind {
+    Linear { matrix: [[f32; 3]; 3], identity: bool },
     Builtin {
         transfer: Vec<f32>,
         matrix: [[f32; 3]; 3],
@@ -25,7 +26,16 @@ impl WorkingDecoder {
         options: ConversionOptions,
     ) -> Result<Self, String> {
         validate_options(options)?;
-        let kind = if let ColorProfile::Builtin(space) = source.profile {
+        let kind = if source.depth.is_float() {
+            let ColorProfile::Builtin(space) = source.profile else { return Err("HDR source needs explicit linear RGB primaries".into()); };
+            if !matches!(source.channels, SourceChannels::Rgb | SourceChannels::Rgba) { return Err("HDR supports RGB and RGBA samples".into()); }
+            let matrix = if options.intent == RenderingIntent::AbsoluteColorimetric {
+                space.absolute_linear_transform(destination)
+            } else {
+                space.linear_transform(destination)
+            };
+            DecoderKind::Linear { matrix: matrix.map(|r| r.map(|v| v as f32)), identity: space == destination }
+        } else if let ColorProfile::Builtin(space) = source.profile {
             if source.channels == SourceChannels::Cmyk {
                 return Err("CMYK source samples require an embedded CMYK profile".into());
             }
@@ -97,6 +107,16 @@ impl WorkingDecoder {
         if output.len().checked_mul(bpp) != Some(encoded.len()) {
             return Err("Incomplete source samples for working conversion".into());
         }
+        if let DecoderKind::Linear { matrix, identity } = &self.kind {
+            for (input, output) in encoded.chunks_exact(bpp).zip(output) {
+                let mut p = [0.,0.,0.,1.];
+                for (c, b) in input.chunks_exact(2).enumerate() { p[c] = layer_core::color::f16::from_bits(u16::from_le_bytes([b[0],b[1]])).to_f32(); }
+                layer_core::color::hdr::encode_pixel(p).map_err(str::to_string)?;
+                if !identity { let rgb = [p[0],p[1],p[2]]; for c in 0..3 { p[c] = matrix[c][0]*rgb[0]+matrix[c][1]*rgb[1]+matrix[c][2]*rgb[2]; } }
+                *output = p;
+            }
+            return Ok(());
+        }
         let step = self.source.depth.bytes();
         let channels = self.source.channels;
         let maximum = self.source.depth.maximum() as f32;
@@ -125,6 +145,7 @@ impl WorkingDecoder {
                     codes = std::array::from_fn(|c| code(pixel, c));
                 }
                 match &self.kind {
+                    DecoderKind::Linear { .. } => unreachable!(),
                     DecoderKind::Builtin {
                         transfer,
                         matrix,
@@ -155,6 +176,7 @@ impl WorkingDecoder {
                 }
             }
             match &self.kind {
+                DecoderKind::Linear { .. } => unreachable!(),
                 DecoderKind::Builtin { .. } => (),
                 DecoderKind::Rgb(transform) => {
                     transform.transform_pixels(&values[..destination.len()], destination)

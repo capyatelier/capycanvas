@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{IntegerDepth, source::*};
+use layer_core::color::{SampleDepth, source::*};
 
 #[test]
 fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_cache() {
@@ -10,7 +10,7 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         [2305, 1537], // Seventy original tiles exceed the 64-tile cache.
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -138,7 +138,7 @@ fn raw_sampling_combines_integer_paint_and_unmaterialized_sixteen_bit_source() {
         [513, 257],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -266,7 +266,7 @@ fn restored_source_tiles_update_the_displayed_blur_without_full_image_invalidati
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -420,7 +420,7 @@ fn tiled_sources_stream_through_fixed_slots_and_materialize_only_painted_pages()
     let extent = [2049, 513]; // 27 tiles: crosses a 16-tile display submission.
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgb,
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         profile: Default::default(),
         profile_assumed: false,
     };

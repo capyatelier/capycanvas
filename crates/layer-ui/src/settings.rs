@@ -552,6 +552,7 @@ pub struct HostRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequestKind {
+    SdrRendition,
     SoftProofSetup,
     Histogram,
     Workspace { command: crate::WorkspaceCommand },

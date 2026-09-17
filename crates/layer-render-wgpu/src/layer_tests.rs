@@ -2597,14 +2597,14 @@ fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
 
 #[test]
 fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     for (native, preset) in [false, true].into_iter().flat_map(|native| {
         [layer_core::DefaultBrushPreset::GPen, layer_core::DefaultBrushPreset::Pencil]
             .map(|preset| (native, preset))
     }) {
         let mut r = if native {
             WgpuRasterizer::new_native_headless(DocumentColor {
-                space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
+                space: RgbSpace::ProPhoto, depth: SampleDepth::U16,
             }).unwrap()
         } else { WgpuRasterizer::new_headless().unwrap() };
         let layers = [Layer::paint(LayerId(1), "sparse contacts")];
@@ -2651,11 +2651,11 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
 
 #[test]
 fn destination_preview_matches_committed_masked_translucent_paint_and_cancels_exactly() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     for native in [false, true] {
         let mut r = if native {
             WgpuRasterizer::new_native_headless(DocumentColor {
-                space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
+                space: RgbSpace::ProPhoto, depth: SampleDepth::U16,
             }).unwrap()
         } else {
             WgpuRasterizer::new_headless().unwrap()

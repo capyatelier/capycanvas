@@ -123,9 +123,9 @@ pub(super) fn read(
     let interpretation = SourceInterpretation {
         channels,
         depth: if info.bits <= 8 {
-            IntegerDepth::U8
+            SampleDepth::U8
         } else {
-            IntegerDepth::U16
+            SampleDepth::U16
         },
         profile,
         profile_assumed,

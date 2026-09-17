@@ -93,9 +93,9 @@ fn source_uploads_share_owned_pixels_and_pack_borrowed_rows() {
 
 #[test]
 fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
-    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::color::{SampleDepth, source::*};
     let mut builder = SourceBuilder::new(SIZE, SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
         profile: Default::default(), profile_assumed: false,
     }, 16 * 1024 * 1024).unwrap();
     for y in 0..SIZE[1] {

@@ -898,7 +898,7 @@ mod tests {
         fx.set("curve_0", EffectValue::Curve(points.clone()))
             .unwrap();
         let data = fx.gpu_parameters(RgbSpace::Srgb).unwrap();
-        assert_eq!(data.len(), 1 + 4 * EFFECT_TABLE_VECTORS);
+        assert_eq!(data.len(), 3 + 4 * EFFECT_TABLE_VECTORS);
         assert_eq!(data[1], [3., 0., 1., 0.]);
         for p in &points {
             assert_eq!(curve_value(&points, p[0]), p[1]);

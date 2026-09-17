@@ -3,7 +3,7 @@
 //! not claims of photographic color accuracy. Export/undo timings are cold paths.
 //! Use --bounded-display to compare the atlas fallback with host memory admission.
 use layer_core::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
     input_queue,
@@ -86,8 +86,9 @@ impl Canvas {
                     65535,
                 ] {
                     match color.depth {
-                        IntegerDepth::U8 => row.push((code >> 8) as u8),
-                        IntegerDepth::U16 => row.extend_from_slice(&code.to_le_bytes()),
+                SampleDepth::F16 => unreachable!("SDR-only benchmark fixture"),
+                        SampleDepth::U8 => row.push((code >> 8) as u8),
+                        SampleDepth::U16 => row.extend_from_slice(&code.to_le_bytes()),
                     }
                 }
             }
@@ -406,7 +407,7 @@ fn main() -> Result<()> {
     let mut capture_only = false;
     let mut navigation_only = false;
     let mut output = PathBuf::from("artifacts/color-m2/final-performance/dense");
-    let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let mut color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut arguments = args.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -424,8 +425,8 @@ fn main() -> Result<()> {
                 _ => return Err("--space needs srgb, p3, adobe-rgb or prophoto".into()),
             },
             "--depth" => color.depth = match arguments.next().map(String::as_str) {
-                Some("8") => IntegerDepth::U8,
-                Some("16") => IntegerDepth::U16,
+                Some("8") => SampleDepth::U8,
+                Some("16") => SampleDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
             _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--bounded-display] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),

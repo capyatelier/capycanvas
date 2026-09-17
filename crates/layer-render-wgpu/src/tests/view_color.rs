@@ -1,12 +1,12 @@
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, rgb, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, rgb, source::*};
 
 fn source(space: RgbSpace, codes: [u16; 4]) -> Layer {
     let mut builder = SourceBuilder::new(
         [256; 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(space),
             profile_assumed: false,
         },
@@ -131,7 +131,7 @@ fn native_export_navigator_thumbnails_and_raw_samples_keep_their_declared_color_
     use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
     for preview_space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let mut r =
                     WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
                 r.configure_ui_previews(preview_space).unwrap();
@@ -232,7 +232,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         let codes = [17000, 65000, 5000, 17000];
@@ -311,7 +311,7 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
     for space in RgbSpace::ALL {
         let color = DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let codes = [51000u16, 14000, 23000, 65535];
         let raw = codes
@@ -350,7 +350,7 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         let mut r = if native {
             WgpuRasterizer::new_native_headless(DocumentColor {
                 space: RgbSpace::ProPhoto,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
             })
             .unwrap()
         } else {
@@ -424,7 +424,7 @@ fn proof_shadow_grid_matches_cpu_and_never_changes_artwork_or_export() {
 fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
     for space in RgbSpace::ALL {
         let lut = Arc::new(layer_color::ProofLut::build(space, recipe, || false).unwrap());
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             let format = wgpu::TextureFormat::Rgba8Unorm;
             let target = texture(&r, format);
@@ -451,6 +451,49 @@ fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
                         close(&actual[i..i+4], bytes(expected, 1.), "CPU/GPU proof parity");
                         assert_eq!(r.readback_srgb_rgba8().unwrap(), exported, "proof must not reach export");
                         assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), raw);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
+    use layer_core::color::{hdr::SdrRendition, ProofRecipe};
+    for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth:SampleDepth::F16}).unwrap();
+        let lut=Arc::new(layer_color::ProofLut::build(space,&ProofRecipe::new("SDR proof".into(),ColorProfile::Builtin(RgbSpace::Srgb)),||false).unwrap());
+        let target=texture(&r,wgpu::TextureFormat::Rgba32Float);
+        let output=target.create_view(&Default::default());
+        for p in [[8.,2.,-0.125,1.],[32.,4.,1.,0.5],[1.,1.,1.,1./65536.],[0.;4]] {
+            let bits=layer_core::color::hdr::encode_pixel(p).unwrap();
+            let p=layer_core::color::hdr::decode_pixel(bits).unwrap();
+            let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
+            let row=bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(256);
+            for _ in 0..256 {builder.push_row(&row).unwrap();}
+            let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
+            frame(&mut r,&layer);
+            let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
+            let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,SdrSurfaceColor::WindowsScrgb).unwrap();
+            for recipe in [SdrRendition::default(),SdrRendition{exposure:-2.,contrast:1.5,knee:0.65}] {
+                for headroom in [1.,4.] {
+                    for proof in [false,true] {
+                        presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
+                        presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
+                        presenter.present(&r,&output,view(),[0.;4]).unwrap();
+                        let mut expected=if headroom==1. || proof {recipe.map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
+                        else {
+                            let rgb=[p[0],p[1],p[2]].map(|v|v.max(0.));let peak=rgb.into_iter().fold(0.,f32::max);
+                            let knee=headroom*0.75;let mapped=if peak<=knee {peak}else{headroom-(headroom-knee).powi(2)/(peak+headroom-2.*knee)};
+                            let rgb=rgb.map(|v|if peak>0.{v/peak*mapped*p[3]}else{0.});[rgb[0],rgb[1],rgb[2],p[3]]
+                        };
+                        if proof {expected=lut.apply_premultiplied(expected,true,false);}
+                        let rgb=rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from));
+                        let expected=rgb.map(|v|(v+0.94*(1.-f64::from(p[3])))*2.5375);
+                        let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
+                        for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
+                        assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
                     }
                 }
             }

@@ -2,7 +2,7 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::glib;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_ui::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -25,11 +25,7 @@ impl Form {
             extent: [self.width.value() as u32, self.height.value() as u32],
             color: DocumentColor {
                 space: RgbSpace::ALL[self.space.selected().min(3) as usize],
-                depth: if self.depth.selected() == 0 {
-                    IntegerDepth::U8
-                } else {
-                    IntegerDepth::U16
-                },
+                depth: [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][self.depth.selected().min(2) as usize],
             },
             background: if self.background.selected() == 0 {
                 DocumentBackground::White
@@ -49,7 +45,7 @@ impl Form {
                 .unwrap() as u32,
         );
         self.depth
-            .set_selected(u32::from(options.color.depth == IntegerDepth::U16));
+            .set_selected(match options.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2 });
         self.background.set_selected(u32::from(
             options.background == DocumentBackground::Transparent,
         ));
@@ -59,14 +55,14 @@ impl Form {
     fn describe(&self) {
         let options = self.options();
         self.color.set_subtitle(&format!(
-            "{} · {}-bit SDR",
+            "{} · {}",
             options.color.space.name(),
-            options.color.depth.bits()
+            options.color.depth.label()
         ));
         self.note
             .set_text("16-bit SDR is recommended for ProPhoto gradients and photo adjustments.");
         self.note.set_visible(
-            options.color.space == RgbSpace::ProPhoto && options.color.depth == IntegerDepth::U8,
+            options.color.space == RgbSpace::ProPhoto && options.color.depth == SampleDepth::U8,
         );
         self.dialog
             .set_response_enabled("create", options.validate().is_ok());
@@ -149,7 +145,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     let depth = combo(
         "Bit depth",
         "new-document-depth",
-        &["8-bit SDR", "16-bit SDR"],
+        &["8-bit SDR", "16-bit SDR", "16-bit float HDR"],
     );
     group.remove(&space);
     group.remove(&depth);

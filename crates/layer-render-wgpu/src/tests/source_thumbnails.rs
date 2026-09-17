@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, rgb, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, rgb, source::*};
 use layer_render::ViewState;
 
 fn codes(x: u32, y: u32) -> [u16; 4] {
@@ -19,7 +19,7 @@ fn photo(extent: [u32; 2]) -> Arc<SourceImage> {
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         },
@@ -87,7 +87,7 @@ fn placed_photo_thumbnail_keeps_full_source_orientation_and_off_canvas_paint() {
         [1024, 512],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(RgbSpace::Srgb),
             profile_assumed: false,
         },

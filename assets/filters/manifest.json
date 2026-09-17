@@ -43,6 +43,18 @@
             "key": "curve_3",
             "kind": {"kind":"curve"},
             "label": "Blue"
+          },
+          {
+            "default": {"kind":"choice","value":0},
+            "key": "domain",
+            "kind": {"kind":"choice","options":["Encoded RGB","Linear HDR"]},
+            "label": "Curve domain"
+          },
+          {
+            "default": {"kind":"number","value":4},
+            "key": "hdr_stops",
+            "kind": {"kind":"number","min":0,"max":15,"step":1,"decimals":0,"unit":"EV"},
+            "label": "Linear HDR white at right edge"
           }
         ],
         "wgsl": ["effects.wgsl"]

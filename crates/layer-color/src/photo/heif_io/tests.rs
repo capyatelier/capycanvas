@@ -19,7 +19,7 @@ fn assert_reference_samples(photo: &DecodedPhoto, expected: &[u8]) {
     {
         rows.read(y as u32, &mut row).unwrap();
         for (c, pair) in expected.chunks_exact(2).enumerate() {
-            let actual = if source.interpretation.depth == IntegerDepth::U8 {
+            let actual = if source.interpretation.depth == SampleDepth::U8 {
                 row[c] as u16 * 257
             } else {
                 u16::from_le_bytes(row[c * 2..c * 2 + 2].try_into().unwrap())
@@ -43,35 +43,35 @@ fn heif_avif_sequences_and_grids_match_independent_reference() {
         (
             "colors-animated-12bpc-keyframes-0-2-3",
             [64, 64],
-            IntegerDepth::U16,
+            SampleDepth::U16,
             true,
             false,
         ),
         (
             "sequence-different-poster",
             [64, 64],
-            IntegerDepth::U16,
+            SampleDepth::U16,
             true,
             false,
         ),
         (
             "colors-animated-8bpc-alpha-exif-xmp",
             [150, 150],
-            IntegerDepth::U8,
+            SampleDepth::U8,
             true,
             true,
         ),
         (
             "color_grid_alpha_nogrid",
             [80, 80],
-            IntegerDepth::U8,
+            SampleDepth::U8,
             false,
             true,
         ),
         (
             "sofa_grid1x5_420",
             [1024, 770],
-            IntegerDepth::U8,
+            SampleDepth::U8,
             false,
             true,
         ),
@@ -137,7 +137,7 @@ fn heif_avif_crop_rotation_mirror_preserve_samples_and_density() {
                     photo.source.interpretation.profile,
                     ColorProfile::Builtin(RgbSpace::DisplayP3)
                 );
-                assert_eq!(photo.source.interpretation.depth, IntegerDepth::U16);
+                assert_eq!(photo.source.interpretation.depth, SampleDepth::U16);
                 assert!(!photo.source.interpretation.profile_assumed);
                 assert_eq!(
                     photo.source.resolution.unwrap().density,
@@ -305,7 +305,7 @@ fn heif_bundled_reference_files_decode() {
         .unwrap_or_else(|e| panic!("{name}: {e}"));
         photo.source.validate().unwrap();
         assert!(photo.source.extent.iter().all(|n| *n > 0));
-        assert_eq!(photo.source.interpretation.depth, IntegerDepth::U8);
+        assert_eq!(photo.source.interpretation.depth, SampleDepth::U8);
         let mut rows = photo.source.rows();
         let mut row = vec![0; photo.source.row_bytes()];
         let mut colored = false;
@@ -403,7 +403,7 @@ fn heif_avif_precision_alpha_and_orientation_match_independent_encoder() {
                 photo.source.extent,
                 if rotated { [32, 64] } else { [64, 32] }
             );
-            assert_eq!(photo.source.interpretation.depth, IntegerDepth::U16);
+            assert_eq!(photo.source.interpretation.depth, SampleDepth::U16);
             assert_eq!(
                 photo.source.interpretation.profile,
                 ColorProfile::Builtin(RgbSpace::DisplayP3)
@@ -512,28 +512,28 @@ fn heif_avif_bitstream_color_rotation_alpha_and_gainmap_match_reference() {
         (
             "p3-10bit-bitstream-no-colr",
             [64, 32],
-            IntegerDepth::U16,
+            SampleDepth::U16,
             RgbSpace::DisplayP3,
             0,
         ),
         (
             "p3-12bit-bitstream-no-colr",
             [64, 32],
-            IntegerDepth::U16,
+            SampleDepth::U16,
             RgbSpace::DisplayP3,
             0,
         ),
         (
             "abc_color_irot_alpha_irot",
             [256, 512],
-            IntegerDepth::U8,
+            SampleDepth::U8,
             RgbSpace::Srgb,
             257,
         ),
         (
             "seine_sdr_gainmap_srgb",
             [400, 300],
-            IntegerDepth::U8,
+            SampleDepth::U8,
             RgbSpace::Srgb,
             257,
         ),
@@ -565,7 +565,7 @@ fn heif_avif_bitstream_color_rotation_alpha_and_gainmap_match_reference() {
             rows.read(y as u32, &mut row).unwrap();
             for (channel, expected) in expected.chunks_exact(2).enumerate() {
                 let expected = u16::from_le_bytes(expected.try_into().unwrap());
-                let actual = if depth == IntegerDepth::U8 {
+                let actual = if depth == SampleDepth::U8 {
                     row[channel] as u16 * 257
                 } else {
                     u16::from_le_bytes(row[channel * 2..channel * 2 + 2].try_into().unwrap())

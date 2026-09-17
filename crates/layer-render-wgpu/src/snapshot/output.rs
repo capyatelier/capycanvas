@@ -2,6 +2,22 @@
 use super::*;
 
 impl SnapshotRenderer {
+    pub fn write_hdr_png(&mut self, output: impl std::io::Write, map_out_of_range: bool) -> Result<layer_color::OutputStatistics, String> {
+        self.check_cancelled().map_err(|e| e.to_string())?;
+        if !self.color().depth.is_float() { return Err("PQ delivery requires an HDR document".into()); }
+        let extent=self.output_extent;let source_extent=self.extent;let space=self.color().space;
+        let resolution=self.output_resolution;let control=self.control.clone();
+        let mut resampler=(source_extent!=extent).then(||layer_color::RowResampler::new(source_extent,extent)).transpose()?;
+        let mut source=Rows::new(self);
+        layer_color::photo::write_hdr_png_rows(output,extent,space,resolution,map_out_of_range,|y,row| {
+            control.check().map_err(|e|e.to_string())?;
+            if let Some(resampler)=&mut resampler {resampler.read_row(y,row,&mut |y,row:&mut [[f32;4]]|{row.copy_from_slice(source.read(y)?);Ok(())})?;}
+            else {row.copy_from_slice(source.read(y)?);}
+            control.output_rows.store(y+1,Ordering::Relaxed);
+            Ok(())
+        })
+    }
+
     pub fn set_output_resolution(
         &mut self,
         resolution: Option<layer_core::ImageResolution>,
@@ -88,6 +104,7 @@ impl SnapshotRenderer {
         let source_extent = self.extent;
         let working = self.color().space;
         let control = self.control.clone();
+        let rendition = if target.depth.is_float() { None } else { self.sdr_rendition };
         let mut source = Rows::new(self);
         layer_color::encode_working_rows(
             working,
@@ -96,6 +113,7 @@ impl SnapshotRenderer {
             target,
             options,
             matte,
+            rendition,
             |y, row| {
                 control.check().map_err(|e| e.to_string())?;
                 row.copy_from_slice(source.read(y)?);

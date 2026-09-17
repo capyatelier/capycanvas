@@ -9,7 +9,7 @@ use std::{
     os::fd::{AsFd, FromRawFd},
 };
 use wayland_client::{WEnum, globals::GlobalList};
-use wayland_protocols::wp::color_management::v1::client::{
+pub(super) use wayland_protocols::wp::color_management::v1::client::{
     wp_color_management_surface_v1 as surface, wp_color_manager_v1 as manager,
     wp_image_description_creator_icc_v1 as icc, wp_image_description_creator_params_v1 as params,
     wp_image_description_v1 as description,
@@ -17,17 +17,17 @@ use wayland_protocols::wp::color_management::v1::client::{
 
 #[derive(Default)]
 pub(super) struct State {
-    features: HashSet<u32>,
+    pub(super) features: HashSet<u32>,
     primaries: HashSet<u32>,
     transfers: HashSet<u32>,
-    intents: HashSet<u32>,
+    pub(super) intents: HashSet<u32>,
     generation: u64,
     ready: Option<Result<(), String>>,
 }
 pub(super) struct ColorSurface {
-    manager: manager::WpColorManagerV1,
-    surface: Option<surface::WpColorManagementSurfaceV1>,
-    image: Option<description::WpImageDescriptionV1>,
+    pub(super) manager: manager::WpColorManagerV1,
+    pub(super) surface: Option<surface::WpColorManagementSurfaceV1>,
+    pub(super) image: Option<description::WpImageDescriptionV1>,
 }
 impl ColorSurface {
     pub(super) fn bind(globals: &GlobalList, qh: &QueueHandle<Events>) -> Option<Self> {
@@ -91,6 +91,7 @@ impl Child {
             for use_icc in [false, true] {
                 let state = &mut self.state.color;
                 let primaries = match view {
+                    ViewColor::Mapped { .. } => unreachable!("surface descriptions use display primaries"),
                     ViewColor::Srgb => manager::Primaries::Srgb,
                     ViewColor::DisplayP3 => manager::Primaries::DisplayP3,
                 };

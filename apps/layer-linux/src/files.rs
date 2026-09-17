@@ -126,6 +126,7 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::SdrRendition => crate::hdr::configure(&w).await,
                                 HostRequestKind::SoftProofSetup => proof::run(&w).await,
                                 HostRequestKind::Histogram => {
                                     crate::histogram::show(&w);

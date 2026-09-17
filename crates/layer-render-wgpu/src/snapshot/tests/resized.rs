@@ -34,7 +34,7 @@ fn area(source: [u32; 2], target: [u32; 2], pixels: &[[f32; 4]]) -> Vec<[f32; 4]
 #[test]
 fn snapshot_resized_composition_matches_area_before_profile_quantization_and_matte() {
     use layer_core::color::{OutputDither, OutputEncoding};
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let project = rich_project(
             DocumentColor {
                 space: RgbSpace::ProPhoto,
@@ -71,7 +71,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
                 profile_assumed: false,
             };
             let options = OutputEncoding {
-                dither: if depth == IntegerDepth::U8 {
+                dither: if depth == SampleDepth::U8 {
                     OutputDither::Stochastic8
                 } else {
                     OutputDither::None
@@ -108,7 +108,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
                 );
                 let actual = raw_rows(&decoded);
                 let code = |v: &[u8]| {
-                    if depth == IntegerDepth::U8 {
+                    if depth == SampleDepth::U8 {
                         u16::from(v[0])
                     } else {
                         u16::from_le_bytes(v.try_into().unwrap())
@@ -158,7 +158,7 @@ fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity
     let project = source_project(
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         [33, 17],
     );
@@ -168,7 +168,7 @@ fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity
     renderer.set_output_extent(extent).unwrap();
     let target = SourceInterpretation {
         channels: SourceChannels::Rgb,
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         profile: ColorProfile::Builtin(RgbSpace::Srgb),
         profile_assumed: false,
     };
@@ -226,7 +226,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
     let project = source_project(
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         [513, 35],
     );
@@ -250,21 +250,21 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
                 [513, 35],
                 ColorProfile::Builtin(RgbSpace::ProPhoto),
                 SourceChannels::Rgba,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 None,
             ),
             (
                 [257, 19],
                 ColorProfile::Builtin(RgbSpace::Srgb),
                 SourceChannels::Rgba,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 None,
             ),
             (
                 [257, 19],
                 ColorProfile::Builtin(RgbSpace::DisplayP3),
                 SourceChannels::Rgb,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 Some([0.25, 0.5, 0.75]),
             ),
             // Exercise the encoder's canonical gray ICC, not a guessed RGB tag.
@@ -272,7 +272,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
                 [769, 53],
                 ColorProfile::Builtin(RgbSpace::Srgb),
                 SourceChannels::GrayAlpha,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 None,
             ),
         ];
@@ -280,7 +280,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
             let bytes = std::fs::read(path).unwrap();
             eprintln!("Output preview CMYK profile: {} bytes", bytes.len());
             let profile = ColorProfile::Icc(bytes.into());
-            for (depth, matte) in [(IntegerDepth::U8, [1.; 3]), (IntegerDepth::U16, [0.; 3])] {
+            for (depth, matte) in [(SampleDepth::U8, [1.; 3]), (SampleDepth::U16, [0.; 3])] {
                 cases.push((
                     [257, 19],
                     profile.clone(),
@@ -299,7 +299,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
                 profile_assumed: false,
             };
             let options = OutputEncoding {
-                dither: if depth == IntegerDepth::U8 {
+                dither: if depth == SampleDepth::U8 {
                     OutputDither::Stochastic8
                 } else {
                     OutputDither::None

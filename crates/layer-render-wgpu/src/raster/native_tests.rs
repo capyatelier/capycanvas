@@ -1,6 +1,6 @@
 use super::*;
 use crate::native_tiles::{NativeTileEncoder, NativeTileRequest, NativeTransfer};
-use layer_core::color::{IntegerDepth, RgbSpace};
+use layer_core::color::{SampleDepth, RgbSpace};
 
 fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
     r.device.create_texture(&wgpu::TextureDescriptor {
@@ -40,8 +40,9 @@ fn upload(r: &WgpuRasterizer, t: &wgpu::Texture, bytes: &[u8]) {
         t.size(),
     );
 }
-fn descriptor(depth: IntegerDepth) -> PixelDescriptor {
+fn descriptor(depth: SampleDepth) -> PixelDescriptor {
     PixelDescriptor {
+            sample: layer_core::color::SampleType::Unsigned,
         channels: 4,
         bits_per_channel: depth.bits(),
         encoding: TransferEncoding::Profile,
@@ -77,14 +78,14 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
     let mut copies: Vec<_> = (0..35)
         .map(|_| TileCapture {
             source: crate::raster::CaptureSource::Texture(&native16),
-            tile: RasterTile::pending(descriptor(IntegerDepth::U16)),
+            tile: RasterTile::pending(descriptor(SampleDepth::U16)),
         })
         .collect();
     copies.insert(
         31,
         TileCapture {
             source: crate::raster::CaptureSource::Texture(&native8),
-            tile: RasterTile::pending(descriptor(IntegerDepth::U8)),
+            tile: RasterTile::pending(descriptor(SampleDepth::U8)),
         },
     );
     copies.push(TileCapture {
@@ -138,7 +139,7 @@ fn native_gpu_failure_rejects_every_capture_before_backing_and_retry_succeeds() 
                 canonical: &canonical,
                 encoded: &encoded,
                 transfer: &transfer,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
                 alpha: AlphaAssociation::Straight,
                 region: [0, 0, PAGE_SIZE, PAGE_SIZE],
             }],
@@ -174,7 +175,7 @@ fn native_gpu_failure_rejects_every_capture_before_backing_and_retry_succeeds() 
         let copies: Vec<_> = (0..33)
             .map(|_| TileCapture {
                 source: crate::raster::CaptureSource::Texture(&encoded),
-                tile: RasterTile::pending(descriptor(IntegerDepth::U16)),
+                tile: RasterTile::pending(descriptor(SampleDepth::U16)),
             })
             .collect();
         let capture = r.capture_tiles(&copies, Some(&status)).unwrap();
@@ -207,7 +208,7 @@ fn native_gpu_failure_rejects_every_capture_before_backing_and_retry_succeeds() 
     }
     let cancelled = [TileCapture {
         source: crate::raster::CaptureSource::Texture(&encoded),
-        tile: RasterTile::pending(descriptor(IntegerDepth::U16)),
+        tile: RasterTile::pending(descriptor(SampleDepth::U16)),
     }];
     drop(r.capture_tiles(&cancelled, Some(&status)).unwrap());
     assert!(matches!(cancelled[0].tile.try_backing(), Some(Err(_))));
@@ -224,22 +225,22 @@ fn native_capture_preflights_descriptors_tickets_and_actual_staging_budget() {
     };
     assert!(r.capture_tiles(&[], None).is_err());
     let mut copies = vec![
-        make(&native16, IntegerDepth::U16),
-        make(&native8, IntegerDepth::U16),
+        make(&native16, SampleDepth::U16),
+        make(&native8, SampleDepth::U16),
     ];
     assert!(r.capture_tiles(&copies, None).is_err());
     assert!(copies.iter().all(|c| c.tile.try_backing().is_none()));
-    copies[1] = make(&native16, IntegerDepth::U16);
+    copies[1] = make(&native16, SampleDepth::U16);
     copies[1].tile = copies[0].tile.clone();
     assert!(r.capture_tiles(&copies, None).is_err());
     // 252.5 MiB of raw payload would fit, but these boundaries need sixteen
     // 16 MiB chunks plus one 512 KiB chunk. Reject before allocating staging.
     let mut mixed = Vec::new();
     for _ in 0..16 {
-        mixed.extend((0..31).map(|_| make(&native16, IntegerDepth::U16)));
-        mixed.push(make(&native8, IntegerDepth::U8));
+        mixed.extend((0..31).map(|_| make(&native16, SampleDepth::U16)));
+        mixed.push(make(&native8, SampleDepth::U8));
     }
-    mixed.push(make(&native16, IntegerDepth::U16));
+    mixed.push(make(&native16, SampleDepth::U16));
     assert_eq!(
         mixed.iter().map(|c| c.byte_len().unwrap()).sum::<u64>(),
         252 * 1024 * 1024 + 512 * 1024
@@ -259,10 +260,10 @@ fn native_capture_workloads() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let status = NativeEncodeStatus::new(&r.device);
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let encoded = texture(
             &r,
-            if depth == IntegerDepth::U8 {
+            if depth == SampleDepth::U8 {
                 wgpu::TextureFormat::Rgba8Uint
             } else {
                 wgpu::TextureFormat::Rgba16Uint

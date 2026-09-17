@@ -1,13 +1,13 @@
 use super::new_photo::{chooser, finish, invoke, ready};
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
 pub(super) fn source() -> SourceImage {
     let mut builder = SourceBuilder::new(
         [128, 64],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Icc(
                 layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3))
                     .unwrap()
@@ -409,7 +409,7 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
         [3, 2],
         SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(RgbSpace::Srgb),
             profile_assumed: false,
         },
@@ -427,7 +427,7 @@ fn native_unsupported_hdr_and_multiple_picture_inputs_preserve_the_document() {
         (
             CommandId::OpenDocument,
             b"urn:iso:std:iso:ts:21496:-1\0".as_slice(),
-            "HDR import is not supported",
+            "Gain-map import is not supported",
         ),
         (
             CommandId::ImportImage,

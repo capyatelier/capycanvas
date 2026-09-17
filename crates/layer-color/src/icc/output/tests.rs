@@ -1,9 +1,9 @@
 use super::*;
-use layer_core::color::IntegerDepth;
+use layer_core::color::SampleDepth;
 
 fn destination(
     space: RgbSpace,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     channels: SourceChannels,
 ) -> SourceInterpretation {
     SourceInterpretation {
@@ -13,7 +13,7 @@ fn destination(
         profile_assumed: false,
     }
 }
-fn codes(bytes: &[u8], depth: IntegerDepth) -> Vec<u32> {
+fn codes(bytes: &[u8], depth: SampleDepth) -> Vec<u32> {
     bytes
         .chunks_exact(depth.bytes())
         .map(|c| {
@@ -29,7 +29,7 @@ fn codes(bytes: &[u8], depth: IntegerDepth) -> Vec<u32> {
 #[test]
 fn every_native_integer_code_and_straight_hidden_color_round_trips() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let destination = destination(space, depth, SourceChannels::Rgba);
             let decoder = WorkingDecoder::new(&destination, space, Default::default()).unwrap();
             let encoder = WorkingEncoder::new(space, &destination, Default::default()).unwrap();
@@ -62,7 +62,7 @@ fn premultiplied_output_preserves_integer16_at_low_alpha() {
     for space in RgbSpace::ALL {
         let encoder = WorkingEncoder::new(
             space,
-            &destination(space, IntegerDepth::U16, SourceChannels::Rgba),
+            &destination(space, SampleDepth::U16, SourceChannels::Rgba),
             Default::default(),
         )
         .unwrap();
@@ -79,7 +79,7 @@ fn premultiplied_output_preserves_integer16_at_low_alpha() {
             encoder
                 .encode_premultiplied(&input, &mut output, None, [0, 0])
                 .unwrap();
-            for (i, pixel) in codes(&output, IntegerDepth::U16)
+            for (i, pixel) in codes(&output, SampleDepth::U16)
                 .chunks_exact(4)
                 .enumerate()
             {
@@ -105,7 +105,7 @@ fn premultiplied_output_preserves_integer16_at_low_alpha() {
 fn matte_is_explicit_linear_and_precedes_profile_conversion() {
     let encoder = WorkingEncoder::new(
         RgbSpace::Srgb,
-        &destination(RgbSpace::Srgb, IntegerDepth::U8, SourceChannels::Rgb),
+        &destination(RgbSpace::Srgb, SampleDepth::U8, SourceChannels::Rgb),
         Default::default(),
     )
     .unwrap();
@@ -127,7 +127,7 @@ fn matte_is_explicit_linear_and_precedes_profile_conversion() {
     assert_eq!(output, [188, 0, 188]);
     let encoder = WorkingEncoder::new(
         RgbSpace::DisplayP3,
-        &destination(RgbSpace::Srgb, IntegerDepth::U16, SourceChannels::Rgba),
+        &destination(RgbSpace::Srgb, SampleDepth::U16, SourceChannels::Rgba),
         Default::default(),
     )
     .unwrap();
@@ -135,7 +135,7 @@ fn matte_is_explicit_linear_and_precedes_profile_conversion() {
     let statistics = encoder
         .encode_straight(&[[1., 0., 0., 1.]], &mut output, None, [0, 0])
         .unwrap();
-    assert_eq!(codes(&output, IntegerDepth::U16), [65535, 0, 0, 65535]);
+    assert_eq!(codes(&output, SampleDepth::U16), [65535, 0, 0, 65535]);
     assert_eq!(statistics.clipped_channels, 3);
 }
 
@@ -147,7 +147,7 @@ fn gray_outputs_have_stable_matching_profiles_and_independent_alpha() {
         assert_eq!(profile_channels(&gray).unwrap(), ProfileChannels::Gray);
         let encoder = WorkingEncoder::new(
             space,
-            &destination(space, IntegerDepth::U16, SourceChannels::GrayAlpha),
+            &destination(space, SampleDepth::U16, SourceChannels::GrayAlpha),
             Default::default(),
         )
         .unwrap();
@@ -161,7 +161,7 @@ fn gray_outputs_have_stable_matching_profiles_and_independent_alpha() {
         encoder
             .encode_straight(&input, &mut output, None, [0, 0])
             .unwrap();
-        let values = codes(&output, IntegerDepth::U16);
+        let values = codes(&output, SampleDepth::U16);
         assert_eq!([values[1], values[3], values[5]], [0, 1, 65535]);
         assert_eq!(values[0], 0);
         assert_eq!(values[4], 65535);
@@ -182,7 +182,7 @@ fn gray_outputs_have_stable_matching_profiles_and_independent_alpha() {
 
 #[test]
 fn unsupported_profiles_channels_and_nonfinite_working_data_fail() {
-    let mut target = destination(RgbSpace::Srgb, IntegerDepth::U16, SourceChannels::Cmyk);
+    let mut target = destination(RgbSpace::Srgb, SampleDepth::U16, SourceChannels::Cmyk);
     assert!(WorkingEncoder::new(RgbSpace::Srgb, &target, Default::default()).is_err());
     target.channels = SourceChannels::Rgba;
     target.profile = gray_profile(RgbSpace::Srgb).unwrap();
@@ -209,7 +209,7 @@ fn unsupported_profiles_channels_and_nonfinite_working_data_fail() {
 fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
     for source in RgbSpace::ALL {
         for target in RgbSpace::ALL {
-            let mut destination = destination(target, IntegerDepth::U16, SourceChannels::Rgba);
+            let mut destination = destination(target, SampleDepth::U16, SourceChannels::Rgba);
             destination.profile =
                 ColorProfile::Icc(profile_bytes(&destination.profile).unwrap().into());
             for intent in [
@@ -264,7 +264,7 @@ fn icc_rgb_output_matches_direct_encoded_cmm_conversion() {
                 encoder
                     .encode_straight(&linear, &mut output, None, [0, 0])
                     .unwrap();
-                for (i, (actual, expected)) in codes(&output, IntegerDepth::U16)
+                for (i, (actual, expected)) in codes(&output, SampleDepth::U16)
                     .chunks_exact(4)
                     .zip(expected)
                     .enumerate()
@@ -302,7 +302,7 @@ fn cmyk_output_matches_independent_reference_samples() {
     };
     let destination = SourceInterpretation {
         channels: SourceChannels::Cmyk,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         profile: ColorProfile::Icc(bytes.into()),
         profile_assumed: false,
     };
@@ -344,7 +344,7 @@ fn cmyk_output_matches_independent_reference_samples() {
         encoder
             .encode_straight(&linear, &mut output, None, [0, 0])
             .unwrap();
-        let max = codes(&output, IntegerDepth::U16)
+        let max = codes(&output, SampleDepth::U16)
             .iter()
             .zip(expected)
             .map(|(a, b)| (*a as f32 / 65535. - b / 100.).abs())
@@ -390,7 +390,7 @@ fn cmyk_output_matches_independent_reference_samples() {
 #[test]
 fn output_dither_is_stable_across_chunks_preserves_neutrals_and_does_not_touch_alpha() {
     for space in RgbSpace::ALL {
-        let target = destination(space, IntegerDepth::U8, SourceChannels::Rgba);
+        let target = destination(space, SampleDepth::U8, SourceChannels::Rgba);
         let dithered = WorkingEncoder::new(
             space,
             &target,
@@ -444,7 +444,7 @@ fn output_dither_is_stable_across_chunks_preserves_neutrals_and_does_not_touch_a
             assert!((f64::from(pixel[0]) - (90. + i as f64 / 4096.)).abs() <= 1.0001);
         }
         let mut high_depth = target;
-        high_depth.depth = IntegerDepth::U16;
+        high_depth.depth = SampleDepth::U16;
         assert!(
             WorkingEncoder::new(
                 space,

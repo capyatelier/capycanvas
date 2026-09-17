@@ -34,20 +34,29 @@ fn native_diagnostics_and_gpu_failure_recovery() {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_wide_color_gpu_failure_recovery() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.WideColorGpuRecovery");
     for color in [
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
         },
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
     ] {
         check_gpu_failure_recovery(&app, color);
     }
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_hdr_gpu_failure_recovery() {
+    let app = native_test_app("art.capycanvas.HdrRecovery");
+    check_gpu_failure_recovery(&app, layer_core::color::DocumentColor {
+        space: layer_core::color::RgbSpace::Srgb, depth: layer_core::color::SampleDepth::F16,
+    });
 }
 
 fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::DocumentColor) {
@@ -61,6 +70,12 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
             g.session.engine().backend().startup.complete && !g.session.state().filter_load.pending
         })
     });
+    if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
+        w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
+            color: layer_core::color::RgbColor::from_linear(
+                layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
+        }});
+    }
     let proof = super::proof::benchmark_proof(&w);
     let proof_cache = w.proof.cache_info();
     w.dispatch(UiAction::Customize {

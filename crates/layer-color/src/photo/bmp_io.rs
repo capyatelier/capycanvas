@@ -34,7 +34,7 @@ pub(super) fn read(
     let bytes = raster_io::frame_bytes([w, h], bpp, 4, profile_bytes, 65536, limits)?;
     let mut pixels = raster_io::allocate(bytes)?;
     decoder.read_image(&mut pixels).map_err(err)?;
-    let mut interpretation = interpretation(channels, IntegerDepth::U8, None)?;
+    let mut interpretation = interpretation(channels, SampleDepth::U8, None)?;
     if let Some(profile) = profile {
         check_channels(channels, &profile)?;
         interpretation.profile = profile;

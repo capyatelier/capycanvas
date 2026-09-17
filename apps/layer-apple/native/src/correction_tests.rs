@@ -2,7 +2,7 @@
 use super::*;
 use layer_core::{
     Document,
-    color::{ColorProfile, IntegerDepth, RgbSpace, source::*},
+    color::{ColorProfile, SampleDepth, RgbSpace, source::*},
 };
 use std::{
     io::Seek,
@@ -133,8 +133,8 @@ fn select_region(app: &App) {
 fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen() {
     for platform in [0, 1] {
         for (space, depth) in [
-            (RgbSpace::DisplayP3, IntegerDepth::U8),
-            (RgbSpace::ProPhoto, IntegerDepth::U16),
+            (RgbSpace::DisplayP3, SampleDepth::U8),
+            (RgbSpace::ProPhoto, SampleDepth::U16),
         ] {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
@@ -152,7 +152,7 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                 [257, 129],
                 SourceInterpretation {
                     channels: SourceChannels::Rgba,
-                    depth: IntegerDepth::U16,
+                    depth: SampleDepth::U16,
                     profile: ColorProfile::Builtin(space),
                     profile_assumed: false,
                 },

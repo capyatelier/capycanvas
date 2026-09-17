@@ -18,6 +18,13 @@ struct Settings {
 @fragment fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if any(position.xy >= settings.options.zw) { return vec4<f32>(0.); }
     let samples = textureLoad(encoded, vec2<i32>(position.xy), 0);
+    if settings.options.y==0. {
+        let alpha=half_value(samples.a);
+        if alpha==0. {return vec4(0.);}
+        let linear=vec3(half_value(samples.r),half_value(samples.g),half_value(samples.b));
+        let rgb=vec3(dot(settings.red.xyz,linear),dot(settings.green.xyz,linear),dot(settings.blue.xyz,linear));
+        return vec4(rgb*alpha,alpha);
+    }
     // Keep opaque coverage exactly one despite approximate GPU reciprocals.
     let alpha = select(f32(samples.a) / settings.options.y, 1., samples.a == u32(settings.options.y));
     let scale = 65535u / u32(settings.options.y);

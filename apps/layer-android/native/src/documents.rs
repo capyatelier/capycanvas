@@ -202,6 +202,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             }
         }
     };
+    layer_ui::require_sdr_host(&project.document, "Android")?;
     if t.place.is_some() {
         let source = project
             .document
@@ -404,6 +405,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     let target = recipe.interpretation();
                     let mut out = BufWriter::new(input.ok_or("Missing export output")?);
                     match recipe.format {
+                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped => Err("HDR delivery is not enabled on this host".into()),
                         layer_ui::ExportFormat::Png => renderer.write_png(
                             &mut out,
                             &target,

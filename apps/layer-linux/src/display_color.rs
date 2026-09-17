@@ -44,16 +44,27 @@ pub enum ViewColor {
     #[default]
     Srgb,
     DisplayP3,
+    Mapped { p3: bool, document: RgbSpace, recipe: [u32; 3] },
 }
 impl ViewColor {
+    pub fn with_rendition(self, document: layer_core::color::DocumentColor, rendition: layer_core::color::hdr::SdrRendition) -> Self {
+        if !document.depth.is_float() { return self.base(); }
+        Self::Mapped { p3: self.base() == Self::DisplayP3, document: document.space,
+            recipe: [rendition.exposure, rendition.contrast, rendition.knee].map(f32::to_bits) }
+    }
+    fn base(self) -> Self {
+        match self { Self::Mapped { p3, .. } => if p3 { Self::DisplayP3 } else { Self::Srgb }, other => other }
+    }
     pub fn space(self) -> RgbSpace {
-        match self {
+        match self.base() {
+            Self::Mapped { .. } => unreachable!(),
             Self::Srgb => RgbSpace::Srgb,
             Self::DisplayP3 => RgbSpace::DisplayP3,
         }
     }
     pub fn surface(self) -> layer_render_wgpu::SdrSurfaceColor {
-        match self {
+        match self.base() {
+            Self::Mapped { .. } => unreachable!(),
             Self::Srgb => layer_render_wgpu::SdrSurfaceColor::Srgb,
             Self::DisplayP3 => layer_render_wgpu::SdrSurfaceColor::DisplayP3,
         }
@@ -75,7 +86,8 @@ impl ViewColor {
         .ok_or_else(|| "The Wayland canvas requires Vulkan color pass-through".into())
     }
     pub fn description(self) -> &'static str {
-        match self {
+        match self.base() {
+            Self::Mapped { .. } => unreachable!(),
             Self::Srgb => {
                 "sRGB fallback. Colors outside sRGB are clipped for viewing; document values remain intact."
             }
@@ -85,7 +97,8 @@ impl ViewColor {
         }
     }
     pub fn state(self) -> gdk::ColorState {
-        match self {
+        match self.base() {
+            Self::Mapped { .. } => unreachable!(),
             Self::Srgb => gdk::ColorState::srgb(),
             Self::DisplayP3 => {
                 thread_local! {
@@ -137,7 +150,14 @@ impl ViewColor {
     }
     /// Match the canvas: linear alpha-over-checker, then display encoding/clamp.
     pub fn checker_colors(self, color: RgbColor) -> [[f32; 4]; 2] {
-        let linear = color.linear_in(self.space()).expect("validated artwork color");
+        let linear = if let Self::Mapped { document, recipe, .. } = self {
+            let [exposure, contrast, knee] = recipe.map(f32::from_bits);
+            let rendition = layer_core::color::hdr::SdrRendition { exposure, contrast, knee };
+            let p = color.linear_in(document).expect("validated artwork color");
+            let rgb = rendition.map_rgb([p[0], p[1], p[2]]);
+            let rgb = layer_core::color::rgb::apply(document.linear_transform(self.space()), rgb.map(f64::from)).map(|v| v as f32);
+            [rgb[0], rgb[1], rgb[2], p[3]]
+        } else { color.linear_in(self.space()).expect("validated artwork color") };
         [0.94, 0.80].map(|checker| {
             let mut rgba = [1.; 4];
             for c in 0..3 {

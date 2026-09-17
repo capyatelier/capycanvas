@@ -10,6 +10,7 @@ pub fn encode_working_rows(
     target: &SourceInterpretation,
     options: OutputEncoding,
     matte: Option<[f32; 3]>,
+    rendition: Option<layer_core::color::hdr::SdrRendition>,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
     write: impl FnOnce(
         [u32; 2],
@@ -17,6 +18,7 @@ pub fn encode_working_rows(
         &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>,
     ) -> Result<(), String>,
 ) -> Result<OutputStatistics, String> {
+    if let Some(r) = rendition { r.validate().map_err(str::to_string)?; }
     let encoder = WorkingEncoder::new(working, target, options)?;
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
@@ -29,6 +31,7 @@ pub fn encode_working_rows(
         } else {
             read(y, &mut pixels)?;
         }
+        if let Some(r) = rendition { for pixel in &mut pixels { *pixel = r.map_premultiplied(*pixel); } }
         statistics.clipped_channels += encoder
             .encode_premultiplied(&pixels, row, matte, [0, y])?
             .clipped_channels;

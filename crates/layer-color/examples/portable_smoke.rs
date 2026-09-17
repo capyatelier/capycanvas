@@ -1,5 +1,5 @@
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
 #[unsafe(no_mangle)]
 pub extern "C" fn portable_smoke() -> u32 {
     let profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
@@ -16,7 +16,7 @@ pub extern "C" fn portable_smoke() -> u32 {
         [16, 8],
         SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: embedded.clone(),
             profile_assumed: false,
         },

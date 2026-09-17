@@ -1,11 +1,12 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
 use layer_core::color::{
-    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, RenderingIntent,
+    ConversionOptions, SampleDepth, OutputDither, OutputEncoding, RenderingIntent,
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::sync::{Arc, Mutex};
 mod presets;
+const FORMATS: [ExportFormat; 5] = [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg, ExportFormat::PngHdr, ExportFormat::PngHdrMapped];
 
 use super::profile::{ProfileChooser, ProfilePurpose};
 
@@ -91,6 +92,7 @@ pub(crate) fn write_snapshot(
             path,
             |file| {
                 let statistics = match recipe.format {
+                    ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(file, recipe.format.maps_hdr_range()),
                     ExportFormat::Png => renderer.write_png(
                         file,
                         &target,
@@ -318,7 +320,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         move |_| refresh()
     });
     refresh_size();
-    let format = combo(&group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
+    let format = combo(&group, "Format", "export-format", if document.depth.is_float() { &["SDR PNG", "SDR TIFF", "SDR JPEG", "HDR PNG · preserve PQ range", "HDR PNG · map to PQ range"] } else { &["PNG", "TIFF", "JPEG"] });
     let profile = ProfileChooser::new(w, "Delivery profile", "export-space", document.space, ProfilePurpose::Output);
     let space = profile.row.clone();
     group.add(&space);
@@ -379,6 +381,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             dither.set_sensitive(depth.selected() == 0);
         }
     ));
+    format.connect_selected_notify(glib::clone!(#[weak] space, #[weak] depth, #[weak] background, #[weak] advanced,
+        move |format| { let hdr=format.selected()>=3; space.set_visible(!hdr); depth.set_visible(!hdr); background.set_visible(!hdr); advanced.set_visible(!hdr); }));
     let jpeg_hint = gtk::Label::builder()
         .label("JPEG uses 8-bit color and needs an opaque background.")
         .wrap(true)
@@ -397,15 +401,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         jpeg_hint,
         move |format| {
             let recipe = ExportRecipe {
-                depth: if depth.selected() == 0 { IntegerDepth::U8 } else { IntegerDepth::U16 },
+                depth: if depth.selected() == 0 { SampleDepth::U8 } else { SampleDepth::U16 },
                 background: [ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black][background.selected() as usize],
                 ..ExportRecipe::web_share()
             };
-            let draft = recipe.draft(ExportDraftAction::Format([ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg][format.selected() as usize]));
+            let draft = recipe.draft(ExportDraftAction::Format(FORMATS[format.selected().min(4) as usize]));
             quality.set_visible(draft.recipe.format == ExportFormat::Jpeg);
             jpeg_hint.set_visible(draft.recipe.format == ExportFormat::Jpeg);
             depth.set_sensitive(draft.depths.len() > 1);
-            depth.set_selected(u32::from(draft.recipe.depth == IntegerDepth::U16));
+            depth.set_selected(u32::from(draft.recipe.depth == SampleDepth::U16));
             background.set_selected(match draft.recipe.background { ExportBackground::Preserve => 0, ExportBackground::White => 1, ExportBackground::Black => 2 });
         }
     ));
@@ -426,12 +430,12 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         move |_| {
             if let Ok(profile) = selected_profile() {
                 let recipe = ExportRecipe {
-                    format: [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg][format.selected() as usize],
+                    format: FORMATS[format.selected().min(4) as usize],
                     background: [ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black][background.selected() as usize],
                     ..ExportRecipe::web_share()
                 };
                 let draft = recipe.draft(ExportDraftAction::Profile(profile));
-                format.set_selected(match draft.recipe.format { ExportFormat::Png => 0, ExportFormat::Tiff => 1, ExportFormat::Jpeg => 2 });
+                format.set_selected(FORMATS.iter().position(|f| *f == draft.recipe.format).unwrap() as u32);
                 background.set_selected(match draft.recipe.background { ExportBackground::Preserve => 0, ExportBackground::White => 1, ExportBackground::Black => 2 });
             }
             background.notify("selected");
@@ -479,9 +483,11 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                     ExportFormat::Png => 0,
                     ExportFormat::Tiff => 1,
                     ExportFormat::Jpeg => 2,
+                    ExportFormat::PngHdr => 3,
+                    ExportFormat::PngHdrMapped => 4,
                 });
                 restore_profile(recipe.profile.clone());
-                depth.set_selected(u32::from(recipe.depth == IntegerDepth::U16));
+                depth.set_selected(u32::from(recipe.depth == SampleDepth::U16));
                 background.set_selected(match recipe.background {
                     ExportBackground::Preserve => 0,
                     ExportBackground::White => 1,
@@ -607,7 +613,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[strong]
             selected_profile,
             move |depth: &adw::ComboRow| {
-                note.set_label(if depth.selected() == 0 && document.depth == IntegerDepth::U16 {
+                note.set_label(if depth.selected() == 0 && document.depth == SampleDepth::U16 {
                 "This copy reduces 16-bit artwork to 8-bit. The master retains its precision."
             } else if depth.selected() == 0 && selected_profile().is_ok_and(|p| p.profile == layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)) {
                 "16-bit is recommended for ProPhoto RGB gradients and further editing."
@@ -655,13 +661,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 format: match format.selected() {
                     1 => ExportFormat::Tiff,
                     2 => ExportFormat::Jpeg,
+                    3 => ExportFormat::PngHdr,
+                    4 => ExportFormat::PngHdrMapped,
                     _ => ExportFormat::Png,
                 },
                 profile: selected_profile()?,
                 depth: if depth.selected() == 0 {
-                    IntegerDepth::U8
+                    SampleDepth::U8
                 } else {
-                    IntegerDepth::U16
+                    SampleDepth::U16
                 },
                 background: match background.selected() {
                     1 => ExportBackground::White,
@@ -686,6 +694,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                     },
                 },
             };
+            let recipe = if recipe.format.is_hdr() {
+                if !document.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
+                recipe.draft(ExportDraftAction::Refresh).recipe
+            } else { recipe };
             recipe.validate()?;
             recipe.output_resolution(master_resolution)?;
             Ok(recipe)
@@ -735,7 +747,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color());
     let compression_note = gtk::Label::builder()
         .label(
-            "JPEG preview includes size, color and background. Compression artifacts are excluded.",
+            "SDR output uses the saved rendition. HDR preview shows that rendition; PQ range is checked on export. Mapping to PQ range deliberately clips colors outside BT.2020 or 0–10000 cd/m². JPEG compression artifacts are excluded.",
         )
         .wrap(true)
         .xalign(0.)

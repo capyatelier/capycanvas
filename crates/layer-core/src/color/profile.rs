@@ -10,12 +10,17 @@ pub enum ProfileChannels {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum IntegerDepth {
+pub enum SampleDepth {
     #[default]
     U8,
     U16,
+    /// Display-referred linear binary16; RGB 1 is 203 cd/m².
+    F16,
 }
-impl IntegerDepth {
+impl SampleDepth {
+    pub fn is_float(self) -> bool { self == Self::F16 }
+    pub fn coverage(self) -> Self { if self.is_float() { Self::U16 } else { self } }
+    pub fn label(self) -> &'static str { match self { Self::U8 => "8-bit integer SDR", Self::U16 => "16-bit integer SDR", Self::F16 => "16-bit float HDR" } }
     pub fn bits(self) -> u8 {
         if self == Self::U8 { 8 } else { 16 }
     }
@@ -23,7 +28,7 @@ impl IntegerDepth {
         usize::from(self.bits() / 8)
     }
     pub fn maximum(self) -> u32 {
-        if self == Self::U8 { 255 } else { 65535 }
+        match self { Self::U8 => 255, Self::U16 => 65535, Self::F16 => panic!("Float samples have no integer code maximum") }
     }
 }
 

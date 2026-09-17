@@ -182,6 +182,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             files: document_files::DocumentFiles::default(),
             state: UiState {
                 soft_proof: false,
+                preview_sdr: false,
                 gamut_warning: false,
                 revision: 0,
                 fullscreen: false,
@@ -1756,6 +1757,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::SdrRendition | CommandId::PreviewSdr => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProof => document.proof.is_some()
                 || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
@@ -1862,6 +1864,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
+            || (id == CommandId::PreviewSdr && self.state.preview_sdr)
             || (id == CommandId::SoftProof && self.state.soft_proof)
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
@@ -3411,6 +3414,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::SdrRendition => {
+                self.request(HostRequestKind::SdrRendition)?;
+                Ok((HOST, false))
+            }
+            CommandId::PreviewSdr => {
+                self.state.preview_sdr = !self.state.preview_sdr;
+                Ok((COMMANDS, true))
+            }
             CommandId::SoftProofSetup => {
                 self.request(HostRequestKind::SoftProofSetup)?;
                 Ok((HOST, false))
@@ -4177,6 +4188,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .raster
                 .identity()
                 .wrapping_mul(4099)
+                .wrapping_add(if doc.color.depth.is_float() {
+                    [doc.sdr_rendition.exposure,doc.sdr_rendition.contrast,doc.sdr_rendition.knee].into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
+                } else { 0 })
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))
                 .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
@@ -4431,11 +4445,11 @@ mod tests {
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
-        use layer_core::color::{IntegerDepth, source::*};
+        use layer_core::color::{SampleDepth, source::*};
         let mut document = Document::new("photo", 1, 1);
         let mut source = SourceBuilder::new([1, 1], SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         }, 1024 * 1024).unwrap();
@@ -13857,6 +13871,7 @@ mod tests {
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
                 ["histogram"],
+                ["sdr_rendition", "preview_sdr"],
                 ["soft_proof_setup", "soft_proof", "gamut_warning"],
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],

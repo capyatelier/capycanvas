@@ -1,8 +1,15 @@
 use super::*;
 
 pub fn read_png(
+    input: impl BufRead + Seek,
+    limits: DecodeLimits,
+) -> Result<SourceImage, String> {
+    read_with_cancel(input, limits, &std::sync::atomic::AtomicBool::new(false))
+}
+pub(super) fn read_with_cancel(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<SourceImage, String> {
     let has_icc = profile_chunk_present(&mut input, limits)?;
     let mut decoder = png::Decoder::new_with_limits(
@@ -41,6 +48,12 @@ pub fn read_png(
     if info.animation_control.is_some() {
         return Err("Animated PNG is not a still-photo source".into());
     }
+    if let Some(cicp) = info.coding_independent_code_points
+        && matches!(cicp.transfer_function, 16 | 18) {
+        let mut source = super::hdr_png::read(reader, limits, cancelled)?;
+        source.resolution = resolution;
+        return super::orientation::normalize(source, metadata.orientation, limits.source_bytes);
+    }
     let (color, depth) = reader.output_color_type();
     let channels = match color {
         png::ColorType::Grayscale => SourceChannels::Gray,
@@ -50,8 +63,8 @@ pub fn read_png(
         _ => return Err("PNG palette expansion failed".into()),
     };
     let depth = match depth {
-        png::BitDepth::Eight => IntegerDepth::U8,
-        png::BitDepth::Sixteen => IntegerDepth::U16,
+        png::BitDepth::Eight => SampleDepth::U8,
+        png::BitDepth::Sixteen => SampleDepth::U16,
         _ => return Err("Unsupported PNG sample depth".into()),
     };
     let (profile, assumed) = interpretation_from_tags(info)?;
@@ -74,7 +87,7 @@ pub fn read_png(
         let mut frame = vec![0; size];
         reader.next_frame(&mut frame).map_err(err)?;
         for row in frame.chunks_exact_mut(row_bytes) {
-            if depth == IntegerDepth::U16 {
+            if depth == SampleDepth::U16 {
                 swap_u16(row);
             }
             builder.push_row(row)?;
@@ -82,7 +95,8 @@ pub fn read_png(
     } else {
         let mut converted = Vec::new();
         while let Some(row) = reader.next_row().map_err(err)? {
-            if depth == IntegerDepth::U16 {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("Image read cancelled".into()); }
+            if depth == SampleDepth::U16 {
                 converted.clear();
                 converted.extend_from_slice(row.data());
                 swap_u16(&mut converted);
@@ -221,8 +235,9 @@ pub fn write_png_rows(
         });
     }
     info.bit_depth = match interpretation.depth {
-        IntegerDepth::U8 => png::BitDepth::Eight,
-        IntegerDepth::U16 => png::BitDepth::Sixteen,
+        SampleDepth::U8 => png::BitDepth::Eight,
+        SampleDepth::U16 => png::BitDepth::Sixteen,
+        SampleDepth::F16 => return Err("HDR needs explicit PQ PNG delivery".into()),
     };
     info.color_type = match interpretation.channels {
         SourceChannels::Gray => png::ColorType::Grayscale,
@@ -255,7 +270,7 @@ pub fn write_png_rows(
         let mut row = vec![0; row_bytes];
         for y in 0..extent[1] {
             read_row(y, &mut row)?;
-            if interpretation.depth == IntegerDepth::U16 {
+            if interpretation.depth == SampleDepth::U16 {
                 swap_u16(&mut row);
             }
             stream.write_all(&row).map_err(err)?;

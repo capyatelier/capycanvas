@@ -2,7 +2,7 @@
 //! file worker. PNG/TIFF output consumes rows, never a second full CPU canvas.
 use crate::{ProfileChannels, profile_bytes, profile_channels};
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
 use std::io::{BufRead, Read, Seek, Write};
 
 mod jpeg_codec;
@@ -16,6 +16,8 @@ mod metadata;
 mod metadata_tests;
 mod orientation;
 mod png_io;
+mod hdr_png;
+pub use hdr_png::write_hdr_png_rows;
 mod tiff_io;
 mod raster_io;
 mod bmp_io;
@@ -159,7 +161,7 @@ fn read_photo_impl(
     input.read_exact(&mut signature).map_err(err)?;
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
     let source = if signature == *b"\x89PNG\r\n\x1a\n" {
-        read_png(input, limits)
+        png_io::read_with_cancel(input, limits, _cancelled)
     } else if signature[..2] == [0xff, 0xd8] {
         read_jpeg(input, limits)
     } else if matches!(
@@ -186,7 +188,7 @@ fn read_photo_impl(
 
 fn interpretation(
     channels: SourceChannels,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     embedded: Option<Vec<u8>>,
 ) -> Result<SourceInterpretation, String> {
     let profile_assumed = embedded.is_none();

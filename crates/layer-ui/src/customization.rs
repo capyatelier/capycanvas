@@ -909,6 +909,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             command.label().into(),
             match command {
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
+                CommandId::SdrRendition => "Edit the saved HDR-to-SDR delivery mapping",
+                CommandId::PreviewSdr => "Preview the authored SDR rendition without changing artwork",
                 CommandId::SoftProofSetup => "Choose a printer and paper profile for viewing",
                 CommandId::SoftProof => "Compare print simulation with normal viewing",
                 CommandId::GamutWarning => "Show colors outside the proof target gamut",

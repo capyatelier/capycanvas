@@ -874,7 +874,7 @@ fn render_error(error: impl std::fmt::Display) -> LayerStatus {
 }
 
 fn decode_document_color(config: LayerCanvasConfig) -> Result<layer_core::color::DocumentColor, LayerStatus> {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     Ok(DocumentColor {
         space: match config.color_space {
             0 => RgbSpace::Srgb,
@@ -884,8 +884,8 @@ fn decode_document_color(config: LayerCanvasConfig) -> Result<layer_core::color:
             _ => return Err(LayerStatus::InvalidArgument),
         },
         depth: match config.integer_depth {
-            8 => IntegerDepth::U8,
-            16 => IntegerDepth::U16,
+            8 => SampleDepth::U8,
+            16 => SampleDepth::U16,
             _ => return Err(LayerStatus::InvalidArgument),
         },
     })

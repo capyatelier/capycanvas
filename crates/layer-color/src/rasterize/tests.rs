@@ -1,7 +1,7 @@
 use super::*;
-use layer_core::color::{IntegerDepth, RgbSpace};
+use layer_core::color::{SampleDepth, RgbSpace};
 
-fn fixture(depth: IntegerDepth, space: RgbSpace, extent: [u32; 2]) -> SourceImage {
+fn fixture(depth: SampleDepth, space: RgbSpace, extent: [u32; 2]) -> SourceImage {
     let mut builder = SourceBuilder::new(
         extent,
         SourceInterpretation {
@@ -20,7 +20,7 @@ fn fixture(depth: IntegerDepth, space: RgbSpace, extent: [u32; 2]) -> SourceImag
                 [code, depth.maximum() - code, code / 3, code]
             })
             .flat_map(|code| {
-                if depth == IntegerDepth::U16 {
+                if depth == SampleDepth::U16 {
                     (code as u16).to_le_bytes().to_vec()
                 } else {
                     vec![code as u8]
@@ -35,8 +35,8 @@ fn fixture(depth: IntegerDepth, space: RgbSpace, extent: [u32; 2]) -> SourceImag
 #[test]
 fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
-            let extent = if depth == IntegerDepth::U16 {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
+            let extent = if depth == SampleDepth::U16 {
                 [256, 256]
             } else {
                 [256, 1]
@@ -58,12 +58,12 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
             }
             assert!(original.is_original());
         }
-        let original = fixture(IntegerDepth::U8, space, [256, 3]);
+        let original = fixture(SampleDepth::U8, space, [256, 3]);
         let (promoted, _) = rasterize_source(
             &original,
             DocumentColor {
                 space,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
             },
             4 * 1024 * 1024,
             || false,
@@ -80,12 +80,12 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
                 "{space:?}"
             );
         }
-        let original = fixture(IntegerDepth::U16, space, [256, 256]);
+        let original = fixture(SampleDepth::U16, space, [256, 256]);
         let (reduced, stats) = rasterize_source(
             &original,
             DocumentColor {
                 space,
-                depth: IntegerDepth::U8,
+                depth: SampleDepth::U8,
             },
             4 * 1024 * 1024,
             || false,
@@ -109,7 +109,7 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
 
 #[test]
 fn conversion_clipping_cancellation_and_limits_leave_original_intact() {
-    let original = fixture(IntegerDepth::U16, RgbSpace::ProPhoto, [513, 257]);
+    let original = fixture(SampleDepth::U16, RgbSpace::ProPhoto, [513, 257]);
     let snapshot = original.clone();
     let color = DocumentColor::default();
     assert!(

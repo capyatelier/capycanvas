@@ -32,7 +32,7 @@ fn scalar_native_workloads() {
     let status = NativeEncodeStatus::new(&r.device);
     let working: Vec<_> = (0..16).map(|_| texture(&r)).collect();
     let canonical: Vec<_> = (0..16).map(|_| texture(&r)).collect();
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let buffers: Vec<_> = (0..16).map(|_| buffer(&r, depth)).collect();
         let descriptor = PixelDescriptor {
             bits_per_channel: depth.bits(),

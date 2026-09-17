@@ -1,8 +1,8 @@
 #[test]
 fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
-    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::color::{SampleDepth, source::*};
     let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
     }, 1024).unwrap();
     for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
@@ -47,10 +47,10 @@ fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
 
 #[test]
 fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_together() {
-    use layer_core::{Affine, color::{IntegerDepth, source::*}};
+    use layer_core::{Affine, color::{SampleDepth, source::*}};
     let source = |extent: [u32; 2]| {
         let mut builder = SourceBuilder::new(extent, SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+            channels: SourceChannels::Rgba, depth: SampleDepth::U8,
             profile: Default::default(), profile_assumed: false,
         }, 1 << 20).unwrap();
         for _ in 0..extent[1] { builder.push_row(&vec![255; extent[0] as usize * 4]).unwrap(); }
@@ -111,7 +111,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
 #[test]
 fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     use crate::{ImageLayerDestination, LayerDropPosition};
-    use layer_core::{Layer, LayerKind, color::{IntegerDepth, source::*}};
+    use layer_core::{Layer, LayerKind, color::{SampleDepth, source::*}};
     let mut doc = Document::new("drop", 200, 150);
     let group_id = doc.allocate_layer_id();
     let mut group = Layer::paint(group_id, "Group");
@@ -126,7 +126,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     doc.layers.insert(1, clipped);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600]).unwrap();
     let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
     }, 1024).unwrap();
     builder.push_row(&[255; 8]).unwrap();
@@ -167,9 +167,9 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
 
 #[test]
 fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
-    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::color::{SampleDepth, source::*};
     let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
     }, 1024).unwrap();
     builder.push_row(&[255; 8]).unwrap();
@@ -190,9 +190,9 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
 
 #[test]
 fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
-    use layer_core::{Affine, color::{IntegerDepth, source::*}};
+    use layer_core::{Affine, color::{SampleDepth, source::*}};
     let mut builder = SourceBuilder::new([600, 400], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
         profile: Default::default(), profile_assumed: false,
     }, 8 * 1024 * 1024).unwrap();
     for _ in 0..400 { builder.push_row(&[255; 600 * 8]).unwrap(); }
@@ -253,12 +253,12 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
 
 #[test]
 fn retained_import_transform_clear_and_undo_keep_source_precision() {
-    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
     let mut builder = SourceBuilder::new(
         [3, 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
             profile_assumed: false,
         },
@@ -388,7 +388,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
 }
 fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform) {
     use layer_core::{
-        color::{ColorProfile, IntegerDepth, RgbSpace, source::*},
+        color::{ColorProfile, SampleDepth, RgbSpace, source::*},
         raster::*,
     };
     use std::sync::Arc;
@@ -396,7 +396,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
         [1, 1],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::Srgb),
             profile_assumed: true,
         },
@@ -696,10 +696,10 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
 #[test]
 fn source_workflow_requires_current_complete_comparison_and_preserves_original_samples() {
     use crate::SourceWorkflow;
-    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
-            channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+            channels: SourceChannels::Rgba, depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto), profile_assumed: true,
         }, 1024).unwrap();
         builder.push_row(&[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]).unwrap();
@@ -717,7 +717,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
         assert!(workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || true).is_err());
         let (corrected, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || false).unwrap();
         assert!(corrected.tiles.iter().zip(&source.tiles).all(|((_, a), (_, b))| std::sync::Arc::ptr_eq(a, b)));
-        assert_eq!(corrected.interpretation.depth, IntegerDepth::U16);
+        assert_eq!(corrected.interpretation.depth, SampleDepth::U16);
         assert!(workflow.preview(&s, corrected.clone(), false, false).is_err());
         workflow.preview(&s, corrected, false, true).unwrap();
         assert!(workflow.commit(&mut s, false, true).is_err());

@@ -24,7 +24,7 @@ fn unsupported_black_point_compensation_is_explicit_for_all_conversion_paths() {
     let profile = ColorProfile::default();
     let source = SourceInterpretation {
         channels: SourceChannels::Rgba,
-        depth: layer_core::color::IntegerDepth::U8,
+        depth: layer_core::color::SampleDepth::U8,
         profile: profile.clone(),
         profile_assumed: false,
     };

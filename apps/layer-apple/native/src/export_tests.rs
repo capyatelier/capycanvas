@@ -1,6 +1,6 @@
 //! Actual Apple snapshot jobs: exact retained samples, profiled copies and retry.
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 use layer_ui::{ExportBackground, ExportFormat, ExportRecipe, ExportResolution, ExportSize};
 use std::{io::{Read, Seek, Write}, os::{fd::AsRawFd, unix::fs::OpenOptionsExt}};
 
@@ -16,7 +16,7 @@ fn profile_source(space: RgbSpace) -> SourceImage {
         ColorProfile::Icc(layer_color::profile_bytes(&builtin).unwrap().into())
     } else { builtin };
     let mut builder = SourceBuilder::new([17,11], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
         profile, profile_assumed: false,
     }, 1024*1024).unwrap();
     for y in 0..11u16 {
@@ -26,7 +26,7 @@ fn profile_source(space: RgbSpace) -> SourceImage {
     }
     builder.finish().unwrap()
 }
-fn initialize(platform: u32, space: RgbSpace, depth: IntegerDepth) -> (App, SourceImage) {
+fn initialize(platform: u32, space: RgbSpace, depth: SampleDepth) -> (App, SourceImage) {
     let app = App::new(platform);
     unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer()); app.draw_until_idle();
     let source = profile_source(space);
@@ -72,7 +72,7 @@ fn exact(actual: &SourceImage, expected: &SourceImage) {
 #[test]
 fn profiled_apple_export_keeps_u16_hidden_rgb_retries_and_survives_owner_closure() {
     for platform in [0,1] {
-        for (space,depth) in [(RgbSpace::DisplayP3,IntegerDepth::U8),(RgbSpace::ProPhoto,IntegerDepth::U16)] {
+        for (space,depth) in [(RgbSpace::DisplayP3,SampleDepth::U8),(RgbSpace::ProPhoto,SampleDepth::U16)] {
             let (app,source) = initialize(platform,space,depth);
             let master = unsafe { &*app.0 }.host.session.engine().document().clone();
             let file_state = app.state()["document_file"].clone();
@@ -106,11 +106,11 @@ fn profiled_apple_export_keeps_u16_hidden_rgb_retries_and_survives_owner_closure
             }
             recipe.size = ExportSize::Fit {bounds:[9,9],enlarge:false};
             assert_eq!(configure(&job,&recipe),0);assert_eq!(output(&job).extent,[9,6]);
-            recipe.format = ExportFormat::Jpeg;recipe.depth = IntegerDepth::U8;recipe.background = ExportBackground::White;
+            recipe.format = ExportFormat::Jpeg;recipe.depth = SampleDepth::U8;recipe.background = ExportBackground::White;
             assert_eq!(configure(&job,&recipe),0);
             let jpeg = output(&job);assert_eq!(jpeg.extent,[9,6]);
             assert_eq!(jpeg.interpretation.channels,SourceChannels::Rgb);
-            assert_eq!(jpeg.interpretation.depth,IntegerDepth::U8);
+            assert_eq!(jpeg.interpretation.depth,SampleDepth::U8);
             assert_eq!(layer_color::profile_bytes(&jpeg.interpretation.profile).unwrap(),layer_color::profile_bytes(&source.interpretation.profile).unwrap());
         }
     }

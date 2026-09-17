@@ -1082,6 +1082,7 @@ dependencies = [
 name = "layer-core"
 version = "0.1.0"
 dependencies = [
+ "half",
  "serde",
  "serde_json",
  "sha2",

@@ -348,6 +348,7 @@ pub(super) async fn unpack(
         }
     }
     project.validate(budget).map_err(js)?;
+    layer_ui::require_sdr_host(&project.document, "Web").map_err(js)?;
     Ok(project)
 }
 

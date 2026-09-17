@@ -121,7 +121,7 @@ impl DecodedTileCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::{DocumentColor, IntegerDepth, PixelDescriptor, RgbSpace};
+    use crate::color::{DocumentColor, SampleDepth, PixelDescriptor, RgbSpace};
 
     fn tile(value: u8) -> Arc<TileBlob> {
         Arc::new(TileBlob::encode(PixelDescriptor::COVERAGE8, &vec![value; 65536]).unwrap())
@@ -155,7 +155,7 @@ mod tests {
     fn cache_keeps_exact_u16_samples_and_rejects_corrupt_tiles() {
         let color = DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let bytes: Vec<_> = (0..65536u32)
             .flat_map(|i| {

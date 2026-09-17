@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn gray_and_gray_alpha_delivery_preserve_samples_and_embed_matching_profiles() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             for channels in [SourceChannels::Gray, SourceChannels::GrayAlpha] {
                 let mut builder = SourceBuilder::new([513, 3], SourceInterpretation {
                     channels, depth, profile: ColorProfile::Builtin(space), profile_assumed: false,
@@ -38,7 +38,7 @@ fn gray_and_gray_alpha_delivery_preserve_samples_and_embed_matching_profiles() {
 }
 use std::io::Cursor;
 
-pub(super) fn fixture(depth: IntegerDepth, profile: ColorProfile) -> SourceImage {
+pub(super) fn fixture(depth: SampleDepth, profile: ColorProfile) -> SourceImage {
     let mut builder = SourceBuilder::new(
         [257, 259],
         SourceInterpretation {
@@ -59,7 +59,7 @@ pub(super) fn fixture(depth: IntegerDepth, profile: ColorProfile) -> SourceImage
                 x ^ (y * 17),
                 if x % 3 == 0 { 0 } else { 65535 - y * 253 },
             ] {
-                if depth == IntegerDepth::U8 {
+                if depth == SampleDepth::U8 {
                     row.push(value as u8);
                 } else {
                     row.extend_from_slice(&(value as u16).to_le_bytes());
@@ -86,7 +86,7 @@ pub(super) fn exact_pixels(before: &SourceImage, after: &SourceImage) {
 
 #[test]
 fn profiled_png_tiff_roundtrip_every_source_code_including_transparency() {
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in RgbSpace::ALL {
             // Store an actual embedded payload, not just a built-in label.
             let profile =
@@ -223,7 +223,7 @@ fn interrupted_output_and_tiny_source_budget_return_errors() {
             Ok(())
         }
     }
-    let source = fixture(IntegerDepth::U16, ColorProfile::default());
+    let source = fixture(SampleDepth::U16, ColorProfile::default());
     assert!(
         write_png(Broken, &source)
             .unwrap_err()

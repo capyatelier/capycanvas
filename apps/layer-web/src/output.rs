@@ -326,6 +326,7 @@ pub async fn raster_worker_output(
             return Ok(());
         }
         match recipe.format {
+            ExportFormat::PngHdr | ExportFormat::PngHdrMapped => Err("HDR delivery is not enabled on this host".into()),
             ExportFormat::Png => layer_color::photo::write_png_rows(
                 output,
                 extent,
@@ -378,6 +379,7 @@ pub async fn raster_worker_output(
             &target,
             recipe.encoding,
             recipe.background.matte(),
+            None,
             |y, pixels| {
                 let result = read
                     .call2(

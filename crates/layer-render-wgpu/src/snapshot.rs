@@ -130,6 +130,7 @@ impl SnapshotGpu {
 }
 
 pub struct SnapshotRenderer {
+    pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
     backing: HashMap<LayerId, Arc<RasterData>>,
@@ -217,7 +218,7 @@ impl SnapshotRenderer {
                     asset.extent,
                     SourceInterpretation {
                         channels: SourceChannels::Rgba,
-                        depth: layer_core::color::IntegerDepth::U8,
+                        depth: layer_core::color::SampleDepth::U8,
                         profile: Default::default(),
                         profile_assumed: false,
                     },
@@ -271,6 +272,7 @@ impl SnapshotRenderer {
             background[3] *= if paper.visible { paper.opacity } else { 0. };
         }
         Ok(Self {
+            sdr_rendition: project.document.color.depth.is_float().then_some(project.document.sdr_rendition),
             renderer,
             layers,
             backing,
@@ -296,7 +298,7 @@ impl SnapshotRenderer {
         options: layer_core::color::OutputEncoding,
         matte: Option<[f32; 3]>,
     ) -> Option<Arc<layer_core::color::source::SourceImage>> {
-        if extent != self.extent || options.conversion != Default::default() || matte.is_some() {
+        if (self.sdr_rendition.is_some() && !target.depth.is_float()) || extent != self.extent || options.conversion != Default::default() || matte.is_some() {
             return None;
         }
         self.identity_source(target)
@@ -754,7 +756,7 @@ impl SnapshotPreview {
     pub fn encoded_bytes(&self, space: layer_core::color::RgbSpace) -> Result<Vec<u8>, String> {
         let target = SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: layer_core::color::IntegerDepth::U8,
+            depth: layer_core::color::SampleDepth::U8,
             profile: layer_core::color::ColorProfile::Builtin(space),
             profile_assumed: false,
         };

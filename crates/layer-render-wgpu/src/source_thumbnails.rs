@@ -118,7 +118,7 @@ impl SourceThumbnails {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
+                        min_binding_size: NonZeroU64::new(32),
                     },
                     count: None,
                 },
@@ -126,7 +126,7 @@ impl SourceThumbnails {
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("photo overview display"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("source_thumbnail_display.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("hdr_mapping.wgsl"), include_str!("source_thumbnail_display.wgsl")).into()),
         });
         let display = fullscreen_pipeline(
             d,
@@ -143,8 +143,8 @@ impl SourceThumbnails {
         );
         let working = overview_buffer(d);
         let display_parameters = d.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("photo thumbnail orientation"),
-            size: 16,
+            label: Some("photo thumbnail orientation and rendition"),
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -329,7 +329,7 @@ impl SourceThumbnails {
             &r.queue,
             &self.display_parameters,
             &mapping
-                .into_iter()
+                .into_iter().chain(r.ui_rendition_parameters())
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>(),
         )?;

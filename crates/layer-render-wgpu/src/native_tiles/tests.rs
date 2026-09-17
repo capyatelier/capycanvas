@@ -88,15 +88,15 @@ fn read_status(
     read.unmap();
     result
 }
-fn format(depth: IntegerDepth) -> wgpu::TextureFormat {
-    if depth == IntegerDepth::U8 {
+fn format(depth: SampleDepth) -> wgpu::TextureFormat {
+    if depth == SampleDepth::U8 {
         wgpu::TextureFormat::Rgba8Uint
     } else {
         wgpu::TextureFormat::Rgba16Uint
     }
 }
-fn code(bytes: &[u8], component: usize, depth: IntegerDepth) -> u32 {
-    if depth == IntegerDepth::U8 {
+fn code(bytes: &[u8], component: usize, depth: SampleDepth) -> u32 {
+    if depth == SampleDepth::U8 {
         u32::from(bytes[component])
     } else {
         u32::from(u16::from_le_bytes(
@@ -106,7 +106,7 @@ fn code(bytes: &[u8], component: usize, depth: IntegerDepth) -> u32 {
 }
 fn reference(
     pixel: [f32; 4],
-    depth: IntegerDepth,
+    depth: SampleDepth,
     space: RgbSpace,
     alpha: AlphaAssociation,
 ) -> [u32; 4] {
@@ -136,7 +136,7 @@ fn reference(
 fn assert_pixels(
     actual: &[u8],
     pixels: &[[f32; 4]],
-    depth: IntegerDepth,
+    depth: SampleDepth,
     space: RgbSpace,
     alpha: AlphaAssociation,
     region: [u32; 4],
@@ -187,14 +187,14 @@ fn writeback_corpus(in_place: bool) {
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
     let canonical = if in_place { working.clone() } else { texture(&r, wgpu::TextureFormat::Rgba32Float) };
     let outputs = [
-        texture(&r, format(IntegerDepth::U8)),
-        texture(&r, format(IntegerDepth::U16)),
+        texture(&r, format(SampleDepth::U8)),
+        texture(&r, format(SampleDepth::U16)),
     ];
     let mut tables = transfer::Tables::default();
     let mut cases = 0;
     for space in RgbSpace::ALL {
         let transfer = tables.prepare(&r.device, space).unwrap();
-        for (depth, encoded) in [IntegerDepth::U8, IntegerDepth::U16]
+        for (depth, encoded) in [SampleDepth::U8, SampleDepth::U16]
             .into_iter()
             .zip(&outputs)
         {
@@ -276,7 +276,7 @@ fn writeback_corpus(in_place: bool) {
                         space,
                         alpha,
                         region,
-                        if depth == IntegerDepth::U8 {
+                        if depth == SampleDepth::U8 {
                             0x39
                         } else {
                             0x3939
@@ -347,9 +347,9 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
             texture(
                 &r,
                 format(if i % 2 == 0 {
-                    IntegerDepth::U8
+                    SampleDepth::U8
                 } else {
-                    IntegerDepth::U16
+                    SampleDepth::U16
                 }),
             )
         })
@@ -364,9 +364,9 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
                 encoded,
                 transfer: &transfer,
                 depth: if i % 2 == 0 {
-                    IntegerDepth::U8
+                    SampleDepth::U8
                 } else {
-                    IntegerDepth::U16
+                    SampleDepth::U16
                 },
                 alpha: if i % 3 == 0 {
                     AlphaAssociation::PremultipliedLinear
@@ -419,7 +419,7 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
             RgbSpace::Srgb,
             request.alpha,
             request.region,
-            if request.depth == IntegerDepth::U8 {
+            if request.depth == SampleDepth::U8 {
                 0x39
             } else {
                 0x3939
@@ -437,7 +437,7 @@ fn native_writeback_batch_validation_cancellation_and_failure_status() {
             0 => invalid[15].region = [1, 0, u32::MAX, 1],
             1 => invalid[15].region = [0, 256, 1, 1],
             2 => invalid[15].working = &wrong,
-            3 => invalid[15].depth = IntegerDepth::U8,
+            3 => invalid[15].depth = SampleDepth::U8,
             4 => invalid[15].alpha = AlphaAssociation::None,
             5 => invalid[15].canonical = &working,
             6 => invalid[15].canonical = &canonical[0],
@@ -533,7 +533,7 @@ fn canonical_native_tiles_are_stable_across_64_publications() {
     let mut tables = transfer::Tables::default();
     for space in RgbSpace::ALL {
         let transfer = tables.prepare(&r.device, space).unwrap();
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let max = depth.maximum();
             let encoded = texture(&r, format(depth));
             let pixels: Vec<_> = (0..65536u32)
@@ -631,7 +631,7 @@ fn native_writeback_workloads() {
             cold.elapsed().as_secs_f64() * 1000.,
             transfer.storage_bytes()
         );
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let encoded: Vec<_> = (0..16).map(|_| texture(&r, format(depth))).collect();
             for clipped in [false, true] {
                 let pixels: Vec<_> = (0..65536u32)
@@ -715,7 +715,7 @@ fn native_writeback_workloads() {
                                 count as u32
                                     * side
                                     * side
-                                    * if depth == IntegerDepth::U8 { 3 } else { 4 }
+                                    * if depth == SampleDepth::U8 { 3 } else { 4 }
                                     / 4
                             } else {
                                 0
@@ -764,13 +764,13 @@ fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
     for space in RgbSpace::ALL {
         let transfer = r.prepare_native_transfer(space).unwrap();
         assert_eq!(transfer, r.prepare_native_transfer(space).unwrap());
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let maximum = depth.maximum();
             for association in [
                 AlphaAssociation::Straight,
                 AlphaAssociation::PremultipliedLinear,
             ] {
-                let encoded = if depth == IntegerDepth::U8 {
+                let encoded = if depth == SampleDepth::U8 {
                     &encoded8
                 } else {
                     &encoded16
@@ -961,7 +961,7 @@ fn native_restore_workloads() {
         .map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float))
         .collect();
     for space in [RgbSpace::Srgb, RgbSpace::AdobeRgb, RgbSpace::ProPhoto] {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let descriptor = PixelDescriptor {
                 bits_per_channel: depth.bits(),
                 encoding: TransferEncoding::Profile,
@@ -1038,3 +1038,50 @@ fn native_restore_workloads() {
 }
 
 mod batched;
+
+#[test]
+fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() {
+    use layer_core::color::{DocumentColor, f16};
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 }).unwrap();
+    let encoder = NativeTileEncoder::new(&r.device);
+    let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
+    let status = NativeEncodeStatus::new(&r.device);
+    let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let output = texture(&r, wgpu::TextureFormat::Rgba16Uint);
+    for alpha in [1., 0.5, 1./65536., 0.] {
+        let pixels: Vec<_> = (0..65536u32).map(|code| {
+            let v=f16::from_bits(code as u16).to_f32();
+            let v=if v.is_finite() {v} else {0.};
+            [v*alpha, -v*alpha, 4.*alpha, alpha]
+        }).collect();
+        upload(&r, &working, &working_bytes(&pixels));
+        let request = NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
+            depth: SampleDepth::F16, alpha: AlphaAssociation::Straight, region: [0,0,256,256] };
+        let batch=encoder.prepare(&r.device, &[request], &status).unwrap();
+        submit(&r, &encoder, &status, &[batch], true);
+        assert_eq!(read_status(&r,&status).unwrap().clipped_pixels,0);
+        let actual=page_bytes(&r,&output);
+        let cache=page_bytes(&r,&canonical);
+        for (i, ((bytes,linear),pixel)) in actual.chunks_exact(8).zip(cache.chunks_exact(16)).zip(&pixels).enumerate() {
+            let straight=if alpha>0. { [pixel[0]/alpha,pixel[1]/alpha,pixel[2]/alpha,alpha] } else { [0.;4] };
+            let expected=layer_core::color::hdr::encode_pixel(straight).unwrap();
+            for c in 0..4 {
+                let bits=u16::from_le_bytes(bytes[c*2..c*2+2].try_into().unwrap());
+                // Signed zero of premultiplied RGB is not an artwork distinction.
+                if expected[c]&32767 != 0 { assert_eq!(bits,expected[c],"pixel={i} channel={c} alpha={alpha}"); }
+                else { assert_eq!(bits&32767,0); }
+                let decoded=f32::from_le_bytes(linear[c*4..c*4+4].try_into().unwrap());
+                let value=f16::from_bits(bits).to_f32()*if c<3 {alpha} else {1.};
+                assert_eq!(decoded,value,"canonical pixel={i} channel={c}");
+            }
+        }
+    }
+    for pixel in [[65505.,0.,0.,1.],[-65505.,0.,0.,1.],[f32::NAN,0.,0.,1.],[1.,0.,0.,-0.1]] {
+        upload(&r,&working,&working_bytes(&vec![pixel;65536]));
+        let batch=encoder.prepare(&r.device,&[NativeTileRequest { working:&working, encoded:&output, canonical:&canonical, transfer:&transfer,
+            depth:SampleDepth::F16,alpha:AlphaAssociation::Straight,region:[0,0,256,256] }],&status).unwrap();
+        submit(&r,&encoder,&status,&[batch],true);
+        assert!(read_status(&r,&status).is_err());
+    }
+}

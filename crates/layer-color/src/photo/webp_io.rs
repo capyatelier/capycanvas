@@ -75,7 +75,7 @@ pub(super) fn read(
         }
         pixels = rgba;
     }
-    let interpretation = interpretation(channels, IntegerDepth::U8, icc)?;
+    let interpretation = interpretation(channels, SampleDepth::U8, icc)?;
     let source = raster_io::source(&pixels, extent, interpretation, metadata, limits)?;
     Ok(DecodedPhoto {
         source,

@@ -1,7 +1,7 @@
 //! Physical working-target tests; native document adoption remains separate.
 use super::*;
 use crate::native_tiles::{NativeEncodeStatus, NativeTileEncoder, NativeTileRequest};
-use layer_core::color::{IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{SampleDepth, RgbSpace, source::*};
 
 fn native_texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
     r.device.create_texture(&wgpu::TextureDescriptor {
@@ -47,7 +47,7 @@ fn ramp(alpha: u16) -> (Layer, Vec<u8>) {
         [256; 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -96,7 +96,7 @@ fn float32_working_targets_preserve_integer16_through_scene_and_native_publicati
                     encoded: &encoded,
                     canonical: &canonical,
                     transfer: &transfer,
-                    depth: IntegerDepth::U16,
+                    depth: SampleDepth::U16,
                     alpha: layer_core::color::AlphaAssociation::Straight,
                     region: [0, 0, 256, 256],
                 }],

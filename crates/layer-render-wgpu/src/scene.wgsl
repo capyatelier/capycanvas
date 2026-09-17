@@ -153,7 +153,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         let p=settings.color.xy+v.uv*settings.color.zw;
         let ink=scene_sample(front,p/vec2<f32>(textureDimensions(front)));
         let mask=scene_read(back,v).a;
-        return ink*mask;
+        return hdr_map_sdr(ink,settings.operation_linear)*mask;
     }
     if op == 8u {
         // Sources are straight encoded RGB. Associate in linear light, then

@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
 use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, SelectionPixels};
 use std::io::Cursor;
@@ -39,8 +39,9 @@ fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
             ];
             for value in values {
                 match color.depth {
-                    IntegerDepth::U8 => row.push(value as u8),
-                    IntegerDepth::U16 => row.extend((value as u16).to_le_bytes()),
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                    SampleDepth::U8 => row.push(value as u8),
+                    SampleDepth::U16 => row.extend((value as u16).to_le_bytes()),
                 }
             }
         }
@@ -98,7 +99,7 @@ fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
 #[test]
 fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let project = source_project(DocumentColor { space, depth }, [257, 256]);
             let source = project.document.layers[0].source.as_ref().unwrap().clone();
             let expected = raw_rows(&source);
@@ -140,7 +141,7 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     let mut project = source_project(
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         [257, 256],
     );
@@ -184,7 +185,7 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     let project = source_project(
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         [33, 17],
     );
@@ -218,7 +219,7 @@ fn snapshot_legacy_project_images_use_native_primary_conversion_without_full_upl
     project.document.layers[0].asset = Some(asset.clone());
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     project.assets.insert(
         asset,
@@ -297,8 +298,9 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
     selection.inverted = mask_kind == 2;
     mask.initial = Some(selection);
     let scalar = match color.depth {
-        IntegerDepth::U8 => vec![123; 65536],
-        IntegerDepth::U16 => 32001u16.to_le_bytes().repeat(65536),
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+        SampleDepth::U8 => vec![123; 65536],
+        SampleDepth::U16 => 32001u16.to_le_bytes().repeat(65536),
     };
     let mut mask_data = RasterData::default();
     mask_data.tiles.insert(
@@ -318,8 +320,9 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         ..Default::default()
     };
     let paint = match color.depth {
-        IntegerDepth::U8 => [92u8, 41, 71, 123].repeat(65536),
-        IntegerDepth::U16 => [30001u16, 17003, 49117, 32768]
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+        SampleDepth::U8 => [92u8, 41, 71, 123].repeat(65536),
+        SampleDepth::U16 => [30001u16, 17003, 49117, 32768]
             .into_iter()
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>()
@@ -372,7 +375,7 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
         DocumentColor::default(),
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
     ] {
         let project = rich_project(color, 1);
@@ -456,7 +459,7 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
 fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let project = rich_project(color, 1);
     let control = CaptureControl::with_allocation_tracking();
@@ -529,11 +532,11 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
         DocumentColor::default(),
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
     ] {
         for mask in 0..3 {
@@ -589,7 +592,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
     let project = rich_project(
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         2,
     );
@@ -602,7 +605,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
         .collect::<Vec<_>>();
     let mut reader =
         SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
             for tiff in [false, true] {
                 let target = SourceInterpretation {
@@ -636,7 +639,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
                     .zip(expected.chunks_exact(depth.bytes()))
                 {
                     let sample = |v: &[u8]| {
-                        if depth == IntegerDepth::U8 {
+                        if depth == SampleDepth::U8 {
                             v[0] as u16
                         } else {
                             u16::from_le_bytes(v.try_into().unwrap())
@@ -670,7 +673,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
                 &mut out,
                 &SourceInterpretation {
                     channels: SourceChannels::Rgba,
-                    depth: IntegerDepth::U16,
+                    depth: SampleDepth::U16,
                     profile: Default::default(),
                     profile_assumed: false
                 },
@@ -702,7 +705,7 @@ fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
     let project = source_project(
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         [33, 17],
     );
@@ -710,7 +713,7 @@ fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
     for space in RgbSpace::ALL {
         let target = SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(space),
             profile_assumed: false,
         };
@@ -727,7 +730,7 @@ fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
         let expected = decode(png);
         let actual = decode(jpeg);
         assert_eq!(actual.interpretation.channels, SourceChannels::Rgb);
-        assert_eq!(actual.interpretation.depth, IntegerDepth::U8);
+        assert_eq!(actual.interpretation.depth, SampleDepth::U8);
         assert_eq!(
             layer_color::profile_bytes(&actual.interpretation.profile).unwrap(),
             layer_color::profile_bytes(&target.profile).unwrap()
@@ -747,7 +750,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
     use layer_core::color::{OutputDither, OutputEncoding};
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let project = source_project(color, [513, 35]);
     let original = project.clone();
@@ -755,7 +758,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
         SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         profile: ColorProfile::Builtin(color.space),
         profile_assumed: false,
     };
@@ -796,7 +799,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
     // Dithering never bypasses exact same-depth/source delivery to make noise.
     let project = source_project(
         DocumentColor {
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             ..color
         },
         [513, 35],
@@ -817,7 +820,7 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
     let mut original = rich_project(
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         2,
     );
@@ -827,7 +830,7 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
         SnapshotRenderer::new(original.clone(), [0.; 4], 0., Default::default()).unwrap();
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let result = reader
         .flattened_document(color, Default::default(), 64 * 1024 * 1024)

@@ -68,7 +68,7 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
 
 #[test]
 fn color_transitions_update_picker_coordinates_and_route_exact_history_through_the_host() {
-    use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace}};
+    use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbColor, RgbSpace}};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
     let mut s = session();
     s.set_platform(platform);
@@ -76,7 +76,7 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
     s.dispatch(UiAction::Color { action: ColorAction::Definition { color: definition } }).unwrap();
     s.frame(1, 1).unwrap();
     let before = s.engine.document().clone();
-    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
         color, layers: s.engine.document().layers.clone(),
     }).unwrap().0;
@@ -113,13 +113,13 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
 
 #[test]
 fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbColor, RgbSpace};
     use layer_render::{ColorSample, ColorSampleSource};
     let definition = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 0.37]).unwrap();
     let make = |space| {
         let color = DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let mut document = Document::new("wide", 1000, 1000);
         document.color = color;
@@ -224,10 +224,10 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
 
 #[test]
 fn figures_and_gradients_convert_both_portable_paints() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbColor, RgbSpace};
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut document = Document::new("wide", 1000, 1000);
     document.color = color;
@@ -293,7 +293,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
 fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer() {
     use crate::{ColorWorkflow, ColorPreparation};
     use layer_color::DocumentColorChange as C;
-    use layer_core::color::{RgbSpace, IntegerDepth};
+    use layer_core::color::{RgbSpace, SampleDepth};
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut s = session();
         s.set_platform(platform);
@@ -301,7 +301,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
         invoke(&mut s, CommandId::AssignProfile);
         let id = s.state.requests.first().unwrap().id;
         let mut workflow = ColorWorkflow::begin(&s, id).unwrap();
-        assert!(workflow.select(Some(C::Depth { depth: IntegerDepth::U16, dither: layer_core::color::OutputDither::None }), false).is_err());
+        assert!(workflow.select(Some(C::Depth { depth: SampleDepth::U16, dither: layer_core::color::OutputDither::None }), false).is_err());
         assert!(workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), true).is_err());
         let ColorPreparation::Edit(change) = workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), false).unwrap() else { panic!() };
         workflow.candidate = Some(layer_color::prepare_document_color(&workflow.original, change, 1024 * 1024, || false).unwrap().project);

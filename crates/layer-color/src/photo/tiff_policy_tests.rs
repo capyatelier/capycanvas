@@ -51,7 +51,7 @@ fn classic_and_big_tiff_interleaved_strips_decode_all_lossless_codec_variants() 
             let source = read_tiff(Cursor::new(file.into_inner()), Default::default())
                 .unwrap_or_else(|e| panic!("big={big} codec={name}: {e}"));
             assert_eq!(source.extent, [33, 17]);
-            assert_eq!(source.interpretation.depth, IntegerDepth::U16);
+            assert_eq!(source.interpretation.depth, SampleDepth::U16);
             assert_eq!(
                 source.interpretation.profile,
                 ColorProfile::Icc(profile.clone().into())
@@ -142,7 +142,7 @@ fn unsupported_tiff_layouts_and_classic_output_overflow_fail_explicitly() {
     );
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgba,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         profile: Default::default(),
         profile_assumed: false,
     };

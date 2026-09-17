@@ -250,13 +250,13 @@ impl ExportPresets {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{IntegerDepth, RgbSpace};
+    use layer_core::color::{SampleDepth, RgbSpace};
     #[test]
     fn named_and_remembered_recipes_retain_profiles_independently_and_retire_unused_bytes() {
         let mut library = ExportPresets::default();
         let document = DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let mut recipe = ExportRecipe::further_editing(document);
         recipe.profile.profile = ColorProfile::Icc(vec![1, 2, 3, 4].into()); // host validates CMM support

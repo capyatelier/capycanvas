@@ -8,7 +8,7 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
         unit: ResolutionUnit::Inch,
         density: [[601, 2], [300, 1]],
     };
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let mut source = super::tests::fixture(depth, ColorProfile::Builtin(RgbSpace::ProPhoto));
         let mut before = vec![0; source.row_bytes()];
         let mut after = before.clone();
@@ -46,7 +46,7 @@ fn png_tiff_and_jpeg_keep_physical_density_without_changing_encoded_samples() {
         [37, 19],
         SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
             profile_assumed: false,
         },
@@ -141,7 +141,7 @@ fn gray_and_cmyk_jpeg_resolution_is_retained_with_the_delivery_profile() {
         let interpretation = SourceInterpretation {
             channels,
             profile,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile_assumed: false,
         };
         let mut builder = SourceBuilder::new([7, 3], interpretation.clone(), 1024 * 1024).unwrap();

@@ -166,6 +166,7 @@ impl TileBlob {
         if bytes.len() != expected {
             return Err("Invalid raster tile byte count".into());
         }
+        descriptor.validate_samples(bytes)?;
         // Integer16 source channels benefit from byte planes: smooth high
         // bytes no longer alternate with noisy low bytes. This is a reversible
         // permutation, not a precision change; the digest covers original bytes.
@@ -213,6 +214,7 @@ impl TileBlob {
         if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
+        self.descriptor.validate_samples(&bytes)?;
         Ok(bytes)
     }
     pub fn from_compressed(
@@ -470,7 +472,7 @@ mod tests {
     use super::*;
     #[test]
     fn pending_history_charges_each_retained_tiles_own_precision() {
-        use crate::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use crate::color::{DocumentColor, SampleDepth, RgbSpace};
         use crate::{Document, Edit, Editor, LayerId};
         for (bits, expected_undo) in [(8, 4), (16, 2), (32, 2)] {
             // Even while the current document is still sRGB8, old revision
@@ -481,7 +483,7 @@ mod tests {
                 bits_per_channel: bits,
                 ..DocumentColor {
                     space: RgbSpace::ProPhoto,
-                    depth: IntegerDepth::U16,
+                    depth: SampleDepth::U16,
                 }
                 .paint_descriptor()
             };
@@ -522,10 +524,10 @@ mod tests {
     }
     #[test]
     fn pending_native_layout_is_stable_and_rejects_mismatched_publication() {
-        use crate::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use crate::color::{DocumentColor, SampleDepth, RgbSpace};
         let color = DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let descriptor = RasterPlane::Color.descriptor(color);
         let tile = RasterTile::pending(descriptor);
@@ -546,7 +548,7 @@ mod tests {
                 [256; 2],
                 false,
                 DocumentColor {
-                    depth: IntegerDepth::U8,
+                    depth: SampleDepth::U8,
                     ..color
                 }
             )

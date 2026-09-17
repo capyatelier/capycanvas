@@ -374,13 +374,13 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::{ColorProfile, IntegerDepth, source::*};
+    use crate::color::{ColorProfile, SampleDepth, source::*};
 
     fn source_fixture() -> Project {
         let mut project = fixture();
         let interpretation = SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             // Transport treats ICC as exact opaque bytes; color services validate
             // its tags and supported CMM role before any renderer adopts it.
             profile: ColorProfile::Icc((0..256).map(|n| n as u8).collect::<Vec<_>>().into()),

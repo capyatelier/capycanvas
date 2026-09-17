@@ -2,7 +2,7 @@
 use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, response};
 use super::place_source::snapshot;
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
@@ -17,13 +17,13 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
     let mut project = new_drawing(192, 128).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     project.document.resolution = Some(layer_core::ImageResolution::ppi(600));
     project.document.layers[1].visible = false;
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgba,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
         profile_assumed: false,
     };
@@ -266,9 +266,9 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
         assert_eq!(
             result.interpretation.depth,
             if format == 2 {
-                IntegerDepth::U8
+                SampleDepth::U8
             } else {
-                IntegerDepth::U16
+                SampleDepth::U16
             }
         );
         assert_eq!(
@@ -368,7 +368,7 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     let mut library = ExportPresets::default();
     let mut custom = ExportRecipe::further_editing(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     custom.profile.profile = ColorProfile::Icc(
         layer_color::profile_bytes(&custom.profile.profile)

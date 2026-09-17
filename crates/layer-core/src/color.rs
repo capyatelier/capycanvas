@@ -5,15 +5,17 @@ pub use rgb::RgbSpace;
 mod value;
 pub use value::RgbColor;
 mod profile;
-pub use profile::{ColorProfile, ConversionOptions, IntegerDepth, ProfileChannels, RenderingIntent};
+pub use profile::{ColorProfile, ConversionOptions, SampleDepth, ProfileChannels, RenderingIntent};
 mod output;
 pub use output::{OutputDither, OutputEncoding};
 mod proof;
 pub use proof::ProofRecipe;
 pub mod source;
 pub mod histogram;
+pub mod hdr;
+pub use half::f16;
 
-/// Native SDR coordinates and committed integer precision. Working math and
+/// Native RGB coordinates and committed sample precision. Working math and
 /// per-operation blend domains are independent of these storage choices.
 /// The archive version fixes the built-in RGB definitions; monitor state never
 /// changes the permanent interpretation of artwork.
@@ -21,20 +23,21 @@ pub mod histogram;
 #[serde(deny_unknown_fields)]
 pub struct DocumentColor {
     pub space: RgbSpace,
-    pub depth: IntegerDepth,
+    pub depth: SampleDepth,
 }
 impl DocumentColor {
     pub fn paint_descriptor(self) -> PixelDescriptor {
         PixelDescriptor {
             channels: 4,
             bits_per_channel: self.depth.bits(),
-            encoding: TransferEncoding::Profile,
+            sample: if self.depth.is_float() { SampleType::Float } else { SampleType::Unsigned },
+            encoding: if self.depth.is_float() { TransferEncoding::Linear } else { TransferEncoding::Profile },
             alpha: AlphaAssociation::Straight,
         }
     }
     pub fn coverage_descriptor(self) -> PixelDescriptor {
         PixelDescriptor {
-            bits_per_channel: self.depth.bits(),
+            bits_per_channel: self.depth.coverage().bits(),
             ..PixelDescriptor::COVERAGE8
         }
     }
@@ -60,14 +63,24 @@ pub enum TransferEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PixelDescriptor {
+    #[serde(default, skip_serializing_if = "SampleType::is_unsigned")]
+    pub sample: SampleType,
     pub channels: u8,
     pub bits_per_channel: u8,
     pub encoding: TransferEncoding,
     pub alpha: AlphaAssociation,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SampleType { #[default] Unsigned, Float }
+impl SampleType { pub fn is_unsigned(&self) -> bool { *self == Self::Unsigned } }
+
 impl PixelDescriptor {
+    pub fn depth(self) -> SampleDepth {
+        if self.sample == SampleType::Float { SampleDepth::F16 } else if self.bits_per_channel == 16 { SampleDepth::U16 } else { SampleDepth::U8 }
+    }
     pub const SRGB8_STRAIGHT: Self = Self {
+        sample: SampleType::Unsigned,
         channels: 4,
         bits_per_channel: 8,
         encoding: TransferEncoding::Srgb,
@@ -80,13 +93,26 @@ impl PixelDescriptor {
         ..Self::SRGB8_STRAIGHT
     };
     pub const COVERAGE8: Self = Self {
+        sample: SampleType::Unsigned,
         channels: 1,
         bits_per_channel: 8,
         encoding: TransferEncoding::Linear,
         alpha: AlphaAssociation::None,
     };
 
+    pub fn validate_samples(self, bytes: &[u8]) -> Result<(), String> {
+        if self.sample != SampleType::Float { return Ok(()); }
+        let bpp = self.bytes_per_pixel().ok_or("Invalid float descriptor")?;
+        if bytes.len() % bpp != 0 { return Err("Incomplete half-float samples".into()); }
+        for input in bytes.chunks_exact(bpp) {
+            let mut pixel = [0., 0., 0., 1.];
+            for (c, bits) in input.chunks_exact(2).enumerate() { pixel[c] = f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])).to_f32(); }
+            hdr::encode_pixel(pixel).map_err(str::to_string)?;
+        }
+        Ok(())
+    }
     pub fn bytes_per_pixel(self) -> Option<usize> {
+        if self.sample == SampleType::Float && (self.bits_per_channel != 16 || self.encoding != TransferEncoding::Linear || !matches!((self.channels, self.alpha), (3, AlphaAssociation::None) | (4, AlphaAssociation::Straight))) { return None; }
         if !matches!(self.bits_per_channel, 8 | 16) {
             return None;
         }

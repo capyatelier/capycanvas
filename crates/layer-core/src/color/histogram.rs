@@ -72,7 +72,7 @@ impl Histogram {
                 [0, 1, 2].map(|c| f64::from(pixel[c]) / f64::from(pixel[3]))
             };
             for c in 0..3 {
-                self.channels[c].add(encoded.index(rgb[c]), rgb[c]);
+                self.channels[c].add(if self.color.depth.is_float() { hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) }, rgb[c]);
             }
             // Algebraically equal to dot(Y, RGB), with neutral values exact at
             // the endpoints instead of depending on rounded coefficient sums.
@@ -80,9 +80,9 @@ impl Histogram {
                 + self.luminance[0] * (rgb[0] - rgb[1])
                 + self.luminance[2] * (rgb[2] - rgb[1]);
             self.channels[3].add(
-                (y.clamp(0., 1.) * BINS as f64)
+                if self.color.depth.is_float() { hdr_bin(y) } else { (y.clamp(0., 1.) * BINS as f64)
                     .floor()
-                    .min((BINS - 1) as f64) as usize,
+                    .min((BINS - 1) as f64) as usize },
                 y,
             );
         }
@@ -90,17 +90,22 @@ impl Histogram {
     }
 }
 
+/// Bin 0 counts nonpositive channels; remaining bins cover -12..+16 stops
+/// relative to portable reference white. `above` still reports above-white data.
+fn hdr_bin(linear: f64) -> usize {
+    if linear <= 0. { 0 } else { 1 + (((linear.log2()+12.)/28.).clamp(0.,1.)*254.).floor() as usize }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::{IntegerDepth, RgbSpace};
+    use crate::color::{SampleDepth, RgbSpace};
 
     #[test]
     fn native_codes_transparency_and_strip_partition_do_not_change_distributions() {
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let color = DocumentColor { space, depth };
-                let maximum: u32 = if depth == IntegerDepth::U8 {
+                let maximum: u32 = if depth == SampleDepth::U8 {
                     255
                 } else {
                     65535
@@ -190,7 +195,7 @@ mod tests {
         for space in RgbSpace::ALL {
             let color = DocumentColor {
                 space,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
             };
             let mut actual = Histogram::new(color);
             actual.add(&pixels).unwrap();

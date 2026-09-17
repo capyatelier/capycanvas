@@ -82,7 +82,7 @@ mod tests {
     fn all_eight_orientations_preserve_numbered_pixel_positions() {
         let interpretation = SourceInterpretation {
             channels: SourceChannels::Gray,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::default(),
             profile_assumed: true,
         };

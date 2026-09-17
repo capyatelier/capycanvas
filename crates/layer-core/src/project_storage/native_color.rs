@@ -1,5 +1,5 @@
 use super::*;
-use crate::color::{DocumentColor, IntegerDepth, RgbSpace};
+use crate::color::{DocumentColor, SampleDepth, RgbSpace};
 
 fn project(color: DocumentColor) -> Project {
     let mut document = Document::new("native color archive", 512, 256);
@@ -79,7 +79,7 @@ fn project(color: DocumentColor) -> Project {
 #[test]
 fn native_sdr_archives_preserve_space_depth_every_code_and_scalar_planes() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
             let original = project(color);
             let mut bytes = Vec::new();
@@ -133,19 +133,19 @@ fn native_sdr_archives_preserve_space_depth_every_code_and_scalar_planes() {
 fn native_sdr_archives_reject_depth_mismatch_and_previous_semantics() {
     let mut p = project(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let mut bytes = Vec::new();
     p.write(&mut bytes).unwrap();
     bytes[10] = 2;
     assert!(Project::read(bytes.as_slice(), Default::default()).is_err());
-    p.document.color.depth = IntegerDepth::U8;
+    p.document.color.depth = SampleDepth::U8;
     assert!(
         p.write(&mut Vec::new())
             .unwrap_err()
             .contains("representation")
     );
-    p.document.color.depth = IntegerDepth::U16;
+    p.document.color.depth = SampleDepth::U16;
     let mask = p.document.layers[0].mask.as_mut().unwrap();
     mask.raster = RasterRevision::backed(RasterData {
         tiles: BTreeMap::from([(
@@ -169,7 +169,7 @@ fn native_sdr_archives_reject_depth_mismatch_and_previous_semantics() {
 #[test]
 fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() {
     use crate::color::{ColorProfile, ProofRecipe, source::*};
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let mut p = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
         // Core storage owns exact bytes; CMM validation belongs to layer-color.
         let profile: Arc<[u8]> = (0..1024).map(|i| (i * 13 % 251) as u8).collect::<Vec<_>>().into();
@@ -213,4 +213,28 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
         reopened.write(&mut again).unwrap();
         assert_eq!(bytes, again);
     }
+}
+
+#[test]
+fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
+    let color=DocumentColor {space:RgbSpace::DisplayP3,depth:SampleDepth::F16};
+    let mut document=Document::new("HDR master",256,256);document.color=color;
+    let samples:Vec<_>=(0..65536u32).flat_map(|i| {
+        let value=crate::color::f16::from_bits(i as u16).to_f32();
+        let value=if value.is_finite(){value}else{0.};
+        crate::color::hdr::encode_pixel([value,-value,4.,1.]).unwrap().into_iter().flat_map(u16::to_le_bytes)
+    }).collect();
+    let key=TileKey{plane:RasterPlane::Color,coordinate:[0,0]};
+    document.layers[0].raster=RasterRevision::backed(RasterData{tiles:BTreeMap::from([(key,RasterTile::backed(TileBlob::encode(color.paint_descriptor(),&samples).unwrap()))]),watercolor:None});
+    let mut editor=Editor::new(document);
+    let rendition=crate::color::hdr::SdrRendition{exposure:-1.,contrast:0.8,knee:0.6};
+    editor.perform(Edit::SetSdrRendition(rendition)).unwrap();
+    editor.undo().unwrap();assert_eq!(editor.document().sdr_rendition,Default::default());
+    editor.redo().unwrap();assert_eq!(editor.document().sdr_rendition,rendition);
+    let project=Project{document:editor.document().clone(),assets:Default::default()};
+    let mut encoded=Vec::new();project.write(&mut encoded).unwrap();
+    let restored=Project::read(encoded.as_slice(),Default::default()).unwrap();
+    assert_eq!(restored.document.color,color);assert_eq!(restored.document.sdr_rendition,rendition);
+    assert_eq!(restored.document.layers[0].raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().decode().unwrap(),samples);
+    let mut again=Vec::new();restored.write(&mut again).unwrap();assert_eq!(again,encoded);
 }

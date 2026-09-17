@@ -1,7 +1,7 @@
 use super::*;
 use layer_core::{
     Affine,
-    color::{IntegerDepth, source::*},
+    color::{SampleDepth, source::*},
 };
 
 // An interior backtrace must read original pixels even when placement maps the
@@ -14,7 +14,7 @@ fn placed_material_backtrace(execution: BrushExecution, alpha_locked: bool) {
             [side; 2],
             SourceInterpretation {
                 channels: SourceChannels::Rgba,
-                depth: IntegerDepth::U8,
+                depth: SampleDepth::U8,
                 profile: Default::default(),
                 profile_assumed: false,
             },
@@ -195,7 +195,7 @@ fn placed_photo_liquify_modes_keep_opaque_interior() {
         [4096; 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -252,7 +252,7 @@ fn placed_photo_material_gather_keeps_each_source_page_identity() {
         [4096; 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -366,7 +366,7 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -443,7 +443,7 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
 fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
     let size = [1024, 768];
     let mut builder = SourceBuilder::new(size, SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
     }, 8 * 1024 * 1024).unwrap();
     for y in 0..size[1] {
@@ -581,7 +581,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -697,7 +697,7 @@ fn oversized_photo_preview_uses_admitted_memory_across_scale_boundary() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -736,7 +736,7 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -839,7 +839,7 @@ fn placed_photo_edits_and_restores_tiles_outside_canvas_bounds() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -912,7 +912,7 @@ fn placed_photo_brush_footprint_matches_document_brush_under_affine() {
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -1020,7 +1020,7 @@ fn large_photo_placement_workload() {
             size,
             SourceInterpretation {
                 channels: SourceChannels::Rgba,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
                 profile: Default::default(),
                 profile_assumed: false,
             },
@@ -1131,7 +1131,7 @@ fn retained_placement_samples_full_source_across_tiles_without_creating_raster()
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },

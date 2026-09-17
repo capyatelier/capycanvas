@@ -1,6 +1,6 @@
 //! New/Open/Save/Export through GTK dialogs and the production SDR worker.
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
 pub(super) fn ready(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -198,6 +198,11 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
         &super::place_source::source(),
     )
     .unwrap();
+    let hdr = directory.join("hdr-pq.png");
+    layer_color::photo::write_hdr_png_rows(std::fs::File::create(&hdr).unwrap(), [513, 257],
+        layer_core::color::RgbSpace::Srgb, None, false, |_, row| {
+            row.fill([4., 2., 1., 1.]); Ok(())
+        }).unwrap();
     let native = directory.join("master.capy");
     std::fs::write(&native, &original).unwrap();
     let cancelled = Rc::new(Cell::new(0));
@@ -224,7 +229,7 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
                 glib::ControlFlow::Break
             });
         });
-    for path in [&photo, &native, &photo] {
+    for path in [&photo, &native, &hdr, &hdr] {
         invoke(&w, CommandId::OpenDocument);
         let file = chooser();
         file.set_file(&gtk::gio::File::for_path(path)).unwrap();
@@ -241,7 +246,7 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
             "reader has not acknowledged cancellation"
         );
     }
-    assert_eq!(cancelled.get(), 3);
+    assert_eq!(cancelled.get(), 4);
     w.window.disconnect(signal);
     // The same request path remains usable after repeated cancellation.
     invoke(&w, CommandId::OpenDocument);
@@ -297,7 +302,7 @@ fn native_new_presets_and_profiled_photo_master() {
         extent: [256, 256],
         color: DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
         },
         background: DocumentBackground::Transparent,
     };
@@ -425,7 +430,7 @@ fn native_new_presets_and_profiled_photo_master() {
         [513, 257],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Icc(
                 layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::ProPhoto))
                     .unwrap()
@@ -464,7 +469,7 @@ fn native_new_presets_and_profiled_photo_master() {
         project.document.color,
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16
+            depth: SampleDepth::U16
         }
     );
     assert_eq!(project.document.layers[0].source.as_deref(), Some(&source));
@@ -578,7 +583,7 @@ fn native_new_presets_and_profiled_photo_master() {
         Default::default(),
     )
     .unwrap();
-    assert_eq!(delivered.interpretation.depth, IntegerDepth::U16);
+    assert_eq!(delivered.interpretation.depth, SampleDepth::U16);
     assert_eq!(delivered.resolution, source.resolution);
     assert_eq!(
         delivered.interpretation.profile,

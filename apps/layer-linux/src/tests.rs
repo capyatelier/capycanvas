@@ -17,6 +17,8 @@ mod effect_color;
 mod export_resize;
 #[path = "new_photo_tests.rs"]
 mod new_photo;
+#[path = "hdr_tests.rs"]
+mod hdr;
 #[path = "place_source_tests.rs"]
 mod place_source;
 #[path = "photo_drop_tests.rs"]
@@ -831,7 +833,7 @@ fn native_document_files() {
         let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()), Default::default()).unwrap();
         assert_eq!(decoded.extent, [384, 256]);
         assert_eq!(decoded.interpretation.channels, *channels);
-        assert_eq!(decoded.interpretation.depth, layer_core::color::IntegerDepth::U16);
+        assert_eq!(decoded.interpretation.depth, layer_core::color::SampleDepth::U16);
         assert_eq!(layer_color::profile_bytes(&decoded.interpretation.profile).unwrap(), *profile);
         std::fs::write(path.with_extension("icc"), profile).unwrap();
         let mut raw = std::fs::File::create(path.with_extension("raw")).unwrap();
@@ -844,12 +846,12 @@ fn native_document_files() {
     }
     let tiff = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&tiff_path).unwrap()), Default::default()).unwrap();
     assert_eq!(tiff.extent, [384, 256]);
-    assert_eq!(tiff.interpretation.depth, layer_core::color::IntegerDepth::U16);
+    assert_eq!(tiff.interpretation.depth, layer_core::color::SampleDepth::U16);
     assert_eq!(layer_color::profile_bytes(&tiff.interpretation.profile).unwrap(),
         layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)).unwrap());
     let jpeg = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&jpeg_path).unwrap()), Default::default()).unwrap();
     assert_eq!(jpeg.extent, [384, 256]);
-    assert_eq!(jpeg.interpretation.depth, layer_core::color::IntegerDepth::U8);
+    assert_eq!(jpeg.interpretation.depth, layer_core::color::SampleDepth::U8);
     assert_eq!(jpeg.interpretation.channels, layer_core::color::source::SourceChannels::Rgb);
     assert_eq!(layer_color::profile_bytes(&jpeg.interpretation.profile).unwrap(),
         layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3)).unwrap());

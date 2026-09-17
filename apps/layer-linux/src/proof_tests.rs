@@ -2,7 +2,7 @@
 use super::new_photo::{chooser, combo, finish, invoke, ready, response};
 use super::place_source::snapshot;
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use std::sync::Arc;
 
 pub(super) fn wait_proof(w: &Rc<Workspace>, prefix: &str) {
@@ -38,7 +38,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     let mut project = new_drawing(128, 64).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
@@ -163,7 +163,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
             .document()
             .color
             .depth,
-        IntegerDepth::U8
+        SampleDepth::U8
     );
     w.window.destroy();
 }
@@ -663,7 +663,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let mut project = new_drawing(128, 64).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     project.document.layers[0].source = Some(Arc::new(super::place_source::source()));
     let w = Workspace::with_project(&app, Some((project, None)));
@@ -888,7 +888,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         Default::default(),
     )
     .unwrap();
-    assert_eq!(delivered.interpretation.depth, IntegerDepth::U16);
+    assert_eq!(delivered.interpretation.depth, SampleDepth::U16);
     assert_eq!(
         delivered.interpretation.profile,
         ColorProfile::Icc(
@@ -913,7 +913,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     };
     let mut export = ExportRecipe::further_editing(DocumentColor {
         space: RgbSpace::Srgb,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     export.profile = ExportProfile::builtin(RgbSpace::Srgb);
     let expected = output.join(format!("Normal delivery-{}.tif", std::process::id()));

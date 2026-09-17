@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, EffectValue};
 
 #[path = "native_effects/tone.rs"]
@@ -73,7 +73,7 @@ fn close(actual: [f32; 4], rgb: [f32; 3], alpha: f32, context: &str) {
 #[test]
 fn native_exposure_retains_extended_low_alpha_through_fused_and_physical_chains() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r =
                 WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             for image in [false, true] {
@@ -118,7 +118,7 @@ fn native_white_balance_and_encoded_tone_helpers_use_document_primaries_and_tran
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         for image in [false, true] {
@@ -174,7 +174,7 @@ fn native_white_balance_and_encoded_tone_helpers_use_document_primaries_and_tran
 fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
     use layer_core::color::{ColorProfile, source::*};
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
             let mut document = layer_core::Document::new("editable photo", 256, 256);
             document.color = color;
@@ -195,7 +195,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
                         [x * 257, y * 257, (x * 101 + y * 237) % 65536, 65535]
                             .into_iter()
                             .flat_map(move |v| {
-                                let value = if depth == IntegerDepth::U8 {
+                                let value = if depth == SampleDepth::U8 {
                                     v / 257
                                 } else {
                                     v

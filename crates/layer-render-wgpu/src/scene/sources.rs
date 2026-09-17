@@ -4,7 +4,7 @@
 use super::*;
 use crate::source_access::RawTile;
 use layer_core::color::{
-    AlphaAssociation, ColorProfile, IntegerDepth, PixelDescriptor, RgbSpace, TransferEncoding,
+    AlphaAssociation, ColorProfile, SampleDepth, PixelDescriptor, RgbSpace, TransferEncoding,
     source::{SourceChannels, SourceImage},
 };
 use layer_core::raster::TileBlob;
@@ -58,7 +58,7 @@ struct NativeSamples<'a> {
     tile: &'a Arc<TileBlob>,
     descriptor: PixelDescriptor,
     channels: SourceChannels,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     space: RgbSpace,
 }
 impl Pixels {
@@ -85,11 +85,7 @@ impl Pixels {
                 tile,
                 descriptor: tile.descriptor,
                 channels: SourceChannels::Rgba,
-                depth: if tile.descriptor.bits_per_channel == 16 {
-                    IntegerDepth::U16
-                } else {
-                    IntegerDepth::U8
-                },
+                depth: tile.descriptor.depth(),
                 space: *space,
             }),
         }
@@ -212,11 +208,7 @@ impl DecodedTiles {
     ) -> Result<(RawTile, Option<PendingTile>), GpuRasterError> {
         validate_raster(blob, space)?;
         let d = blob.descriptor;
-        let depth = if d.bits_per_channel == 16 {
-            IntegerDepth::U16
-        } else {
-            IntegerDepth::U8
-        };
+        let depth = d.depth();
         let (tile, write) =
             self.plan_key(r, Key::Raster(blob.digest, space, destination))?;
         let pending = write.map(|write| PendingTile {
@@ -323,7 +315,7 @@ impl DecodedTiles {
     ) -> Result<u64, GpuRasterError> {
         let bytes = if pending.data.is_some() {
             let samples = pending.pixels.native()?;
-            let index = usize::from(samples.depth == IntegerDepth::U16);
+            let index = usize::from(samples.depth != SampleDepth::U8);
             let pipelines = &r.scene_pipelines.source;
             let input = self.inputs[index].get_or_insert_with(|| {
                 let texture = r.device.create_texture(&wgpu::TextureDescriptor {
@@ -519,7 +511,8 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
             d.alpha,
             AlphaAssociation::Straight | AlphaAssociation::PremultipliedLinear
         )
-        || !(d.encoding == TransferEncoding::Profile
+        || !(d.sample == layer_core::color::SampleType::Float && d.encoding == TransferEncoding::Linear && d.bits_per_channel == 16
+            || d.encoding == TransferEncoding::Profile
             || (d.encoding == TransferEncoding::Srgb && space == RgbSpace::Srgb))
     {
         return Err(GpuRasterError::Color(
@@ -531,38 +524,42 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
 
 /// Expand integer source channels without changing their codes or byte order.
 /// Fixed pixel widths keep the hot upload path out of per-channel dynamic copies.
-fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: IntegerDepth) {
+fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: SampleDepth) {
     match (depth, channels) {
-        (IntegerDepth::U8, SourceChannels::Rgb) => {
+        (SampleDepth::U8, SourceChannels::Rgb) => {
             for (p, o) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
                 o.copy_from_slice(&[p[0], p[1], p[2], 255]);
             }
         }
-        (IntegerDepth::U8, SourceChannels::Gray) => {
+        (SampleDepth::U8, SourceChannels::Gray) => {
             for (p, o) in input.iter().zip(output.chunks_exact_mut(4)) {
                 o.copy_from_slice(&[*p, *p, *p, 255]);
             }
         }
-        (IntegerDepth::U8, SourceChannels::GrayAlpha) => {
+        (SampleDepth::U8, SourceChannels::GrayAlpha) => {
             for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(4)) {
                 o.copy_from_slice(&[p[0], p[0], p[0], p[1]]);
             }
         }
-        (IntegerDepth::U16, SourceChannels::Rgb) => {
+        (SampleDepth::U16, SourceChannels::Rgb) => {
             for (p, o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) {
                 o.copy_from_slice(&[p[0], p[1], p[2], p[3], p[4], p[5], 255, 255]);
             }
         }
-        (IntegerDepth::U16, SourceChannels::Gray) => {
+        (SampleDepth::U16, SourceChannels::Gray) => {
             for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(8)) {
                 o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], 255, 255]);
             }
         }
-        (IntegerDepth::U16, SourceChannels::GrayAlpha) => {
+        (SampleDepth::U16, SourceChannels::GrayAlpha) => {
             for (p, o) in input.chunks_exact(4).zip(output.chunks_exact_mut(8)) {
                 o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], p[2], p[3]]);
             }
         }
+        (SampleDepth::F16, SourceChannels::Rgb) => {
+            for (p,o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) { o[..6].copy_from_slice(p); o[6..].copy_from_slice(&0x3c00u16.to_le_bytes()); }
+        }
+        (SampleDepth::F16, SourceChannels::Gray | SourceChannels::GrayAlpha) => unreachable!("invalid HDR gray"),
         (_, SourceChannels::Rgba | SourceChannels::Cmyk) => unreachable!("RGBA copies directly; CMYK uses its ICC transform"),
     }
 }
@@ -593,7 +590,7 @@ fn builtin_settings(
 fn rgb_settings(
     space: RgbSpace,
     destination: RgbSpace,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     extent: [u32; 2],
     alpha: AlphaAssociation,
 ) -> [f32; 24] {
@@ -602,7 +599,7 @@ fn rgb_settings(
         data[i * 4..i * 4 + 3].copy_from_slice(&row.map(|v| v as f32));
     }
     data[12] = f32::from(alpha == AlphaAssociation::PremultipliedLinear);
-    data[13] = depth.maximum() as f32;
+    data[13] = if depth.is_float() { 0. } else { depth.maximum() as f32 };
     data[14] = extent[0] as f32;
     data[15] = extent[1] as f32;
     data
@@ -649,7 +646,7 @@ impl Pipelines {
         let pipeline = Deferred::new(move || {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("integer SDR to Float32"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("source_decode.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("../native_tiles/validity.wgsl"), include_str!("source_decode.wgsl")).into()),
             });
             fullscreen_pipeline(
                 &device,

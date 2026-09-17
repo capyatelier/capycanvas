@@ -31,7 +31,7 @@ pub fn read_jpeg(mut input: impl Read + Seek, limits: DecodeLimits) -> Result<So
     decoder
         .output_buffer_size()
         .map_err(|e| format!("{}: {e}", jpeg_codec::MEMORY_ERROR))?;
-    let interpretation = interpretation(channels, IntegerDepth::U8, metadata.profile)?;
+    let interpretation = interpretation(channels, SampleDepth::U8, metadata.profile)?;
     let mut builder = SourceBuilder::new(extent, interpretation, limits.source_bytes)?;
     let image = decoder.decode_image().map_err(err)?;
     let mut row = vec![0; extent[0] as usize * channels.count()];
@@ -128,7 +128,7 @@ pub fn write_jpeg_rows_with_options(
 ) -> Result<(), String> {
     let quality = options.quality;
     let row_bytes = output_row_bytes(extent, interpretation)?;
-    if interpretation.depth != IntegerDepth::U8 {
+    if interpretation.depth != SampleDepth::U8 {
         return Err("JPEG output requires 8-bit samples".into());
     }
     if interpretation.channels.has_alpha() {

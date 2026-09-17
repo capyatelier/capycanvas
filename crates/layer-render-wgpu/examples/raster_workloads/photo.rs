@@ -100,8 +100,9 @@ fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<L
                 .flat_map(|i| {
                     let code = ((i % 256) * 257) as u16;
                     match color.depth {
-                        IntegerDepth::U8 => vec![(code >> 8) as u8],
-                        IntegerDepth::U16 => code.to_le_bytes().to_vec(),
+                SampleDepth::F16 => unreachable!("SDR-only benchmark fixture"),
+                        SampleDepth::U8 => vec![(code >> 8) as u8],
+                        SampleDepth::U16 => code.to_le_bytes().to_vec(),
                     }
                 })
                 .collect();
@@ -283,7 +284,7 @@ fn concurrent(
         let setup = Instant::now();
         let target = SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         };

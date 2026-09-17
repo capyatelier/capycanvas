@@ -32,7 +32,7 @@ fn external_webp_reference_samples() {
         assert!(!photo.first_frame);
         assert_eq!(photo.source.extent, extent);
         assert_eq!(photo.source.interpretation.channels, SourceChannels::Rgba);
-        assert_eq!(photo.source.interpretation.depth, IntegerDepth::U8);
+        assert_eq!(photo.source.interpretation.depth, SampleDepth::U8);
         assert!(photo.source.interpretation.profile_assumed);
         let actual = pixels(&photo.source);
         assert_eq!(actual.len(), reference.len());
@@ -109,7 +109,7 @@ fn bmp_v5_and_dib_preserve_profile_alpha_hidden_rgb_and_density() {
             photo.source.interpretation.profile,
             ColorProfile::Icc(profile.clone().into())
         );
-        assert_eq!(photo.source.interpretation.depth, IntegerDepth::U8);
+        assert_eq!(photo.source.interpretation.depth, SampleDepth::U8);
         assert_eq!(pixels(&photo.source), [10, 20, 30, 128, 70, 80, 90, 0]);
         assert_eq!(
             photo.source.resolution.unwrap().density,

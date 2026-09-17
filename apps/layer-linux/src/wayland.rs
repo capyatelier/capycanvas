@@ -1,5 +1,6 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
 mod color;
+mod hdr;
 use gtk::{gdk, glib::translate::*, prelude::*};
 use std::{
     ptr::NonNull,
@@ -284,6 +285,7 @@ pub struct Child {
 #[derive(Default)]
 struct Events {
     color: color::State,
+    hdr: hdr::HdrState,
     clock: Arc<FrameClock>,
     monotonic: bool,
     feedback_pending: usize,
@@ -361,6 +363,7 @@ impl Child {
         self.events
             .dispatch_pending(&mut self.state)
             .map_err(error)?;
+        self.poll_hdr_feedback();
         self.connection.flush().map_err(error)
     }
 

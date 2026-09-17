@@ -1254,6 +1254,9 @@ pub struct Document {
     /// by the project source/profile index. Temporary view toggles live in UI.
     #[serde(skip)]
     pub proof: Option<color::ProofRecipe>,
+    /// Authored delivery mapping. Display capability and preview toggles are view state.
+    #[serde(default)]
+    pub sdr_rendition: color::hdr::SdrRendition,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
@@ -1295,6 +1298,7 @@ impl Document {
             color: color::DocumentColor::default(),
             resolution: None,
             proof: None,
+            sdr_rendition: Default::default(),
             layers: vec![
                 Layer::paint(paint_id, "Current ink"),
                 Layer {
@@ -1354,6 +1358,10 @@ impl Document {
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
             Edit::SetColor { color, layers } => self.apply_color_edit(color, layers)?,
+            Edit::SetSdrRendition(recipe) => {
+                recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid SDR rendition"))?;
+                Edit::SetSdrRendition(std::mem::replace(&mut self.sdr_rendition, recipe))
+            }
             Edit::SetProof(recipe) => {
                 if let Some(recipe) = &recipe {
                     recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid proof recipe"))?;
@@ -1598,6 +1606,7 @@ impl Document {
 pub enum Edit {
     /// Metadata only; no raster conversion or composite invalidation.
     SetProof(Option<color::ProofRecipe>),
+    SetSdrRendition(color::hdr::SdrRendition),
     /// One atomic interpretation/backing change. Structure and properties stay
     /// intact; all native color and scalar replacements must be host-backed.
     SetColor {
@@ -1651,7 +1660,7 @@ impl Edit {
 
     fn requires_history_admission(&self, document: &Document) -> bool {
         match self {
-            Self::SetColor { .. } | Self::SetProof(_) => true,
+            Self::SetColor { .. } | Self::SetProof(_) | Self::SetSdrRendition(_) => true,
             Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
             Self::InsertLayer { layer, .. } => layer.source.is_some(),
             Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| l.source.is_some()),
@@ -1715,7 +1724,7 @@ impl Edit {
     /// Guide-only edits affect presentation, never committed raster pixels.
     pub fn changes_image(&self) -> bool {
         match self {
-            Self::SetRulers(_) | Self::SetProof(_) => false,
+            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_) => false,
             Self::Batch(edits) => edits.iter().any(Self::changes_image),
             _ => true,
         }

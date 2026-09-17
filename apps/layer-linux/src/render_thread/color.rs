@@ -113,6 +113,7 @@ impl RenderWorker {
         self.awaiting_color_adoption = Some(id);
         self.pending_color = None;
         self.color = color;
+        self.hdr_view = None;
         self.startup_generation += 1;
         self.startup = complete();
         self.startup_key = None;
@@ -243,9 +244,10 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(
             &renderer,
             self.config.format,
-            self.view_color.surface(),
+            if self.hdr_surface { layer_render_wgpu::SdrSurfaceColor::WindowsScrgb } else { self.view_color.surface() },
         )
         .map_err(error)?;
+        presenter.set_hdr_view(&renderer, request.project.document.color.depth.is_float().then_some(request.project.document.sdr_rendition), 1.).map_err(error)?;
         presenter.prepare_overviews(&renderer);
         check()?;
         Ok(Prepared {

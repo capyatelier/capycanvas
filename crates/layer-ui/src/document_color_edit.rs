@@ -3,6 +3,15 @@ use super::*;
 use layer_core::{ColorTransition, PreparedColorTransition, Project};
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
+        self.require_document_idle()?;
+        if !self.engine.document().color.depth.is_float() { return Err("SDR rendition settings require HDR artwork".into()); }
+        recipe.validate().map_err(str::to_string)?;
+        if recipe != self.engine.document().sdr_rendition { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
+        self.refresh_document(); self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
+    }
+
     /// A host validates the actual bidirectional ICC transform before publishing
     /// this saved recipe. Temporary comparison toggles never enter history.
     pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, String> {
@@ -35,6 +44,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .engine
             .prepare_color_transition(transition)
             .map_err(error)?;
+        if self.state.platform != Platform::Gtk { crate::require_sdr_host(prepared.document(), "this host")?; }
         let project = Project::snapshot(prepared.document(), &self.files.assets)?;
         Ok((prepared, project))
     }

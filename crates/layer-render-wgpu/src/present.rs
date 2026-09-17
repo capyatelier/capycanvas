@@ -1,7 +1,7 @@
 //! GPU-only viewport presentation shared by toolkit surfaces and WebGPU.
 
 use crate::{GpuRasterError, SdrSurfaceColor, Uploads, WgpuRasterizer};
-use layer_render::{CursorSegment, ViewState};
+use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 
 /// A native UI's document overview, sampled from the existing GPU image.
 /// Bounds and work-area corners use physical target-surface pixels. Hosts can
@@ -48,6 +48,8 @@ pub struct ViewportPresenter {
     uniform: wgpu::Buffer,
     proof_buffer: wgpu::Buffer,
     proof_uniform: wgpu::Buffer,
+    hdr_uniform: wgpu::Buffer,
+    hdr_options: [f32; 4],
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
@@ -76,15 +78,27 @@ pub struct ViewportPresenter {
 }
 
 impl ViewportPresenter {
+    pub fn set_hdr_view(&mut self, renderer: &WgpuRasterizer, rendition: Option<layer_core::color::hdr::SdrRendition>, headroom: f32) -> Result<(), GpuRasterError> {
+        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err(GpuRasterError::Color("Invalid display HDR headroom".into())); }
+        if let Some(r) = rendition { r.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
+        let options = rendition.map_or([0.; 4], |r| [r.exposure, r.contrast, r.knee, headroom]);
+        if options != self.hdr_options {
+            renderer.queue.write_buffer(&self.hdr_uniform, 0, options.map(f32::to_ne_bytes).as_flattened());
+            self.hdr_options = options;
+        }
+        Ok(())
+    }
     pub fn proof_storage_bytes(&self) -> u64 {
         if self.proof_lut.is_some() { self.proof_buffer.size() } else { 0 }
     }
 
     /// Explicit viewport captures share immutable samples and the same viewing
     /// options; they do not allocate another LUT. Export never calls this path.
-    pub fn inherit_proof(&mut self, source: &Self) {
+    pub fn inherit_proof(&mut self, renderer: &WgpuRasterizer, source: &Self) {
         self.proof_buffer = source.proof_buffer.clone();
         self.proof_uniform = source.proof_uniform.clone();
+        renderer.queue.write_buffer(&self.hdr_uniform, 0, source.hdr_options.map(f32::to_ne_bytes).as_flattened());
+        self.hdr_options = source.hdr_options;
         self.proof_options = source.proof_options;
         self.proof_lut = source.proof_lut.clone();
         self.bind_group = None;
@@ -156,7 +170,9 @@ impl ViewportPresenter {
         color: SdrSurfaceColor,
     ) -> Result<Self, GpuRasterError> {
         color.shader_encoding(format)?;
-        Ok(Self::with_device(&renderer.device, format, color))
+        let mut presenter = Self::with_device(&renderer.device, format, color);
+        presenter.set_hdr_view(renderer, renderer.document_color().depth.is_float().then_some(Default::default()), 1.)?;
+        Ok(presenter)
     }
 
     /// A Navigator canvas owns its coverage instead of preserving the parent
@@ -253,6 +269,12 @@ impl ViewportPresenter {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: std::num::NonZeroU64::new(16) },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
@@ -273,10 +295,13 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
+                    if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),
+                    include_str!("hdr_mapping.wgsl"),
+                    include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
                     include_str!("present.wgsl")
@@ -363,6 +388,8 @@ impl ViewportPresenter {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor { label: Some("HDR viewing options"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
+            hdr_options: [0.; 4],
             proof_options: [0; 4],
             proof_lut: None,
             bind_group: None,
@@ -639,6 +666,7 @@ impl ViewportPresenter {
                     },
                     wgpu::BindGroupEntry { binding: 7, resource: self.proof_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 8, resource: self.proof_uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 9, resource: self.hdr_uniform.as_entire_binding() },
                 ],
             }));
             self.document_extent = renderer.document_extent;

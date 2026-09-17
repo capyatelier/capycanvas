@@ -587,11 +587,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let top = doc.clipping_stack_top(current.id).unwrap();
                 let index = doc.layers.iter().position(|l| l.id == top).unwrap();
                 let parent = current.properties.parent;
+                let hdr = doc.color.depth.is_float();
                 let id = self.engine.allocate_layer_id();
                 let mut layer = Layer::paint(id, effect.label());
                 layer.kind = LayerKind::Effect;
                 layer.properties.parent = parent;
-                layer.effect = Some(Arc::new(EffectInstance::new(effect.program())));
+                let mut instance = EffectInstance::new(effect.program());
+                if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
+                layer.effect = Some(Arc::new(instance));
                 self.layer_edit(Edit::Batch(vec![
                     Edit::InsertLayer { index, layer },
                     Edit::SetActiveLayer { id },

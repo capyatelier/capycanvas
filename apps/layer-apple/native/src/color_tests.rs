@@ -1,6 +1,6 @@
 //! Actual native SDR preparation, backing, history and GPU replacement.
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use std::{io::Seek, os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
 
 #[test]
@@ -12,7 +12,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
         app.draw_until_idle();
         let defaults = NewDocumentOptions {
             extent: [67, 43],
-            color: DocumentColor { space: RgbSpace::AdobeRgb, depth: IntegerDepth::U16 },
+            color: DocumentColor { space: RgbSpace::AdobeRgb, depth: SampleDepth::U16 },
             background: DocumentBackground::Transparent,
         };
         app.action(json!({"type":"new_document_settings","settings":{"defaults":defaults,"presets":[]}}));
@@ -30,7 +30,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
             assert!(!app.pixels().is_empty());
         };
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 for background in [DocumentBackground::White, DocumentBackground::Transparent] {
                     let options = NewDocumentOptions {
                         extent: [63, 47], color: DocumentColor { space, depth }, background,
@@ -77,8 +77,8 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
 fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement() {
     for platform in [0, 1] {
         for (space, depth) in [
-            (RgbSpace::DisplayP3, IntegerDepth::U8),
-            (RgbSpace::ProPhoto, IntegerDepth::U16),
+            (RgbSpace::DisplayP3, SampleDepth::U8),
+            (RgbSpace::ProPhoto, SampleDepth::U16),
         ] {
             let color = DocumentColor { space, depth };
             let project = layer_ui::NewDocumentOptions {
@@ -150,7 +150,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                     .iter()
                     .all(|(descriptor, _)| *descriptor == color.paint_descriptor())
             );
-            if depth == IntegerDepth::U16 {
+            if depth == SampleDepth::U16 {
                 assert!(
                     samples
                         .iter()

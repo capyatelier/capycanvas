@@ -797,6 +797,7 @@ pub struct Workspace {
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
+    pub(crate) hdr_status: gtk::Label,
     pub(crate) recovery: Rc<crate::recovery::Recovery>,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
@@ -920,6 +921,10 @@ impl Workspace {
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
         status_bar.append(&proof.label);
+        let hdr_status=gtk::Label::builder().visible(false).build();
+        hdr_status.set_widget_name("hdr-view-status");
+        hdr_status.add_css_class("status-bubble");
+        status_bar.append(&hdr_status);
         status_bar.add_css_class("workspace-status");
         view_info.add_css_class("status-bubble");
         view_info.set_hexpand(true);
@@ -988,6 +993,7 @@ impl Workspace {
             image_drop: RefCell::new(None),
             image_drop_label,
             proof,
+            hdr_status,
             recovery: Rc::new(crate::recovery::Recovery::default()),
             surface,
             palette_css,
@@ -1622,7 +1628,10 @@ impl Workspace {
         self.dispatch(UiAction::WindowFullscreen { fullscreen });
     }
     pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
-        self.gpu.borrow().as_ref().map_or(Default::default(), |g| g.session.engine().backend().view_color)
+        self.gpu.borrow().as_ref().map_or(Default::default(), |g| {
+            let document = g.session.engine().document();
+            g.session.engine().backend().view_color.with_rendition(document.color, document.sdr_rendition)
+        })
     }
     pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
         self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
@@ -1726,6 +1735,16 @@ impl Workspace {
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(change) => {
+                if let Some(g) = self.gpu.borrow_mut().as_mut() {
+                    let document = g.session.engine().document();
+                    let rendition = document.color.depth.is_float().then_some(document.sdr_rendition);
+                    self.hdr_status.set_visible(rendition.is_some());
+                    let preview = g.session.state().preview_sdr;
+                    let headroom = g.session.renderer_mut().display_headroom;
+                    self.hdr_status.set_label(&if preview { "HDR · SDR preview".into() } else if headroom > 1. { format!("HDR · {headroom:.1}× display headroom") } else { "HDR · mapped SDR display".into() });
+                    self.hdr_status.set_tooltip_text(Some("HDR data retained. Display headroom uses the compositor's current luminance hint. Unknown or SDR displays show the saved SDR rendition; print proof always uses that rendition."));
+                    if let Err(e) = g.session.renderer_mut().set_hdr_view(rendition, preview) { eprintln!("HDR viewing: {e}"); }
+                }
                 self.proof.sync(self);
                 let publication = self
                     .gpu

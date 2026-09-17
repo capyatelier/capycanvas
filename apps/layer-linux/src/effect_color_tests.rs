@@ -4,7 +4,7 @@ use super::place_source::snapshot;
 use super::*;
 use layer_core::{
     EffectValue, GradientStop,
-    color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace},
+    color::{DocumentColor, SampleDepth, RgbColor, RgbSpace},
 };
 use layer_ui::{ColorAction, ColorInputModel, EffectAction};
 
@@ -98,7 +98,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     let mut project = new_drawing(128, 128).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();

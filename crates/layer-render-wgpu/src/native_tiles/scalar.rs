@@ -3,7 +3,7 @@
 //! requiring optional single-channel integer storage texture formats.
 use super::{MAX_BATCH_TILES, NativeEncodeStatus, STATUS_BYTES, buffer_entry};
 use crate::{GpuRasterError, PipelineDevice};
-use layer_core::color::{AlphaAssociation, IntegerDepth, PixelDescriptor, TransferEncoding};
+use layer_core::color::{AlphaAssociation, SampleDepth, PixelDescriptor, TransferEncoding};
 
 /// Exact native coverage restored into a private R32Float working candidate.
 pub struct NativeScalarRestore<'a> {
@@ -115,12 +115,13 @@ pub struct NativeScalarRequest<'a> {
     /// Exactly 256×256 native samples, little-endian, packed into storage words.
     pub encoded: &'a wgpu::Buffer,
     pub canonical: &'a wgpu::Texture,
-    pub depth: IntegerDepth,
+    pub depth: SampleDepth,
     pub region: [u32; 4],
 }
 impl NativeScalarRequest<'_> {
     pub fn descriptor(&self) -> PixelDescriptor {
         PixelDescriptor {
+            sample: layer_core::color::SampleType::Unsigned,
             channels: 1,
             bits_per_channel: self.depth.bits(),
             encoding: TransferEncoding::Linear,
@@ -283,7 +284,7 @@ impl NativeScalarEncoder {
             );
             layouts.push(layout);
         }
-        let records = [IntegerDepth::U8, IntegerDepth::U16].map(|depth| {
+        let records = [SampleDepth::U8, SampleDepth::U16].map(|depth| {
             [
                 depth.maximum(),
                 4 / depth.bytes() as u32,
@@ -445,7 +446,7 @@ impl NativeScalarEncoder {
                 binding,
                 count - 1,
                 if full {
-                    u32::from(r.depth == IntegerDepth::U16) * stride
+                    u32::from(r.depth == SampleDepth::U16) * stride
                 } else {
                     first as u32 * stride
                 },

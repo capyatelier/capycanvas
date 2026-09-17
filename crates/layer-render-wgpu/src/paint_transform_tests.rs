@@ -1201,7 +1201,7 @@ fn measure_transform_latency(live: bool) {
 
 #[test]
 fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_history() {
-    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::color::{SampleDepth, source::*};
     use layer_core::raster::RasterRevision;
     use std::sync::Arc;
     let size = [1537, 1025]; // Thirty-five original tiles, beyond cache capacity.
@@ -1210,7 +1210,7 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
         size,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },
@@ -1417,7 +1417,7 @@ fn original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_histor
 #[test]
 #[ignore = "physical GPU source-backed photo transform latency and residency"]
 fn photo_transform_workloads() {
-    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
     use std::{sync::Arc, time::Instant};
     let size = std::env::var("LAYER_PHOTO_BENCH_EXTENT").unwrap_or_else(|_| "6000x4000".into());
     let (width, height) = size.split_once('x').unwrap();
@@ -1433,7 +1433,7 @@ fn photo_transform_workloads() {
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         },

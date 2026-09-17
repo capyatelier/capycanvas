@@ -10,7 +10,7 @@ fn key(plane: RasterPlane) -> TileKey {
     }
 }
 
-fn samples(depth: IntegerDepth, channels: usize) -> Vec<u8> {
+fn samples(depth: SampleDepth, channels: usize) -> Vec<u8> {
     (0..TILE_SIZE * TILE_SIZE)
         .flat_map(|i| {
             let n = i % (depth.maximum() + 1);
@@ -150,7 +150,7 @@ fn assert_original_and_properties(old: &Project, new: &Project) {
 
 #[test]
 fn assignment_preserves_every_code_and_shared_backing_in_all_eight_modes() {
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in RgbSpace::ALL {
             let project = fixture(DocumentColor { space, depth });
             for target in RgbSpace::ALL {
@@ -193,12 +193,12 @@ fn assignment_preserves_every_code_and_shared_backing_in_all_eight_modes() {
 #[test]
 fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let project = fixture(DocumentColor { space, depth });
-            let target = if depth == IntegerDepth::U8 {
-                IntegerDepth::U16
+            let target = if depth == SampleDepth::U8 {
+                SampleDepth::U16
             } else {
-                IntegerDepth::U8
+                SampleDepth::U8
             };
             let prepared = prepare_document_color(
                 &project,
@@ -231,7 +231,7 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                     .chunks_exact(depth.bytes())
                     .zip(bytes.chunks_exact(target.bytes()))
                 {
-                    if target == IntegerDepth::U16 {
+                    if target == SampleDepth::U16 {
                         assert_eq!(
                             u16::from_le_bytes([b[0], b[1]]),
                             a[0] as u16 * 257,
@@ -266,7 +266,7 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
 
 #[test]
 fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         for space in RgbSpace::ALL {
             let project = fixture(DocumentColor { space, depth });
             let original = samples(depth, 4);
@@ -290,7 +290,7 @@ fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
                 .decode()
                 .unwrap();
                 let read = |bytes: &[u8]| {
-                    if depth == IntegerDepth::U8 {
+                    if depth == SampleDepth::U8 {
                         bytes[0] as u32
                     } else {
                         u16::from_le_bytes([bytes[0], bytes[1]]) as u32
@@ -338,10 +338,10 @@ fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
 fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
     let project = fixture(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let change = DocumentColorChange::Depth {
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         dither: OutputDither::Stochastic8,
     };
     let a = prepare_document_color(&project, change, LIMIT, || false).unwrap();
@@ -360,7 +360,7 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
     let plain = prepare_document_color(
         &project,
         DocumentColorChange::Depth {
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             dither: OutputDither::None,
         },
         LIMIT,
@@ -389,7 +389,7 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
 fn absolute_intent_keeps_the_white_point_difference_and_preserves_alpha() {
     let project = fixture(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let convert = |intent| {
         prepare_document_color(
@@ -483,7 +483,7 @@ fn explicit_attachment_assignment_recovers_declared_straight_codes_before_retagg
 fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
     let project = fixture(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     for change in [
         DocumentColorChange::Assign(RgbSpace::AdobeRgb),
@@ -492,7 +492,7 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
             options: Default::default(),
         },
         DocumentColorChange::Depth {
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             dither: OutputDither::Stochastic8,
         },
     ] {
@@ -547,11 +547,11 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
 fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact() {
     let project = fixture(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let snapshot = project.document.clone();
     let change = DocumentColorChange::Depth {
-        depth: IntegerDepth::U8,
+        depth: SampleDepth::U8,
         dither: OutputDither::None,
     };
     for when in [1, 12, 200] {

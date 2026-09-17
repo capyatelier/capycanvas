@@ -1,23 +1,25 @@
 //! Camera requests through the production GTK owner/worker/presentation path.
 //! Synthetic software gestures do not measure physical device input latency.
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
 
 fn photo(extent: [u32; 2]) -> layer_core::Project {
+    let hdr = std::env::var("LAYER_NAVIGATION_HDR").as_deref() == Ok("1");
+    let depth = if hdr { SampleDepth::F16 } else { SampleDepth::U16 };
     let mut project = new_drawing(1, 1).unwrap();
     // Imported photographs may exceed the New Drawing dialog's size ceiling.
     project.document.width = extent[0];
     project.document.height = extent[1];
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth,
     };
     let mut source = SourceBuilder::new(
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         },
@@ -33,13 +35,17 @@ fn photo(extent: [u32; 2]) -> layer_core::Project {
             random ^= random >> 17;
             random ^= random << 5;
             let noise = (random % 1024) as u16;
-            for code in [
+            for (channel, code) in [
                 (u64::from(x) * 55000 / u64::from(extent[0])) as u16 + noise,
                 (u64::from(y) * 55000 / u64::from(extent[1])) as u16 + noise,
                 ((u64::from(x) + u64::from(y)) * 13 % 60000) as u16 + noise,
                 65535,
-            ] {
-                row.extend_from_slice(&code.to_le_bytes());
+            ].into_iter().enumerate() {
+                let bits = if hdr {
+                    layer_core::color::f16::from_f32(if channel == 3 { 1. }
+                        else { (RgbSpace::ProPhoto.decode(f64::from(code) / 65535.) * 8. - 0.125) as f32 }).to_bits()
+                } else { code };
+                row.extend_from_slice(&bits.to_le_bytes());
             }
         }
         source.push_row(&row).unwrap();
@@ -77,6 +83,18 @@ fn photo(extent: [u32; 2]) -> layer_core::Project {
         layer.effect = Some(Arc::new(effect));
         project.document.layers.insert(0, layer);
     }
+    if std::env::var("LAYER_NAVIGATION_LONG_CHAIN").as_deref() == Ok("1") {
+        for index in 0..24 {
+            let id = project.document.allocate_layer_id();
+            let mut layer = layer_core::Layer::paint(id, "HDR long chain");
+            layer.kind = layer_core::LayerKind::Effect;
+            let mut effect = layer_core::EffectInstance::new(
+                layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
+            effect.set("exposure", layer_core::EffectValue::Number(if index % 2 == 0 { 0.25 } else { -0.25 })).unwrap();
+            layer.effect = Some(Arc::new(effect));
+            project.document.layers.insert(0, layer);
+        }
+    }
     project.validate(Default::default()).unwrap();
     project
 }
@@ -95,7 +113,9 @@ fn native_large_photo_navigation() {
         _ => panic!("LAYER_NAVIGATION_PHOTO must be 24mp, 45mp, 60mp or 61mp"),
     };
     let app = native_test_app("art.capycanvas.PhotoNavigation");
-    let w = Workspace::with_project(&app, Some((photo(extent), None)));
+    let project = photo(extent);
+    let startup = Instant::now();
+    let w = Workspace::with_project(&app, Some((project, None)));
     if std::env::var("LAYER_NAVIGATION_MAXIMIZE").as_deref() == Ok("0") {
         w.window.set_default_size(1200, 900);
     } else {
@@ -116,6 +136,9 @@ fn native_large_photo_navigation() {
         }
         assert!(Instant::now() < deadline, "photo startup must settle");
     }
+    let startup_ms = startup.elapsed().as_secs_f64() * 1000.;
+    use layer_render::CanvasRenderer;
+    w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().set_telemetry_enabled(true);
     let proof = super::proof::benchmark_proof(&w);
     let settle_ms = std::env::var("LAYER_NAVIGATION_SETTLE_MS")
         .ok().map(|v| v.parse::<u64>().unwrap()).unwrap_or(0);
@@ -280,7 +303,15 @@ fn native_large_photo_navigation() {
             .all(|v| v.2 == stats.camera_views[0].2),
         "navigation must not change the artwork preview revision"
     );
+    let telemetry = w.gpu.borrow().as_ref().unwrap().session.engine().backend().telemetry();
     let mut report = serde_json::json!({
+        "startup_ready_ms": startup_ms,
+        "hdr": original.color.depth.is_float(),
+        "reference_white_nits": if original.color.depth.is_float() { Some(203) } else { None },
+        "effect_count": original.layers.iter().filter(|layer| layer.effect.is_some()).count(),
+        "process_memory": std::fs::read_to_string("/proc/self/status").unwrap().lines()
+            .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:")).collect::<Vec<_>>(),
+        "renderer_resident_bytes": telemetry.resident_bytes,
         "proof": proof,
         "extent": extent, "space": "ProPhoto", "depth": 16, "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),

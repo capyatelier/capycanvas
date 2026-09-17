@@ -1,7 +1,7 @@
 use super::*;
-use layer_core::color::IntegerDepth;
+use layer_core::color::SampleDepth;
 
-fn interpretation(space: RgbSpace, depth: IntegerDepth) -> SourceInterpretation {
+fn interpretation(space: RgbSpace, depth: SampleDepth) -> SourceInterpretation {
     SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth,
@@ -13,7 +13,7 @@ fn interpretation(space: RgbSpace, depth: IntegerDepth) -> SourceInterpretation 
 #[test]
 fn every_integer_code_and_hidden_rgb_survive_builtin_working_decode() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let source = interpretation(space, depth);
             let decoder = WorkingDecoder::new(&source, space, Default::default()).unwrap();
             let maximum = depth.maximum();
@@ -58,7 +58,7 @@ fn wide_gamut_working_conversion_retains_negative_and_above_one_values() {
     for from in RgbSpace::ALL {
         for to in RgbSpace::ALL {
             for embedded in [false, true] {
-                let mut source = interpretation(from, IntegerDepth::U16);
+                let mut source = interpretation(from, SampleDepth::U16);
                 if embedded {
                     source.profile =
                         ColorProfile::Icc(profile_bytes(&source.profile).unwrap().into());
@@ -102,7 +102,7 @@ fn wide_gamut_working_conversion_retains_negative_and_above_one_values() {
 
 #[test]
 fn gray_profiles_alpha_and_source_edge_padding_are_independent() {
-    let mut source = interpretation(RgbSpace::Srgb, IntegerDepth::U16);
+    let mut source = interpretation(RgbSpace::Srgb, SampleDepth::U16);
     source.channels = SourceChannels::GrayAlpha;
     source.profile = matrix_profile(
         RgbSpace::Srgb.white(),

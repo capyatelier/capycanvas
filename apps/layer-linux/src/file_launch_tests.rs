@@ -2,7 +2,7 @@
 //! runs production application setup; the receiver inspects native documents.
 use super::*;
 use gtk::gio;
-use layer_core::color::{ColorProfile, IntegerDepth, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, source::*};
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -121,7 +121,7 @@ fn native_application_file_launch() {
         [96, 64],
         SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::default(),
             profile_assumed: false,
         },
@@ -184,7 +184,7 @@ fn native_application_file_launch() {
         assert_eq!([doc.width, doc.height], expected.extent);
         assert_eq!(
             doc.color.depth,
-            IntegerDepth::U16,
+            SampleDepth::U16,
             "cold launch uses saved photo policy"
         );
         assert_eq!(doc.layers[0].source.as_deref(), Some(&expected));
@@ -379,7 +379,7 @@ fn native_application_file_launch() {
         let gpu = interpreted.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
         assert_eq!(doc.color.space, layer_core::color::RgbSpace::DisplayP3);
-        assert_eq!(doc.color.depth, IntegerDepth::U16);
+        assert_eq!(doc.color.depth, SampleDepth::U16);
         let mut expected =
             layer_color::photo::read_photo(std::io::Cursor::new(&untagged), Default::default())
                 .unwrap();

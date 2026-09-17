@@ -1834,7 +1834,16 @@ impl Scene {
                         pass.set_bind_group(1, &*binding, &[]);
                         let (data, clip) = match job {
                             Job::Draw { data, clip, .. } => (data, *clip),
-                            Job::Effect { data, .. } => (data, None),
+                            // A fullscreen triangle extends beyond its rectangle.
+                            // A final effect can write directly into one region
+                            // of a larger composite: clip it to that region or
+                            // it overwrites adjacent tiles with out-of-range reads.
+                            Job::Effect { data, .. } => (data, Some(PixelRect::new(
+                                data[0].max(0.).floor() as u32,
+                                data[1].max(0.).floor() as u32,
+                                (data[0] + data[2]).min(data[4]).max(0.).ceil() as u32,
+                                (data[1] + data[3]).min(data[5]).max(0.).ceil() as u32,
+                            ))),
                             _ => unreachable!(),
                         };
                         let clip =
@@ -1892,7 +1901,7 @@ impl Pipelines {
             move || {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("layer scene"),
-                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("scene.wgsl")])),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("hdr_mapping.wgsl"), include_str!("scene.wgsl")])),
                 })
             }
         });

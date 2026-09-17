@@ -6,7 +6,7 @@ use crate::native_tiles::{
 use crate::raster::{CaptureSource, TileCapture};
 use crate::{WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::{
-    color::{AlphaAssociation, IntegerDepth, RgbSpace},
+    color::{AlphaAssociation, SampleDepth, RgbSpace},
     raster::RasterTile,
 };
 
@@ -216,7 +216,7 @@ fn late_color_or_scalar_failure_rejects_every_promotion_and_capture() {
             canonical: &canonical_color,
             encoded: &encoded_color,
             transfer: &transfer,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             alpha: AlphaAssociation::Straight,
             region: [0, 0, 256, 256],
         };
@@ -228,7 +228,7 @@ fn late_color_or_scalar_failure_rejects_every_promotion_and_capture() {
             working: &scalar,
             canonical: &canonical_scalar,
             encoded: &encoded_scalar,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             region: [0, 0, 256, 256],
         };
         let scalar_descriptor = scalar_request.descriptor();

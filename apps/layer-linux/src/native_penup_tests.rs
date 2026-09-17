@@ -4,12 +4,12 @@ use super::*;
 #[test]
 #[ignore = "private 120 Hz Wayland display and release hardware GPU benchmark"]
 fn native_penup_and_following_strokes() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.NativePenupPacing");
     let mut project = new_drawing(4096, 4096).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: if std::env::var("LAYER_DRAWING_HDR").as_deref() == Ok("1") { SampleDepth::F16 } else { SampleDepth::U16 },
     };
     for _ in 0..31 {
         let id = project.document.allocate_layer_id();
@@ -40,6 +40,12 @@ fn native_penup_and_following_strokes() {
             break;
         }
         assert!(Instant::now() < deadline, "native pen-up fixture startup");
+    }
+    if w.gpu.borrow().as_ref().unwrap().session.engine().document().color.depth.is_float() {
+        w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
+            color: layer_core::color::RgbColor::from_linear(
+                layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
+        }});
     }
     let proof = super::proof::benchmark_proof(&w);
     if let Some(proof) = proof {
@@ -235,12 +241,12 @@ fn native_penup_and_following_strokes() {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_terminal_wake_preserves_commit_cancel_and_idle() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.TerminalWake");
     let mut project = new_drawing(256, 256).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();

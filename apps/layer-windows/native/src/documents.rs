@@ -299,6 +299,7 @@ fn prepare(
             )?
         }
     };
+    layer_ui::require_sdr_host(&project.document, "Windows")?;
     check_cancelled(cancel)?;
     // Eager preparation is isolated from the independently presented live canvas.
     #[allow(deprecated)]

@@ -1,5 +1,5 @@
 use super::*;
-use color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
 #[test]
 fn admitted_native_output_reservation_is_shared_until_tile_publication() {
@@ -23,7 +23,7 @@ fn source() -> Arc<SourceImage> {
         [1, 1],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Icc(vec![19; 16 * 1024].into()),
             profile_assumed: false,
         },

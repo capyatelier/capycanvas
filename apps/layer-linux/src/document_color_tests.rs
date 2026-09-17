@@ -117,7 +117,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     let mut project = new_drawing(256, 128).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let paint = project.document.active_layer;
     let original = std::sync::Arc::new(source());
@@ -209,7 +209,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
             CommandId::ChangeBitDepth,
             0,
             DocumentColorChange::Depth {
-                depth: IntegerDepth::U8,
+                depth: SampleDepth::U8,
                 dither: OutputDither::None,
             },
         ),
@@ -469,7 +469,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     assert_mode(
         &w,
         DocumentColor {
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             ..changed.color
         },
     );

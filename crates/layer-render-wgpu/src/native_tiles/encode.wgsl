@@ -44,6 +44,17 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;
     let value=load_working(invocation.z,vec2<i32>(pixel));
+    if settings.maximum==0u {
+        let error=hdr_color_error(value);
+        if error!=0u {atomicOr(&status.invalid,error);return;}
+        let alpha_bits=half_bits(value.a);
+        if alpha_bits==0u {store_outputs(invocation.z,pixel,vec4(0u),vec4(0.));return;}
+        let rgb=value.rgb/value.a;
+        let bits=vec4(half_bits(rgb.r),half_bits(rgb.g),half_bits(rgb.b),alpha_bits);
+        let alpha=half_value(alpha_bits);
+        store_outputs(invocation.z,pixel,bits,vec4(vec3(half_value(bits.r),half_value(bits.g),half_value(bits.b))*alpha,alpha));
+        return;
+    }
     let error=color_error(value);
     if error!=0u {atomicOr(&status.invalid,error);store_result(invocation.z,pixel,vec4(0u));return;}
     let alpha=quantize_coverage(value.a,settings.maximum);

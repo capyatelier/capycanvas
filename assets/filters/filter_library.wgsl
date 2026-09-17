@@ -34,7 +34,9 @@ fn capy_gaussian_blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_blur(p
 fn capy_unsharp_mask(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let original=fx_original(p);let blurred=capy_gaussian_blur(c,p,b);let detail=fx_straight(original)-fx_straight(blurred);
     let threshold=fx_parameter(b,2u).x/100.;let gate=smoothstep(threshold,threshold+.02,length(detail));
-    return vec4<f32>(clamp(fx_straight(original)+detail*(fx_parameter(b,1u).x/100.)*gate,vec3<f32>(0.),vec3<f32>(1.))*original.a,original.a);
+    var rgb=fx_straight(original)+detail*(fx_parameter(b,1u).x/100.)*gate;
+    if !FX_HDR {rgb=clamp(rgb,vec3<f32>(0.),vec3<f32>(1.));}
+    return vec4<f32>(rgb*original.a,original.a);
 }
 fn capy_high_pass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let original=fx_original(p);let blurred=capy_gaussian_blur(c,p,b);
@@ -43,7 +45,9 @@ fn capy_high_pass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
 fn capy_bloom_h(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_blur(p,b,vec2<f32>(1.,0.),fx_parameter(b,2u).x/100.);}
 fn capy_bloom(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let original=fx_original(p);let glow=capy_gaussian_blur(c,p,b)*fx_parameter(b,1u).x/100.;
-    let alpha=min(1.,original.a+glow.a);return vec4<f32>(min(original.rgb+glow.rgb,vec3<f32>(alpha)),alpha);
+    let alpha=min(1.,original.a+glow.a);var rgb=original.rgb+glow.rgb;
+    if !FX_HDR {rgb=min(rgb,vec3<f32>(alpha));}
+    return vec4<f32>(rgb,alpha);
 }
 fn capy_soft_focus(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let original=fx_original(p);let soft=fx_straight(capy_gaussian_blur(c,p,b))*original.a;
@@ -174,7 +178,9 @@ fn capy_rainy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let trail=(1.-smoothstep(.015,.07,abs(delta.x)))*smoothstep(0.,.4,-delta.y)*.35*enabled;
     let offset=sin(delta*2.*FX_PI)*fx_parameter(b,0u).x*max(drop,trail);
     let source=fx_sample(p+offset);let highlight=drop*(1.-drop)*.08;
-    return vec4<f32>(min(source.rgb+highlight*source.a,vec3<f32>(source.a)),source.a);
+    var rgb=source.rgb+highlight*source.a;
+    if !FX_HDR {rgb=min(rgb,vec3<f32>(source.a));}
+    return vec4<f32>(rgb,source.a);
 }
 fn capy_vhs(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let time=fx_time(b)*fx_parameter(b,3u).x;let frame=u32(floor(time*24.));let distance=fx_parameter(b,0u).x;
@@ -183,7 +189,8 @@ fn capy_vhs(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let alpha=max(red.a,max(green.a,blue.a));var rgb=vec3<f32>(red.r,green.g,blue.b);
     rgb*=1.-fx_parameter(b,2u).x/100.*(.5+.5*sin(p.y*FX_PI));
     rgb+=(fx_random(p,frame+91u)-.5)*fx_parameter(b,1u).x/300.*alpha;
-    return vec4<f32>(clamp(rgb,vec3<f32>(0.),vec3<f32>(alpha)),alpha);
+    if !FX_HDR {rgb=clamp(rgb,vec3<f32>(0.),vec3<f32>(alpha));}
+    return vec4<f32>(rgb,alpha);
 }
 fn capy_crt(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let uv=p/fx_extent()*2.-1.;let q=(uv*(1.+dot(uv,uv)*fx_parameter(b,0u).x/100.)+1.)*.5*fx_extent();

@@ -38,6 +38,10 @@ pub(crate) struct FilterPreviews {
     pub rendered_rows: u64,
 }
 impl FilterPreviews {
+    pub(crate) fn rendition_changed(&mut self) {
+        self.rows.clear();
+        self.cancelled |= self.request.is_some();
+    }
     fn new(r: &mut WgpuRasterizer) -> Result<Self, GpuRasterError> {
         let scene = Scene::new(r);
         let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -568,6 +572,7 @@ impl FilterPreviews {
                 (height * self.rendering.len() as u32) as f32,
             ]);
             data[8] = 10.;
+            data[24..28].copy_from_slice(&r.ui_rendition_parameters());
             data[12..16].copy_from_slice(&[
                 (origin[0] - crop[0]) as f32,
                 (origin[1] - crop[1]) as f32,
@@ -821,10 +826,10 @@ mod tests {
     }
     #[test]
     fn filter_probe_chunks_bound_sources_and_cancel_changed_documents() {
-        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         let extent = [2049, 513]; // 27 tiles, including partial right/bottom edges.

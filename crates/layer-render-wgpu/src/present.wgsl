@@ -147,7 +147,8 @@ fn view_half(value:f32)->f32 {
     let rounded=(bits+4095u+((bits>>13u)&1u))&0xffffe000u;
     return sign(value)*bitcast<f32>(rounded);
 }
-fn view_store(c:vec4<f32>)->vec4<f32> {
+fn view_store(original:vec4<f32>)->vec4<f32> {
+    let c=vec4(original.rgb*VIEW_WHITE_SCALE,original.a);
     if VIEW_FLOAT16 {return vec4<f32>(view_half(c.r),view_half(c.g),view_half(c.b),view_half(c.a));}
     return c;
 }
@@ -220,7 +221,7 @@ struct CursorVertex {
         white = clamp(0.5 - scale - d, 0., 1.);
     }
     let clip = window_coverage(v.position.xy);
-    return vec4<f32>(vec3<f32>(white), alpha) * clip;
+    return view_store(vec4<f32>(vec3<f32>(white), alpha) * clip);
 }
 
 struct OverviewVertex {
@@ -263,5 +264,5 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     if camera.viewport.z > .5 { rgb = display_color(rgb); }
     let opacity = v.outline.a;
     // Keep destination window alpha; only mix color inside its coverage.
-    return vec4(rgb * opacity * window_coverage(p),opacity);
+    return view_store(vec4(rgb * opacity * window_coverage(p),opacity));
 }

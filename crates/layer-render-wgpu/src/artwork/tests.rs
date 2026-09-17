@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, LayerMask, Point};
 use layer_render::{
@@ -19,11 +19,12 @@ fn document(color: DocumentColor) -> Document {
         for x in 0..3 {
             let values = codes(x * PAGE_SIZE);
             let bytes = match color.depth {
-                IntegerDepth::U16 => values
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::U16 => values
                     .into_iter()
                     .flat_map(u16::to_le_bytes)
                     .collect::<Vec<_>>(),
-                IntegerDepth::U8 => values.map(|v| (v >> 8) as u8).to_vec(),
+                SampleDepth::U8 => values.map(|v| (v >> 8) as u8).to_vec(),
             };
             data.tiles.insert(
                 TileKey {
@@ -89,11 +90,11 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
     for color in [
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         },
         DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
         },
     ] {
         let mut doc = document(color);
@@ -123,8 +124,9 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
                         ..(position[0] + radius + 1).min(EXTENT[0])
                     {
                         let values = codes(x).map(|v| match color.depth {
-                            IntegerDepth::U16 => f64::from(v) / 65535.,
-                            IntegerDepth::U8 => f64::from(v >> 8) / 255.,
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                            SampleDepth::U16 => f64::from(v) / 65535.,
+                            SampleDepth::U8 => f64::from(v >> 8) / 255.,
                         });
                         let alpha = values[3] as f32 * 0.5 * 0.7;
                         for c in 0..3 {
@@ -176,7 +178,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
 fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies() {
     let mut doc = document(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     doc.layers
         .insert(0, crate::tests::image_windows::effect(20, false, false));
@@ -249,7 +251,7 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
 fn projected_watercolor_queries_keep_layer_style_identity_and_prediction() {
     let mut doc = document(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let mut unrelated = Layer::paint(LayerId(8), "unrelated style slot");
     unrelated.visible = false;

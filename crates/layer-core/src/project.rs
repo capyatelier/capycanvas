@@ -327,6 +327,7 @@ fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<()
 }
 
 pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
+    doc.sdr_rendition.validate().map_err(str::to_string)?;
     if let Some(resolution) = doc.resolution { resolution.validate()?; }
     if let Some(recipe) = &doc.proof {
         recipe.validate()?;

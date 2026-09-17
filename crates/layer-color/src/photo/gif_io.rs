@@ -20,7 +20,7 @@ pub(super) fn read(
     let mut decoder = options.read_info(input).map_err(err)?;
     let extent = [u32::from(decoder.width()), u32::from(decoder.height())];
     let icc = decoder.icc_profile().map(Vec::from);
-    let interpretation = interpretation(SourceChannels::Rgba, IntegerDepth::U8, icc)?;
+    let interpretation = interpretation(SourceChannels::Rgba, SampleDepth::U8, icc)?;
     let frame = decoder
         .next_frame_info()
         .map_err(err)?

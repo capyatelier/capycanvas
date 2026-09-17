@@ -39,6 +39,7 @@ impl SnapshotRenderer {
         self.check_cancelled().map_err(|e| e.to_string())?;
         let extent = self.extent;
         let matrix = self.color().space.linear_transform(space);
+        let rendition = self.sdr_rendition;
         let mut rows = Rows::new(self);
         let mut image = reduce(extent, bounds, space, |y, target| {
             target.copy_from_slice(rows.read(y)?);
@@ -47,6 +48,7 @@ impl SnapshotRenderer {
         // Linear primary/adaptation matrices commute with area averaging and
         // associated alpha. No encoded or bounded sRGB intermediate is used.
         for pixel in &mut image.pixels {
+            if let Some(r) = rendition { *pixel = r.map_premultiplied(*pixel); }
             let rgb: [f64; 3] = std::array::from_fn(|c| f64::from(pixel[c]));
             for (out, row) in pixel[..3].iter_mut().zip(matrix) {
                 *out = row.iter().zip(rgb).map(|(m, v)| m * v).sum::<f64>() as f32;

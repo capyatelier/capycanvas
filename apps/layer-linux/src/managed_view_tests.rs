@@ -2,7 +2,7 @@
 use super::new_photo::{capture_ui, ready};
 use super::*;
 use crate::display_color::{ColorPatch, ViewColor};
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbColor, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbColor, RgbSpace, source::*};
 
 fn download(texture: &gdk::Texture, state: &gdk::ColorState) -> Vec<[f32; 4]> {
     let mut downloader = gdk::TextureDownloader::new(texture);
@@ -60,13 +60,13 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     let mut project = new_drawing(64, 64).unwrap();
     project.document.color = DocumentColor {
         space: color.space,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut source = SourceBuilder::new(
         [64, 64],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(color.space),
             profile_assumed: false,
         },

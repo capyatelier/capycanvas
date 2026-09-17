@@ -1,7 +1,7 @@
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
-fn initialized(platform: u32, space: RgbSpace, depth: IntegerDepth) -> App {
+fn initialized(platform: u32, space: RgbSpace, depth: SampleDepth) -> App {
     let app = App::new(platform);
     unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
     app.draw_until_idle();
@@ -10,7 +10,7 @@ fn initialized(platform: u32, space: RgbSpace, depth: IntegerDepth) -> App {
     assert_eq!(unsafe { capy_project_new(task.0, options.as_ptr()) }, 0);
     assert_eq!(unsafe { capy_apple_project_adopt(app.0, task.0, c"Inspection".as_ptr(), c"".as_ptr()) }, 0);
     let mut source = SourceBuilder::new([5,5], SourceInterpretation {
-        channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+        channels: SourceChannels::Rgba, depth: SampleDepth::U16,
         profile: ColorProfile::Builtin(space), profile_assumed: false,
     }, 1024*1024).unwrap();
     // Nineteen opaque red pixels, one half-alpha blue, five transparent green.
@@ -38,7 +38,7 @@ fn histogram(task: &ProjectJob) -> Value {
 #[test]
 fn apple_histogram_keeps_full_resolution_precision_snapshot_identity_and_cancellation() {
     for platform in [0,1] {
-        for (space, depth) in [(RgbSpace::DisplayP3,IntegerDepth::U8), (RgbSpace::ProPhoto,IntegerDepth::U16)] {
+        for (space, depth) in [(RgbSpace::DisplayP3,SampleDepth::U8), (RgbSpace::ProPhoto,SampleDepth::U16)] {
             let app = initialized(platform, space, depth);
             app.invoke("histogram");
             let request = app.state()["requests"].as_array().unwrap().iter().find(|r| r["kind"]["type"] == "histogram").unwrap().clone();
@@ -78,7 +78,7 @@ fn apple_histogram_keeps_full_resolution_precision_snapshot_identity_and_cancell
 #[test]
 fn apple_point_and_area_sampling_use_document_linear_coverage_without_changing_artwork_or_opacity() {
     for platform in [0,1] {
-        let app = initialized(platform, RgbSpace::DisplayP3, IntegerDepth::U16);
+        let app = initialized(platform, RgbSpace::DisplayP3, SampleDepth::U16);
         app.action(json!({"type":"set_brush_opacity","value":0.37}));
         let original = unsafe { &*app.0 }.host.session.engine().document().clone();
         let pixels = app.pixels();

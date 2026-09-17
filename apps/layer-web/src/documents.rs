@@ -237,6 +237,7 @@ impl WebApp {
                     let profile = serde_wasm_bindgen::from_value(choice).map_err(js)?;
                     imported.interpret(profile).map_err(js)?;
             }
+            layer_ui::require_sdr_host(&imported.project.document, "Web").map_err(js)?;
             let source_kind = imported.source;
             let project = imported.project;
             if placing {

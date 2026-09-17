@@ -9,7 +9,9 @@ fn proof_at(p: vec3<u32>) -> ProofPoint {
     return ProofPoint(vec3(proof_samples[i], proof_samples[i+1u], proof_samples[i+2u]),
         vec2(proof_samples[i+3u], proof_samples[i+4u]));
 }
-fn proof_artwork(paint: vec4<f32>) -> vec4<f32> {
+fn proof_artwork(original: vec4<f32>) -> vec4<f32> {
+    var paint=hdr_artwork(original);
+    if proof_options.x>=2u && (proof_options.z!=0u || proof_options.w!=0u) {paint=hdr_map_sdr(original,hdr_view); }
     if paint.a <= 0. || proof_options.x < 2u || (proof_options.z == 0u && proof_options.w == 0u) { return paint; }
     let encoded = sdr_encode(paint.rgb / paint.a, proof_options.y & 255u);
     let outside = any(encoded < vec3(0.)) || any(encoded > vec3(1.));

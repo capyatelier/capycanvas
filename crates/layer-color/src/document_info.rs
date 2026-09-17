@@ -52,7 +52,7 @@ impl DocumentInfo {
             ("Working color space".into(), self.color.space.name().into()),
             (
                 "Bit depth".into(),
-                format!("{}-bit integer SDR", self.color.depth.bits()),
+                self.color.depth.label().into(),
             ),
             (
                 "Resolution metadata".into(),
@@ -65,6 +65,7 @@ impl DocumentInfo {
                 ),
             ),
         ];
+        if self.color.depth.is_float() { rows.push(("HDR reference white".into(), "203 cd/m² · linear RGB · finite range −65504 to 65504".into())); }
         for source in &self.sources {
             let i = &source.interpretation;
             let profile = crate::profile_description(&i.profile)?;

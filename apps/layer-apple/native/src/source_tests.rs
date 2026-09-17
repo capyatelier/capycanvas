@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Document, color::{ColorProfile, IntegerDepth, RgbSpace, source::*}};
+use layer_core::{Document, color::{ColorProfile, SampleDepth, RgbSpace, source::*}};
 
 fn document(app: &App) -> Document { unsafe { &*app.0 }.host.session.engine().document().clone() }
 fn adopt(app: &App, task: &ProjectJob) -> i32 {
@@ -10,7 +10,7 @@ fn initialized(platform: u32) -> App {
     unsafe{&mut *app.0}.host.session.renderer_mut().0=Some(native_renderer());
     app.draw_until_idle();
     let task=ProjectJob::new(&app,true);assert_eq!(task.create([128,96]),0);assert_eq!(adopt(&app,&task),0);
-    let mut source=SourceBuilder::new([151,103],SourceInterpretation {channels:SourceChannels::Rgba,depth:IntegerDepth::U16,
+    let mut source=SourceBuilder::new([151,103],SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U16,
         profile:ColorProfile::Builtin(RgbSpace::ProPhoto),profile_assumed:true},1024*1024).unwrap();
     let row:Vec<u8>=[23141u16,31788,9234,65535].into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(151);
     for _ in 0..103 {source.push_row(&row).unwrap();}
@@ -65,7 +65,7 @@ fn source_repair_and_rasterization_keep_exact_originals_paint_masks_extent_and_h
         assert!(preview(&task,false)!=preview(&task,true),"Repair must change interpreted appearance");
         assert_eq!(adopt(&app,&task),0);app.draw_until_idle();
         let repaired=document(&app);let source=repaired.layer(id).unwrap().source.as_ref().unwrap();
-        assert_eq!(source.extent,original.extent);assert_eq!(source.interpretation.depth,IntegerDepth::U16);
+        assert_eq!(source.extent,original.extent);assert_eq!(source.interpretation.depth,SampleDepth::U16);
         for (a,b) in source.tiles.values().zip(original.tiles.values()) {assert!(std::sync::Arc::ptr_eq(a,b));}
         assert_eq!(repaired.layer(id).unwrap().mask,before.layer(id).unwrap().mask);
         history(&app,before,pixels);

@@ -138,7 +138,7 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
                 .iter()
                 .any(|signature| segment.windows(signature.len()).any(|w| w == *signature))
         {
-            return Err("This JPEG contains an HDR gain map. HDR import is not supported yet; export an SDR image from another editor.".into());
+            return Err("This JPEG contains an HDR gain map. Gain-map import is not supported; export a PQ PNG or SDR image from another editor.".into());
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
             super::jpeg_mpf::validate_previews(&segment)?;
         }

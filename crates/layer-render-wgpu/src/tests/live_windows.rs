@@ -2,7 +2,7 @@
 //! composition. Edited images use an arithmetic tolerance, not byte parity.
 use super::image_windows::effect;
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::{LayerMask, Selection};
 
 fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
@@ -46,7 +46,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
     let extent = [777, 533];
     const CAP: u64 = 16 * 1024 * 1024;
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r =
                 WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             for clipped in [false, true] {
@@ -140,7 +140,7 @@ fn native_live_global_limit_rejects_before_document_or_submission_changes() {
     let extent = [333, 291];
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     let mut layers = vec![effect(2, false, true), effect(1, true, false)];
@@ -177,7 +177,7 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
     let extent = [777, 533];
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     const CAP: u64 = 8 * 1024 * 1024;
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
@@ -288,7 +288,7 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
     let mut layers = vec![effect(2, false, false), generator];
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     const CAP: u64 = 8 * 1024 * 1024;

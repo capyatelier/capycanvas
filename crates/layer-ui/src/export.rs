@@ -1,20 +1,24 @@
 //! Delivery choices describe a copy of the master. Hosts own dialogs and jobs.
 use layer_core::color::source::{SourceChannels, SourceInterpretation};
 use layer_core::color::{
-    ColorProfile, DocumentColor, IntegerDepth, OutputEncoding, ProfileChannels, RgbSpace,
+    ColorProfile, DocumentColor, SampleDepth, OutputEncoding, ProfileChannels, RgbSpace,
 };
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
+    PngHdr,
+    PngHdrMapped,
     Png,
     Tiff,
     Jpeg,
 }
 impl ExportFormat {
+    pub fn is_hdr(self) -> bool { matches!(self, Self::PngHdr | Self::PngHdrMapped) }
+    pub fn maps_hdr_range(self) -> bool { self == Self::PngHdrMapped }
     pub fn extension(self) -> &'static str {
         match self {
-            Self::Png => "png",
+            Self::Png | Self::PngHdr | Self::PngHdrMapped => "png",
             Self::Tiff => "tif",
             Self::Jpeg => "jpg",
         }
@@ -22,6 +26,8 @@ impl ExportFormat {
     pub fn name(self) -> &'static str {
         match self {
             Self::Png => "PNG image",
+            Self::PngHdr => "HDR PNG · BT.2020 PQ",
+            Self::PngHdrMapped => "HDR PNG · map to BT.2020 PQ range",
             Self::Tiff => "TIFF image",
             Self::Jpeg => "JPEG image",
         }
@@ -114,7 +120,7 @@ pub enum ExportResolution {
 pub struct ExportRecipe<P = ExportProfile> {
     pub format: ExportFormat,
     pub profile: P,
-    pub depth: IntegerDepth,
+    pub depth: SampleDepth,
     pub background: ExportBackground,
     pub jpeg_quality: u8,
     pub encoding: OutputEncoding,
@@ -141,7 +147,7 @@ impl ExportRecipe {
         Self {
             format: ExportFormat::Png,
             profile: ExportProfile::builtin(RgbSpace::Srgb),
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
             encoding: Default::default(),
@@ -159,7 +165,7 @@ impl ExportRecipe {
         Self {
             format: ExportFormat::Tiff,
             profile: ExportProfile::builtin(document.space),
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
             encoding: Default::default(),
@@ -192,6 +198,10 @@ impl ExportRecipe {
         }
         self.size.extent([1, 1])?;
         self.encoding.validate(self.depth)?;
+        if self.format.is_hdr() && (self.depth != SampleDepth::U16 || self.profile != ExportProfile::builtin(RgbSpace::Srgb) || self.background != ExportBackground::Preserve || self.encoding != OutputEncoding::default()) {
+            return Err("PQ PNG delivery uses 16-bit BT.2020 PQ, retained transparency and no ICC/dither override".into());
+        }
+        if self.depth.is_float() { return Err("Choose integer SDR or PQ PNG delivery".into()); }
         if self.profile.channels == ProfileChannels::Cmyk {
             if self.format == ExportFormat::Png {
                 return Err("Choose TIFF or JPEG for a CMYK profile".into());
@@ -204,7 +214,7 @@ impl ExportRecipe {
             return Err("JPEG quality must be between 1 and 100".into());
         }
         if self.format == ExportFormat::Jpeg {
-            if self.depth != IntegerDepth::U8 {
+            if self.depth != SampleDepth::U8 {
                 return Err("JPEG output requires 8-bit samples".into());
             }
             if self.background == ExportBackground::Preserve {
@@ -230,7 +240,7 @@ impl ExportRecipe {
         };
         if let Some(value) = value {
             match self.format {
-                ExportFormat::Png => {
+                ExportFormat::Png | ExportFormat::PngHdr | ExportFormat::PngHdrMapped => {
                     value.png_density()?;
                 }
                 ExportFormat::Tiff => {
@@ -252,7 +262,7 @@ pub enum ExportDraftAction {
     Refresh,
     Format(ExportFormat),
     Profile(ExportProfile),
-    Depth(IntegerDepth),
+    Depth(SampleDepth),
     Background(ExportBackground),
     Encoding(OutputEncoding),
 }
@@ -260,7 +270,7 @@ pub enum ExportDraftAction {
 pub struct ExportDraft {
     pub recipe: ExportRecipe,
     pub formats: Vec<ExportFormat>,
-    pub depths: Vec<IntegerDepth>,
+    pub depths: Vec<SampleDepth>,
     pub backgrounds: Vec<ExportBackground>,
     pub dithers: Vec<layer_core::color::OutputDither>,
 }
@@ -275,17 +285,23 @@ impl ExportRecipe {
             ExportDraftAction::Background(v) => self.background = v,
             ExportDraftAction::Encoding(v) => self.encoding = v,
         }
+        if self.format.is_hdr() {
+            self.profile = ExportProfile::builtin(RgbSpace::Srgb);
+            self.depth = SampleDepth::U16;
+            self.background = ExportBackground::Preserve;
+            self.encoding = Default::default();
+        }
         let cmyk = self.profile.channels == ProfileChannels::Cmyk;
         if cmyk && self.format == ExportFormat::Png { self.format = ExportFormat::Tiff; }
         let jpeg = self.format == ExportFormat::Jpeg;
-        if jpeg { self.depth = IntegerDepth::U8; }
+        if jpeg { self.depth = SampleDepth::U8; }
         if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
-        if self.depth != IntegerDepth::U8 { self.encoding.dither = OutputDither::None; }
+        if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
         ExportDraft {
             formats: if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
-            depths: if jpeg { vec![IntegerDepth::U8] } else { vec![IntegerDepth::U8, IntegerDepth::U16] },
+            depths: if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
             backgrounds: if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
-            dithers: if self.depth == IntegerDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
+            dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
             recipe: self,
         }
     }
@@ -344,12 +360,12 @@ mod tests {
         let mut recipe = ExportRecipe::further_editing(DocumentColor::default());
         recipe.encoding.dither = layer_core::color::OutputDither::Stochastic8;
         let jpeg = recipe.draft(ExportDraftAction::Format(ExportFormat::Jpeg));
-        assert_eq!(jpeg.depths, [IntegerDepth::U8]);
-        assert_eq!(jpeg.recipe.depth, IntegerDepth::U8);
+        assert_eq!(jpeg.depths, [SampleDepth::U8]);
+        assert_eq!(jpeg.recipe.depth, SampleDepth::U8);
         assert_eq!(jpeg.recipe.background, ExportBackground::White);
         jpeg.recipe.validate().unwrap();
         let png = jpeg.recipe.draft(ExportDraftAction::Format(ExportFormat::Png));
-        let deep = png.recipe.draft(ExportDraftAction::Depth(IntegerDepth::U16));
+        let deep = png.recipe.draft(ExportDraftAction::Depth(SampleDepth::U16));
         assert_eq!(deep.recipe.encoding.dither, layer_core::color::OutputDither::None);
         deep.recipe.validate().unwrap();
         let cmyk = deep.recipe.draft(ExportDraftAction::Profile(ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels: ProfileChannels::Cmyk, name: "CMYK".into() }));
@@ -377,7 +393,7 @@ mod tests {
             assert_eq!(ExportSize::Original.extent(source).unwrap(), source);
             let mut recipe = ExportRecipe::further_editing(DocumentColor {
                 space: RgbSpace::ProPhoto,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
             });
             recipe.size = size;
             recipe.validate().unwrap();
@@ -386,7 +402,7 @@ mod tests {
                     .unwrap(),
                 recipe
             );
-            assert_eq!(recipe.depth, IntegerDepth::U16);
+            assert_eq!(recipe.depth, SampleDepth::U16);
             assert_eq!(recipe.profile, ExportProfile::builtin(RgbSpace::ProPhoto));
         }
         for size in [[0, 1], [1, 32769]] {
@@ -406,7 +422,7 @@ mod tests {
             (
                 ProfileChannels::Rgb,
                 ExportFormat::Png,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 ExportBackground::Preserve,
                 SourceChannels::Rgba,
                 true,
@@ -414,7 +430,7 @@ mod tests {
             (
                 ProfileChannels::Gray,
                 ExportFormat::Png,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 ExportBackground::Preserve,
                 SourceChannels::GrayAlpha,
                 true,
@@ -422,7 +438,7 @@ mod tests {
             (
                 ProfileChannels::Cmyk,
                 ExportFormat::Png,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 ExportBackground::White,
                 SourceChannels::Cmyk,
                 false,
@@ -430,7 +446,7 @@ mod tests {
             (
                 ProfileChannels::Cmyk,
                 ExportFormat::Tiff,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 ExportBackground::White,
                 SourceChannels::Cmyk,
                 true,
@@ -438,7 +454,7 @@ mod tests {
             (
                 ProfileChannels::Cmyk,
                 ExportFormat::Tiff,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 ExportBackground::Preserve,
                 SourceChannels::Cmyk,
                 false,
@@ -446,7 +462,7 @@ mod tests {
             (
                 ProfileChannels::Cmyk,
                 ExportFormat::Jpeg,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 ExportBackground::Black,
                 SourceChannels::Cmyk,
                 true,
@@ -454,7 +470,7 @@ mod tests {
             (
                 ProfileChannels::Gray,
                 ExportFormat::Jpeg,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 ExportBackground::White,
                 SourceChannels::Gray,
                 true,
@@ -462,7 +478,7 @@ mod tests {
             (
                 ProfileChannels::Rgb,
                 ExportFormat::Jpeg,
-                IntegerDepth::U16,
+                SampleDepth::U16,
                 ExportBackground::White,
                 SourceChannels::Rgb,
                 false,
@@ -470,7 +486,7 @@ mod tests {
             (
                 ProfileChannels::Rgb,
                 ExportFormat::Jpeg,
-                IntegerDepth::U8,
+                SampleDepth::U8,
                 ExportBackground::Preserve,
                 SourceChannels::Rgba,
                 false,

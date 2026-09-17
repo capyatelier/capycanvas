@@ -1,14 +1,14 @@
 use super::new_photo::{capture_ui, finish, invoke, ready, response};
 use super::place_source::snapshot;
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
 fn source() -> SourceImage {
     let mut builder = SourceBuilder::new(
         [513, 257],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Icc(
                 layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3))
                     .unwrap()
@@ -183,7 +183,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     let image = rasterized.source.as_ref().unwrap();
     assert_eq!(image.kind, SourceKind::Rasterized);
     assert_eq!(image.extent, source.extent);
-    assert_eq!(image.interpretation.depth, IntegerDepth::U8);
+    assert_eq!(image.interpretation.depth, SampleDepth::U8);
     assert_eq!(
         image.interpretation.profile,
         ColorProfile::Builtin(RgbSpace::Srgb)

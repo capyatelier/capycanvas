@@ -5,7 +5,7 @@ use std::io::Cursor;
 #[test]
 fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let source = super::tests::fixture(depth, ColorProfile::Builtin(space));
             let decoder =
                 WorkingDecoder::new(&source.interpretation, space, Default::default()).unwrap();
@@ -56,7 +56,7 @@ fn working_rows_stream_into_profiled_files_without_an_intermediate_image() {
 fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgba,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         profile: ColorProfile::default(),
         profile_assumed: false,
     };

@@ -4,7 +4,7 @@ use layer_color::{
     photo::{write_png_rows, write_tiff_rows},
 };
 use layer_core::color::{
-    ColorProfile, IntegerDepth, RgbSpace,
+    ColorProfile, SampleDepth, RgbSpace,
     source::{SourceChannels, SourceInterpretation},
 };
 use std::{fs::File, io::BufWriter, time::Instant};
@@ -60,7 +60,7 @@ fn main() -> Result<(), String> {
     };
     let target = SourceInterpretation {
         channels,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         profile,
         profile_assumed: false,
     };

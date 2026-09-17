@@ -17,7 +17,7 @@ pub enum DocumentColorChange {
         options: ConversionOptions,
     },
     Depth {
-        depth: IntegerDepth,
+        depth: SampleDepth,
         dither: OutputDither,
     },
 }
@@ -125,7 +125,7 @@ impl Converter<'_> {
     ) -> Result<Arc<TileBlob>, String> {
         self.check()?;
         let scalar = original.descriptor.channels == 1;
-        if scalar && self.old.depth == self.target.depth
+        if scalar && self.old.depth.coverage() == self.target.depth.coverage()
             || matches!(self.change, DocumentColorChange::Assign(_))
                 && original.descriptor == self.target.paint_descriptor()
         {
@@ -154,12 +154,13 @@ impl Converter<'_> {
         ];
         if scalar {
             for (old, new) in decoded
-                .chunks_exact(self.old.depth.bytes())
-                .zip(encoded.chunks_exact_mut(self.target.depth.bytes()))
+                .chunks_exact(self.old.depth.coverage().bytes())
+                .zip(encoded.chunks_exact_mut(self.target.depth.coverage().bytes()))
             {
-                match self.target.depth {
-                    IntegerDepth::U16 => new.copy_from_slice(&(old[0] as u16 * 257).to_le_bytes()),
-                    IntegerDepth::U8 => {
+                match self.target.depth.coverage() {
+                    SampleDepth::U16 => new.copy_from_slice(&(old[0] as u16 * 257).to_le_bytes()),
+                    SampleDepth::F16 => unreachable!("coverage is integer"),
+                    SampleDepth::U8 => {
                         new[0] = ((u16::from_le_bytes([old[0], old[1]]) as u32 + 128) / 257) as u8
                     }
                 }
@@ -276,6 +277,7 @@ pub fn prepare_document_color(
     let mut candidate = project.clone().pruned()?;
     let old = candidate.document.color;
     let target = change.target(old);
+    if old.depth.is_float() && !target.depth.is_float() { return Err("Export an SDR rendition to reduce HDR range; the editable HDR master remains unchanged".into()); }
     change.encoding().validate(target.depth)?;
     if target == old {
         return Ok(PreparedDocumentColor {

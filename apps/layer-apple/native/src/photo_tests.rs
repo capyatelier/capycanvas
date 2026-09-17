@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
 
 impl App {
@@ -29,7 +29,7 @@ fn place_at(app: &App, placement: Option<Value>) -> ProjectJob {
 #[test]
 fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
     let mut encoded = std::io::Cursor::new(Vec::new());
-    let original = source(RgbSpace::DisplayP3, IntegerDepth::U8);
+    let original = source(RgbSpace::DisplayP3, SampleDepth::U8);
     layer_color::photo::write_tiff(&mut encoded, &original).unwrap();
     let bytes = encoded.into_inner();
     for platform in [0, 1] {
@@ -98,7 +98,7 @@ fn adopt(app: &App, job: &ProjectJob, opened: bool) {
         if opened { c"file:///source/Photo.tiff".as_ptr() } else { c"".as_ptr() }) }, 0, "{:?}", job.error());
     app.draw_until_prepared(true);
 }
-fn source(space: RgbSpace, depth: IntegerDepth) -> SourceImage {
+fn source(space: RgbSpace, depth: SampleDepth) -> SourceImage {
     let interpretation = SourceInterpretation { channels: SourceChannels::Rgba, depth,
         profile: ColorProfile::Builtin(space), profile_assumed: false };
     let mut builder = SourceBuilder::new([13, 9], interpretation, usize::MAX).unwrap();
@@ -106,7 +106,7 @@ fn source(space: RgbSpace, depth: IntegerDepth) -> SourceImage {
         let mut row = Vec::new();
         for x in 0..13u16 {
             for sample in [1234 + x * 713, 54321 - y * 997, 31234, if x % 3 == 0 { 213 } else { 65535 }] {
-                if depth == IntegerDepth::U16 { row.extend(sample.to_le_bytes()); }
+                if depth == SampleDepth::U16 { row.extend(sample.to_le_bytes()); }
                 else { row.push((sample / 257) as u8); }
             }
         }
@@ -142,7 +142,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
     let decoded = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), Default::default()).unwrap();
     assert_eq!(decoded.extent, [9504, 6336]);
     assert_eq!(decoded.interpretation.channels, SourceChannels::Rgb);
-    assert_eq!(decoded.interpretation.depth, IntegerDepth::U8);
+    assert_eq!(decoded.interpretation.depth, SampleDepth::U8);
     for platform in [0, 1] {
         let app = App::new(platform);
         let owner = unsafe { &mut *app.0 };
@@ -160,7 +160,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         app.draw_until_idle();
         let mut original = document(&app);
         assert_eq!(original.color.space, RgbSpace::Srgb);
-        assert_eq!(original.color.depth, IntegerDepth::U8);
+        assert_eq!(original.color.depth, SampleDepth::U8);
         assert_eq!(original.layers.iter().find_map(|l| l.source.as_deref()), Some(&decoded));
         let before = app.pixels();
         app.stroke(); app.draw_until_idle();
@@ -225,7 +225,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
 #[test]
 fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
     for platform in [0, 1] {
-        for (space, depth) in [(RgbSpace::DisplayP3, IntegerDepth::U8), (RgbSpace::ProPhoto, IntegerDepth::U16)] {
+        for (space, depth) in [(RgbSpace::DisplayP3, SampleDepth::U8), (RgbSpace::ProPhoto, SampleDepth::U16)] {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
             app.draw_until_idle();
@@ -301,9 +301,9 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
         adopt(&app, &job, true);
         let document = unsafe { &*app.0 }.host.session.engine().document();
         assert_eq!(document.color.space, RgbSpace::DisplayP3);
-        assert_eq!(document.color.depth, IntegerDepth::U16);
+        assert_eq!(document.color.depth, SampleDepth::U16);
         let source = document.layers.iter().find_map(|l| l.source.as_ref()).unwrap();
-        assert_eq!(source.interpretation.depth, IntegerDepth::U8, "Promotion affects future edits, not the retained original");
+        assert_eq!(source.interpretation.depth, SampleDepth::U8, "Promotion affects future edits, not the retained original");
         assert!(!source.interpretation.profile_assumed);
         app.action(json!({"type":"preferences","action":{"type":"edit","id":"missing_profile","value":0}}));
 
@@ -345,7 +345,7 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
 
 #[test]
 fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
-    let images: Vec<_> = [(RgbSpace::DisplayP3, IntegerDepth::U8), (RgbSpace::ProPhoto, IntegerDepth::U16)]
+    let images: Vec<_> = [(RgbSpace::DisplayP3, SampleDepth::U8), (RgbSpace::ProPhoto, SampleDepth::U16)]
         .into_iter().map(|(space, depth)| {
             let mut encoded = std::io::Cursor::new(Vec::new());
             layer_color::photo::write_tiff(&mut encoded, &source(space, depth)).unwrap();

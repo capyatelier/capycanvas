@@ -291,7 +291,7 @@ impl TileCapture<'_> {
                     }
                     && matches!(
                         d.encoding,
-                        TransferEncoding::Srgb | TransferEncoding::Profile
+                        TransferEncoding::Srgb | TransferEncoding::Profile | TransferEncoding::Linear
                     )
             }
             _ => false,

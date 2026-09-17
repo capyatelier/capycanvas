@@ -1,6 +1,6 @@
 //! Connected native brush/composite precision checks with declared scalar oracles.
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace, rgb};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace, rgb};
 
 fn frame(r: &mut WgpuRasterizer, layer: &Layer, dab: Dab, batch: &DabBatch, reset: bool) {
     r.submit(FramePacket {
@@ -105,7 +105,7 @@ fn blended(mode: BrushBlendMode, d: f64, s: f64) -> f64 {
 #[test]
 fn native_brush_blends_preserve_extended_color_and_tiny_locked_coverage() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r =
                 WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             let layer = Layer::paint(LayerId(1), "reference brush");
@@ -222,7 +222,7 @@ fn mixed(space: RgbSpace, a: [f32; 3], b: [f32; 3], weight: f64) -> [f64; 3] {
 #[test]
 fn native_wet_brush_oklab_mixing_uses_document_primaries_and_preserves_extended_endpoints() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r =
                 WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             let layer = Layer::paint(LayerId(1), "wet reference");
@@ -258,7 +258,7 @@ fn native_wet_and_watercolor_deposit_sub_epsilon_pigment_and_transport_extended_
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         let layer = Layer::paint(LayerId(1), "tiny pigment");
@@ -316,7 +316,7 @@ fn native_capillary_front_transports_faint_pigment_with_independent_water_covera
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         let layer = Layer::paint(LayerId(1), "faint transport");

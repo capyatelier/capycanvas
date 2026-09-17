@@ -194,6 +194,7 @@ impl Inspector {
             return;
         };
         self.description.set_label(&format!("{} · {}-bit document\n{} pixels counted · {} fully transparent pixels excluded\nRGB is profile-encoded; luminance is linear relative Y. Partial coverage is unassociated; each pixel counts once.", result.color.space.name(), result.color.depth.bits(), result.pixels, result.transparent));
+        if result.color.depth.is_float() { self.description.set_label(&format!("{} · 16-bit float HDR\n{} pixels counted · {} transparent excluded\nRGB and luminance: −12 to +16 stops relative to 203 cd/m² reference white; first bin includes nonpositive values. Above white is HDR data, not clipping.", result.color.space.name(), result.pixels, result.transparent)); }
         if let Some(time) = self.sampled_time.get() {
             self.description.set_label(&format!(
                 "{}\nAnimation sampled at {time:.2} s. Pause and resume to sample again.",

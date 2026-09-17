@@ -21,7 +21,7 @@ fn thumbnail(
     let mut renderer =
         gpu.capture(project, background, time, Default::default(), control)
             .map_err(|e| e.to_string())?;
-    let (preview, clipped) = if let Some(recipe) = output {
+    let (preview, clipped) = if let Some(recipe) = output.filter(|r| !r.format.is_hdr()) {
         recipe.validate()?;
         renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
         let (preview, statistics) = renderer.preview_output(

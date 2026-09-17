@@ -32,7 +32,7 @@ fn slots(in_place: bool) {
     };
     for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
         let transfer = NativeTransfer::new(&r.device, space).unwrap();
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let encoded: Vec<_> = (0..3).map(|_| texture(&r, format(depth))).collect();
             let seed = vec![0x39; 65536 * 4 * depth.bytes()];
             for alpha in [
@@ -105,7 +105,7 @@ fn slots(in_place: bool) {
                                 space,
                                 alpha,
                                 region,
-                                if depth == IntegerDepth::U8 {
+                                if depth == SampleDepth::U8 {
                                     0x39
                                 } else {
                                     0x3939

@@ -1,6 +1,6 @@
 //! Lossless tiled source samples. A decoded full photograph need not coexist
 //! with its GPU paint, save snapshot and export. Integer16 bytes are little endian.
-use super::{AlphaAssociation, ColorProfile, IntegerDepth, PixelDescriptor, TransferEncoding};
+use super::{AlphaAssociation, ColorProfile, SampleDepth, PixelDescriptor, TransferEncoding};
 use crate::raster::{TILE_SIZE, TileBlob};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -61,7 +61,7 @@ impl SourceChannels {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceInterpretation {
     pub channels: SourceChannels,
-    pub depth: IntegerDepth,
+    pub depth: SampleDepth,
     pub profile: ColorProfile,
     pub profile_assumed: bool,
 }
@@ -70,7 +70,8 @@ impl SourceInterpretation {
         PixelDescriptor {
             channels: self.channels.count() as u8,
             bits_per_channel: self.depth.bits(),
-            encoding: TransferEncoding::Profile,
+            sample: if self.depth.is_float() { super::SampleType::Float } else { super::SampleType::Unsigned },
+            encoding: if self.depth.is_float() { TransferEncoding::Linear } else { TransferEncoding::Profile },
             alpha: if self.channels.has_alpha() {
                 AlphaAssociation::Straight
             } else {
@@ -130,6 +131,9 @@ impl SourceImage {
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self.interpretation.depth.is_float() && (!matches!(self.interpretation.profile, ColorProfile::Builtin(_)) || !matches!(self.interpretation.channels, SourceChannels::Rgb | SourceChannels::Rgba)) {
+            return Err("HDR sources require explicit linear RGB primaries".into());
+        }
         if let Some(resolution) = self.resolution { resolution.validate()?; }
         if self.kind == SourceKind::Rasterized
             && (self.interpretation.channels != SourceChannels::Rgba
@@ -290,7 +294,7 @@ mod tests {
     fn source_accounting_tracks_allocations_instead_of_equal_samples() {
         let interpretation = SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Icc(vec![17; 512].into()),
             profile_assumed: false,
         };
@@ -323,7 +327,7 @@ mod tests {
     fn source_bands_preserve_integer16_hidden_rgb_and_partial_tiles() {
         let interpretation = SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::default(),
             profile_assumed: false,
         };

@@ -38,6 +38,20 @@ impl Thumbnails {
     }
 }
 impl WgpuRasterizer {
+    pub fn set_ui_rendition(&mut self, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Result<(), GpuRasterError> {
+        if let Some(recipe) = rendition { recipe.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
+        if self.ui_rendition != rendition {
+            if let Some(previews) = &mut self.filter_previews {
+                previews.rendition_changed();
+            }
+            self.ui_rendition = rendition;
+        }
+        Ok(())
+    }
+    pub(super) fn ui_rendition_parameters(&self) -> [f32; 4] {
+        self.ui_rendition.map_or([0.; 4], |r| [r.exposure, r.contrast, r.knee, 1.])
+    }
+
     /// Configure the display-only byte outputs before requesting any previews.
     /// Native saves, exact sampling and exports retain their own color contracts.
     pub fn configure_ui_previews(
@@ -346,7 +360,7 @@ impl PreviewPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: NonZeroU64::new(48),
+                        min_binding_size: NonZeroU64::new(64),
                     },
                     count: None,
                 },
@@ -370,7 +384,7 @@ impl PreviewPipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content-framed thumbnails"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("thumbnails.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("hdr_mapping.wgsl"), include_str!("thumbnails.wgsl")).into()),
         });
         let layout = |bounds| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -471,11 +485,11 @@ impl PreviewPipeline {
             .device
             .limits()
             .min_uniform_buffer_offset_alignment
-            .max(48) as usize;
+            .max(64) as usize;
         let mut bytes = vec![0u8; stride * sources.len()];
         for (i, coordinate) in sources.iter().enumerate() {
             let c = coordinate.unwrap_or([0; 2]);
-            let mut record = [0u32; 12];
+            let mut record = [0u32; 16];
             record[..4].copy_from_slice(&[
                 c[0] * PAGE_SIZE,
                 c[1] * PAGE_SIZE,
@@ -485,7 +499,8 @@ impl PreviewPipeline {
             record[4] = if i == 0 { 2 } else { u32::from(mask.is_some()) };
             record[5] = u32::from(mask.as_ref().is_some_and(|m| m.inverted));
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
-            for (dst, value) in bytes[i * stride..i * stride + 48]
+            if mask.is_none() { record[12..16].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
+            for (dst, value) in bytes[i * stride..i * stride + 64]
                 .as_chunks_mut::<4>()
                 .0
                 .iter_mut()
@@ -528,7 +543,7 @@ impl PreviewPipeline {
                                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                                     buffer: &records,
                                     offset: 0,
-                                    size: NonZeroU64::new(48),
+                                    size: NonZeroU64::new(64),
                                 }),
                             },
                             wgpu::BindGroupEntry {

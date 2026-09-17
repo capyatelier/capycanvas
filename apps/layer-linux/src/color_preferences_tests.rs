@@ -124,7 +124,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         state(&w).settings.new_document.defaults.color,
         DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U8
+            depth: SampleDepth::U8
         }
     );
     assert_eq!(state(&w).settings.new_document.defaults.extent[0], 128);
@@ -190,11 +190,11 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         project.document.color,
         DocumentColor {
             space: RgbSpace::AdobeRgb,
-            depth: IntegerDepth::U16
+            depth: SampleDepth::U16
         }
     );
     let retained = project.document.layers[0].source.as_ref().unwrap();
-    assert_eq!(retained.interpretation.depth, IntegerDepth::U8);
+    assert_eq!(retained.interpretation.depth, SampleDepth::U8);
     let mut expected = source.clone();
     expected.interpretation = retained.interpretation.clone();
     assert_eq!(retained.as_ref(), &expected);

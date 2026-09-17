@@ -28,6 +28,7 @@ pub(crate) struct PipelineDevice {
     device: wgpu::Device,
     working_format: wgpu::TextureFormat,
     working_space: layer_core::color::RgbSpace,
+    hdr: bool,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
@@ -38,6 +39,7 @@ impl From<wgpu::Device> for PipelineDevice {
             device,
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
+            hdr: false,
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
                 512 * 1024 * 1024,
             )),
@@ -58,6 +60,8 @@ impl PipelineDevice {
     pub fn working_format(&self) -> wgpu::TextureFormat {
         self.working_format
     }
+    pub fn hdr(&self) -> bool { self.hdr }
+    pub fn with_hdr(mut self, hdr: bool) -> Self { self.hdr = hdr; self }
     pub fn working_space(&self) -> layer_core::color::RgbSpace {
         self.working_space
     }
@@ -108,6 +112,7 @@ impl PipelineDevice {
             cache,
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
+            hdr: false,
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
                 512 * 1024 * 1024,
             )),

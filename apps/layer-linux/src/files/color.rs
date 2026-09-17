@@ -161,10 +161,10 @@ pub(super) async fn run(
     let depth = choice(
         "Bit depth",
         "document-color-depth",
-        &["8-bit SDR", "16-bit SDR"],
+        &["8-bit SDR", "16-bit SDR", "16-bit float HDR"],
         false,
     );
-    depth.set_selected(u32::from(color.depth == IntegerDepth::U8));
+    depth.set_selected(if color.depth.is_float() { 2 } else { u32::from(color.depth == SampleDepth::U8) });
     depth.set_visible(operation == DocumentColorOperation::Depth);
     group.add(&depth);
     let result = choice(
@@ -257,11 +257,7 @@ pub(super) async fn run(
         #[weak]
         dialog,
         move || {
-            let depth = if depth.selected() == 0 {
-                IntegerDepth::U8
-            } else {
-                IntegerDepth::U16
-            };
+            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][depth.selected() as usize];
             let intent = [
                 RenderingIntent::RelativeColorimetric,
                 RenderingIntent::Perceptual,
@@ -269,7 +265,7 @@ pub(super) async fn run(
                 RenderingIntent::AbsoluteColorimetric,
             ][intent.selected() as usize];
             bpc.set_sensitive(false);
-            dither.set_sensitive(depth == IntegerDepth::U8);
+            dither.set_sensitive(depth == SampleDepth::U8);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
             dialog.set_response_label("apply", if flattened { "Create Copy" } else { "Apply" });
             let space = RgbSpace::ALL[space.selected() as usize];
@@ -287,7 +283,7 @@ pub(super) async fn run(
                     },
                     DocumentColorOperation::Depth => DocumentColorChange::Depth {
                         depth,
-                        dither: if depth == IntegerDepth::U8 && dither.is_active() {
+                        dither: if depth == SampleDepth::U8 && dither.is_active() {
                             OutputDither::Stochastic8
                         } else {
                             OutputDither::None

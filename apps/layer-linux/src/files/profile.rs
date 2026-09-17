@@ -191,7 +191,7 @@ mod tests {
 #[cfg(test)]
 mod source_tests {
     use super::*;
-    use layer_core::color::{IntegerDepth, source::SourceChannels};
+    use layer_core::color::{SampleDepth, source::SourceChannels};
     #[test]
     fn source_roles_validate_actual_channels_without_requiring_delivery() {
         let path =
@@ -209,7 +209,7 @@ mod source_tests {
             std::fs::write(&path, &bytes).unwrap();
             let purpose = ProfilePurpose::Source(SourceInterpretation {
                 channels,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
                 profile: rgb.clone(),
                 profile_assumed: false,
             });

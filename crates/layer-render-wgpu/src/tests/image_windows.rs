@@ -1,6 +1,6 @@
 //! Cropped captures must be the same document, including halos and clipping.
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, LayerMask, Selection};
 
 pub(crate) fn effect(id: u64, generator: bool, global: bool) -> Layer {
@@ -80,7 +80,7 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
             None => WgpuRasterizer::new_headless().unwrap(),
             Some(space) => WgpuRasterizer::new_native_headless(DocumentColor {
                 space,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
             })
             .unwrap(),
         };
@@ -188,7 +188,7 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
 fn image_windows_keep_document_sampler_dependencies_complete() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     let extent = [333, 291];

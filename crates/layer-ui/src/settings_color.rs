@@ -1,6 +1,6 @@
 //! Color policies apply to future documents; retained originals stay unchanged.
 use super::*;
-use layer_core::color::{IntegerDepth, RgbSpace};
+use layer_core::color::{SampleDepth, RgbSpace};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,9 +17,9 @@ pub struct PhotoOpenPolicy {
     pub missing_profile: MissingProfilePolicy,
 }
 impl PhotoOpenPolicy {
-    pub fn editing_depth(self, source: IntegerDepth) -> IntegerDepth {
-        if self.promote_to_16 {
-            IntegerDepth::U16
+    pub fn editing_depth(self, source: SampleDepth) -> SampleDepth {
+        if self.promote_to_16 && !source.is_float() {
+            SampleDepth::U16
         } else {
             source
         }
@@ -62,7 +62,7 @@ impl Settings {
                         "Bit depth",
                         "16-bit improves precision for subsequent edits.",
                         &["8-bit SDR", "16-bit SDR"],
-                        u32::from(defaults.color.depth == IntegerDepth::U16),
+                        u32::from(defaults.color.depth == SampleDepth::U16),
                     ),
                     choice(
                         NewBackground,
@@ -100,9 +100,9 @@ impl Settings {
             NewColorSpace => self.new_document.defaults.color.space = RgbSpace::ALL[value as usize],
             NewBitDepth => {
                 self.new_document.defaults.color.depth = if value == 0 {
-                    IntegerDepth::U8
+                    SampleDepth::U8
                 } else {
-                    IntegerDepth::U16
+                    SampleDepth::U16
                 }
             }
             NewBackground => {
@@ -150,15 +150,15 @@ mod tests {
             assert_eq!(existing.document.color, Default::default());
             let new = settings.new_document.defaults.project().unwrap();
             assert_eq!(new.document.color.space, RgbSpace::ProPhoto);
-            assert_eq!(new.document.color.depth, IntegerDepth::U16);
+            assert_eq!(new.document.color.depth, SampleDepth::U16);
             assert!(!new.document.layers[1].visible);
             assert_eq!(
-                settings.photo_open.editing_depth(IntegerDepth::U8),
-                IntegerDepth::U16
+                settings.photo_open.editing_depth(SampleDepth::U8),
+                SampleDepth::U16
             );
             assert_eq!(
-                PhotoOpenPolicy::default().editing_depth(IntegerDepth::U8),
-                IntegerDepth::U8
+                PhotoOpenPolicy::default().editing_depth(SampleDepth::U8),
+                SampleDepth::U8
             );
             assert_eq!(
                 settings.photo_open.missing_profile,

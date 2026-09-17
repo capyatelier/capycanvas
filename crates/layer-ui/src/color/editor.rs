@@ -7,14 +7,16 @@ use super::*;
 pub enum ColorInputModel {
     #[default]
     DocumentRgb,
+    LinearRgb,
     SrgbHex,
     Hsv,
     Hls,
     Oklch,
 }
 impl ColorInputModel {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::DocumentRgb,
+        Self::LinearRgb,
         Self::SrgbHex,
         Self::Hsv,
         Self::Hls,
@@ -23,6 +25,7 @@ impl ColorInputModel {
     pub fn name(self) -> &'static str {
         match self {
             Self::DocumentRgb => "Document RGB",
+            Self::LinearRgb => "Linear RGB / HDR",
             Self::SrgbHex => "sRGB hex",
             Self::Hsv => "HSV (document RGB)",
             Self::Hls => "HLS (document RGB)",
@@ -31,7 +34,8 @@ impl ColorInputModel {
     }
     pub fn labels(self) -> [&'static str; 4] {
         match self {
-            Self::DocumentRgb => ["Red (0–1)", "Green (0–1)", "Blue (0–1)", "Alpha (%)"],
+            Self::DocumentRgb => ["Red (encoded)", "Green (encoded)", "Blue (encoded)", "Alpha (%)"],
+            Self::LinearRgb => ["Red (linear)", "Green (linear)", "Blue (linear)", "Alpha (%)"],
             Self::SrgbHex => ["sRGB hex (#RRGGBB)", "", "", "Alpha (%)"],
             Self::Hsv => ["Hue (°)", "Saturation (%)", "Value (%)", "Alpha (%)"],
             Self::Hls => ["Hue (°)", "Lightness (%)", "Saturation (%)", "Alpha (%)"],
@@ -89,6 +93,7 @@ impl ColorEditor {
         let rgb = [rgba[0], rgba[1], rgba[2]];
         let values = match self.model {
             ColorInputModel::DocumentRgb | ColorInputModel::SrgbHex => rgb,
+            ColorInputModel::LinearRgb => { let p=self.definition.linear_in(self.document_space).unwrap(); [p[0],p[1],p[2]] },
             ColorInputModel::Hsv => components(rgba, ColorSpace::Hsv, 0.),
             ColorInputModel::Hls => components(rgba, ColorSpace::Hls, 0.),
             ColorInputModel::Oklch => okhsv::to_oklch_in(self.document_space, rgb, 0.),
@@ -164,6 +169,7 @@ impl ColorEditor {
             model => {
                 let values = [parse(0)?, parse(1)?, parse(2)?];
                 match model {
+                    ColorInputModel::LinearRgb => RgbColor::from_linear(self.document_space, [values[0], values[1], values[2], alpha])?,
                     ColorInputModel::DocumentRgb => RgbColor::new(
                         self.document_space,
                         [values[0], values[1], values[2], alpha],
@@ -206,6 +212,7 @@ impl ColorEditor {
     }
     pub fn description(&self) -> String {
         let mut text = format!("Document RGB: {}.", self.document_space.name());
+        if self.model == ColorInputModel::LinearRgb { text.push_str(" Linear 1 is reference white (203 cd/m² in HDR). Negative values and values above 1 are supported; alpha is separate."); }
         if self.model == ColorInputModel::SrgbHex {
             text.push_str(" Hex uses sRGB and rounds its preview to 8-bit. An unchanged entry keeps the original color.");
         }

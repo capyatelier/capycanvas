@@ -87,8 +87,8 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
         return Err("TIFF import currently requires explicitly unassociated alpha".into());
     }
     let depth = match bits {
-        8 => IntegerDepth::U8,
-        16 => IntegerDepth::U16,
+        8 => SampleDepth::U8,
+        16 => SampleDepth::U16,
         _ => return Err("TIFF SDR sample depth must be 8 or 16 bits".into()),
     };
     let profile = decoder
@@ -126,8 +126,8 @@ pub fn read_tiff(input: impl Read + Seek, limits: DecodeLimits) -> Result<Source
             let (data_w, data_h) = decoder.chunk_data_dimensions(index);
             let decoded = decoder.read_chunk(index).map_err(err)?;
             let bytes = match decoded {
-                DecodingResult::U8(v) if depth == IntegerDepth::U8 => v,
-                DecodingResult::U16(v) if depth == IntegerDepth::U16 => {
+                DecodingResult::U8(v) if depth == SampleDepth::U8 => v,
+                DecodingResult::U16(v) if depth == SampleDepth::U16 => {
                     v.into_iter().flat_map(u16::to_le_bytes).collect()
                 }
                 _ => return Err("TIFF decoder changed the declared sample depth".into()),
@@ -277,16 +277,17 @@ pub fn write_tiff_rows(
         }};
     }
     let result = match (interpretation.channels, interpretation.depth) {
-        (SourceChannels::Gray, IntegerDepth::U8) => write!(colortype::Gray8, false),
-        (SourceChannels::Gray, IntegerDepth::U16) => write!(colortype::Gray16, true),
-        (SourceChannels::GrayAlpha, IntegerDepth::U8) => write!(GrayAlpha8, false),
-        (SourceChannels::GrayAlpha, IntegerDepth::U16) => write!(GrayAlpha16, true),
-        (SourceChannels::Rgb, IntegerDepth::U8) => write!(colortype::RGB8, false),
-        (SourceChannels::Rgb, IntegerDepth::U16) => write!(colortype::RGB16, true),
-        (SourceChannels::Rgba, IntegerDepth::U8) => write!(colortype::RGBA8, false),
-        (SourceChannels::Rgba, IntegerDepth::U16) => write!(colortype::RGBA16, true),
-        (SourceChannels::Cmyk, IntegerDepth::U8) => write!(colortype::CMYK8, false),
-        (SourceChannels::Cmyk, IntegerDepth::U16) => write!(colortype::CMYK16, true),
+        (_, SampleDepth::F16) => return Err("TIFF HDR delivery is not supported; select PQ PNG or an SDR rendition".into()),
+        (SourceChannels::Gray, SampleDepth::U8) => write!(colortype::Gray8, false),
+        (SourceChannels::Gray, SampleDepth::U16) => write!(colortype::Gray16, true),
+        (SourceChannels::GrayAlpha, SampleDepth::U8) => write!(GrayAlpha8, false),
+        (SourceChannels::GrayAlpha, SampleDepth::U16) => write!(GrayAlpha16, true),
+        (SourceChannels::Rgb, SampleDepth::U8) => write!(colortype::RGB8, false),
+        (SourceChannels::Rgb, SampleDepth::U16) => write!(colortype::RGB16, true),
+        (SourceChannels::Rgba, SampleDepth::U8) => write!(colortype::RGBA8, false),
+        (SourceChannels::Rgba, SampleDepth::U16) => write!(colortype::RGBA16, true),
+        (SourceChannels::Cmyk, SampleDepth::U8) => write!(colortype::CMYK8, false),
+        (SourceChannels::Cmyk, SampleDepth::U16) => write!(colortype::CMYK16, true),
     };
     result?;
     drop(encoder);

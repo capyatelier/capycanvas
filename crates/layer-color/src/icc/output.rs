@@ -37,6 +37,7 @@ impl WorkingEncoder {
         validate_options(options)?;
         let mut destination = destination.clone();
         destination.profile_assumed = false;
+        if destination.depth.is_float() && (!matches!(destination.profile, ColorProfile::Builtin(_)) || !matches!(destination.channels, SourceChannels::Rgb | SourceChannels::Rgba)) { return Err("HDR output requires linear RGB primaries".into()); }
         if matches!(
             destination.channels,
             SourceChannels::Gray | SourceChannels::GrayAlpha
@@ -57,12 +58,15 @@ impl WorkingEncoder {
         let input = linear_profile(source)?;
         let kind = match &destination.profile {
             ColorProfile::Builtin(space)
-                if options.intent != RenderingIntent::AbsoluteColorimetric
+                if destination.depth.is_float()
+                    || options.intent != RenderingIntent::AbsoluteColorimetric
                     || source.white() == space.white() =>
             {
                 OutputKind::Builtin {
                     space: *space,
-                    matrix: source.linear_transform(*space),
+                    matrix: if destination.depth.is_float() && options.intent == RenderingIntent::AbsoluteColorimetric {
+                        source.absolute_linear_transform(*space)
+                    } else { source.linear_transform(*space) },
                     identity: source == *space,
                 }
             }
@@ -138,7 +142,7 @@ impl WorkingEncoder {
         if matte.is_none() && !destination.channels.has_alpha() && input.iter().any(|p| p[3] < 1.) {
             return Err("Opaque output requires an explicit matte for transparency".into());
         }
-        let maximum = f64::from(destination.depth.maximum());
+        let maximum = if destination.depth.is_float() { 1. } else { f64::from(destination.depth.maximum()) };
         let step = destination.depth.bytes();
         let mut statistics = OutputStatistics::default();
         for (chunk, (input, output)) in input
@@ -193,7 +197,7 @@ impl WorkingEncoder {
                         } else {
                             layer_core::color::rgb::apply(*matrix, linear)
                         }
-                        .map(|v| space.encode(v));
+                        .map(|v| if destination.depth.is_float() { v } else { space.encode(v) });
                         [rgb[0], rgb[1], rgb[2], 0.]
                     }
                     OutputKind::Rgb(_) => converted[i].map(f64::from),
@@ -216,6 +220,12 @@ impl WorkingEncoder {
                 {
                     if !value.is_finite() {
                         return Err("Destination profile produced non-finite output".into());
+                    }
+                    if destination.depth.is_float() {
+                        let alpha = destination.channels.has_alpha() && channel + 1 == destination.channels.count();
+                        if value.abs() > f64::from(layer_core::color::hdr::MAX_LINEAR) || (alpha && !(0. ..=1.).contains(&value)) { return Err("HDR result exceeds the supported half-float range".into()); }
+                        code.copy_from_slice(&layer_core::color::f16::from_f32(value as f32).to_bits().to_le_bytes());
+                        continue;
                     }
                     let unbounded = (value * maximum).round();
                     statistics.clipped_channels += u64::from(unbounded < 0. || unbounded > maximum);

@@ -2912,11 +2912,11 @@ mod tests {
 
     #[test]
     fn native_color_dynamics_match_cursor_corrections_recovery_and_next_contact() {
-        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
         use layer_core::{BrushCombine, BrushCurve, BrushMapping, BrushSensor, BrushTarget};
         for space in RgbSpace::ALL {
             let mut depths = Vec::new();
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let color = DocumentColor { space, depth };
                 let mut variants = Vec::new();
                 for recover in [false, true] {
@@ -3042,9 +3042,9 @@ mod tests {
 
     #[test]
     fn native_document_adoption_and_recovery_require_matching_renderer_interpretation() {
-        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let color = DocumentColor { space, depth };
                 let mut document = Document::new("native adoption", 64, 64);
                 document.color = color;
@@ -3082,10 +3082,10 @@ mod tests {
                 input.push(event(2, PenPhase::Up, 24.)).unwrap();
                 let wrong = DocumentColor {
                     space,
-                    depth: if depth == IntegerDepth::U8 {
-                        IntegerDepth::U16
+                    depth: if depth == SampleDepth::U8 {
+                        SampleDepth::U16
                     } else {
-                        IntegerDepth::U8
+                        SampleDepth::U8
                     },
                 };
                 let before = engine.checkpoint();
@@ -3116,7 +3116,7 @@ mod tests {
 
     #[test]
     fn color_edits_and_history_reject_an_unprepared_renderer_without_consuming_input() {
-        use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+        use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
         let (mut input, consumer) = input_queue(8);
         let mut engine = CanvasEngine::new(
             RecordingRenderer::default(), Document::new("color edit", 64, 64),
@@ -3124,7 +3124,7 @@ mod tests {
         ).unwrap();
         engine.render_frame().unwrap();
         let original = engine.document().clone();
-        let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let edit = Edit::SetColor { color, layers: original.layers.clone() };
         input.push(event(1, PenPhase::Down, 8.)).unwrap();
         input.push(event(2, PenPhase::Up, 24.)).unwrap();
@@ -3156,7 +3156,7 @@ mod tests {
 
     #[test]
     fn prepared_color_and_history_publish_together_and_reject_failure_or_staleness() {
-        use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbSpace}};
+        use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
         let (_, consumer) = input_queue(8);
         let mut engine = CanvasEngine::new(
             RecordingRenderer::default(), Document::new("atomic color", 64, 64),
@@ -3165,7 +3165,7 @@ mod tests {
         engine.render_frame().unwrap();
         let original = engine.document().clone();
         let old_brush = engine.brush().clone();
-        let target = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        let target = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
             color: target, layers: engine.document().layers.clone(),
         }).unwrap();
@@ -3220,10 +3220,10 @@ mod tests {
 
     #[test]
     fn prepared_color_does_not_consume_queued_input_or_overflow_tool_coordinates() {
-        use layer_core::{ColorTransition, color::{DocumentColor, IntegerDepth, RgbSpace}};
+        use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
         let (mut input, consumer) = input_queue(8);
         let mut document = Document::new("color input", 64, 64);
-        document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+        document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let mut engine = CanvasEngine::new(
             RecordingRenderer { color: document.color, ..Default::default() }, document,
             consumer, view(64, 64), ViewTransform::IDENTITY,

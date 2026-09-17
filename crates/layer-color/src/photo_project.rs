@@ -2,7 +2,7 @@
 //! source file locations remain the host's separate, read-only import reference.
 use layer_core::{
     Document, Project, ProjectLimits,
-    color::{DocumentColor, IntegerDepth, RgbSpace, source::SourceImage},
+    color::{DocumentColor, SampleDepth, RgbSpace, source::SourceImage},
 };
 use std::sync::Arc;
 
@@ -26,9 +26,10 @@ pub fn assume_source_profile(
 pub fn photo_project(
     source: SourceImage,
     name: &str,
-    depth: IntegerDepth,
+    depth: SampleDepth,
 ) -> Result<Project, String> {
     source.validate()?;
+    if source.interpretation.depth.is_float() && !depth.is_float() { return Err("HDR placement requires an HDR document; export an SDR rendition for SDR placement".into()); }
     let space = crate::suggested_working_space(&source.interpretation.profile)?
         .unwrap_or(RgbSpace::ProPhoto);
     let mut document = Document::new("untitled", source.extent[0], source.extent[1]);

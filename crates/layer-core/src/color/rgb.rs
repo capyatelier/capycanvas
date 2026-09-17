@@ -114,6 +114,14 @@ impl RgbSpace {
         )
     }
 
+    /// Preserve absolute XYZ, including the source white, without adaptation.
+    pub fn absolute_linear_transform(self, destination: Self) -> Matrix3 {
+        if self == destination {
+            return [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+        }
+        multiply(inverse(destination.to_xyz()), self.to_xyz())
+    }
+
     pub fn convert(self, destination: Self, encoded: [f64; 3]) -> [f64; 3] {
         if self == destination {
             return encoded;
@@ -129,6 +137,19 @@ impl RgbSpace {
 pub fn apply(matrix: Matrix3, vector: [f64; 3]) -> [f64; 3] {
     matrix.map(|row| row.into_iter().zip(vector).map(|(a, b)| a * b).sum())
 }
+/// Linear primary conversion with Bradford white adaptation. Used for explicitly
+/// tagged interchange spaces as well as the built-in document spaces.
+pub fn linear_rgb_transform(primaries: [[f64; 2]; 3], white: [f64; 2], destination: RgbSpace) -> Matrix3 {
+    let p = primaries.map(xy_to_xyz);
+    let unscaled = std::array::from_fn(|row| std::array::from_fn(|col| p[col][row]));
+    let scale = apply(inverse(unscaled), xy_to_xyz(white));
+    let source = std::array::from_fn(|row| std::array::from_fn(|col| unscaled[row][col] * scale[col]));
+    let bradford = [[0.8951,0.2664,-0.1614],[-0.7502,1.7135,0.0367],[0.0389,-0.0685,1.0296]];
+    let sw = apply(bradford, xy_to_xyz(white));
+    let dw = apply(bradford, xy_to_xyz(destination.white()));
+    let adapted = std::array::from_fn(|row| std::array::from_fn(|col| bradford[row][col]*dw[row]/sw[row]));
+    multiply(inverse(destination.to_xyz()), multiply(inverse(bradford), multiply(adapted, source)))
+}
 fn xy_to_xyz([x, y]: [f64; 2]) -> [f64; 3] {
     [x / y, 1., (1. - x - y) / y]
 }
@@ -137,7 +158,7 @@ fn multiply(a: Matrix3, b: Matrix3) -> Matrix3 {
         std::array::from_fn(|col| (0..3).map(|k| a[row][k] * b[k][col]).sum())
     })
 }
-fn inverse(m: Matrix3) -> Matrix3 {
+pub(crate) fn inverse(m: Matrix3) -> Matrix3 {
     let cofactor: Matrix3 = std::array::from_fn(|i| {
         std::array::from_fn(|j| {
             m[(i + 1) % 3][(j + 1) % 3] * m[(i + 2) % 3][(j + 2) % 3]

@@ -91,7 +91,7 @@ impl NativeEdit {
                 NativeScalarEncoder::with_device(&r.device)
             },
             promoter: (!in_place).then(|| NativePromoter::with_device(&r.device)),
-            validator: validate::Validator::new(&r.device),
+            validator: validate::Validator::new(&r.device, r.document_color().depth.is_float()),
         }
     }
     pub fn storage_bytes(&self) -> u64 {
@@ -186,7 +186,7 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let device = device
             .with_working_format(wgpu::TextureFormat::Rgba32Float)?
-            .with_working_space(color.space);
+            .with_working_space(color.space).with_hdr(color.depth.is_float());
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
         r.startup.as_mut().unwrap().host_catalog_pending = true;
         r.initialize_native(color)?;
@@ -227,7 +227,7 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let device = device
             .with_working_format(wgpu::TextureFormat::Rgba32Float)?
-            .with_working_space(color.space);
+            .with_working_space(color.space).with_hdr(color.depth.is_float());
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Snapshot)?;
         r.initialize_native(color)?;
         Ok(r)
@@ -235,6 +235,8 @@ impl WgpuRasterizer {
 
     fn initialize_native(&mut self, color: DocumentColor) -> Result<(), GpuRasterError> {
         self.document_color = color;
+        self.device = self.device.clone().with_hdr(color.depth.is_float());
+        self.ui_rendition = color.depth.is_float().then_some(Default::default());
         self.scene = None;
         let transfer = self.prepare_native_transfer(color.space)?;
         self.native_edit = Some(NativeEdit::new(self, transfer));
@@ -393,7 +395,7 @@ impl WgpuRasterizer {
                         working: texture,
                         encoded,
                         canonical,
-                        depth: self.document_color().depth,
+                        depth: self.document_color().depth.coverage(),
                         region: [0, 0, 256, 256],
                     });
                     canonical

@@ -260,13 +260,13 @@ impl ImageImportBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{SampleDepth, RgbSpace, source::*};
     fn source() -> SourceImage {
         let mut builder = SourceBuilder::new(
             [3, 1],
             SourceInterpretation {
                 channels: SourceChannels::Rgba,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
                 profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
                 profile_assumed: true,
             },
@@ -313,7 +313,7 @@ mod tests {
                 .zip(&source.tiles)
                 .all(|((_, a), (_, b))| std::sync::Arc::ptr_eq(a, b))
         );
-        assert_eq!(photo.project.document.color.depth, IntegerDepth::U16);
+        assert_eq!(photo.project.document.color.depth, SampleDepth::U16);
         let mut native = Vec::new();
         photo.project.write(&mut native).unwrap();
         assert!(
@@ -422,4 +422,13 @@ mod tests {
         assert!(batch.take_sources(true).is_err());
         assert!(batch.take_sources(false).is_err());
     }
+}
+
+/// Hosts expose HDR only after integrating presentation, recovery and delivery.
+/// Reject before replacing the live document, including recovered/imported masters.
+pub fn require_sdr_host(document: &layer_core::Document, host: &str) -> Result<(), String> {
+    if document.color.depth.is_float() || document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| s.interpretation.depth.is_float())) {
+        return Err(format!("HDR editing is not enabled on {host}. Open this master in GTK or export its SDR rendition there."));
+    }
+    Ok(())
 }

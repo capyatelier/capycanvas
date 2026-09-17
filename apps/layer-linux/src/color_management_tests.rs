@@ -165,7 +165,7 @@ fn pixels(w: &Rc<Workspace>, id: u32) -> Vec<u8> {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_numeric_colors_and_saved_palettes() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbColor, RgbSpace};
     use layer_ui::{ColorAction, ColorInputModel, ColorSlot};
     let app = native_test_app("art.capycanvas.NumericColors");
     let output = std::path::Path::new("../../artifacts/color-m2/numeric-palette-ui");
@@ -173,7 +173,7 @@ fn native_numeric_colors_and_saved_palettes() {
     let mut project = new_drawing(256, 256).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
@@ -459,14 +459,14 @@ fn native_numeric_colors_and_saved_palettes() {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_sdr_portable_paint_and_sampling() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbColor, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbColor, RgbSpace};
     let app = native_test_app("art.capycanvas.PortablePaint");
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.68, 0.23, 0.47, 1.]).unwrap();
     for space in RgbSpace::ALL {
         let mut project = new_drawing(256, 256).unwrap();
         project.document.color = DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.present();
@@ -559,12 +559,12 @@ fn native_sdr_portable_paint_and_sampling() {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_sdr_document_modes() {
-    use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+    use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
     use layer_render::CanvasRenderer;
     use std::sync::Arc;
     let app = native_test_app("art.capycanvas.SdrDocuments");
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
             let mut project = new_drawing(513, 257).unwrap();
             project.document.color = color;
@@ -588,8 +588,9 @@ fn native_sdr_document_modes() {
                 for x in 0..513 {
                     for value in [((x * 71 + y * 37) % 65536) as u16, 31001, 52999, 50000] {
                         match depth {
-                            IntegerDepth::U8 => row.push((value / 257) as u8),
-                            IntegerDepth::U16 => row.extend_from_slice(&value.to_le_bytes()),
+                            SampleDepth::U8 => row.push((value / 257) as u8),
+                            SampleDepth::U16 => row.extend_from_slice(&value.to_le_bytes()),
+                            SampleDepth::F16 => unreachable!("SDR fixture"),
                         }
                     }
                 }
@@ -707,7 +708,7 @@ fn native_sdr_document_modes() {
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_sdr_bounded_canvas_startup_and_paint() {
-    use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     use layer_render::{CanvasRenderer, ColorSampleArea, ColorSampleRequest, ColorSampleSource};
     let app = native_test_app("art.capycanvas.SdrBoundedCanvas");
     // Exceeds the dense Float32 display ceiling and starts zoomed out in a real
@@ -715,7 +716,7 @@ fn native_sdr_bounded_canvas_startup_and_paint() {
     let mut project = new_drawing(4097, 1025).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();

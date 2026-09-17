@@ -253,6 +253,7 @@ impl Effects {
                 stage,
                 r.device().working_format() == wgpu::TextureFormat::Rgba32Float,
                 r.device().working_space(),
+                r.device().hdr(),
             )?;
             validate_source(&source)?;
             let module = r
@@ -490,6 +491,7 @@ pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), 
         Execution::Preview,
         false,
         Default::default(),
+        false,
     )?)
 }
 fn shader_source(
@@ -498,15 +500,17 @@ fn shader_source(
     stage: Execution,
     extended: bool,
     space: layer_core::color::RgbSpace,
+    hdr: bool,
 ) -> Result<String, GpuRasterError> {
     let mut source = working_color::source(extended, space);
+    source.push_str(include_str!("hdr_mapping.wgsl"));
     source.push_str(include_str!("scene.wgsl"));
     let space_id = layer_core::color::RgbSpace::ALL
         .iter()
         .position(|s| *s == space)
         .unwrap();
     let y = space.to_xyz()[1];
-    source.push_str(&format!("\nconst FX_EXTENDED:bool={extended};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
+    source.push_str(&format!("\nconst FX_EXTENDED:bool={extended};\nconst FX_HDR:bool={hdr};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
     source.push_str(include_str!("effects_color.wgsl"));
     for i in 0..MASK_SLOTS {
         source.push_str(&format!(
@@ -674,7 +678,7 @@ mod tests {
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
         let source =
-            shader_source(p, &vec![0; p.len()], execution, false, Default::default()).unwrap();
+            shader_source(p, &vec![0; p.len()], execution, false, Default::default(), false).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

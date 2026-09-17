@@ -10,13 +10,15 @@ pub enum SdrSurfaceColor {
     Srgb,
     DisplayP3,
     ExtendedLinearSrgb,
+    /// Wayland Windows-scRGB: linear sRGB with RGB 1 = 80 cd/m².
+    WindowsScrgb,
 }
 impl SdrSurfaceColor {
     pub fn surface_color_space(self) -> wgpu::SurfaceColorSpace {
         match self {
             Self::Srgb => wgpu::SurfaceColorSpace::Srgb,
             Self::DisplayP3 => wgpu::SurfaceColorSpace::DisplayP3,
-            Self::ExtendedLinearSrgb => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            Self::ExtendedLinearSrgb | Self::WindowsScrgb => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
         }
     }
     pub(crate) fn primaries(self) -> RgbSpace {
@@ -30,7 +32,7 @@ impl SdrSurfaceColor {
         self,
         format: wgpu::TextureFormat,
     ) -> Result<bool, crate::GpuRasterError> {
-        if self == Self::ExtendedLinearSrgb {
+        if matches!(self, Self::ExtendedLinearSrgb | Self::WindowsScrgb) {
             if !matches!(
                 format,
                 wgpu::TextureFormat::Rgba16Float | wgpu::TextureFormat::Rgba32Float

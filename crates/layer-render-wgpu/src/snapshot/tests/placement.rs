@@ -5,7 +5,7 @@ use super::*;
 fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let extent = [1025, 769];
     let mut project = source_project(color, extent);
@@ -148,7 +148,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
 fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent() {
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut project = source_project(color, [33, 17]);
     let target = project.document.layers[0]

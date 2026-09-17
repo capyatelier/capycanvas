@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 
 #[test]
 fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions() {
@@ -33,7 +33,7 @@ fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions()
 fn native_preview_defers_mip_compilation_without_allocating_or_losing_the_request() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     let layers = [Layer::paint(LayerId(1), "deferred preview")];
@@ -115,7 +115,7 @@ fn pixels(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
 fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updates() {
     let r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     let pipelines = Pipelines::new(&r.device);
@@ -239,7 +239,7 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
 fn native_navigator_averages_fine_stripes_and_preserves_alpha_and_revision_reuse() {
     let color = DocumentColor {
         space: RgbSpace::Srgb,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let extent = [4101, 259];

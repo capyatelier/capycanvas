@@ -3,7 +3,7 @@
 use crate::{DEFAULT_DOCUMENT_EXTENT, MAX_NEW_DOCUMENT_DIMENSION};
 use layer_core::{
     Document, Project,
-    color::{DocumentColor, IntegerDepth, RgbSpace},
+    color::{DocumentColor, SampleDepth, RgbSpace},
 };
 use serde::{Deserialize, Serialize};
 
@@ -55,11 +55,11 @@ impl NewDocumentOptions {
     }
     pub fn description(self) -> String {
         format!(
-            "{} × {} px · {} · {}-bit SDR · {}",
+            "{} × {} px · {} · {} · {}",
             self.extent[0],
             self.extent[1],
             self.color.space.name(),
-            self.color.depth.bits(),
+            self.color.depth.label(),
             if self.background == DocumentBackground::White {
                 "White"
             } else {
@@ -78,9 +78,9 @@ pub struct NewDocumentPreset {
 impl NewDocumentPreset {
     pub fn builtins() -> [Self; 3] {
         [
-            ("Standard drawing", RgbSpace::Srgb, IntegerDepth::U8),
-            ("Wide color", RgbSpace::DisplayP3, IntegerDepth::U8),
-            ("Photo editing", RgbSpace::ProPhoto, IntegerDepth::U16),
+            ("Standard drawing", RgbSpace::Srgb, SampleDepth::U8),
+            ("Wide color", RgbSpace::DisplayP3, SampleDepth::U8),
+            ("Photo editing", RgbSpace::ProPhoto, SampleDepth::U16),
         ]
         .map(|(name, space, depth)| Self {
             name: name.into(),
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn creation_preserves_independent_depth_space_and_background() {
         for space in RgbSpace::ALL {
-            for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+            for depth in [SampleDepth::U8, SampleDepth::U16] {
                 for background in [DocumentBackground::White, DocumentBackground::Transparent] {
                     let options = NewDocumentOptions {
                         extent: [513, 257],

@@ -6,7 +6,7 @@ fn native_tagged_effect_and_gradient_colors_match_document_rgb_in_both_depths() 
     use layer_core::{GradientStop, color::RgbColor};
     let color = RgbColor::new(RgbSpace::DisplayP3, [0.9, 0.2, 0.15, 0.37]).unwrap();
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             for image in [false, true] {
                 for alpha in [0., 1. / 65535., 0.37, 1.] {
@@ -35,7 +35,7 @@ fn native_tagged_effect_and_gradient_colors_match_document_rgb_in_both_depths() 
 #[test]
 fn native_neutral_tone_chains_preserve_extended_rgb_and_low_alpha_exactly() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut r =
                 WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
             for image in [false, true] {
@@ -78,7 +78,7 @@ fn native_levels_clipping_is_explicit_and_matches_profiled_signed_gamma_referenc
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         let encoded: [f64; 3] = [-0.125, 0.41, 1.125];
@@ -160,7 +160,7 @@ fn samples(r: &mut WgpuRasterizer, layer: &Layer) -> Vec<f32> {
 fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     })
     .unwrap();
     for image in [false, true] {
@@ -226,7 +226,7 @@ fn native_hue_vibrance_and_balance_preserve_extended_color_with_document_tone_co
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         for image in [false, true] {
@@ -274,7 +274,7 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
             space,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         })
         .unwrap();
         for image in [false, true] {
@@ -307,6 +307,45 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
                     ((encoded * 65535.).round() - (expected * 65535.).round()).abs() <= 1.,
                     "encoded {space:?} image={image} {code}: {encoded} vs {expected}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_linear_curves_and_exposure_retain_range_across_physical_passes() {
+    let points=vec![[0.,0.05],[0.25,0.2],[0.75,0.85],[1.,0.95]];
+    for space in RgbSpace::ALL {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth:SampleDepth::F16}).unwrap();
+        for image in [false,true] {
+            for alpha in [0.,1./16777216.,0.5,1.] {
+                let rgb=[-0.25,4.,32768.];
+                let mut curve=effect(2,"curves",image);
+                set(&mut curve,"domain",EffectValue::Choice(1));set(&mut curve,"hdr_stops",EffectValue::Number(4.));
+                set(&mut curve,"curve_0",EffectValue::Curve(points.clone()));
+                let mut exposure=effect(3,"exposure",image);set(&mut exposure,"exposure",EffectValue::Number(1.));
+                let actual=frame(&mut r,&[exposure,curve,source(rgb,alpha)]);
+                assert_eq!(actual[3],alpha);
+                for c in 0..3 {let expected=if alpha==0.{0.}else{curve_reference(&points,f64::from(rgb[c])/16.)*32.};
+                    let actual=if alpha==0.{actual[c]}else{actual[c]/alpha} as f64;
+                    assert!((actual-expected).abs()<=2e-6+expected.abs()*2e-5,"HDR curve {space:?}, physical={image}, alpha={alpha}: {actual} != {expected}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
+    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16] {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::Srgb,depth}).unwrap();
+        let layers=[effect(2,"exposure",false),source([0.25,2.,-0.125],1.)];
+        for extent in [[512,384],[513,385],[385,513]] {
+            r.submit(FramePacket{view:ViewState{width_px:extent[0],height_px:extent[1],background_rgba_linear:[0.;4],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.}).unwrap();
+            let pixels=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
+            for (i,p) in pixels.chunks_exact(16).enumerate() {
+                let actual: [f32;4]=std::array::from_fn(|c| f32::from_le_bytes(p[c*4..c*4+4].try_into().unwrap()));
+                assert_eq!(actual,[0.25,2.,-0.125,1.],"{depth:?} {extent:?} {},{}",i%extent[0] as usize,i/extent[0] as usize);
             }
         }
     }

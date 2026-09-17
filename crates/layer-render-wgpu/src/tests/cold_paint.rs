@@ -1,7 +1,7 @@
 //! A zero-sized mutable cache forces native artwork through its lossless backing.
 //! Compare complete consumers, not just allocation counts or the decoded cache.
 use super::*;
-use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
+use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, Project};
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
@@ -20,8 +20,9 @@ fn project(color: DocumentColor) -> Project {
             }
             let pixel = [((x * 2351 + y * 71) % 65536) as u16, 32123, 51007, 65535];
             let pixel: Vec<_> = match color.depth {
-                IntegerDepth::U16 => pixel.into_iter().flat_map(u16::to_le_bytes).collect(),
-                IntegerDepth::U8 => pixel.map(|v| (v >> 8) as u8).to_vec(),
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::U16 => pixel.into_iter().flat_map(u16::to_le_bytes).collect(),
+                SampleDepth::U8 => pixel.map(|v| (v >> 8) as u8).to_vec(),
             };
             data.tiles.insert(
                 TileKey {
@@ -116,7 +117,7 @@ fn backing(root: &RasterRevision) -> std::collections::BTreeMap<TileKey, Vec<u8>
 #[test]
 fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let p = project(DocumentColor { space, depth });
             let id = p.document.layers[0].id;
             let mut resident = renderer(&p, u64::MAX);
@@ -176,7 +177,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
 fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revisions() {
     let mut p = project(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let original = p.document.layers[0].raster.clone();
     let original_bytes = backing(&original);
@@ -256,7 +257,7 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
 fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cancel() {
     let p = project(DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let id = p.document.layers[0].id;
     let mut resident = renderer(&p, u64::MAX);
@@ -294,13 +295,13 @@ fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions
     use layer_core::color::{ColorProfile, source::*};
     let mut p = project(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     let mut source = SourceBuilder::new(
         EXTENT,
         SourceInterpretation {
             channels: SourceChannels::Rgb,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(RgbSpace::AdobeRgb),
             profile_assumed: false,
         },
@@ -339,7 +340,7 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
     ] {
         let mut a = project(DocumentColor {
             space: RgbSpace::ProPhoto,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         });
         let mut b = a.clone();
         let id = a.document.layers[0].id;
@@ -413,7 +414,7 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
 
 #[test]
 fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges() {
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let mut a = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
         let mut b = a.clone();
         let id = a.document.layers[0].id;
@@ -508,7 +509,7 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
 fn cold_native_color_feeds_bounded_live_filter_windows() {
     let mut p = project(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     });
     p.document
         .layers
@@ -543,7 +544,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
     ] {
         let mut a = project(DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         });
         let mut b = a.clone();
         let id = a.document.layers[0].id;

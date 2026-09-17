@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{IntegerDepth, source::*};
+use layer_core::color::{SampleDepth, source::*};
 
 #[test]
 fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_prediction() {
@@ -8,7 +8,7 @@ fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_predic
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: Default::default(),
             profile_assumed: false,
         },

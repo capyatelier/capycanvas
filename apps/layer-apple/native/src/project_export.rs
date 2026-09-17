@@ -70,6 +70,7 @@ impl Task {
         let mut output = std::io::BufWriter::new(stream);
         let target = recipe.interpretation();
         let statistics = match recipe.format {
+            ExportFormat::PngHdr | ExportFormat::PngHdrMapped => Err("HDR delivery is not enabled on this host".into()),
             ExportFormat::Png => renderer.write_png(&mut output, &target, recipe.encoding, recipe.background.matte()),
             ExportFormat::Tiff => renderer.write_tiff(&mut output, &target, recipe.encoding, recipe.background.matte()),
             ExportFormat::Jpeg => renderer.write_jpeg(&mut output, &target, recipe.encoding,

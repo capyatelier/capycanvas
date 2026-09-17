@@ -24,9 +24,14 @@ fn fx_preserve_luma(c:vec3<f32>,l:f32) -> vec3<f32> {
 fn capy_curves(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     if FX_EXTENDED && fx_parameter(base,0u).y==1. && fx_parameter(base,65u).y==1.
         && fx_parameter(base,130u).y==1. && fx_parameter(base,195u).y==1. {return c;}
-    let rgb=fx_rgb(c);
+    let hdr=fx_parameter(base,260u).x>0.5;
+    let scale=exp2(fx_parameter(base,261u).x);
+    var rgb=fx_rgb(c);
+    if hdr {rgb=fx_unassociate(c)/scale;}
     let channel=vec3<f32>(fx_lut(base,65u,rgb.r).r,fx_lut(base,130u,rgb.g).r,fx_lut(base,195u,rgb.b).r);
-    return fx_rgba(vec3<f32>(fx_lut(base,0u,channel.r).r,fx_lut(base,0u,channel.g).r,fx_lut(base,0u,channel.b).r),c.a);
+    let result=vec3<f32>(fx_lut(base,0u,channel.r).r,fx_lut(base,0u,channel.g).r,fx_lut(base,0u,channel.b).r);
+    if hdr {return vec4(result*scale*c.a,c.a);}
+    return fx_rgba(result,c.a);
 }
 fn capy_levels(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     let low=fx_parameter(base,0u).x; let high=fx_parameter(base,1u).x;
@@ -130,7 +135,9 @@ fn capy_black_white(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     let rgb=fx_rgb(c); let hsl=fx_hsl(rgb); let hue=hsl.x*6.; let sector=u32(floor(hue))%6u;
     let weight=mix(fx_parameter(base,sector).x,fx_parameter(base,(sector+1u)%6u).x,fract(hue))/100.;
     let low=min(rgb.r,min(rgb.g,rgb.b)); let high=max(rgb.r,max(rgb.g,rgb.b));
-    let value=clamp(low+(high-low)*weight,0.,1.); var out=vec3<f32>(value);
+    var value=low+(high-low)*weight;
+    if !FX_HDR {value=clamp(value,0.,1.);}
+    var out=vec3<f32>(value);
     if fx_parameter(base,6u).x>.5 {
         let tint=fx_hsl(fx_parameter(base,7u).rgb);out=fx_hsl_rgb(vec3<f32>(tint.xy,value));
     }

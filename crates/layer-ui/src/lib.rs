@@ -13,7 +13,7 @@ pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, 
 pub mod profile_library;
 
 mod import_policy;
-pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import};
+pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import, require_sdr_host};
 
 pub mod recovery;
 mod workspace_update;
@@ -204,6 +204,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
         &[CommandId::Histogram],
+        &[CommandId::SdrRendition, CommandId::PreviewSdr],
         &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
@@ -447,6 +448,8 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    SdrRendition,
+    PreviewSdr,
     SoftProofSetup,
     SoftProof,
     GamutWarning,
@@ -529,7 +532,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => platform == Platform::Gtk,
+            Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => platform == Platform::Gtk,
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac),
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
@@ -600,13 +603,14 @@ impl CommandId {
                 | Self::ShowRulers
                 | Self::SnapRulers
                 | Self::TransformAspect
+                | Self::PreviewSdr
                 | Self::SoftProof
                 | Self::GamutWarning
         )
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
-            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
+            Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
             Self::Histogram => "stats",
             Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
@@ -672,7 +676,9 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 78] = [
+        Self::SdrRendition,
+        Self::PreviewSdr,
         Self::SoftProofSetup,
         Self::SoftProof,
         Self::GamutWarning,
@@ -778,6 +784,8 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::SdrRendition => "SDR Rendition…",
+            Self::PreviewSdr => "Preview on SDR Display",
             Self::SoftProofSetup => "Proof Setup…",
             Self::SoftProof => "Proof Colors",
             Self::GamutWarning => "Gamut Warning",
@@ -929,6 +937,7 @@ pub struct DocumentTab {
 pub struct UiState {
     /// Temporary viewing choices, excluded from document and workspace saving.
     pub soft_proof: bool,
+    pub preview_sdr: bool,
     pub gamut_warning: bool,
     pub revision: u64,
     /// Observed native/browser window state; never stored in workspace preferences.

@@ -39,7 +39,7 @@ fn upload(r: &WgpuRasterizer, t: &wgpu::Texture, values: &[f32]) {
         t.size(),
     );
 }
-fn buffer(r: &WgpuRasterizer, depth: IntegerDepth) -> wgpu::Buffer {
+fn buffer(r: &WgpuRasterizer, depth: SampleDepth) -> wgpu::Buffer {
     r.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("packed native scalar fixture"),
         size: 65536 * depth.bytes() as u64,
@@ -82,8 +82,8 @@ fn capture(
     .unwrap();
     tile.wait_backing().unwrap().decode().unwrap()
 }
-fn code(bytes: &[u8], i: usize, depth: IntegerDepth) -> u32 {
-    if depth == IntegerDepth::U8 {
+fn code(bytes: &[u8], i: usize, depth: SampleDepth) -> u32 {
+    if depth == SampleDepth::U8 {
         bytes[i] as u32
     } else {
         u16::from_le_bytes(bytes[i * 2..i * 2 + 2].try_into().unwrap()) as u32
@@ -132,7 +132,7 @@ fn scalar_corpus(in_place: bool) {
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r);
     let canonical = if in_place { working.clone() } else { texture(&r) };
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let encoded = buffer(&r, depth);
         let maximum = depth.maximum();
         for pattern in 0..4 {
@@ -184,7 +184,7 @@ fn scalar_corpus(in_place: bool) {
                         && y < region[1] + region[3];
                     let expected = if inside {
                         (f64::from(*value) * maximum as f64).round() as u32
-                    } else if depth == IntegerDepth::U8 {
+                    } else if depth == SampleDepth::U8 {
                         0xa5
                     } else {
                         0xa5a5
@@ -216,8 +216,8 @@ fn scalar_native_capture_rejects_entire_mixed_publication_on_invalid_coverage() 
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r);
     let canonical = [texture(&r), texture(&r)];
-    let buffers = [buffer(&r, IntegerDepth::U8), buffer(&r, IntegerDepth::U16)];
-    let requests: Vec<_> = [IntegerDepth::U8, IntegerDepth::U16]
+    let buffers = [buffer(&r, SampleDepth::U8), buffer(&r, SampleDepth::U16)];
+    let requests: Vec<_> = [SampleDepth::U8, SampleDepth::U16]
         .into_iter()
         .enumerate()
         .map(|(i, depth)| NativeScalarRequest {
@@ -289,12 +289,12 @@ fn scalar_native_preflights_shapes_aliases_depth_and_capture_descriptor() {
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r);
     let canonical = texture(&r);
-    let encoded = buffer(&r, IntegerDepth::U16);
+    let encoded = buffer(&r, SampleDepth::U16);
     let make = || NativeScalarRequest {
         working: &working,
         encoded: &encoded,
         canonical: &canonical,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
         region: [0, 0, 256, 256],
     };
     assert!(encoder.prepare(&r.device, &[], &status).unwrap().is_empty());
@@ -321,7 +321,7 @@ fn scalar_native_preflights_shapes_aliases_depth_and_capture_descriptor() {
     request.canonical = &working;
     assert!(encoder.prepare(&r.device, &[request], &status).is_err());
     let mut request = make();
-    request.depth = IntegerDepth::U8;
+    request.depth = SampleDepth::U8;
     assert!(encoder.prepare(&r.device, &[request], &status).is_err());
     let tile = RasterTile::pending(PixelDescriptor::COVERAGE8);
     assert!(
@@ -348,9 +348,9 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
     let depths: Vec<_> = (0..16)
         .map(|i| {
             if i % 2 == 0 {
-                IntegerDepth::U8
+                SampleDepth::U8
             } else {
-                IntegerDepth::U16
+                SampleDepth::U16
             }
         })
         .collect();
@@ -371,7 +371,7 @@ fn scalar_native_restore_capture_cycles_preserve_codes_and_bound_uploads() {
             (0..65536u32)
                 .flat_map(|i| {
                     let value = (i * (j as u32 * 2 + 1)) as u16;
-                    if *d == IntegerDepth::U8 {
+                    if *d == SampleDepth::U8 {
                         vec![value as u8]
                     } else {
                         value.to_le_bytes().to_vec()
@@ -476,7 +476,7 @@ fn scalar_slots(in_place: bool) {
     let values: Vec<Vec<f32>> = (0..3).map(|slot| (0..65536u32).map(|i| {
         ((i.wrapping_mul(113) + slot * 17) & 65535) as f32 / 65535.
     }).collect()).collect();
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let encoded: Vec<_> = (0..3).map(|_| buffer(&r, depth)).collect();
         let seed = vec![0x39; 65536 * depth.bytes()];
         for region in [[0, 0, 256, 256], [1, 3, 253, 251]] {
@@ -497,7 +497,7 @@ fn scalar_slots(in_place: bool) {
                     let (x, y) = (i as u32 % 256, i as u32 / 256);
                     let inside = x >= region[0] && y >= region[1] && x < region[0] + region[2] && y < region[1] + region[3];
                     let expected = if inside { (f64::from(*value) * f64::from(depth.maximum())).round() as u32 }
-                        else if depth == IntegerDepth::U8 { 0x39 } else { 0x3939 };
+                        else if depth == SampleDepth::U8 { 0x39 } else { 0x3939 };
                     assert_eq!(code(&bytes, i, depth), expected, "slot {slot} pixel {i}");
                     let actual = f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     if inside {

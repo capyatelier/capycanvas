@@ -2,6 +2,7 @@ mod alert;
 mod canvas;
 mod display_color;
 mod proof_view;
+mod hdr;
 mod effects;
 mod files;
 mod histogram;

@@ -6,7 +6,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
     let r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             for channels in [
                 SourceChannels::Gray,
                 SourceChannels::GrayAlpha,
@@ -214,7 +214,7 @@ fn native_source_decode_workloads() {
     let _affinity = pin_benchmark_thread();
     let scene = Scene::new(&r);
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             let mut builder = SourceBuilder::new(
                 [1280, 1024],
                 SourceInterpretation {
@@ -346,7 +346,7 @@ impl Drop for BenchmarkAffinity {
 }
 
 fn raster_fixture(
-    depth: IntegerDepth,
+    depth: SampleDepth,
     alpha: AlphaAssociation,
     alpha_code: Option<u32>,
 ) -> (Arc<TileBlob>, Vec<u8>) {
@@ -363,6 +363,7 @@ fn raster_fixture(
         .flat_map(|v| (v as u16).to_le_bytes().into_iter().take(depth.bytes()))
         .collect();
     let descriptor = PixelDescriptor {
+            sample: layer_core::color::SampleType::Unsigned,
         channels: 4,
         bits_per_channel: depth.bits(),
         encoding: TransferEncoding::Profile,
@@ -456,7 +457,7 @@ fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() 
     let r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
-    let (first, bytes) = raster_fixture(IntegerDepth::U16, AlphaAssociation::Straight, Some(32767));
+    let (first, bytes) = raster_fixture(SampleDepth::U16, AlphaAssociation::Straight, Some(32767));
     let second = Arc::new(TileBlob::encode_source(first.descriptor, &bytes).unwrap());
     assert!(!Arc::ptr_eq(&first, &second));
     assert_eq!(first.digest, second.digest);
@@ -486,7 +487,7 @@ fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
             for association in [
                 AlphaAssociation::Straight,
                 AlphaAssociation::PremultipliedLinear,
@@ -522,7 +523,7 @@ fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
                             .zip(actual.chunks_exact(16))
                         {
                             let code: [u32; 4] = std::array::from_fn(|c| {
-                                if depth == IntegerDepth::U8 {
+                                if depth == SampleDepth::U8 {
                                     u32::from(input[c])
                                 } else {
                                     u32::from(u16::from_le_bytes(
@@ -609,7 +610,7 @@ fn check_cache_ownership(r: WgpuRasterizer) {
         [256; 2],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U8,
+            depth: SampleDepth::U8,
             profile: ColorProfile::Builtin(RgbSpace::Srgb),
             profile_assumed: false,
         },
@@ -620,7 +621,7 @@ fn check_cache_ownership(r: WgpuRasterizer) {
         source_builder.push_row(&[127; 1024]).unwrap();
     }
     let source = Arc::new(source_builder.finish().unwrap());
-    let (blob, _) = raster_fixture(IntegerDepth::U16, AlphaAssociation::Straight, Some(65535));
+    let (blob, _) = raster_fixture(SampleDepth::U16, AlphaAssociation::Straight, Some(65535));
     let weak = Arc::downgrade(&blob);
     let mut identities = Vec::new();
     for i in 0..DECODED_SLOTS * 4 {

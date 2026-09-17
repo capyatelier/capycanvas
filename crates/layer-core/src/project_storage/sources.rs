@@ -1,7 +1,7 @@
 //! Immutable source indices share tile payloads with the archive. Profiles are
 //! binary payloads, never large JSON byte arrays or reconstructed display names.
 use super::*;
-use crate::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use crate::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 
 #[derive(Clone, Serialize, Deserialize)]
 enum ProfileReference {
@@ -15,7 +15,7 @@ struct ImageRecord {
     kind: SourceKind,
     extent: [u32; 2],
     channels: SourceChannels,
-    depth: IntegerDepth,
+    depth: SampleDepth,
     profile: ProfileReference,
     profile_assumed: bool,
     tiles: Vec<SourceTileRecord>,

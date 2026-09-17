@@ -9,7 +9,7 @@ fn fixture() -> Project {
     let mut p = new_drawing(64, 16).unwrap();
     p.document.color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     p.document
         .layers
@@ -21,7 +21,7 @@ fn fixture() -> Project {
         [64, 16],
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
             profile_assumed: false,
         },

@@ -71,7 +71,7 @@ impl PreviewMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::color::{IntegerDepth, source::*};
+    use layer_core::color::{SampleDepth, source::*};
 
     #[test]
     fn cache_keys_release_source_and_raster_backing_and_track_replacement() {
@@ -79,7 +79,7 @@ mod tests {
             [1, 1],
             SourceInterpretation {
                 channels: SourceChannels::Rgba,
-                depth: IntegerDepth::U16,
+                depth: SampleDepth::U16,
                 profile: Default::default(),
                 profile_assumed: false,
             },

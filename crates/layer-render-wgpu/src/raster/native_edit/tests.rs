@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{IntegerDepth, RgbSpace};
+use layer_core::color::{SampleDepth, RgbSpace};
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
     input_queue,
@@ -98,7 +98,7 @@ fn engine(
 #[test]
 fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples() {
     for space in RgbSpace::ALL {
-        for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
             let color = DocumentColor { space, depth };
             let mut document = layer_core::Document::new("native workflow", 256, 256);
             document.color = color;
@@ -176,7 +176,7 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
 #[test]
 fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
     use layer_core::color::{ColorProfile, source::*};
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         for in_place in [false, true] {
             let mut document = layer_core::Document::new("photo pen", 4353, 769);
             document.color = DocumentColor {
@@ -188,7 +188,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
                 [4353, 769],
                 SourceInterpretation {
                     channels: SourceChannels::Rgb,
-                    depth: IntegerDepth::U8,
+                    depth: SampleDepth::U8,
                     profile: ColorProfile::Builtin(RgbSpace::Srgb),
                     profile_assumed: false,
                 },
@@ -214,8 +214,9 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             }];
             let stride = usize::from(depth.bits() / 8) * 4;
             let expected: Vec<u8> = match depth {
-                IntegerDepth::U8 => vec![70, 140, 210, 255],
-                IntegerDepth::U16 => [70u16, 140, 210, 255]
+                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::U8 => vec![70, 140, 210, 255],
+                SampleDepth::U16 => [70u16, 140, 210, 255]
                     .into_iter()
                     .flat_map(|v| (v * 257).to_le_bytes())
                     .collect(),
@@ -251,7 +252,7 @@ fn native_large_source_transform(linked_mask: bool) {
     use layer_core::color::{ColorProfile, source::*};
     use layer_core::{Affine, ImageTransform, LayerMask, LayerOperation, LayerOperationKind, Point};
     let extent = [8192, 7324];
-    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut document = layer_core::Document::new("60 MP native transform", extent[0], extent[1]);
     document.color = color;
     let mut source = SourceBuilder::new(extent, SourceInterpretation {
@@ -448,7 +449,7 @@ fn mark_changed(r: &mut WgpuRasterizer, layers: &mut [Layer]) {
 fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changing_codes() {
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
@@ -509,7 +510,7 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
     for mask_failure in [false, true] {
         let color = DocumentColor {
             space: RgbSpace::DisplayP3,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
         };
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut layers = restored_fixture(&mut r);
@@ -577,7 +578,7 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
 fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits() {
     let color = DocumentColor {
         space: RgbSpace::AdobeRgb,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
@@ -699,7 +700,7 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
 fn batched_validation_scans_every_texture_slot_and_partial_tail() {
     let r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     }).unwrap();
     let native = r.native_edit.as_ref().unwrap();
     let textures: Vec<_> = [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::R32Float]
@@ -760,7 +761,7 @@ fn batched_validation_scans_every_texture_slot_and_partial_tail() {
 
 #[test]
 fn deferred_native_outputs_preserve_versions_and_status_during_following_frames() {
-    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
     let before = backing(&layers[0].raster);
@@ -805,7 +806,7 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
 #[test]
 fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_backing() {
     let mut document = layer_core::Document::new("pending backing", 256, 256);
-    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: IntegerDepth::U16 };
+    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let (mut input, mut live) = engine(document);
     while !live.backend().raster_ready() { std::thread::yield_now(); }
     let presentation = live.backend().prioritize_raster_presentation();
@@ -843,7 +844,7 @@ fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_bac
 
 #[test]
 fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
-    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: IntegerDepth::U16 };
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
     let checkpoint = layers.clone();
@@ -867,7 +868,7 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
 
 #[test]
 fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
-    for depth in [IntegerDepth::U8, IntegerDepth::U16] {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
         let color = DocumentColor { space: RgbSpace::ProPhoto, depth };
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         assert!(r.native_edit.as_ref().unwrap().promoter.is_none(), "in-place feature must be active for this comparison");

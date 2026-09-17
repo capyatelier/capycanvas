@@ -1,6 +1,6 @@
 //! Source-only measurement/interchange runner. This does not qualify editing.
 use layer_color::photo::{DecodeLimits, read_photo, write_png, write_tiff};
-use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Write},
@@ -30,7 +30,7 @@ fn main() -> Result<(), String> {
                 [w, h],
                 SourceInterpretation {
                     channels: SourceChannels::Rgba,
-                    depth: IntegerDepth::U16,
+                    depth: SampleDepth::U16,
                     profile,
                     profile_assumed: false,
                 },

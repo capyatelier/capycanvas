@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
+use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
 
 fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterError> {
@@ -103,7 +103,7 @@ fn partial_admission_preserves_reduced_levels_during_hidpi_zoom() {
 #[test]
 fn large_rotated_hidpi_views_fit_the_original_display_budget() {
     let mut r = bounded_renderer(DocumentColor {
-        space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
+        space: RgbSpace::ProPhoto, depth: SampleDepth::U16,
     }).unwrap();
     r.document_extent = [9504, 6336];
     let pipelines = display_mips::Pipelines::new(&r.device);
@@ -326,13 +326,13 @@ fn document(extent: [u32; 2]) -> layer_core::Document {
     let mut doc = layer_core::Document::new("bounded live display", extent[0], extent[1]);
     doc.color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut builder = SourceBuilder::new(
         extent,
         SourceInterpretation {
             channels: SourceChannels::Rgba,
-            depth: IntegerDepth::U16,
+            depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
             profile_assumed: false,
         },
@@ -822,7 +822,7 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
     use std::time::{Duration, Instant};
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut doc = layer_core::Document::new("large staged document", 4097, 1025);
     doc.color = color;
@@ -906,7 +906,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     };
     let color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: IntegerDepth::U16,
+        depth: SampleDepth::U16,
     };
     let mut doc = layer_core::Document::new("bounded native drawing", 1025, 513);
     doc.color = color;
