@@ -613,6 +613,14 @@ impl PageSurface {
     fn storage_bytes(&self) -> u64 {
         texture_bytes(&self.texture)
     }
+
+    fn copy_to(&self, destination: &Self, encoder: &mut crate::submission::CommandEncoder) {
+        encoder.copy_texture_to_texture(
+            self.texture.as_image_copy(),
+            destination.texture.as_image_copy(),
+            self.texture.size(),
+        );
+    }
 }
 
 impl LayerPage {
@@ -2672,9 +2680,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         struct Job {
             coordinate: [u32; 2],
-            source_secondary: bool,
             destination_secondary: bool,
-            coverage_source_secondary: Option<bool>,
             coverage_destination_secondary: Option<bool>,
             has_scalar_state: bool,
         }
@@ -2754,11 +2760,20 @@ impl WgpuRasterizer {
                 .coverage_pages
                 .iter()
                 .find(|page| page.coordinate == coordinate && page.owner == Some(batch.stroke_id));
+            // Preserve this batch's old generations together, before any tile
+            // draws. Source neighborhoods remain consumed one draw at a time.
+            page.active().copy_to(page.surface(!page.active_secondary), encoder);
+            if let Some(coverage) = coverage {
+                let destination = if coverage.active_secondary {
+                    &coverage.primary
+                } else {
+                    &coverage.secondary
+                };
+                coverage.active().copy_to(destination, encoder);
+            }
             jobs.push(Job {
                 coordinate,
-                source_secondary: page.active_secondary,
                 destination_secondary: !page.active_secondary,
-                coverage_source_secondary: coverage.map(|page| page.active_secondary),
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_scalar_state: if plan.state.watercolor_wetness {
                     self.paint_layers[layer_index]
@@ -2783,66 +2798,7 @@ impl WgpuRasterizer {
                 .iter()
                 .find(|page| page.coordinate == job.coordinate)
                 .expect("destination page remains live while encoding");
-            let source = page.surface(job.source_secondary);
             let destination = page.surface(job.destination_secondary);
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &source.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &destination.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: PAGE_SIZE,
-                    height: PAGE_SIZE,
-                    depth_or_array_layers: 1,
-                },
-            );
-            if let (Some(source_secondary), Some(destination_secondary)) = (
-                job.coverage_source_secondary,
-                job.coverage_destination_secondary,
-            ) {
-                let coverage = self.paint_layers[layer_index]
-                    .coverage_pages
-                    .iter()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("stroke coverage page remains live while encoding");
-                let source = if source_secondary {
-                    &coverage.secondary
-                } else {
-                    &coverage.primary
-                };
-                let destination = if destination_secondary {
-                    &coverage.secondary
-                } else {
-                    &coverage.primary
-                };
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &source.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &destination.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: PAGE_SIZE,
-                        height: PAGE_SIZE,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
             // Initialize the inactive wetness target once for the submitted
             // update. Every internal deposition microbatch accumulates into it
             // with fixed-function MAX blending before transport begins.
@@ -3060,9 +3016,7 @@ impl WgpuRasterizer {
 
         struct Job {
             coordinate: [u32; 2],
-            color_source_secondary: bool,
             color_destination_secondary: bool,
-            wetness_source_secondary: bool,
             wetness_destination_secondary: bool,
         }
 
@@ -3076,6 +3030,8 @@ impl WgpuRasterizer {
             .transport_bind_group
             .clone();
 
+        // Synchronize the first stage's destinations in one copy batch. Later
+        // stages overwrite the same scissor, leaving identical pixels outside.
         for step in 0..WATERCOLOR_TRANSPORT_STEPS {
             let jobs = if preview {
                 updated
@@ -3091,11 +3047,13 @@ impl WgpuRasterizer {
                             .iter()
                             .find(|page| page.coordinate == *coordinate)
                             .expect("preview transport wetness is prepared before encoding");
+                        if step == 0 {
+                            color.active().copy_to(color.surface(!color.active_secondary), encoder);
+                            wetness.active().copy_to(wetness.inactive(), encoder);
+                        }
                         Job {
                             coordinate: *coordinate,
-                            color_source_secondary: color.active_secondary,
                             color_destination_secondary: !color.active_secondary,
-                            wetness_source_secondary: wetness.active_secondary,
                             wetness_destination_secondary: !wetness.active_secondary,
                         }
                     })
@@ -3119,11 +3077,13 @@ impl WgpuRasterizer {
                             .iter()
                             .find(|page| page.coordinate == *coordinate)
                             .expect("transport wetness is prepared before encoding");
+                        if step == 0 {
+                            color.active().copy_to(color.surface(!color.active_secondary), encoder);
+                            wetness.active().copy_to(wetness.inactive(), encoder);
+                        }
                         Job {
                             coordinate: *coordinate,
-                            color_source_secondary: color.active_secondary,
                             color_destination_secondary: !color.active_secondary,
-                            wetness_source_secondary: wetness.active_secondary,
                             wetness_destination_secondary: !wetness.active_secondary,
                         }
                     })
@@ -3133,7 +3093,7 @@ impl WgpuRasterizer {
             for job in &jobs {
                 let bind_group =
                     self.transport_bind_group(batch.layer_id, job.coordinate, preview, encoder)?;
-                let (color_source, color_destination, wetness_source, wetness_destination) =
+                let (color_destination, wetness_destination) =
                     if preview {
                         let color = self
                             .preview_pages
@@ -3146,9 +3106,7 @@ impl WgpuRasterizer {
                             .find(|page| page.coordinate == job.coordinate)
                             .expect("preview transport wetness remains live while encoding");
                         (
-                            color.surface(job.color_source_secondary),
                             color.surface(job.color_destination_secondary),
-                            wetness.surface(job.wetness_source_secondary),
                             wetness.surface(job.wetness_destination_secondary),
                         )
                     } else {
@@ -3168,42 +3126,10 @@ impl WgpuRasterizer {
                             .find(|page| page.coordinate == job.coordinate)
                             .expect("transport wetness remains live while encoding");
                         (
-                            color.surface(job.color_source_secondary),
                             color.surface(job.color_destination_secondary),
-                            wetness.surface(job.wetness_source_secondary),
                             wetness.surface(job.wetness_destination_secondary),
                         )
                     };
-                // The first stage synchronizes both ping-pong generations.
-                // Every later stage overwrites the full local scissor while
-                // pixels outside it are already identical, so copying again
-                // is redundant page traffic.
-                if step == 0 {
-                    for (source, destination) in [
-                        (color_source, color_destination),
-                        (wetness_source, wetness_destination),
-                    ] {
-                        encoder.copy_texture_to_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &source.texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &destination.texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d {
-                                width: PAGE_SIZE,
-                                height: PAGE_SIZE,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    }
-                }
                 let page_damage = damages.iter().fold(PixelRect::EMPTY, |combined, damage| {
                     combined.union(damage.intersect(page_rect(job.coordinate)))
                 });
@@ -3470,9 +3396,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         struct Job {
             coordinate: [u32; 2],
-            source_secondary: bool,
             destination_secondary: bool,
-            coverage_source_secondary: Option<bool>,
             coverage_destination_secondary: Option<bool>,
             has_watercolor_wetness: bool,
         }
@@ -3491,11 +3415,20 @@ impl WgpuRasterizer {
                     .find(|page| page.coordinate == coordinate)
                     .expect("preview coverage page is prepared before encoding")
             });
+            // Preserve this batch's old generations together, before any tile
+            // draws. Source neighborhoods remain consumed one draw at a time.
+            page.active().copy_to(page.surface(!page.active_secondary), encoder);
+            if let Some(coverage) = coverage {
+                let destination = if coverage.active_secondary {
+                    &coverage.primary
+                } else {
+                    &coverage.secondary
+                };
+                coverage.active().copy_to(destination, encoder);
+            }
             jobs.push(Job {
                 coordinate,
-                source_secondary: page.active_secondary,
                 destination_secondary: !page.active_secondary,
-                coverage_source_secondary: coverage.map(|page| page.active_secondary),
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_watercolor_wetness: plan.state.watercolor_wetness,
             });
@@ -3511,66 +3444,7 @@ impl WgpuRasterizer {
                 .iter()
                 .find(|page| page.coordinate == job.coordinate)
                 .expect("preview destination page remains live while encoding");
-            let source = page.surface(job.source_secondary);
             let destination = page.surface(job.destination_secondary);
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &source.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &destination.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: PAGE_SIZE,
-                    height: PAGE_SIZE,
-                    depth_or_array_layers: 1,
-                },
-            );
-            if let (Some(source_secondary), Some(destination_secondary)) = (
-                job.coverage_source_secondary,
-                job.coverage_destination_secondary,
-            ) {
-                let coverage = self
-                    .preview_coverage_pages
-                    .iter()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("preview coverage page remains live while encoding");
-                let source = if source_secondary {
-                    &coverage.secondary
-                } else {
-                    &coverage.primary
-                };
-                let destination = if destination_secondary {
-                    &coverage.secondary
-                } else {
-                    &coverage.primary
-                };
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &source.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &destination.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: PAGE_SIZE,
-                        height: PAGE_SIZE,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
             // The preview update uses the same one-snapshot contract as
             // persistent watercolor. Initialization happens once before its
             // first microbatch.

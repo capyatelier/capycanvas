@@ -47,7 +47,8 @@ see the [display record](apple-handoff.md#managed-sdr-canvas-and-controls).
 Retained source/paint/correction/mask recovery now passes the complete persistence
 barrier and fresh-owner restoration on Mac Metal with both Apple policies;
 the [recovery record](apple-handoff.md#sdr-recovery-and-current-review-builds)
-identifies the updated physical review apps and pending grouped device check.
+identifies the review apps and user-confirmed drawing, Undo/Redo, background/return
+and local Save As/reopen workflow on both devices.
 The 61 MP class synthetic-JPEG G-Pen, exact history/save/reopen and GPU-loss
 regression also passes both policies on Mac Metal. Physical iPad execution and
 large-photo performance remain unqualified.
@@ -60,10 +61,19 @@ The next correction reuses identical native tiles by their existing content
 identity, with unchanged memory limits. Physical iPad layered-4K then completes
 ten minutes with **0.576%** long intervals. Moving the bounded-display wait before
 the next batch removes terminal CPU stalls. Heavy 4K watercolor still has
-12.803%/28.347% long intervals on Mac/iPad in short runs; this is the immediate
-performance blocker. See the [follow-up record](../../apps/layer-apple/PERFORMANCE.md#native-tile-reuse-and-final-display-batches--2026-09-16).
+12.803%/28.347% long intervals on Mac/iPad in short runs. Removing redundant
+watercolor composition passes lowers these to **3.688%/17.929%**, with exact
+replay captures, 13 Metal regressions and both Release builds passing. Remaining
+heavy-watercolor performance is still the immediate blocker. Shared render-pass
+batching further lowers short-run misses to **1.764%/15.893%**. Optional GPU queue
+timing does not explain the iPad gap: disabling it gives **15.740%**. Physical GPU
+attribution then identifies costly interleaved tile copies. Batching those copies
+reduces matching timer-off runs to **1.030%/12.868%** on Mac/iPad with exact replay
+pixels and less production code. The broader renderer suite exposes ten failures
+also reproduced on published main; these remain open qualification issues. See the
+[current record](../../apps/layer-apple/PERFORMANCE.md#watercolor-tile-copy-batching--2026-09-16).
 Continue with that GPU/display diagnosis, remaining current SDR profiles, provider/
-background workflows in step 4 and grouped physical SDR acceptance. Device
+background workflows in step 4 and remaining physical SDR controls/display checks. Device
 performance and provider delivery are not fully closed.
 
 The physical M4 startup check exposed and fixed a vendored wgpu Metal Float32

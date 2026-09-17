@@ -1,6 +1,7 @@
 //! Renderer-only reproduction of the Apple layered 4K drawing workload.
 //! Reports preparation/completion and upload work, not screen presentation.
 use layer_host::{NativeHost, Renderer};
+use layer_render::CanvasRenderer;
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{Platform, UiSession};
 use serde_json::json;
@@ -23,10 +24,18 @@ fn main() {
     let (brush, diameter) = match std::env::args().nth(1).as_deref() {
         None | Some("ink") => (1, 24),
         Some("wet-watercolor") => (21, 320),
-        _ => panic!("usage: layered-strokes [ink|wet-watercolor] [frames]"),
+        _ => panic!("usage: layered-strokes [ink|wet-watercolor] [frames] [gpu] [rgba-path]"),
     };
-    let frames: usize = std::env::args().nth(2).map(|n| n.parse().unwrap()).unwrap_or(256);
+    let frames: usize = std::env::args()
+        .nth(2)
+        .map(|n| n.parse().unwrap())
+        .unwrap_or(256);
     assert!((1..=100_000).contains(&frames));
+    let gpu_timing = match std::env::args().nth(3).as_deref() {
+        None => false,
+        Some("gpu") => true,
+        _ => panic!("expected optional 'gpu' timing argument"),
+    };
     let project = layer_ui::new_drawing(4096, 4096).unwrap();
     let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
     let mut host = NativeHost::new(Platform::Mac).unwrap();
@@ -53,8 +62,9 @@ fn main() {
     assert_eq!(host.session.engine().document().layers.len(), 9);
     let camera = host.session.state().camera.clone();
     println!(
-        "frame,stroke_sample,prepare_ms,complete_ms,composited_pixels,source_misses,upload_submissions,display_submissions,paint_pages"
+        "frame,stroke_sample,prepare_ms,complete_ms,composited_pixels,source_misses,upload_submissions,display_submissions,paint_pages,gpu_ms"
     );
+    let mut gpu_samples = 0;
     for frame in 0..frames {
         let before = host
             .session
@@ -98,6 +108,9 @@ fn main() {
         if !records.is_empty() {
             host.pointer(contact as u64, 0, 0, &records, false).unwrap();
         }
+        host.session
+            .renderer_mut()
+            .set_telemetry_enabled(gpu_timing);
         let start = Instant::now();
         host.session.frame(now, now + 11_111_111).unwrap();
         let prepare = start.elapsed().as_secs_f64() * 1000.;
@@ -109,6 +122,23 @@ fn main() {
             .wait_idle()
             .unwrap();
         let complete = start.elapsed().as_secs_f64() * 1000.;
+        // Resolve the optional encoded GPU span after measuring completion.
+        // These waits belong only to this synchronous renderer replay.
+        let gpu = host.session.renderer_mut().0.as_mut().unwrap();
+        let mut gpu_ms = String::new();
+        if gpu_timing {
+            assert!(gpu.telemetry().gpu_timestamps);
+            for _ in 0..2 {
+                gpu.device()
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .unwrap();
+                let samples = gpu.telemetry().gpu;
+                if samples.count > gpu_samples {
+                    gpu_ms = format!("{:.3}", samples.ordered().last().unwrap());
+                    gpu_samples = samples.count;
+                }
+            }
+        }
         let after = host
             .session
             .engine()
@@ -118,7 +148,7 @@ fn main() {
             .unwrap()
             .metrics();
         println!(
-            "{frame},{},{prepare:.3},{complete:.3},{},{},{},{},{}",
+            "{frame},{},{prepare:.3},{complete:.3},{},{},{},{},{},{gpu_ms}",
             frame * 3 % 384,
             after.composited_pixels - before.composited_pixels,
             after.source_tile_misses - before.source_tile_misses,
@@ -126,5 +156,16 @@ fn main() {
             after.display_composition_submissions - before.display_composition_submissions,
             after.paint_pages
         );
+    }
+    if let Some(path) = std::env::args().nth(4) {
+        let mut rgba = vec![0; 4096 * 4096 * 4];
+        host.session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .copy_rgba8_srgb(&mut rgba, 4096 * 4)
+            .unwrap();
+        std::fs::write(path, rgba).unwrap();
     }
 }

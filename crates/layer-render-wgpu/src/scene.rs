@@ -663,9 +663,24 @@ impl Scene {
         blend: layer_core::LayerBlend,
         clip: bool,
     ) -> usize {
+        let n = self.jobs.len();
+        // Watercolor already outputs premultiplied source-over. A complete,
+        // unmasked layer at full opacity can draw straight onto its backdrop.
+        if !clip && opacity == 1. && blend == layer_core::LayerBlend::Normal && n >= 2 {
+            let clear = matches!(&self.jobs[n - 2], Job::Clear(view, color)
+                if *view == self.pool[front].view && *color == wgpu::Color::TRANSPARENT);
+            if clear
+                && let Job::Watercolor { target, .. } = &mut self.jobs[n - 1]
+                && *target == self.pool[front].view
+            {
+                *target = self.pool[back].view.clone();
+                self.jobs.remove(n - 2);
+                self.free(front);
+                return back;
+            }
+        }
         // An isolated clipping stack over a constant backdrop needs no color
         // intermediate after its last adjustment. Fold that final composite.
-        let n = self.jobs.len();
         if !clip && n >= 2 {
             let bg = if let Job::Clear(view, color) = &self.jobs[n - 2] {
                 (*view == self.pool[back].view).then_some(*color)
@@ -809,7 +824,13 @@ impl Scene {
                             }));
                     if wet_nearby {
                         let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
-                        let page = self.alloc(r, wgpu::Color::TRANSPARENT);
+                        // Aligned pages already cover the layer tile. Only a
+                        // translated page needs an intermediate and placement.
+                        let page = if rect == [0., 0., 256., 256.] {
+                            out
+                        } else {
+                            self.alloc(r, wgpu::Color::TRANSPARENT)
+                        };
                         self.jobs.push(Job::Watercolor {
                             layer: layer.id,
                             target: self.pool[page].view.clone(),
@@ -817,16 +838,18 @@ impl Scene {
                             record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
                             coordinate: c,
                         });
-                        self.draw(
-                            r,
-                            out,
-                            self.pool[page].view.clone(),
-                            None,
-                            rect,
-                            [1., 1., 0., 0.],
-                            true,
-                        );
-                        self.free(page);
+                        if page != out {
+                            self.draw(
+                                r,
+                                out,
+                                self.pool[page].view.clone(),
+                                None,
+                                rect,
+                                [1., 1., 0., 0.],
+                                true,
+                            );
+                            self.free(page);
+                        }
                     } else {
                         let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
                         let predicted = if preview {
@@ -1609,8 +1632,15 @@ impl Scene {
                         depth_or_array_layers: 1,
                     },
                 ),
-                Job::Draw { target, .. } | Job::Effect { target, .. } => {
-                    let end=(i+1..self.jobs.len()).find(|&j|!matches!(&self.jobs[j],Job::Draw{target:next,..}|Job::Effect{target:next,..} if next==target)).unwrap_or(self.jobs.len());
+                Job::Draw { target, .. }
+                | Job::Effect { target, .. }
+                | Job::Watercolor { target, .. } => {
+                    let end = (i + 1..self.jobs.len())
+                        .find(|&j| !matches!(&self.jobs[j],
+                            Job::Draw { target: next, .. }
+                            | Job::Effect { target: next, .. }
+                            | Job::Watercolor { target: next, .. } if next == target))
+                        .unwrap_or(self.jobs.len());
                     let load = if i > 0
                         && let Job::Clear(previous, color) = &self.jobs[i - 1]
                         && previous == target
@@ -1628,6 +1658,15 @@ impl Scene {
                         self.effect_passes += 1;
                     }
                     for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                        if let Job::Watercolor { layer, binding, record, coordinate, .. } = job {
+                            pass.set_pipeline(&r.pipelines.watercolor_composite);
+                            pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
+                            pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
+                            pass.set_bind_group(2, binding, &[]);
+                            pass.set_scissor_rect(0, 0, PAGE_SIZE, PAGE_SIZE);
+                            pass.draw(0..3, 0..1);
+                            continue;
+                        }
                         let sources = match job {
                             Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
                             _ => unreachable!(),
@@ -1694,27 +1733,6 @@ impl Scene {
                         pass.draw(0..3, 0..1);
                     }
                     encoded_through = end;
-                }
-                Job::Watercolor {
-                    layer,
-                    target,
-                    binding,
-                    record,
-                    coordinate,
-                } => {
-                    let load = match i.checked_sub(1).and_then(|j| self.jobs.get(j)) {
-                        Some(Job::Clear(previous, color)) if previous == target => {
-                            wgpu::LoadOp::Clear(*color)
-                        }
-                        _ => wgpu::LoadOp::Load,
-                    };
-                    let attachments = [Some(attachment(target, load))];
-                    let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
-                    pass.set_pipeline(&r.pipelines.watercolor_composite);
-                    pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
-                    pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
-                    pass.set_bind_group(2, binding, &[]);
-                    pass.draw(0..3, 0..1);
                 }
             }
         }
