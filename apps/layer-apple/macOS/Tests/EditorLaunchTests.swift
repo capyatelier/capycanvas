@@ -53,6 +53,10 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testFullscreenEditor() { checkFullscreenEditor(in: editorCaptureApplication()) }
 
+    @MainActor func testSDRWindowSurfaceTransitions() {
+        checkSDRWindowSurfaceTransitions(in: editorCaptureApplication())
+    }
+
     @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
 
     @MainActor func testMaskActionsAndHistory() { checkMaskActionsAndHistory(in: editorCaptureApplication()) }

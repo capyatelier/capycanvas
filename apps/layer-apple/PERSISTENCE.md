@@ -337,6 +337,15 @@ checks independent layers and Undo in two scenes, closes the second scene and
 continues editing the first. Test applications use isolated persistence and
 register termination at teardown, including when an assertion fails.
 
+The native Mac `testSDRWindowSurfaceTransitions` check also passes minimize,
+hide, narrow resize and restoration with a ProPhoto U16 drawing. It verifies
+the same scene/workspace, profile/depth, layers, live Navigator, sampled artwork,
+continued mouse input and Undo/Redo after each transition. Closing Document
+Properties must finish ownership revalidation and leave the editor enabled
+without a recovery warning. The native full-screen/return check passes on the
+same runtime. Evidence is `artifacts/apple-mac-surface-v1/`; sleep/wake and actual
+cross-display transitions remain separate acceptance cases.
+
 The project-file checks use the actual Swift owner, coordinator and Metal C ABI
 with injected location choices. They cover both Mac destination-first saves and
 iPad staged exports, Save/Open/New, private permissions, cancellation, failed

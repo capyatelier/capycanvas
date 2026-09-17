@@ -1,13 +1,12 @@
 @group(0) @binding(0) var source: texture_2d<f32>;
 // Original tile dimensions and the number of original pixels per source texel.
 @group(0) @binding(1) var<uniform> footprint: vec4<u32>;
+@group(0) @binding(2) var destination: texture_storage_2d<rgba32float, write>;
 
-@vertex fn vertex_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-    return vec4<f32>(uv * vec2<f32>(2., -2.) + vec2<f32>(-1., 1.), 0., 1.);
-}
-@fragment fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let start = vec2<u32>(position.xy) * 2u;
+@compute @workgroup_size(8, 8)
+fn reduce(@builtin(global_invocation_id) position: vec3<u32>) {
+    if any(position.xy >= textureDimensions(destination)) { return; }
+    let start = position.xy * 2u;
     let span = footprint.z;
     var total = vec4<f32>(0.);
     var area = 0u;
@@ -23,5 +22,5 @@
             }
         }
     }
-    return total / f32(max(area, 1u));
+    textureStore(destination, vec2<i32>(position.xy), total / f32(max(area, 1u)));
 }

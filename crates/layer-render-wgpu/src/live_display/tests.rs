@@ -58,6 +58,49 @@ fn complete_admission_respects_texture_extent_even_with_free_memory() {
 }
 
 #[test]
+fn unchanged_hidpi_navigation_keeps_reserved_detail_slots() {
+    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
+    let pipelines = display_mips::Pipelines::new(&r.device);
+    for extent in [[8192, 7324], [9504, 6336]] {
+        r.document_extent = extent;
+        let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+        let mut previous = 0;
+        for (scale, angle) in [(1., 0.), (1., 0.2), (2., 0.2), (1., 0.), (0.5, 0.)] {
+            let v = centered_view(extent, [2752, 2064], scale, angle);
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            cache.prepare(&mut r, v, &mut encoder).unwrap();
+            let slots = cache.fine.as_ref().unwrap().keys.len();
+            assert!(slots >= previous,
+                "unchanged viewport shrank its detail cache: {extent:?}, {scale}, {previous} -> {slots}");
+            assert!(cache.storage_bytes() <= CACHE_BYTES);
+            previous = slots;
+        }
+    }
+}
+
+#[test]
+fn partial_admission_preserves_reduced_levels_during_hidpi_zoom() {
+    let mut r = bounded_renderer(DocumentColor::default()).unwrap();
+    r.document_extent = [9504, 6336];
+    let allowance = 768 * 1024 * 1024;
+    r.native_edit.as_mut().unwrap().display_complete_bytes = allowance;
+    let pipelines = display_mips::Pipelines::new(&r.device);
+    let mut cache = Cache::new(&r, &pipelines, CACHE_BYTES).unwrap();
+    assert!(cache.retained.iter().all(|level| level.level > 0));
+    let original_mips = cache.retained_bytes();
+    for scale in [2., 1., 0.50001, 0.25, 0.125, 0.50001] {
+        for angle in [0., 0.12, 0.7, 1.2] {
+            let v = centered_view(r.document_extent, [2752, 2064], scale, angle);
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            cache.prepare(&mut r, v, &mut encoder).unwrap();
+            assert!(cache.storage_bytes() <= allowance);
+            assert_eq!(cache.retained_bytes(), original_mips,
+                "unused admitted memory must preserve completed zoomed-out pixels");
+        }
+    }
+}
+
+#[test]
 fn large_rotated_hidpi_views_fit_the_original_display_budget() {
     let mut r = bounded_renderer(DocumentColor {
         space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
@@ -809,6 +852,51 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
     assert!(r.display_pipelines.as_ref().unwrap().reduce.ready());
     submit(&mut r, &doc, view([1., 0., 0., 1., 0., 0.]), true);
     assert!(r.live_display.is_some() && r.composite_texture.is_none());
+}
+
+#[test]
+fn coalesced_contact_composition_matches_a_full_rebuild_without_repainting_its_empty_center() {
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
+        SampleFlags, ToolKind, ViewTransform, input_queue};
+    let doc = document([4096, 3072]);
+    let mut r = bounded_renderer(doc.color).unwrap();
+    r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    let v = view([1. / 16., 0., 0., 1. / 16., 0., 0.]);
+    let (mut input, consumer) = input_queue(64);
+    let mut engine = CanvasEngine::new(r, doc, consumer, v,
+        ViewTransform { revision: 0, surface_to_document: [16., 0., 0., 16., 0., 0.] }).unwrap();
+    engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..Default::default() }).unwrap();
+    let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    brush.diameter = 48.;
+    engine.set_brush(brush).unwrap();
+    engine.render_frame().unwrap();
+    engine.backend_mut().wait_idle().unwrap();
+    let before = engine.backend().metrics().composited_pixels;
+    for i in 0..33 {
+        let angle = i as f32 / 32. * std::f32::consts::TAU;
+        input.push(PenEvent {
+            device_id: 1, sequence: i + 1, timestamp_ns: (i + 1) * 4_166_667,
+            view_revision: 0,
+            surface_position: layer_core::Point { x: 128. + 112. * angle.cos(), y: 96. + 80. * angle.sin() },
+            pressure: 0.65, tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
+            phase: if i == 0 { PenPhase::Down } else if i == 32 { PenPhase::Up } else { PenPhase::Move },
+            tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+        }).unwrap();
+    }
+    loop {
+        engine.render_frame().unwrap();
+        engine.backend_mut().wait_idle().unwrap();
+        if !engine.has_pending_input() { break; }
+    }
+    let changed = engine.backend().metrics().composited_pixels - before;
+    assert!(changed > 0 && changed < 4096 * 3072 / 2,
+        "a narrow circle must not recompose its untouched center: {changed}");
+    let mut presenter = ViewportPresenter::for_surface(engine.backend(),
+        wgpu::TextureFormat::Rgba32Float, SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let actual = present(engine.backend(), &mut presenter, v);
+    let doc = engine.document().clone();
+    submit(engine.backend_mut(), &doc, v, true);
+    close(&actual, &present(engine.backend(), &mut presenter, v));
 }
 
 #[test]

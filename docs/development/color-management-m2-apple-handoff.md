@@ -51,7 +51,16 @@ identifies the review apps and user-confirmed drawing, Undo/Redo, background/ret
 and local Save As/reopen workflow on both devices.
 The 61 MP class synthetic-JPEG G-Pen, exact history/save/reopen and GPU-loss
 regression also passes both policies on Mac Metal. Physical iPad execution and
-large-photo performance remain unqualified.
+large-photo performance remain unqualified beyond the subsequent warm native
+URL-open check on `90adbb6d`: the JPEG's canvas and Navigator render, with all
+existing drawings preserved. The user then reports fast 570 px G-Pen circles
+lagging by up to one second and repeatable mid-zoom stalls. The attached trace
+and paired replay identify redundant contact/composition work and discarded
+zoom cache pixels. Shared fixes pass focused integrity checks and both Release
+builds; physical iPad retesting is next. See the
+[performance record](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
+and `artifacts/apple-photo-lag-v1/`. Large-photo local save/reopen remains
+unconfirmed.
 The current SDR layered-4K Mac performance regression is corrected in the
 shared renderer: decoded-tile retention and byte-based staging accounting reduce
 ten-minute long active intervals from 41.397% to **1.016%**, within the accepted

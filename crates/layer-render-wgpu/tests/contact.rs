@@ -15,15 +15,27 @@ fn render(
     passes: usize,
     feedback: bool,
 ) -> Vec<u8> {
+    render_extent(brush, pressure, tilt, cadence, passes, feedback, [256; 2])
+}
+
+fn render_extent(
+    brush: BrushSnapshot,
+    pressure: f32,
+    tilt: [f32; 2],
+    cadence: usize,
+    passes: usize,
+    feedback: bool,
+    extent: [u32; 2],
+) -> Vec<u8> {
     let gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
     let (mut input, consumer) = input_queue(256);
     let mut engine = CanvasEngine::new(
         gpu,
-        Document::new("contact-invariants", 256, 256),
+        Document::new("contact-invariants", extent[0], extent[1]),
         consumer,
         ViewState {
-            width_px: 256,
-            height_px: 256,
+            width_px: extent[0],
+            height_px: extent[1],
             document_to_surface: Affine::IDENTITY.0,
             background_rgba_linear: [1.; 4],
         },
@@ -49,8 +61,8 @@ fn render(
                     timestamp_ns: time,
                     view_revision: 0,
                     surface_position: Point {
-                        x: 32. + i as f32 * 3.,
-                        y: 128.,
+                        x: extent[0] as f32 * (0.125 + i as f32 * 0.75 / 64.),
+                        y: extent[1] as f32 * 0.5,
                     },
                     pressure,
                     tilt_radians: tilt,
@@ -77,12 +89,25 @@ fn render(
             }
         }
     }
-    let mut bytes = vec![0; 256 * 256 * 4];
+    let mut bytes = vec![0; extent[0] as usize * extent[1] as usize * 4];
     engine
         .backend_mut()
-        .copy_rgba8_srgb(&mut bytes, 256 * 4)
+        .copy_rgba8_srgb(&mut bytes, extent[0] as usize * 4)
         .unwrap();
     bytes
+}
+
+#[test]
+fn long_contact_batches_preserve_ink_across_tile_boundaries() {
+    for preset in [DefaultBrushPreset::GPen, DefaultBrushPreset::CalligraphyPen] {
+        let mut brush = default_brush(preset);
+        brush.diameter = 36.;
+        let reference = render_extent(brush.clone(), 0.65, [0.; 2], 1, 1, false, [1536, 256]);
+        let batched = render_extent(brush, 0.65, [0.; 2], 64, 1, false, [1536, 256]);
+        assert!(reference.chunks_exact(4).any(|p| p[0] < 100));
+        let difference = reference.iter().zip(&batched).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(difference <= 5, "{preset:?}: batching across tiles changed ink by {difference}");
+    }
 }
 
 fn ink(bytes: &[u8], top: usize, bottom: usize) -> f64 {

@@ -1030,7 +1030,7 @@ impl WgpuRasterizer {
         let material_layout = create_material_layout(&device);
         let material_source_meta = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("adjacent material source pages"), size: 160,
-            usage: wgpu::BufferUsages::UNIFORM, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let edge_layout = create_edge_layout(&device);
         let watercolor_layout = create_color_neighborhood_layout(&device);
@@ -4132,6 +4132,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.ensure_paint_state_pages(packet.dab_batches)?;
 
         let old_preview_damage = self.preview_damage;
+        let old_preview_layer = self.preview_layer_id;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
         let mut dirty = old_preview_damage.union(watercolor_style_dirty);
         let mut new_preview_damage = PixelRect::EMPTY;
@@ -4755,19 +4756,37 @@ impl CanvasRenderer for WgpuRasterizer {
             self.transforms = Some(transforms);
             self.transform_damage.extend(result?);
         }
-        // Restrict pointwise restoration/transform composition to its actual
-        // tiles. Preview cleanup, global effects and full rebuilds retain their
-        // complete damage propagation. Translate before rounding to scene tiles.
-        let mut composite_tiles = (dirty.is_empty()
-            && !reset
-            && !packet.composite_all
-            && !self.transform_damage.is_empty()
-            && original_batches.is_empty()
-            && packet.dabs.is_empty()
+        // Pointwise edits need only their touched tiles, not the rectangle
+        // enclosing a fast curved stroke. Global effects and full rebuilds
+        // retain complete damage propagation.
+        let local_contacts = scene_required && !original_batches.is_empty()
+            && watercolor_style_dirty.is_empty()
+            && old_preview_layer.is_none_or(|id|
+                layer_core::target_transform(packet.layers, id) == layer_core::Affine::IDENTITY)
+            && original_batches.iter().all(|b| {
+                matches!(b.kind, DabBatchKind::Persistent | DabBatchKind::Preview)
+                    && b.style.execution == BrushExecution::Dry && b.style.contact.is_some()
+                    && !b.style.rendering.edge_after_stroke
+                    && layer_core::target_transform(packet.layers, b.layer_id) == layer_core::Affine::IDENTITY
+            });
+        let mut composite_tiles = (!reset && !packet.composite_all
+            && (local_contacts || (dirty.is_empty() && !self.transform_damage.is_empty()
+                && original_batches.is_empty() && packet.dabs.is_empty()))
             && packet.layers.iter().all(|l| {
                 l.effect.as_ref().is_none_or(|e| !e.animated() && !e.program.image_boundary())
             }))
         .then(std::collections::BTreeSet::new);
+        if local_contacts && let Some(tiles) = &mut composite_tiles {
+            tiles.extend(page_coordinates(old_preview_damage));
+            for batch in original_batches {
+                let start = batch.first_dab as usize;
+                let end = start + batch.dab_count as usize;
+                for dab in &packet.dabs[start..end] {
+                    tiles.extend(page_coordinates(pixel_rect(
+                        batch.style.brush_to_layer.bounds(dab.bounds()), packet.document_extent)));
+                }
+            }
+        }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(
                 layer_core::target_transform(packet.layers, layer).bounds(layer_core::Rect {

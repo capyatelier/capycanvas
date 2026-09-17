@@ -237,7 +237,7 @@ impl WgpuRasterizer {
             }) {
                 let mip = self.display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-                required.render.push(mip.reduce.clone());
+                required.compute.push(mip.reduce.clone());
             }
             if document.layers.iter().any(|l| l.source.is_some()) {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());

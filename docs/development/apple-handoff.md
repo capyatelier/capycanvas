@@ -96,6 +96,27 @@ The Mac review remains untouched. Evidence is
 `artifacts/apple-prediction-adoption-v1/`. The user confirms native prediction
 now looks correct in the updated iPad app; this reported regression is closed.
 
+## Mac SDR window transitions
+
+The isolated native Mac app now passes minimize/restore, hide/activate, narrow
+resize and restoration to its original width with a ProPhoto U16 drawing.
+Each transition preserves the scene, Paint workspace, layers, Navigator and
+sampled artwork; new mouse strokes and their Undo/Redo work after every return.
+Document Properties still reports the original profile/depth. The final check
+waits for normal ownership revalidation after sheet dismissal and verifies the
+editor is enabled with no recovery warning; its final capture is reviewed.
+The existing native full-screen/return workflow also passes on the same runtime.
+
+This adds no lifecycle product path. The fixture corrections use current native
+menu identifiers, measured resize bounds after minimum-size clamping, and at most
+one sRGB byte of screenshot difference across native integer history restoration
+(measured green 114 versus 115; exact native artwork history remains separately
+qualified). Both original Mac review processes stay open; the separate test app
+is stopped. Evidence is `artifacts/apple-mac-surface-v1/`, final `mac-v4` full-screen
+and `mac-v7` SDR window results. Sleep/wake, cross-display transitions and the
+remaining physical iPad lifecycle cases stay open. These checks are grouped with
+the shared large-photo renderer milestone.
+
 ## Native control and modifier closure
 
 UIKit Fill/Auto Select refinement controls now pass fourteen native edits with
@@ -626,6 +647,31 @@ not a camera-photo benchmark, physical iPad execution or sustained performance.
 Initial fixture failures were a Rust borrow error, incorrect reuse of stroke IDs
 in the Undo expectation and an attempted private-field assignment; the corrected
 fixture uses the public allocation API. The final run has no compiler warnings.
+
+The subsequent physical iPad check opens that JPEG through ordinary warm URL
+delivery on Release `90adbb6d`, without restarting the review process. The retained
+photo layer, fitted gradient canvas and complete Navigator preview render without
+a visible error. All existing saved files and ten recovery drawings remain
+unchanged; workspace persistence only adopts the document RGB space and updates
+its generation/lease/receipt. Evidence is `artifacts/apple-ipad-large-photo-v1/`.
+The subsequent physical check reports two blocking stalls: fast full-screen
+circles with 570.7 px G-Pen can lag by about one second, and zooming from far in
+to far out repeatedly stalls at intermediate scales. The reviewed iPad capture
+shows a 763.65 ms GPU maximum. CPU/GPU profiling attaches to the same process,
+with all drawings backed up; the user confirms reproducing both cases during
+recording. The trace attributes about 87% of active GPU work to destination
+brush pages, with nominal thermal state. Shared fixes restrict dry-contact work
+to relevant contacts/tiles, combine display reduction into a compute pass, and
+preserve zoom cache pixels within the existing admitted memory allowance. A
+paired Mac Metal stress replay falls from 1,035 to 131 ms median completion with
+identical committed pixels; repeated zoom sweeps stop recomposing the image.
+These are offscreen measurements, not physical iPad acceptance. Both Release
+builds and focused contact/photo integrity checks pass. The candidate is installed
+on iPad with all eleven recovery drawings preserved and saved files byte-identical
+across installation. The ordinary app is open at Recovered Drawings with recording
+disabled; the requested physical retest remains pending. See the [measured causes and limits](../../apps/layer-apple/PERFORMANCE.md#large-photo-fast-strokes-and-repeated-zoom--2026-09-16)
+and `artifacts/apple-photo-lag-v1/`. Local save/reopen of this large image remains
+unconfirmed; the earlier small ProPhoto workflow stays passed.
 
 The recovery checkpoint updated both approved physical review apps to Release
 `a2054398`. Before their

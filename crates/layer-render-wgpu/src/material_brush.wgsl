@@ -73,6 +73,7 @@ struct Dab {
 @group(2) @binding(11) var reservoir_texture: texture_2d<f32>;
 struct MaterialSources {
     // 0: adjacent pages; 1: disjoint gather pages; 2: gathered sample field.
+    // Adjacent pages also provide the ordered dry-contact range in zw.
     header: vec4<u32>,
     pages: array<vec4<u32>, 9>,
 }
@@ -721,8 +722,9 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
-    for (var offset = 0u; offset < count; offset += 1u) {
-        let dab = dabs[first + offset];
+    let range = select(style.operation.xy, material_sources.header.zw, style.contact_a.x > 0.5);
+    for (var offset = 0u; offset < range.y; offset += 1u) {
+        let dab = dabs[range.x + offset];
         let coverage = contact_coverage(dab, world);
         if coverage <= 0.0 { continue; }
         var requested_alpha = clamp(

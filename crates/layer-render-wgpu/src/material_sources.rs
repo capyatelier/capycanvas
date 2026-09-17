@@ -309,6 +309,21 @@ impl WgpuRasterizer {
                 None,
                 encoder,
             );
+            // Keep the original contact order, but do not evaluate a whole
+            // fast stroke at every pixel of every touched tile. Only dry
+            // contacts are local; smudge/liquify/wet updates retain their full
+            // dependency sequence. Use the same swept bounds as allocation.
+            if batch.style.contact.is_some() && batch.style.execution == BrushExecution::Dry {
+                let page = page_rect(coordinate);
+                let mut hits = dabs.iter().enumerate().filter(|(_, dab)| {
+                    !pixel_rect(batch.style.brush_to_layer.bounds(dab.bounds()),
+                        self.target_extent(batch.layer_id)).intersect(page).is_empty()
+                }).map(|(i, _)| i);
+                let range = hits.next().map_or(0..0, |first| first..hits.next_back().unwrap_or(first) + 1);
+                let header = [0u32, 0, batch.first_dab + range.start as u32, range.len() as u32];
+                let bytes: Vec<_> = header.into_iter().flat_map(u32::to_le_bytes).collect();
+                self.uploads.write(encoder, &self.queue, &self.material_source_meta, &bytes)?;
+            }
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }

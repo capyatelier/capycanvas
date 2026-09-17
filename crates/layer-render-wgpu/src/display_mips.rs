@@ -42,7 +42,7 @@ impl Plan {
 pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     pub image_layout: wgpu::BindGroupLayout,
-    pub reduce: Deferred<wgpu::RenderPipeline>,
+    pub reduce: Deferred<wgpu::ComputePipeline>,
 }
 impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -76,7 +76,7 @@ impl Pipelines {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -86,11 +86,21 @@ impl Pipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: std::num::NonZeroU64::new(16),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
                 },
@@ -107,15 +117,14 @@ impl Pipelines {
         });
         let device = device.clone();
         let reduce = Deferred::new(move || {
-            fullscreen_pipeline(
-                &device,
-                &pipeline_layout,
-                &shader,
-                "fragment_main",
-                None,
-                wgpu::TextureFormat::Rgba32Float,
-                "display mip reduction",
-            )
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("display mip reduction"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("reduce"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
         });
         Self {
             layout,
@@ -186,7 +195,7 @@ impl Image {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
@@ -329,32 +338,27 @@ impl Image {
                                 binding: 1,
                                 resource: uniform.as_entire_binding(),
                             },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(&self.views[level as usize]),
+                            },
                         ],
                     });
                     Record { uniform, binding }
                 })
                 .collect()
         });
-        for (index, record) in records.iter().enumerate() {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        if !records.is_empty() {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("reduce display tile"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.views[index + 1],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
                 timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
             pass.set_pipeline(&pipelines.reduce);
-            pass.set_bind_group(0, &record.binding, &[]);
-            pass.draw(0..3, 0..1);
+            for (index, record) in records.iter().enumerate() {
+                pass.set_bind_group(0, &record.binding, &[]);
+                let side = PAGE_SIZE >> (index + 1);
+                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
+            }
         }
         let scale = 1 << self.plan.level;
         encoder.copy_texture_to_texture(

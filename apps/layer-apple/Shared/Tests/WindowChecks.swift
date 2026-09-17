@@ -104,7 +104,11 @@ extension XCTestCase {
         attachEditor(in: app, name: "fullscreen-mouse-stroke")
         for (command, expected) in [("Undo", blank), ("Redo", painted), ("Undo", blank)] {
             editorHistory(command, in: app)
-            expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: samplePoint) == expected }, evaluatedWith: app)
+            // Native integer restoration can differ by one displayed sRGB byte.
+            // Exact artwork history is checked separately from this screenshot.
+            expectation(for: NSPredicate { _, _ in
+                zip(self.editorPixels(in: app, at: samplePoint), expected).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
+            }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
         }
         fill(); expectPaper(blue: true)
@@ -115,6 +119,110 @@ extension XCTestCase {
         editorHistory("Undo", in: app); expectPaper(blue: false)
         editorHistory("Redo", in: app); expectPaper(blue: true)
         attachEditor(in: app, name: "fullscreen-returned-window")
+    }
+    @MainActor func checkSDRWindowSurfaceTransitions(in app: XCUIApplication) {
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
+        for (id, label) in [("new-document-space", "ProPhoto RGB"), ("new-document-depth", "16-bit SDR")] {
+            let picker = app.descendants(matching: .any).matching(identifier: id).firstMatch
+            XCTAssertTrue(picker.waitForExistence(timeout: 10)); workspaceActivate(picker)
+            workspaceActivate(app.menuItems[label].firstMatch)
+        }
+        let create = app.buttons["new-document-create"]
+        workspaceActivate(create); XCTAssertTrue(create.waitForNonExistence(timeout: 30))
+        let window = app.windows.firstMatch, originalFrame = window.frame
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
+        let sceneID = scenes.firstMatch.identifier
+        let samplePoint = CGPoint(x: 0.53, y: 0.55)
+        func pixels() -> Data { editorPixels(in: app, at: samplePoint) }
+        func expectPixels(_ expected: Data) {
+            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
+        func properties() {
+            editorMenu(in: app, menu: "File", id: "document_properties", label: "Document Properties…")
+            XCTAssertTrue(app.staticTexts["16-bit integer SDR"].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.staticTexts["ProPhoto RGB"].exists)
+            let done = app.buttons["Done"].firstMatch
+            workspaceActivate(done); XCTAssertTrue(done.waitForNonExistence(timeout: 10))
+            // Returning from the sheet revalidates workspace ownership.
+            expectation(for: NSPredicate { _, _ in
+                app.buttons["workspace-switch-builtin:workspace:illustrator"].isEnabled
+                    && !app.staticTexts["Workspace ownership needs recovery."].exists
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        properties()
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        let paper = pixels()
+        XCTAssertTrue(stride(from: 0, to: paper.count, by: 4).allSatisfy {
+            paper[$0] > 250 && paper[$0 + 1] > 250 && paper[$0 + 2] > 250
+        })
+        fill()
+        expectation(for: NSPredicate { _, _ in
+            let sample = pixels(); return Int(sample[2]) > Int(sample[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let filled = pixels()
+        for transition in ["minimize", "hide", "narrow", "restore-size"] {
+            switch transition {
+            case "minimize":
+                app.typeKey("m", modifierFlags: .command)
+                expectation(for: NSPredicate { _, _ in !window.isHittable }, evaluatedWith: window)
+                waitForExpectations(timeout: 10)
+                workspaceActivate(app.menuBars.menuBarItems["Window"])
+                let item = app.menuBars.menuItems["makeKeyAndOrderFront:"].firstMatch
+                XCTAssertTrue(item.waitForExistence(timeout: 10)); workspaceActivate(item)
+            case "hide":
+                app.typeKey("h", modifierFlags: .command)
+                XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+                app.activate()
+                XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+            default:
+                // The native minimum size can clamp the narrowing gesture.
+                let delta: CGFloat = transition == "narrow" ? -280 : originalFrame.width - window.frame.width
+                // Resize from the side: the bottom corner can be against the
+                // screen edge, putting an outward drag beyond the display.
+                let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -1, dy: 0))
+                edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: delta, dy: 0)))
+                expectation(for: NSPredicate { _, _ in
+                    transition == "narrow" ? window.frame.width < originalFrame.width - 100
+                        : abs(window.frame.width - originalFrame.width) <= 2
+                }, evaluatedWith: window)
+                waitForExpectations(timeout: 10)
+            }
+            expectation(for: NSPredicate { _, _ in window.isHittable }, evaluatedWith: window)
+            waitForExpectations(timeout: 10)
+            app.staticTexts["document-title"].hover()
+            XCTAssertEqual(scenes.count, 1); XCTAssertEqual(scenes.firstMatch.identifier, sceneID)
+            XCTAssertEqual(canvas.frame, window.frame)
+            XCTAssertTrue(app.buttons["workspace-switch-builtin:workspace:illustrator"].isSelected)
+            XCTAssertEqual(app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 2)
+            XCTAssertEqual(app.descendants(matching: .any)["navigator-overview"].firstMatch.value as? String, "Live preview")
+            expectPixels(filled)
+            for (command, expected) in [("Undo", paper), ("Redo", filled), ("Undo", paper)] {
+                editorHistory(command, in: app); expectPixels(expected)
+            }
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
+            app.staticTexts["document-title"].hover()
+            expectation(for: NSPredicate { _, _ in pixels() != paper }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+            let stroke = pixels()
+            attachEditor(in: app, name: "sdr-window-" + transition)
+            for (command, expected) in [("Undo", paper), ("Redo", stroke), ("Undo", paper)] {
+                editorHistory(command, in: app); expectPixels(expected)
+            }
+            fill(); expectPixels(filled)
+            XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+        }
+        properties()
+        attachEditor(in: app, name: "sdr-window-restored-artwork")
     }
     #endif
 

@@ -264,12 +264,13 @@ impl Cache {
             })
             .sum::<u64>();
         let complete_bytes = pyramid_bytes + Self::base_bound(plan);
+        let allowance = r.native_edit.as_ref().map_or(0, |native| native.display_complete_bytes);
         let complete = plan.extent.into_iter()
-            .all(|v| v <= r.device.limits().max_texture_dimension_2d) && r
-            .native_edit
-            .as_ref()
-            .is_some_and(|native| complete_bytes <= native.display_complete_bytes);
-        let limit = if complete { complete_bytes } else { limit };
+            .all(|v| v <= r.device.limits().max_texture_dimension_2d)
+            && complete_bytes <= allowance;
+        // Partial admission is useful too: visible detail can coexist with
+        // completed reduced levels without admitting the entire native image.
+        let limit = if complete { complete_bytes } else { limit.max(allowance.min(complete_bytes)) };
         if Self::base_bound(plan) > limit {
             return Err(GpuRasterError::SizeOverflow);
         }
@@ -378,8 +379,15 @@ impl Cache {
         let mut retained_bytes = self.retained_bytes();
         let capacity = loop {
             let capacity = self.limit.saturating_sub(base + retained_bytes) / page_bytes;
-            if required == 0 || atlas_grid(required, capacity as u32, dimension).is_some() {
-                break capacity as u32;
+            // The byte ceiling need not factor into a legal texture rectangle.
+            // Reserve the largest atlas that actually fits, so an impossible
+            // preferred size cannot fall back to reallocating just the visible
+            // tiles on every camera movement and discarding reusable pixels.
+            let capacity = (1..=dimension)
+                .map(|width| width * (capacity as u32 / width).min(dimension))
+                .max().unwrap_or(0);
+            if required == 0 || atlas_grid(required, capacity, dimension).is_some() {
+                break capacity;
             }
             if keep == 0 {
                 return Err(GpuRasterError::Color(format!(

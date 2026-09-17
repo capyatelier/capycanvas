@@ -128,9 +128,9 @@ impl Drop for NativeFrame {
 }
 
 impl WgpuRasterizer {
-    /// Host admission ceiling for an unchanged full-resolution display pyramid.
-    /// Only the actual document's pixels/mips are allocated. Zero selects the
-    /// bounded tile fallback. This display cache never feeds edits or export.
+    /// Host admission ceiling for retained display pixels. A partial allowance
+    /// can preserve reduced levels alongside visible detail; zero selects the
+    /// fixed tile fallback. This display cache never feeds edits or export.
     pub fn set_complete_display_allowance(&mut self, bytes: u64) {
         if let Some(native) = &mut self.native_edit
             && native.display_complete_bytes != bytes

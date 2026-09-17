@@ -68,6 +68,67 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Large-photo fast strokes and repeated zoom — 2026-09-16
+
+The user reproduced the two reported stalls on the physical iPad while an
+attached Metal/CPU trace recorded the existing review app: full-screen circles
+with 570.7 px G-Pen over a 9504×6336 retained photo, followed by repeated zoom
+sweeps. Thermal state stayed nominal. Destination brush pages account for
+20.918 of 24.072 seconds of active GPU work, about 87%. CPU time attributed to
+composition also includes waiting for previously submitted brush work. The
+trace identifies avoidable rendering work; it does not support treating the
+one-second delay as an unavoidable memory-bandwidth limit.
+
+The shared renderer now restricts each dry-contact tile to the first through
+last relevant contact, preserving contact order and the existing swept bounds.
+Pointwise contact edits reuse touched-tile composition instead of repainting the
+rectangle around a circle, including its untouched center. Nonlocal effects and
+transformed targets retain conservative damage propagation. Display reduction
+uses one compute pass with sequential mip dispatches and unchanged Float32
+area-weighted arithmetic; the previous render-pass implementation is removed.
+
+Two cache problems independently explain repeated zoom stalls. A byte capacity
+that could not factor into a legal atlas rectangle caused repeated shrink/grow
+and discarded pixels. Reserving the largest feasible rectangle fixes this.
+Memory admission also discarded the entire measured allowance whenever the
+full-resolution pyramid did not fit. Partial admission now retains reduced
+levels alongside visible detail within that same allowance. The host memory
+fraction and working precision are unchanged.
+
+The reproducible `photo_interaction` example runs a private copy of the actual
+recovery document on Mac Metal at the iPad's 2752×2064 framebuffer size. These
+are offscreen completion measurements, not physical presentation or pen latency:
+
+| Paired replay | Before | After |
+| --- | ---: | ---: |
+| 64 coalesced samples/frame, median completion | 1,035 ms | 131 ms |
+| Same replay, p95 completion | 1,216 ms | 187 ms |
+| Same replay, composited pixels | 2,487,443,904 | 217,328,896 |
+| Three zoom sweeps, same 768 MiB allowance, recomposited pixels | 580,753,408 | 24,248,320 |
+
+The coalesced stress frame contains 267 ms of input at 240 Hz. Both sides have
+8,138 dabs, identical committed native tile roots and exact Undo/Redo; its
+131 ms result is not a normal-frame cadence claim. The second and third zoom
+sweeps perform zero recomposition after the fix. Final ordinary two/eight-sample
+replays also preserve exact history; the eight-sample result matches baseline
+committed roots. Physical iPad retesting remains required.
+
+Regression coverage includes atlas retention, partial admission, sparse contact
+composition versus a full rebuild, and long contact batches across tile edges.
+The renderer library reports 281 passes, 29 ignored and the previously recorded
+Mac/Linux filter-reference mismatch (maximum byte error 56); see
+[filter qualification](../../docs/development/apple-filter-qualification.md).
+All four contact integration tests and the large-JPEG save/reopen/GPU-replacement
+test pass. Both final Apple Release builds and the WebAssembly check pass
+without compiler warnings.
+The iPad candidate is installed in place with all eleven recoveries preserved
+and every saved file byte-identical across installation. The ordinary review
+app is open at Recovered Drawings with recording disabled; the user has been
+asked to repeat both gestures. The Mac artist app remains untouched.
+Evidence, paired results and private traces are in
+`artifacts/apple-photo-lag-v1/`. Large-photo physical acceptance and the wider
+Apple release goal remain open.
+
 ## Metal display admission — 2026-09-16
 
 Apple now admits the existing shared complete display and placed-photo caches
@@ -117,6 +178,14 @@ pressure. Heavy-watercolor acceptance remains open. The iPad is restored to
 ordinary review with all ten recoveries and 59 pre-existing files preserved;
 the Mac artist review is untouched. Evidence is
 `artifacts/apple-display-admission-v1/`.
+
+A subsequent local experiment skips transport copies and attachment loads for
+fully overwritten watercolor pages. All 13 watercolor checks pass, and four
+paired 512-frame Mac Metal replays retain exact pixels and per-frame work.
+GPU medians are 4.614/4.597 ms for the original and 4.624/4.649 ms for the
+candidate, with no consistent tail improvement. The experiment is fully
+reverted; neither physical review app is changed. Evidence is
+`artifacts/apple-watercolor-full-pages-v1/`. This does not close the iPad gap.
 
 ## Integrated renderer GPU follow-up — 2026-09-16
 
