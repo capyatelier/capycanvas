@@ -11,6 +11,7 @@ mod document_workflow;
 pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow};
 
 pub mod profile_library;
+pub mod proof_workflow;
 
 mod import_policy;
 pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import};
@@ -529,7 +530,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => platform == Platform::Gtk,
+            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac),
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),

@@ -50,6 +50,21 @@ impl ProofLut {
         std::mem::size_of_val(self.samples.as_ref())
     }
 
+    /// Host-worker transport only, never a persisted or trusted ICC cache.
+    /// Bounds and finite values are checked before GPU publication. The sender
+    /// must have built these samples using `build` in the same app version.
+    pub fn from_worker(space: RgbSpace, edge: u32, dark_grid: bool, bytes: &[u8]) -> Result<Self, String> {
+        if !matches!(edge, 65 | 129) || (dark_grid && edge != 129) || bytes.len() != (edge as usize).pow(3) * 20 {
+            return Err("Invalid proof worker sample dimensions".into());
+        }
+        let samples: Vec<[f32; 5]> = bytes.chunks_exact(20).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i*4..i*4+4].try_into().unwrap()))).collect();
+        if samples.iter().flatten().any(|v| !v.is_finite()) { return Err("Invalid proof worker samples".into()); }
+        Ok(Self { space, edge: edge as usize, dark_grid, samples: samples.into_boxed_slice() })
+    }
+    pub fn worker_bytes(&self) -> Vec<u8> {
+        self.samples.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
     fn at_resolution(
         space: RgbSpace,
         transform: &ProofTransform,
