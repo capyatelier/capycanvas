@@ -195,8 +195,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
         &[CommandId::Histogram],
-        &[CommandId::SoftProofSetup],
-        &[CommandId::SoftProof, CommandId::GamutWarning],
+        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],

@@ -289,3 +289,14 @@ and GTK read the desktop’s `appmenu:close` decoration layout. All eight GTK ch
 and four profile unit tests pass. The unit tests cover
 exact bytes, filename fallbacks, deduplication, visibility and role validation.
 Manual acceptance remains pending the user's next review.
+
+## Document-properties review
+
+Document Properties now contains concise size, color-space, resolution and depth
+values, with source-image facts in a separate group. Preservation and saving
+instructions have been removed; assumed profiles remain identified. Soft Proof
+Setup, Soft Proof and Gamut Warning now share one View menu section.
+
+The GTK photo-master workflow and compile check pass. The inspected properties
+capture and logs are in `artifacts/color-m3/document-properties-review/`; the
+existing `profile-review-2/review/launch.sh` is updated to this build.

@@ -479,6 +479,7 @@ fn native_new_presets_and_profiled_photo_master() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
+    pump(350);
     capture_ui(&photo, &output, "opened-prophoto-details.png");
     response(&photo, "done");
     finish(&photo);
