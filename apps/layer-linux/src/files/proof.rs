@@ -9,14 +9,15 @@ use std::sync::{
 fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
     let row = adw::ComboRow::builder()
         .title(title)
-        .model(&gtk::StringList::new(values))
+        .use_subtitle(true)
         .build();
     row.set_expression(Some(gtk::PropertyExpression::new(
         gtk::StringObject::static_type(),
         None::<gtk::Expression>,
         "string",
     )));
-    row.set_use_subtitle(true);
+    row.set_model(Some(&gtk::StringList::new(values)));
+    row.set_selected(0);
     row.set_widget_name(name);
     row
 }
@@ -31,22 +32,18 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             session.engine().document().proof.clone(),
         )
     };
-    let dialog = adw::AlertDialog::builder().heading("Soft Proof Setup")
-        .body("Preview the printer and paper using its ICC profile. Choose the lab’s delivery profile separately when exporting. No printer connection is needed.")
-        .prefer_wide_layout(true).content_width(560)
+    let dialog = adw::AlertDialog::builder()
+        .heading("Soft Proof Setup")
+        .body("Preview how colors will look in print.")
+        .prefer_wide_layout(true)
+        .content_width(480)
         .build();
     dialog.set_widget_name("soft-proof-setup");
-    dialog.add_responses(&[
-        ("cancel", "Cancel"),
-        ("remove", "Remove Setup"),
-        ("apply", "Prepare and Apply"),
-    ]);
-    dialog.set_response_enabled("remove", previous.is_some());
+    dialog.add_responses(&[("cancel", "Cancel"), ("apply", "Apply")]);
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("apply"));
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_width_request(480);
     let group = adw::PreferencesGroup::new();
     let chooser = super::profile::ProfileChooser::new(
         w,
@@ -75,9 +72,11 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
     group.add(&intent);
     let bpc = adw::SwitchRow::builder()
         .title("Black point compensation")
-        .subtitle("Map the artwork’s black to the print target’s black")
         .active(true)
         .build();
+    bpc.set_tooltip_text(Some(
+        "Preserve shadow detail when mapping colors to the print profile.",
+    ));
     bpc.set_widget_name("proof-bpc");
     group.add(&bpc);
     let simulation = choice(
@@ -87,15 +86,9 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
     );
     simulation.set_selected(1);
     group.add(&simulation);
-    intent.set_tooltip_text(Some("How colors are mapped into the printer’s range. Use the intent recommended by your print provider."));
-    let intent_hint = gtk::Label::builder().label("Rendering intent controls how colors outside the printer’s range are mapped. Match your print provider’s recommendation.").wrap(true).xalign(0.).build();
-    intent_hint.add_css_class("dim-label");
+    intent.set_tooltip_text(Some("How colors outside the printer’s range are mapped."));
     content.append(&group);
     content.append(&chooser.error);
-    content.append(&intent_hint);
-    let detail = gtk::Label::builder().label("Applies to the canvas and Navigator only. Use Save As for a print variant. Colors beyond the SDR proof domain are clamped for preview and marked by Gamut Warning.")
-        .wrap(true).xalign(0.).build();
-    content.append(&detail);
     let issue = gtk::Label::builder()
         .wrap(true)
         .xalign(0.)
@@ -157,7 +150,7 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
     ));
     loop {
         let response = crate::alert::choose(dialog.clone(), &w.window).await;
-        if response != "apply" && response != "remove" {
+        if response != "apply" {
             return Ok(());
         }
         let result = (|| {
@@ -168,9 +161,6 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             {
                 return Err("The drawing changed; reopen Soft Proof Setup".to_string());
             }
-            if response == "remove" {
-                return Ok(None);
-            }
             let profile = (chooser.selected)()?;
             let mut recipe = ProofRecipe::new(profile.name, profile.profile);
             recipe.conversion.intent = intents[intent.selected() as usize];
@@ -178,21 +168,10 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             recipe.simulate_paper = simulation.selected() == 2;
             recipe.simulate_black_ink = simulation.selected() != 0;
             recipe.validate()?;
-            Ok(Some(recipe))
+            Ok(recipe)
         })();
         let result = match result {
-            Ok(None) => {
-                let result = w
-                    .gpu
-                    .borrow_mut()
-                    .as_mut()
-                    .ok_or("Canvas unavailable")?
-                    .session
-                    .set_proof_recipe(None);
-                w.changed(result);
-                return Ok(());
-            }
-            Ok(Some(recipe)) => {
+            Ok(recipe) => {
                 w.proof.pause().await;
                 let result = prepare(w, working, recipe.clone()).await.and_then(|lut| {
                     let Some(lut) = lut else {
@@ -234,8 +213,7 @@ async fn prepare(
     recipe: ProofRecipe,
 ) -> Result<Option<Arc<layer_color::ProofLut>>, String> {
     let progress = adw::AlertDialog::builder()
-        .heading("Preparing soft proof")
-        .body("Checking the profile and preparing its viewing transform…")
+        .heading("Preparing preview…")
         .build();
     progress.set_widget_name("proof-progress");
     progress.add_response("cancel", "Cancel");

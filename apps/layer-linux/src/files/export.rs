@@ -896,7 +896,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     filters.append(&filter);
     dialog.set_filters(Some(&filters));
     dialog.set_default_filter(Some(&filter));
-    let file = match dialog.save_future(Some(&w.window)).await {
+    let file = match super::chooser::save(&dialog, &w.window, super::chooser::Folder::Export).await {
         Ok(file) => file,
         Err(e)
             if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) =>

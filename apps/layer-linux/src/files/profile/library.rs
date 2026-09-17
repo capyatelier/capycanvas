@@ -16,6 +16,7 @@ pub(super) struct Entry {
     pub(super) name: String,
     pub(super) channels: Option<ProfileChannels>,
     pub(super) issue: Option<String>,
+    pub(super) visible: bool,
     bytes: u64,
 }
 impl Entry {
@@ -23,15 +24,16 @@ impl Entry {
         if let Some(issue) = &self.issue {
             return issue.clone();
         }
-        format!(
-            "{} · {:.1} KiB",
-            match self.channels.unwrap() {
-                ProfileChannels::Rgb => "RGB",
-                ProfileChannels::Gray => "Grayscale",
-                ProfileChannels::Cmyk => "CMYK",
-            },
-            self.bytes as f64 / 1024.
-        )
+        let channels = match self.channels.unwrap() {
+            ProfileChannels::Rgb => "RGB",
+            ProfileChannels::Gray => "Grayscale",
+            ProfileChannels::Cmyk => "CMYK",
+        };
+        if self.visible {
+            channels.into()
+        } else {
+            format!("{channels} · Hidden")
+        }
     }
 }
 pub(super) fn directory() -> PathBuf {
@@ -133,6 +135,7 @@ pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
             ),
         };
         result.push(Entry {
+            visible: !path.with_extension("hidden").exists(),
             path,
             name,
             channels,
@@ -192,41 +195,33 @@ fn remove(directory: &Path, path: &Path) -> Result<Vec<Entry>, String> {
     if !list(directory)?.iter().any(|e| e.path == path) {
         return Err("Select an imported profile".into());
     }
-    match std::fs::remove_file(path.with_extension("name")) {
-        Ok(()) => (),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        Err(e) => return Err(e.to_string()),
+    for extension in ["name", "hidden"] {
+        match std::fs::remove_file(path.with_extension(extension)) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
     }
     std::fs::remove_file(path).map_err(|e| e.to_string())?;
     list(directory)
 }
-fn rows(list: &gtk::ListBox, entries: &[Entry]) {
-    while let Some(child) = list.first_child() {
-        list.remove(&child);
+
+fn set_visible(directory: &Path, path: &Path, visible: bool) -> Result<Vec<Entry>, String> {
+    let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
+    if !list(directory)?.iter().any(|e| e.path == path) {
+        return Err("This profile is no longer saved".into());
     }
-    for entry in entries {
-        let row = adw::ActionRow::builder()
-            .title(&entry.name)
-            .subtitle(entry.description())
-            .use_markup(false)
-            .build();
-        list.append(&row);
+    let marker = path.with_extension("hidden");
+    if visible {
+        match std::fs::remove_file(marker) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
+    } else {
+        layer_core::atomic_write(&marker, |_| Ok(()))?;
     }
-}
-fn view(entries: &[Entry]) -> (gtk::ListBox, gtk::ScrolledWindow) {
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::Single)
-        .build();
-    list.add_css_class("boxed-list");
-    rows(&list, entries);
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(340)
-        .min_content_height(100)
-        .child(&list)
-        .build();
-    (list, scroll)
+    list(directory)
 }
 pub(super) fn read_entry(
     path: &Path,
@@ -243,150 +238,8 @@ pub(super) fn read_entry(
     profile.name = saved_name(path, layer_color::profile_description(&profile.profile)?);
     Ok(profile)
 }
-pub(crate) async fn manage(w: &Rc<Workspace>) -> Result<(), String> {
-    let initial = gio::spawn_blocking(|| list(&directory()))
-        .await
-        .map_err(|_| "Profile library reader failed")??;
-    let entries = Rc::new(RefCell::new(initial));
-    let (list, scroll) = view(&entries.borrow());
-    list.set_widget_name("profile-library-list");
-    let error = gtk::Label::builder().wrap(true).xalign(0.).build();
-    error.set_widget_name("profile-library-status");
-    error.set_label(if entries.borrow().is_empty() {
-        "No saved profiles"
-    } else {
-        ""
-    });
-    let add = gtk::Button::with_label("Add profile…");
-    add.set_widget_name("profile-library-import");
-    let remove_button = gtk::Button::with_label("Remove");
-    remove_button.set_widget_name("profile-library-remove");
-    remove_button.set_sensitive(false);
-    let busy = Rc::new(Cell::new(false));
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.append(&add);
-    buttons.append(&remove_button);
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    body.append(&scroll);
-    body.append(&buttons);
-    body.append(&error);
-    let dialog = adw::AlertDialog::builder().heading("Saved Profiles").body("Saved profiles are available when choosing proof, source and delivery profiles. Removing a library profile leaves source files and profiles embedded in drawings unchanged.").extra_child(&body).content_width(480).build();
-    dialog.set_widget_name("profile-library-manager");
-    dialog.add_response("close", "Close");
-    dialog.set_close_response("close");
-    list.connect_row_selected(glib::clone!(
-        #[weak]
-        remove_button,
-        #[strong]
-        busy,
-        move |_, row| remove_button.set_sensitive(row.is_some() && !busy.get())
-    ));
-    for (button, importing) in [(&add, true), (&remove_button, false)] {
-        button.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            #[weak]
-            list,
-            #[weak]
-            add,
-            #[weak]
-            remove_button,
-            #[weak]
-            error,
-            #[strong]
-            entries,
-            #[strong]
-            busy,
-            move |_| {
-                if busy.replace(true) {
-                    return;
-                }
-                add.set_sensitive(false);
-                remove_button.set_sensitive(false);
-                let selected = list.selected_row().and_then(|row| {
-                    entries
-                        .borrow()
-                        .get(row.index() as usize)
-                        .map(|e| e.path.clone())
-                });
-                glib::MainContext::default().spawn_local(glib::clone!(
-                    #[strong]
-                    w,
-                    #[strong]
-                    list,
-                    #[strong]
-                    add,
-                    #[strong]
-                    remove_button,
-                    #[strong]
-                    error,
-                    #[strong]
-                    entries,
-                    #[strong]
-                    busy,
-                    async move {
-                        let result = if importing {
-                            let chooser = gtk::FileDialog::builder().title("Add profile").build();
-                            let filter = gtk::FileFilter::new();
-                            filter.set_name(Some("ICC color profiles"));
-                            filter.add_suffix("icc");
-                            filter.add_suffix("icm");
-                            chooser.set_default_filter(Some(&filter));
-                            match chooser.open_future(Some(&w.window)).await {
-                                Ok(file) => match file.path() {
-                                    Some(path) => {
-                                        gio::spawn_blocking(move || import(&directory(), &path))
-                                            .await
-                                            .map_err(|_| "Profile import worker failed".to_string())
-                                            .and_then(|r| r)
-                                            .map(Some)
-                                    }
-                                    None => Err("Choose a local profile file".into()),
-                                },
-                                Err(e)
-                                    if e.matches(gtk::DialogError::Dismissed)
-                                        || e.matches(gtk::DialogError::Cancelled) =>
-                                {
-                                    Ok(None)
-                                }
-                                Err(e) => Err(e.to_string()),
-                            }
-                        } else if let Some(path) = selected {
-                            gio::spawn_blocking(move || remove(&directory(), &path))
-                                .await
-                                .map_err(|_| "Profile removal worker failed".to_string())
-                                .and_then(|r| r)
-                                .map(Some)
-                        } else {
-                            Ok(None)
-                        };
-                        match result {
-                            Ok(Some(values)) => {
-                                rows(&list, &values);
-                                *entries.borrow_mut() = values;
-                                error.set_label(if entries.borrow().is_empty() {
-                                    "No saved profiles"
-                                } else {
-                                    ""
-                                });
-                            }
-                            Ok(None) => (),
-                            Err(message) => error.set_label(&message),
-                        }
-                        busy.set(false);
-                        add.set_sensitive(true);
-                        remove_button.set_sensitive(list.selected_row().is_some());
-                    }
-                ));
-            }
-        ));
-    }
-    crate::alert::choose(dialog, &w.window).await;
-    while busy.get() {
-        glib::timeout_future(std::time::Duration::from_millis(5)).await;
-    }
-    Ok(())
-}
+mod manager;
+pub(crate) use manager::manage;
 
 #[cfg(test)]
 mod tests {
@@ -442,6 +295,17 @@ mod tests {
         let entries = import(&store, &original).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].channels, Some(ProfileChannels::Rgb));
+        assert!(entries[0].visible);
+        assert!(!set_visible(&store, &entries[0].path, false).unwrap()[0].visible);
+        assert!(!list(&store).unwrap()[0].visible);
+        assert_eq!(
+            read_entry(&entries[0].path, RgbSpace::Srgb, &ProfilePurpose::Output)
+                .unwrap()
+                .profile,
+            ColorProfile::Icc(bytes.clone().into())
+        );
+        assert!(set_visible(&store, &entries[0].path, true).unwrap()[0].visible);
+        assert!(set_visible(&store, &original, false).is_err());
         assert_eq!(std::fs::read(&entries[0].path).unwrap(), bytes);
         assert_eq!(import(&store, &original).unwrap().len(), 1);
         std::fs::write(&entries[0].path, b"damaged").unwrap();

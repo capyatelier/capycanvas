@@ -47,6 +47,13 @@ fn main() -> gtk::glib::ExitCode {
     glib::set_application_name(layer_ui::APP_NAME);
     let app = adw::Application::builder()
         .application_id("art.capycanvas.CapyCanvas")
+        // Review builds need their own windows while sharing the desktop's
+        // portal and window-decoration settings with the regular application.
+        .flags(if std::env::var_os("CAPY_NEW_INSTANCE").is_some() {
+            gtk::gio::ApplicationFlags::NON_UNIQUE
+        } else {
+            gtk::gio::ApplicationFlags::FLAGS_NONE
+        })
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {

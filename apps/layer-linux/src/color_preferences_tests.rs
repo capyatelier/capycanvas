@@ -2,7 +2,7 @@ use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, respon
 use super::*;
 use layer_core::color::*;
 
-fn dialog(w: &Rc<Workspace>, name: &str) -> adw::AlertDialog {
+fn dialog(w: &Rc<Workspace>, name: &str) -> adw::Dialog {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         pump(20);
@@ -11,7 +11,7 @@ fn dialog(w: &Rc<Workspace>, name: &str) -> adw::AlertDialog {
             .visible_dialog()
             .filter(|d| d.widget_name() == name)
         {
-            return dialog.downcast().unwrap();
+            return dialog;
         }
         assert!(
             Instant::now() < deadline,
@@ -208,7 +208,9 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     invoke(&w, CommandId::ExportDocument);
     dialog(&w, "export-options");
     super::new_photo::profile_action(&w, "export", "saved-0");
-    let export = dialog(&w, "export-options");
+    let export = dialog(&w, "export-options")
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !export.is_response_enabled("export") {
         pump(20);
@@ -243,8 +245,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         .unwrap()
         .downcast::<gtk::ListBox>()
         .unwrap();
-    list.select_row(list.row_at_index(0).as_ref());
-    click_named(manager.upcast_ref(), "profile-library-remove");
+    super::new_photo::profile_manager_action(&w, 0, "remove");
     let deadline = Instant::now() + Duration::from_secs(10);
     while list.row_at_index(0).is_some() {
         pump(20);

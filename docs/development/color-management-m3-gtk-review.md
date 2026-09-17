@@ -10,14 +10,14 @@ not been enabled by this work.
 From the repository root:
 
 ```sh
-bash artifacts/color-m3/profile-picker/review/launch.sh
+bash artifacts/color-m3/profile-review-2/review/launch.sh
 ```
 
-The launcher opens a separate app session with its own settings, workspace,
-profile library and recovery directory. Existing app windows and their drawings
-stay open. Review files and crash recovery remain under
-`artifacts/color-m3/profile-picker/review/state/`; normal Save As writes to your chosen location.
-`artifacts/color-m3/profile-picker/review/build.json` records the source and executable identity.
+The launcher opens a separate app instance with its own app settings, workspace,
+profile library and recovery directory. It shares your normal desktop file picker
+and title-bar preferences. Existing app windows and their drawings stay open. Review files and crash recovery remain under
+`artifacts/color-m3/profile-review-2/review/state/`; normal Save As writes to your chosen location.
+`artifacts/color-m3/profile-review-2/review/build.json` records the source and executable identity.
 Saved profiles from the previous review session have been copied into this one.
 
 ## Review the print journey
@@ -26,17 +26,17 @@ Saved profiles from the previous review session have been copied into this one.
    `artifacts/color-m3/gtk-journey/variant.capy`, which contains the tested CMYK
    recipe and a small edited drawing. Reopening starts in normal viewing.
 2. Choose **View → Soft Proof Setup** (`Ctrl+Alt+Shift+P`). Open the single
-   **Proof profile** picker. Select a saved profile or use **Add profile…** to
+   **Proof profile** picker. Select a saved profile or use **Add Profile…** to
    choose an `.icc`/`.icm` file; it is saved to the library and selected immediately.
    Re-adding the same file reuses its entry. Standard color spaces have their own
    group. The profile's name supplies the proof indicator automatically.
 3. Choose rendering intent, black point compensation and **Print simulation**:
    **Colors only**, **Black ink**, or **Paper and ink**. Paper and ink includes
-   both simulations; absolute intent disables BPC. **Manage saved profiles…**
-   lives inside the picker. Removing a library entry leaves a selected or embedded
-   profile intact. The same picker is used for source interpretation and delivery,
+   both simulations; absolute intent disables BPC. **Manage Profiles…**
+   lives inside the picker. Its row menu offers **Show in Profile Menus** and
+   **Remove**. Hiding or removing an entry leaves selected and embedded profiles intact. The same picker is used for source interpretation and delivery,
    with independent selections.
-4. Choose **Prepare and Apply**. Check the visible **Proof: target** indicator.
+4. Choose **Apply**. Check the visible **Proof: target** indicator.
    The canvas and Navigator should change together. Try paper/ink settings on
    both a neutral ramp and saturated colors. Preparing a complex profile can
    take several seconds; Cancel leaves the saved setup unchanged.
@@ -50,8 +50,10 @@ Saved profiles from the previous review session have been copied into this one.
    settings. A CMYK proof can accompany an sRGB or Adobe RGB delivery. Importing
    a proof target does not choose an export profile. Compare exports made with
    proof/warnings on and off; simulation and warning gray must never enter them.
-8. Try cancelling setup, removing it and undoing removal. An invalid or unsupported
-   ICC must produce an actionable error rather than display a substituted target.
+8. Try cancelling setup and switching **View → Soft Proof** off and on. Turning
+   the preview off retains its settings. An invalid or unsupported ICC must produce
+   an actionable error. Open Drawing and Add Profile should use the desktop picker
+   and remember their own last-used folders, including from another app window.
 
 The test corpus uses `/usr/share/color/icc/krita/cmyk.icm` and downloaded WhiteWall
 and ICC targets under `artifacts/color-m3/references/`. Use the profile supplied

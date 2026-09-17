@@ -100,7 +100,7 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
             .filters(&filters)
             .default_filter(&filter)
             .build();
-        match dialog.open_future(Some(&w.window)).await {
+        match super::chooser::open(&dialog, &w.window, super::chooser::Folder::Artwork).await {
             Ok(file) => Some(file.path().ok_or("Choose an image on this device")?),
             Err(e)
                 if e.matches(gtk::DialogError::Dismissed)

@@ -68,13 +68,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
         });
     invoke(&w, CommandId::SoftProofSetup);
     super::new_photo::profile_action(&w, "proof", "builtin-0");
-    click(
-        &find_button(
-            w.window.visible_dialog().unwrap().upcast_ref(),
-            "Prepare and Apply",
-        )
-        .unwrap(),
-    );
+    click(&find_button(w.window.visible_dialog().unwrap().upcast_ref(), "Apply").unwrap());
     let deadline = Instant::now() + Duration::from_secs(15);
     while !cancelled.get()
         || w.window
@@ -146,7 +140,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert!(!broken_setup.is_response_enabled("apply"));
-    assert!(broken_setup.is_response_enabled("remove"));
+    assert!(!broken_setup.has_response("remove"));
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), failed_document);
@@ -263,7 +257,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     let w = Workspace::with_project(&app, Some((new_drawing(128, 64).unwrap(), None)));
     w.window.present();
     ready(&w);
-    let output = std::path::Path::new("../../artifacts/color-m3/profile-picker")
+    let output = std::path::Path::new("../../artifacts/color-m3/profile-review-2")
         .canonicalize()
         .unwrap();
     let path = output.join("Unhelpful filename.icm");
@@ -279,9 +273,26 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert!(!setup.is_response_enabled("apply"));
-    for _ in 0..2 {
+    assert_eq!(
+        combo(&w, "proof-intent").subtitle().as_deref(),
+        Some("Relative colorimetric")
+    );
+    assert_eq!(
+        combo(&w, "proof-simulation").subtitle().as_deref(),
+        Some("Black ink")
+    );
+    assert_eq!(setup.response_label("apply"), "Apply");
+    assert!(!setup.has_response("remove"));
+    super::new_photo::capture_ui(&w, &output, "setup.png");
+    for iteration in 0..2 {
         profile_action(&w, "proof", "add");
         let file = chooser();
+        if iteration != 0 {
+            assert_eq!(
+                file.current_folder().and_then(|f| f.path()).as_deref(),
+                path.parent()
+            );
+        }
         file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
         pump(150);
         file.response(gtk::ResponseType::Accept);
@@ -306,6 +317,38 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         .unwrap();
     assert!(list.row_at_index(0).is_some());
     assert!(list.row_at_index(1).is_none());
+    pump(350);
+    super::new_photo::capture_ui(&w, &output, "manager.png");
+    super::new_photo::profile_manager_action(&w, 0, "show");
+    response(&w, "close");
+    // Hiding survives reopening the manager without changing the chosen bytes.
+    let menu = find_named(setup.upcast_ref(), "proof-profile-choose")
+        .unwrap()
+        .downcast::<gtk::MenuButton>()
+        .unwrap();
+    menu.popup();
+    pump(300);
+    let model = menu
+        .popover()
+        .unwrap()
+        .downcast::<gtk::PopoverMenu>()
+        .unwrap()
+        .menu_model()
+        .unwrap();
+    assert!(!super::new_photo::menu_has_action(
+        &model,
+        "profile.saved-0"
+    ));
+    assert!(!super::new_photo::menu_has_action(
+        &model,
+        "profile.current"
+    ));
+    assert_eq!(profile_name(&w, "proof-profile"), expected);
+    assert!(setup.is_response_enabled("apply"));
+    menu.popdown();
+    profile_action(&w, "proof", "manage");
+    pump(250);
+    super::new_photo::profile_manager_action(&w, 0, "show");
     response(&w, "close");
     profile_action(&w, "proof", "builtin-0");
     assert_eq!(profile_name(&w, "proof-profile"), "sRGB");
@@ -318,11 +361,16 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     menu.popup();
     pump(300);
     assert!(
-        find_named(
-            menu.popover().unwrap().upcast_ref(),
-            "proof-profile-current"
-        )
-        .is_none(),
+        !super::new_photo::menu_has_action(
+            &menu
+                .popover()
+                .unwrap()
+                .downcast::<gtk::PopoverMenu>()
+                .unwrap()
+                .menu_model()
+                .unwrap(),
+            "profile.current"
+        ),
         "saved/current profile must not be duplicated"
     );
     super::new_photo::capture_ui(&w, &output, "picker.png");
@@ -354,12 +402,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         .unwrap()
         .downcast::<gtk::ListBox>()
         .unwrap();
-    list.select_row(list.row_at_index(0).as_ref());
-    find_named(manager.upcast_ref(), "profile-library-remove")
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap()
-        .emit_clicked();
+    super::new_photo::profile_manager_action(&w, 0, "remove");
     while list.row_at_index(0).is_some() {
         pump(20);
         assert!(Instant::now() < deadline);
@@ -711,4 +754,171 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     );
     restored.window.destroy();
     w.window.destroy();
+}
+
+#[test]
+#[ignore = "isolated Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_open_and_profile_pickers_remember_separate_folders() {
+    use super::new_photo::profile_action;
+    let app = native_test_app("art.capycanvas.FileFolders");
+    let w = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+    *w.open_document.borrow_mut() = Some(Rc::new(|_, _, _| {}));
+    w.window.present();
+    ready(&w);
+    let root = std::env::temp_dir().join(format!("capy-picker-folders-{}", std::process::id()));
+    let artwork = root.join("artwork");
+    let profiles = root.join("profiles");
+    std::fs::create_dir_all(&artwork).unwrap();
+    std::fs::create_dir_all(&profiles).unwrap();
+    let drawing = artwork.join("drawing.capy");
+    std::fs::write(&drawing, snapshot(&w)).unwrap();
+    let profile = profiles.join("printer.icm");
+    std::fs::write(
+        &profile,
+        layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::Srgb)).unwrap(),
+    )
+    .unwrap();
+    invoke(&w, CommandId::OpenDocument);
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(&drawing)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    finish(&w);
+    invoke(&w, CommandId::SoftProofSetup);
+    profile_action(&w, "proof", "add");
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(&profile)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    let setup = w
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !setup.is_response_enabled("apply") {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    response(&w, "cancel");
+    finish(&w);
+    invoke(&w, CommandId::OpenDocument);
+    let file = chooser();
+    assert_eq!(
+        file.current_folder().and_then(|f| f.path()),
+        Some(artwork.clone())
+    );
+    file.set_current_folder(Some(&gtk::gio::File::for_path(&profiles)))
+        .unwrap();
+    file.response(gtk::ResponseType::Cancel);
+    finish(&w);
+    // A second window reloads the saved locations; cancellation does not replace them.
+    let other = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
+    other.window.present();
+    ready(&other);
+    invoke(&other, CommandId::OpenDocument);
+    let file = chooser();
+    assert_eq!(file.current_folder().and_then(|f| f.path()), Some(artwork));
+    file.response(gtk::ResponseType::Cancel);
+    finish(&other);
+    invoke(&other, CommandId::SoftProofSetup);
+    profile_action(&other, "proof", "manage");
+    pump(250);
+    let manager = other.window.visible_dialog().unwrap();
+    find_named(manager.upcast_ref(), "profile-library-import")
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap()
+        .emit_clicked();
+    let file = chooser();
+    assert_eq!(
+        file.current_folder().and_then(|f| f.path()),
+        Some(profiles.clone())
+    );
+    file.response(gtk::ResponseType::Cancel);
+    pump(200);
+    response(&other, "close");
+    profile_action(&other, "proof", "add");
+    let file = chooser();
+    assert_eq!(file.current_folder().and_then(|f| f.path()), Some(profiles));
+    file.response(gtk::ResponseType::Cancel);
+    pump(200);
+    response(&other, "cancel");
+    finish(&other);
+    other.window.close();
+    w.window.close();
+    pump(100);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "real desktop portal; set CAPY_TEST_DESKTOP_PORTAL=1, without no-portals"]
+#[allow(deprecated)]
+fn native_desktop_file_picker_uses_portal() {
+    assert!(std::env::var_os("CAPY_TEST_DESKTOP_PORTAL").is_some());
+    assert!(
+        !std::env::var("GDK_DEBUG")
+            .unwrap_or_default()
+            .contains("no-portals")
+    );
+    let app = native_test_app("art.capycanvas.DesktopPickerCheck");
+    let window = adw::ApplicationWindow::builder()
+        .application(&*app)
+        .title("File picker check")
+        .default_width(360)
+        .default_height(120)
+        .build();
+    window.set_content(Some(&gtk::Label::new(Some(
+        "Checking desktop file dialogs…",
+    ))));
+    window.present();
+    pump(300);
+    eprintln!(
+        "Desktop decoration layout: {:?}",
+        gtk::Settings::default().unwrap().gtk_decoration_layout()
+    );
+    for (title, suffix) in [("Open Drawing", "capy"), ("Add Profile", "icc")] {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some(title));
+        filter.add_suffix(suffix);
+        let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title(title)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        dialog.set_initial_folder(Some(&gtk::gio::File::for_path(
+            std::env::current_dir().unwrap(),
+        )));
+        let cancel = gtk::gio::Cancellable::new();
+        let result = Rc::new(RefCell::new(None));
+        let completed = result.clone();
+        dialog.open(Some(&window), Some(&cancel), move |r| {
+            completed.replace(Some(r));
+        });
+        pump(1500);
+        assert!(
+            result.borrow().is_none(),
+            "picker failed before cancellation: {:?}",
+            result.borrow()
+        );
+        assert!(
+            !gtk::Window::list_toplevels()
+                .iter()
+                .any(|w| w.is_visible() && w.is::<gtk::FileChooserDialog>()),
+            "desktop picker fell back to an in-process file dialog"
+        );
+        cancel.cancel();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while result.borrow().is_none() {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+        assert!(result.borrow().as_ref().unwrap().is_err());
+    }
+    window.close();
+    pump(100);
 }

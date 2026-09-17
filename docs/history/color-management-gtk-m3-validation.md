@@ -245,3 +245,47 @@ executable identities and launch verification are recorded in
 `profile-picker/review/build.json`. Use the updated
 [manual guide](../development/color-management-m3-gtk-review.md) for this revision;
 manual acceptance is still pending.
+
+
+## Second GTK profile review
+
+The proof dialog now initializes its string expression before its model, so the
+first rendering intent is visible immediately. Native `GtkPopoverMenu` sections
+provide the profile menu's spacing and separators. The profile manager uses an
+Adwaita header, a + action, a spacious scrolling list and row options like Manage
+Workspaces. **Show in Profile Menus** persists independently of profile bytes;
+hidden profiles stay usable in existing selections and drawings. Removal remains
+limited to the application library.
+
+Soft Proof Setup uses one short conceptual sentence and **Cancel / Apply**.
+Applying enables the preview; the existing **View → Soft Proof** toggle turns it
+off without deleting settings. There is no separate setup-removal action. Lengthy
+export instructions, implementation details and duplicated explanations were
+removed from this dialog; brief option explanations remain in tooltips.
+
+The interaction review considered [Photoshop's setup and Proof Colors toggle](https://helpx.adobe.com/photoshop/using/proofing-colors.html)
+and [Affinity Photo's Soft Proof adjustment](https://affinity.help/photo2/en-US.lproj/pages/Adjustments/adjustment_softProof.html).
+The existing canvas-only proof architecture follows the setup/toggle approach;
+these changes do not introduce an adjustment layer or change exported pixels.
+
+File dialogs continue to use `GtkFileDialog`, with remembered folders for artwork,
+ICC profiles, native saves and image exports. Open and Import share the artwork
+folder; every ICC entry point shares the profile folder. Successful selection
+persists the parent directory; cancellation preserves the previous choice.
+Missing directories fall back to the normal chooser behavior.
+
+The earlier review launcher forced `no-portals` and isolated desktop settings,
+which caused the fallback chooser and unexpected title-bar buttons. The revised
+launcher uses the real desktop session and its settings, with `CAPY_NEW_INSTANCE`
+to open the review executable alongside any running application. App files and
+recovery remain isolated. Window-control policy itself has not changed.
+
+Artifacts and the current launcher are under `artifacts/color-m3/profile-review-2/`.
+The native checks cover visible defaults, menu layout, profile hiding/reuse,
+remembered artwork/ICC folders across windows, cancellation, settings, proof
+save/reopen and RGB delivery. A separate desktop check opens and cancels both
+file-picker roles with portal tracing enabled; both issued portal OpenFile requests
+and GTK read the desktop’s `appmenu:close` decoration layout. All eight GTK checks
+and four profile unit tests pass. The unit tests cover
+exact bytes, filename fallbacks, deduplication, visibility and role validation.
+Manual acceptance remains pending the user's next review.

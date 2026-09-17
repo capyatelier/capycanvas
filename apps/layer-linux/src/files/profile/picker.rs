@@ -21,7 +21,6 @@ struct State {
     generation: Cell<u64>,
     working: RgbSpace,
     purpose: ProfilePurpose,
-    prefix: &'static str,
 }
 
 impl State {
@@ -144,12 +143,19 @@ impl State {
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Add profile")
+            .title("Add Profile")
+            .accept_label("Add")
             .modal(true)
             .filters(&filters)
             .default_filter(&filter)
             .build();
-        let file = match dialog.open_future(Some(&w.window)).await {
+        let file = match super::super::chooser::open(
+            &dialog,
+            &w.window,
+            super::super::chooser::Folder::Profiles,
+        )
+        .await
+        {
             Ok(file) => file,
             Err(e)
                 if e.matches(gtk::DialogError::Dismissed)
@@ -173,27 +179,21 @@ impl State {
     }
 }
 
-fn heading(body: &gtk::Box, text: &str) {
-    let label = gtk::Label::builder()
-        .label(text)
-        .xalign(0.)
-        .margin_top(8)
-        .margin_start(8)
-        .margin_bottom(4)
-        .build();
-    label.add_css_class("dim-label");
-    body.append(&label);
-}
-fn button(body: &gtk::Box, label: &str, name: &str, action: impl Fn() + 'static) {
-    let button = gtk::Button::with_label(label);
-    button.set_widget_name(name);
-    button.add_css_class("flat");
-    let label = button.child().unwrap().downcast::<gtk::Label>().unwrap();
-    label.set_xalign(0.);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    label.set_max_width_chars(48);
-    button.connect_clicked(move |_| action());
-    body.append(&button);
+fn item(
+    section: &gio::Menu,
+    actions: &gio::SimpleActionGroup,
+    label: &str,
+    name: &str,
+    activate: impl Fn() + 'static,
+) {
+    let action = gio::SimpleAction::new(name, None);
+    action.connect_activate(move |_, _| activate());
+    actions.add_action(&action);
+    // Profile names are literal text, not menu mnemonics.
+    section.append(
+        Some(&label.replace('_', "__")),
+        Some(&format!("profile.{name}")),
+    );
 }
 
 impl ProfileChooser {
@@ -243,34 +243,29 @@ impl ProfileChooser {
             generation: Cell::new(0),
             working,
             purpose,
-            prefix,
         });
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        body.set_width_request(340);
-        let scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(420)
-            .min_content_width(320)
-            .child(&body)
-            .build();
-        let picker = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        picker.append(&scroll);
-        picker.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        button(
-            &picker,
-            "Add profile…",
-            &format!("{}-profile-add", state.prefix),
+        let model = gio::Menu::new();
+        let choices = gio::Menu::new();
+        let footer = gio::Menu::new();
+        let actions = gio::SimpleActionGroup::new();
+        model.append_section(None, &choices);
+        model.append_section(None, &footer);
+        item(
+            &footer,
+            &actions,
+            "Add Profile…",
+            "add",
             glib::clone!(
                 #[strong]
                 state,
                 move || state.choose(None, None)
             ),
         );
-        button(
-            &picker,
-            "Manage saved profiles…",
-            &format!("{}-profile-manage", state.prefix),
+        item(
+            &footer,
+            &actions,
+            "Manage Profiles…",
+            "manage",
             glib::clone!(
                 #[strong]
                 state,
@@ -291,27 +286,35 @@ impl ProfileChooser {
                 }
             ),
         );
-        let popover = gtk::Popover::builder().child(&picker).build();
+        let popover = gtk::PopoverMenu::from_model(Some(&model));
+        w.watch_popover(popover.upcast_ref());
+        popover.insert_action_group("profile", Some(&actions));
         menu.set_popover(Some(&popover));
         popover.connect_show(glib::clone!(
             #[strong]
             state,
-            #[weak]
-            body,
+            #[strong]
+            choices,
+            #[strong]
+            actions,
             move |_| {
                 if state.listing.replace(true) {
                     return;
                 }
-                while let Some(child) = body.first_child() {
-                    body.remove(&child);
+                choices.remove_all();
+                for name in actions.list_actions() {
+                    if name != "add" && name != "manage" {
+                        actions.remove_action(&name);
+                    }
                 }
-                let loading = gtk::Label::new(Some("Loading profiles…"));
-                body.append(&loading);
+                choices.append(Some("Loading profiles…"), None);
                 glib::MainContext::default().spawn_local(glib::clone!(
                     #[strong]
                     state,
-                    #[weak]
-                    body,
+                    #[strong]
+                    choices,
+                    #[strong]
+                    actions,
                     async move {
                         let current = state.value.borrow().clone();
                         let (entries, current) = gio::spawn_blocking(move || {
@@ -336,66 +339,65 @@ impl ProfileChooser {
                             (entries, current)
                         })
                         .await
-                        .unwrap_or_else(|_| (Err("Profile library reader failed".into()), None));
+                        .unwrap_or_else(|_| (Err("Could not load saved profiles".into()), None));
                         state.listing.set(false);
-                        while let Some(child) = body.first_child() {
-                            body.remove(&child);
-                        }
+                        choices.remove_all();
                         if let Some(current) = current {
-                            heading(&body, "Current profile");
+                            let section = gio::Menu::new();
                             let title = current.name.clone();
-                            button(
-                                &body,
+                            item(
+                                &section,
+                                &actions,
                                 &title,
-                                &format!("{}-profile-current", state.prefix),
+                                "current",
                                 glib::clone!(
                                     #[strong]
                                     state,
                                     move || state.choose(Some(current.clone()), None)
                                 ),
                             );
+                            choices.append_section(Some("Current Profile"), &section);
                         }
-                        heading(&body, "Saved profiles");
                         match entries {
                             Ok(entries) => {
-                                let mut shown = 0;
-                                for entry in entries.into_iter().filter(|e| {
-                                    e.issue.is_none()
-                                        && e.channels.is_some_and(|c| state.compatible(c))
-                                }) {
-                                    button(
-                                        &body,
+                                let saved = gio::Menu::new();
+                                for (index, entry) in entries
+                                    .into_iter()
+                                    .filter(|e| {
+                                        e.visible
+                                            && e.issue.is_none()
+                                            && e.channels.is_some_and(|c| state.compatible(c))
+                                    })
+                                    .enumerate()
+                                {
+                                    item(
+                                        &saved,
+                                        &actions,
                                         &entry.name,
-                                        &format!("{}-profile-saved-{shown}", state.prefix),
+                                        &format!("saved-{index}"),
                                         glib::clone!(
                                             #[strong]
                                             state,
                                             move || state.choose(None, Some(entry.path.clone()))
                                         ),
                                     );
-                                    shown += 1;
                                 }
-                                if shown == 0 {
-                                    body.append(&gtk::Label::new(Some(
-                                        "No matching saved profiles",
-                                    )));
+                                if saved.n_items() > 0 {
+                                    choices.append_section(Some("Saved Profiles"), &saved);
                                 }
                             }
-                            Err(error) => {
-                                let label = gtk::Label::builder().label(error).wrap(true).build();
-                                label.add_css_class("error");
-                                body.append(&label);
-                            }
+                            Err(error) => choices.append(Some(&error), None),
                         }
                         if state.compatible(ProfileChannels::Rgb) {
-                            heading(&body, "Standard color spaces");
+                            let standard = gio::Menu::new();
                             for (index, space) in RgbSpace::ALL.into_iter().enumerate() {
                                 let value = ExportProfile::builtin(space);
                                 let title = value.name.clone();
-                                button(
-                                    &body,
+                                item(
+                                    &standard,
+                                    &actions,
                                     &title,
-                                    &format!("{}-profile-builtin-{index}", state.prefix),
+                                    &format!("builtin-{index}"),
                                     glib::clone!(
                                         #[strong]
                                         state,
@@ -403,14 +405,7 @@ impl ProfileChooser {
                                     ),
                                 );
                             }
-                        }
-                        if state
-                            .menu
-                            .upgrade()
-                            .and_then(|menu| menu.popover())
-                            .is_some_and(|popover| popover.is_visible())
-                        {
-                            body.child_focus(gtk::DirectionType::TabForward);
+                            choices.append_section(Some("Standard Color Spaces"), &standard);
                         }
                     }
                 ));
