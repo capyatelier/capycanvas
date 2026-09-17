@@ -2,7 +2,27 @@
 //! Monitor conversion belongs to the compositor; document values stay unchanged.
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 use layer_core::color::{RgbColor, RgbSpace};
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::{OsStr, OsString},
+    os::unix::ffi::OsStrExt,
+};
+
+fn with_gtk_color_management(flags: &OsStr) -> OsString {
+    if flags
+        .as_bytes()
+        .split(|b| b":;, \t".contains(b))
+        .any(|flag| flag.eq_ignore_ascii_case(b"color-mgmt"))
+    {
+        return flags.into();
+    }
+    let mut flags = flags.to_os_string();
+    if !flags.is_empty() {
+        flags.push(":");
+    }
+    flags.push("color-mgmt");
+    flags
+}
 
 /// GTK 4.22 gates its Wayland color-manager binding behind this flag and has
 /// no public setter. Preserve unrelated diagnostic flags. Native test runners
@@ -14,16 +34,7 @@ use std::cell::{Cell, RefCell};
 /// Call only at the start of the single-threaded application entry point,
 /// before initializing GTK or starting any application/library worker threads.
 pub unsafe fn enable_gtk_color_management() {
-    use std::os::unix::ffi::OsStrExt;
-    let mut flags = std::env::var_os("GDK_DEBUG").unwrap_or_default();
-    if flags
-        .as_bytes()
-        .split(|b| b":;, \t".contains(b))
-        .any(|flag| flag.eq_ignore_ascii_case(b"color-mgmt"))
-    {
-        return;
-    }
-    flags.push(":color-mgmt");
+    let flags = with_gtk_color_management(&std::env::var_os("GDK_DEBUG").unwrap_or_default());
     // SAFETY: the caller guarantees exclusive access to the environment.
     unsafe { std::env::set_var("GDK_DEBUG", flags) };
 }
@@ -223,6 +234,21 @@ impl ColorPatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gtk_color_management_is_a_valid_debug_flag() {
+        for (existing, expected) in [
+            ("", "color-mgmt"),
+            ("no-portals", "no-portals:color-mgmt"),
+            ("no-portals;color-mgmt", "no-portals;color-mgmt"),
+            ("COLOR-MGMT", "COLOR-MGMT"),
+        ] {
+            assert_eq!(
+                with_gtk_color_management(OsStr::new(existing)),
+                OsStr::new(expected)
+            );
+        }
+    }
+
     #[test]
     fn selection_requires_a_matching_passthrough_format() {
         let caps = |entries| wgpu::SurfaceCapabilities {
