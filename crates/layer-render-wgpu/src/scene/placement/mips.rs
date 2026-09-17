@@ -12,6 +12,7 @@ pub(in crate::scene) struct Mip {
     watercolor: Option<WatercolorLayerStyle>,
     pub image: display_mips::Image,
     pub usable: bool,
+    pub sample_level: u32,
     pub updates: u64,
 }
 
@@ -55,13 +56,16 @@ impl Scene {
             let sum = a * a + b * b + c * c + d * d;
             let det = (a * d - b * c).abs();
             let high = ((sum + (sum * sum - 4. * det * det).max(0.).sqrt()) * 0.5).sqrt();
-            let level = (det / high).recip().log2().floor().max(0.) as u32;
+            // Keep enough samples along the most magnified affine axis, also
+            // for nonuniform scale and shear. A narrower axis cannot discard
+            // detail still visible along the wider one.
+            let level = high.recip().log2().floor().max(0.) as u32;
             let level = level.min(8);
             if level == 0 {
                 // A 100% view uses exact local tiles. Retain its reduced cache
                 // only after reserving the previews other visible layers need.
                 if let Some(mip) = existing {
-                    retained.push((layer, mip.image.plan, false));
+                    retained.push((layer, mip.image.plan, 0));
                 }
                 continue;
             }
@@ -80,13 +84,13 @@ impl Scene {
                 continue;
             }
             remaining -= bytes;
-            wanted.push((layer, plan, level > 0));
+            wanted.push((layer, plan, level));
         }
-        for (layer, plan, usable) in retained {
+        for (layer, plan, sample_level) in retained {
             let bytes = plan.pixel_bytes() + 4096;
             if bytes <= remaining {
                 remaining -= bytes;
-                wanted.push((layer, plan, usable));
+                wanted.push((layer, plan, sample_level));
             }
         }
         // Reserve every visible layer's required preview first, then spend only
@@ -95,8 +99,8 @@ impl Scene {
         // the first small scale-up from an exact 1/2, 1/4, ... fit boundary.
         // This never expands the shared display-memory allowance or creates a
         // full-resolution copy. Exact capture still bypasses these previews.
-        for (_, plan, usable) in &mut wanted {
-            while *usable && plan.level > 1 {
+        for (_, plan, sample_level) in &mut wanted {
+            while *sample_level > 0 && plan.level > 1 {
                 let level = plan.level - 1;
                 let finer = display_mips::Plan {
                     extent: plan.extent,
@@ -113,17 +117,33 @@ impl Scene {
                 *plan = finer;
             }
         }
+        // Spare detail prevents cold source replay when scaling up. Retaining
+        // its smaller levels also lets small poses sample at their actual LOD,
+        // avoiding the bandwidth of the finest preview on every moving frame.
+        // Both representations stay inside the same admitted display allowance.
+        let wanted: Vec<_> = wanted.into_iter().map(|(layer, plan, sample_level)| {
+            let mut last = plan.level;
+            while last < 8 {
+                let additional = plan.pixel_bytes_through(last + 1) - plan.pixel_bytes_through(last);
+                if additional > remaining { break; }
+                remaining -= additional;
+                last += 1;
+            }
+            (layer, plan, sample_level, last)
+        }).collect();
         self.placement_mips.retain(|id, mip| {
-            wanted.iter().any(|(layer, plan, _)| {
+            wanted.iter().any(|(layer, plan, _, last)| {
                 layer.id == *id
                     && mip.image.plan == *plan
+                    && mip.image.last_level() == *last
                     && mip.space == r.document_color().space
                     && mip
                         .source
                         .ptr_eq(&Arc::downgrade(layer.source.as_ref().unwrap()))
             })
         });
-        for (layer, plan, usable) in wanted {
+        for (layer, plan, sample_level, last) in wanted {
+            let usable = sample_level > 0;
             let old = self.placement_mips.remove(&layer.id);
             let cold = old.is_none();
             let pipelines = r
@@ -137,8 +157,9 @@ impl Scene {
                 space: r.document_color().space,
                 preview: PixelRect::EMPTY,
                 watercolor: None,
-                image: display_mips::Image::new(r, &pipelines, plan),
+                image: display_mips::Image::with_mips(r, &pipelines, plan, last),
                 usable,
+                sample_level,
                 updates: 0,
             });
             let result = (|| {
@@ -232,8 +253,11 @@ impl Scene {
                     // finished preview is still published only after success.
                     #[cfg(target_os = "android")]
                     {
-                        recorded_tiles += 1;
-                        if recorded_tiles == 64 {
+                        // Count reduction/copy levels as well as source tiles;
+                        // a retained pyramid must not multiply the driver's
+                        // peak command storage during cold preparation.
+                        recorded_tiles += last + 1;
+                        if recorded_tiles >= 64 {
                             Self::submit_chunk(r, encoder, "bounded placed photo preview")?;
                             recorded_tiles = 0;
                         }
@@ -246,6 +270,7 @@ impl Scene {
                     mip.backing = Arc::downgrade(&current);
                 }
                 mip.usable = usable;
+                mip.sample_level = sample_level;
                 Ok::<_, GpuRasterError>(())
             })();
             r.display_pipelines = Some(pipelines);

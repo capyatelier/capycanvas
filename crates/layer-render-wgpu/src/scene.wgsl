@@ -48,6 +48,12 @@ fn scene_image(v:Vertex)->vec4<f32> {
     let local=vec2(m.x*world.x+m.z*world.y,m.y*world.x+m.w*world.y)+settings.operation_offset.xy;
     if any(local<vec2(-.5)) || any(local>vec2<f32>(textureDimensions(front))+vec2(.5)) {return vec4(0.);}
     let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
+    // Almost every footprint is interior. Prove its four loads valid once,
+    // keeping transparent-edge handling out of each interior texture fetch.
+    if all(base>=vec2(0)) && all(base+vec2(1)<vec2<i32>(textureDimensions(front))) {
+        return mix(mix(textureLoad(front,base,0),textureLoad(front,base+vec2(1,0),0),t.x),
+            mix(textureLoad(front,base+vec2(0,1),0),textureLoad(front,base+vec2(1,1),0),t.x),t.y);
+    }
     return mix(mix(scene_image_texel(base),scene_image_texel(base+vec2(1,0)),t.x),
         mix(scene_image_texel(base+vec2(0,1)),scene_image_texel(base+vec2(1,1)),t.x),t.y);
 }

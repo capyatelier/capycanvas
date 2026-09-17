@@ -32,10 +32,15 @@ impl Plan {
         })
     }
     pub fn pixel_bytes(self) -> u64 {
-        let scratch = (0..=self.level)
+        self.pixel_bytes_through(self.level)
+    }
+    pub fn pixel_bytes_through(self, last: u32) -> u64 {
+        let scratch = (0..=last)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)
             .sum::<u64>();
-        u64::from(self.size[0]) * u64::from(self.size[1]) * 16 + scratch
+        scratch + (self.level..=last).map(|level| {
+            self.extent.map(|n| u64::from(n.div_ceil(1 << level))).into_iter().product::<u64>() * 16
+        }).sum::<u64>()
     }
 }
 
@@ -146,12 +151,19 @@ pub(super) struct Image {
     geometry: wgpu::Buffer,
     scratch: wgpu::Texture,
     views: Vec<wgpu::TextureView>,
+    reduced: Vec<(wgpu::Texture, wgpu::TextureView)>,
     // An image has only four combinations of full/partial tile dimensions.
     // Immutable records preserve command order when the scratch tile is reused.
     records: BTreeMap<[u32; 2], Vec<Record>>,
 }
 impl Image {
     pub fn new(r: &WgpuRasterizer, pipelines: &Pipelines, plan: Plan) -> Self {
+        Self::with_mips(r, pipelines, plan, plan.level)
+    }
+    /// Retain optional coarser levels from the same tile reduction. Consumers
+    /// select an existing level; source pixels and editing precision are intact.
+    pub fn with_mips(r: &WgpuRasterizer, pipelines: &Pipelines, plan: Plan, last: u32) -> Self {
+        assert!(last >= plan.level && last < MIP_COUNT);
         let (texture, view) = create_target(
             &r.device,
             plan.size,
@@ -190,7 +202,7 @@ impl Image {
                 height: PAGE_SIZE,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: plan.level + 1,
+            mip_level_count: last + 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
@@ -200,7 +212,7 @@ impl Image {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let views = (0..=plan.level)
+        let views = (0..=last)
             .map(|level| {
                 scratch.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("single display mip"),
@@ -210,6 +222,10 @@ impl Image {
                 })
             })
             .collect();
+        let reduced = (plan.level + 1..=last).map(|level| create_target(
+            &r.device, plan.extent.map(|n| n.div_ceil(1 << level)),
+            wgpu::TextureFormat::Rgba32Float, "retained image mip",
+        )).collect();
         Self {
             plan,
             texture,
@@ -218,11 +234,12 @@ impl Image {
             geometry,
             scratch,
             views,
+            reduced,
             records: BTreeMap::new(),
         }
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.plan.pixel_bytes()
+        self.plan.pixel_bytes_through(self.last_level())
             + self.geometry.size()
             + self
                 .records
@@ -230,6 +247,13 @@ impl Image {
                 .flatten()
                 .map(|r| r.uniform.size())
                 .sum::<u64>()
+    }
+    pub fn last_level(&self) -> u32 { self.views.len() as u32 - 1 }
+    pub fn sample(&self, requested: u32) -> (u32, &wgpu::TextureView, [u32; 2]) {
+        let level = requested.clamp(self.plan.level, self.last_level());
+        let view = if level == self.plan.level { &self.view }
+            else { &self.reduced[(level - self.plan.level - 1) as usize].1 };
+        (level, view, self.plan.extent.map(|n| n.div_ceil(1 << level)))
     }
     pub fn copy_mip(
         &self,
@@ -239,7 +263,7 @@ impl Image {
         destination: &wgpu::Texture,
         origin: [u32; 2],
     ) {
-        assert!(level <= self.plan.level);
+        assert!(level <= self.last_level());
         let valid: [u32; 2] = std::array::from_fn(|i| {
             (self.plan.extent[i] - coordinate[i] * PAGE_SIZE)
                 .min(PAGE_SIZE)
@@ -312,8 +336,9 @@ impl Image {
                 depth_or_array_layers: 1,
             },
         );
+        let last = self.last_level();
         let records = self.records.entry(valid).or_insert_with(|| {
-            (1..=self.plan.level)
+            (1..=last)
                 .map(|level| {
                     let data = [valid[0], valid[1], 1 << (level - 1), 0]
                         .into_iter()
@@ -380,6 +405,10 @@ impl Image {
                 depth_or_array_layers: 1,
             },
         );
+        for (index, (texture, _)) in self.reduced.iter().enumerate() {
+            let level = self.plan.level + index as u32 + 1;
+            self.copy_mip(encoder, level, coordinate, texture, origin.map(|v| v >> level));
+        }
         Ok(())
     }
 }

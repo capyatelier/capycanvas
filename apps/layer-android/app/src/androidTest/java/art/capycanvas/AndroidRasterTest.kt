@@ -310,6 +310,7 @@ class AndroidRasterTest {
         open(File(files,"batch-placement.capy"));memoryStage("after reopen");assertEquals(identity,sourceIdentity(manifest(save("batch-reopened.capy"))))
         invoke("scale_rotate");press("placement_original_size");press("apply_transform")
         val originalSize=manifest(save("batch-original-size.capy"))
+        memoryStage("after original size")
         assertEquals(1.0,originalSize.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").getJSONArray("placement").getDouble(0),1e-6)
         assertEquals(identity,sourceIdentity(originalSize))
         val before=count();val malformed=File(files,"batch-malformed.png").apply { writeText("not a photo") }

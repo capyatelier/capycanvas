@@ -370,3 +370,63 @@ earlier operations; the report treats the run's host timeline as authoritative
 and filters compositor timestamps to its input interval. Android instrumentation
 now includes shared renderer CPU phases and process mapping counts, and accepts
 `-e motionDurationMs 15000` (5–30 seconds) for longer sustained checks.
+
+## Shared 120 Hz moving milestone
+
+The admitted Float32 photo cache now retains its smaller mip levels when the
+existing display allowance permits. Small placements sample the matching level,
+while scale-up reuses the finer retained level without decoding or uploading the
+original again. The selected level preserves detail along the most magnified
+affine axis. All levels use the existing weighted tile reduction, including
+partial edges; source files, paint storage and exact export remain unchanged.
+There is no additional shader pipeline or platform-specific image representation.
+
+The existing fused source-over shader now validates an interior bilinear
+footprint once before its four loads. Edge footprints retain the same transparent
+sampling. On the tablet, this also brought the 61 MP case just above the quarter
+scale boundary below budget without dropping resolution or Float32 interpolation.
+
+Cold preparation counts mip work in its existing Android submission bound. The
+initial unweighted batch retained too much driver command storage and a later
+import correctly failed memory admission. Bounding the work restored repeated
+imports without weakening decode limits. The completed 285-second mixed
+movement/drawing run and 183-second moving run passed exact source identity,
+Apply/Cancel, Undo/Redo, reopen and rejected malformed/cancelled/stale imports.
+Mappings stayed near 35,200–35,560 throughout the final moving run.
+
+Final 15-second stylus movement on the DTHA140, normal Choreographer, approximately
+240 input samples/s, 2000 × 1500 document:
+
+| Source | Scale / fit | GPU p50 | Callback p50 / p95 | Callbacks/s |
+| --- | --- | --- | --- | --- |
+| 9504 × 6336 | 1.1 | 2.60 ms | 6.07 / 6.35 ms | 119.5 |
+| 9504 × 6336 | 1.2 | 4.83 ms | 5.94 / 6.29 ms | 118.6 |
+| 9504 × 6336 | 2.0 | 3.07 ms | 6.19 / 6.43 ms | 119.7 |
+| 4000 × 6000 | 1.1 | 3.50 ms | 5.94 / 6.24 ms | 118.4 |
+| 4000 × 6000 | 1.2 | 3.34 ms | 6.02 / 6.31 ms | 117.7 |
+| 4000 × 6000 | 2.0 | 2.43 ms | 5.97 / 6.33 ms | 119.5 |
+| Both visible | Final movement | 4.18 ms | — | 118.4 |
+
+All six sustained single-photo runs have 8.33 ms median and p95 callback intervals.
+These are measured host/display cadence, with occasional missed frames, not a
+physical input-to-photon measurement or a guarantee for every scene. Short mouse
+and touch runs also exercise their actual host input routes.
+
+After integrating `457cfe73` from main, the final APK passed three more 15-second
+strokes on a full 9504 × 6336 document plus native save/GPU-loss recovery. Drawing
+callbacks were 4.55–4.71 ms median and 6.20–6.30 ms p95, at 118.5–118.7 callbacks/s;
+GPU medians were 0.71–0.75 ms. Mapping counts remained 11,481–11,642. Build and lint
+passed. The newly integrated sparse GPen/Pencil regression passed too.
+
+Validation includes the serial renderer suite (285 unit tests, 4 contact and 6
+project integration tests), the placement suite (13 tests), the final fused-vs-
+tiled affine/alpha/mask/prediction oracle, and every retained level against an
+independent Float64 area reference with the existing 3e-7 tolerance. GTK's real
+61 MP + 24 MP photo workflow passed on an isolated headed Wayland session with
+native input and its native chooser. GTK and Web consume the same mip and shader
+implementation. GPU timing runs were separated from competing desktop GPU tests.
+
+Evidence: `/tmp/capy-final-moving-device.json`,
+`/tmp/capy-mips-bounded-placement.json`, `/tmp/capy-final-main-full-photo.json`,
+`/tmp/capy-mips-gtk-workflow/workflow.json`. The Android reporter now prints
+callback rate and p95 cadence as well as CPU phases and presentation intervals.

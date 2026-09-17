@@ -1109,12 +1109,13 @@ impl Scene {
         if mask.is_none() && self.placement_display && self.cached_composition()
             && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
         {
-            let scale = (1 << mip.image.plan.level) as f32;
+            let (level, view, _) = mip.image.sample(mip.sample_level);
+            let scale = (1 << level) as f32;
             let transform = layer_core::Affine([scale, 0., 0., scale, 0., 0.])
                 .then(layer_core::target_transform(packet.layers, layer.id));
             let inverse = transform.inverse().ok_or(GpuRasterError::InvalidTransform(
                 "Transform must be finite and invertible"))?.0;
-            let view = mip.image.view.clone();
+            let view = view.clone();
             self.draw(r, target, view, None, [0., 0., 256., 256.],
                 [12., layer.opacity, 0., 0.], true);
             let Some(Job::Draw { data, .. }) = self.jobs.last_mut() else { unreachable!() };

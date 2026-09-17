@@ -20,7 +20,9 @@ def report(label, run):
         values = [row[i] / 1e6 for row in frames]
         print(f"  {name.removesuffix('_ns'):24} p50={percentile(values, .5)} p95={percentile(values, .95)} ms")
     intervals = [(b[0] - a[0]) / 1e6 for a, b in zip(frames, frames[1:])]
-    print("  vsync interval", percentile(intervals, .5), "ms")
+    rate = (len(frames) - 1) * 1e9 / (frames[-1][0] - frames[0][0]) if len(frames) > 1 else 0
+    print("  vsync interval", percentile(intervals, .5), "ms p50;",
+          percentile(intervals, .95), "ms p95;", round(rate, 1), "callbacks/s")
     inputs = timeline["inputs"]
     for name, a, b in [("event to delivery", 0, 1), ("worker queue", 1, 2)]:
         values = [(row[b] - row[a]) / 1e6 for row in inputs]

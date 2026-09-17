@@ -126,7 +126,8 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
             .collect();
         let source = upload(&r, extent, &expected);
         let source_before = pixels(&r, &source);
-        let mut image = Image::new(&r, &pipelines, plan);
+        let last = 8;
+        let mut image = Image::with_mips(&r, &pipelines, plan, last);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         // Reuse scratch and edge records in a single queued submission. Visit
         // partial tiles first to expose stale padding and mutable-uniform bugs.
@@ -145,31 +146,47 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
                 .unwrap();
         }
         encoder.submit(&r.queue);
-        let actual = pixels(&r, &image.texture);
-        let scale = 1 << plan.level;
-        for y in 0..plan.size[1] {
-            for x in 0..plan.size[0] {
-                let mut sum = [0f64; 4];
-                let mut count = 0;
-                for yy in y * scale..((y + 1) * scale).min(extent[1]) {
-                    for xx in x * scale..((x + 1) * scale).min(extent[0]) {
-                        let input = expected[(yy * extent[0] + xx) as usize];
-                        for i in 0..4 {
-                            sum[i] += input[i] as f64;
+        let levels: Vec<_> = std::iter::once((plan.level, &image.texture))
+            .chain(
+                image
+                    .reduced
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (texture, _))| (plan.level + i as u32 + 1, texture)),
+            )
+            .map(|(level, texture)| (level, pixels(&r, texture)))
+            .collect();
+        for (level, actual) in &levels {
+            let scale = 1 << level;
+            let size = extent.map(|n| n.div_ceil(scale));
+            assert_eq!(image.sample(*level).0, *level);
+            assert_eq!(image.sample(*level).2, size);
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    let mut sum = [0f64; 4];
+                    let mut count = 0;
+                    for yy in y * scale..((y + 1) * scale).min(extent[1]) {
+                        for xx in x * scale..((x + 1) * scale).min(extent[0]) {
+                            let input = expected[(yy * extent[0] + xx) as usize];
+                            for i in 0..4 {
+                                sum[i] += input[i] as f64;
+                            }
+                            count += 1;
                         }
-                        count += 1;
                     }
-                }
-                for i in 0..4 {
-                    let a = actual[(y * plan.size[0] + x) as usize][i] as f64;
-                    let b = sum[i] / f64::from(count);
-                    assert!(
-                        (a - b).abs() < 3e-7,
-                        "{extent:?} {x},{y} channel {i}: {a} != {b}"
-                    );
+                    for i in 0..4 {
+                        let a = actual[(y * size[0] + x) as usize][i] as f64;
+                        let b = sum[i] / f64::from(count);
+                        assert!(
+                            (a - b).abs() < 3e-7,
+                            "{extent:?} {x},{y} channel {i}: {a} != {b}"
+                        );
+                    }
                 }
             }
         }
+        assert_eq!(image.sample(0).0, plan.level);
+        assert_eq!(image.sample(99).0, last);
         assert_eq!(
             source_before,
             pixels(&r, &source),
@@ -178,7 +195,7 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         assert!(image.records.len() <= 4);
         assert_eq!(
             image.storage_bytes(),
-            plan.pixel_bytes() + 16 + image.records.len() as u64 * u64::from(plan.level) * 16
+            plan.pixel_bytes_through(last) + 16 + image.records.len() as u64 * u64::from(last) * 16
         );
 
         // A later tile update changes only that tile's derived footprint.
@@ -193,23 +210,31 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
             .write_tile(&r.device, &pipelines, &mut encoder, &tile, [0; 2], [0; 2])
             .unwrap();
         encoder.submit(&r.queue);
-        let updated = pixels(&r, &image.texture);
-        for y in 0..plan.size[1] {
-            for x in 0..plan.size[0] {
-                let index = (y * plan.size[0] + x) as usize;
-                assert_eq!(
-                    updated[index],
-                    if x * scale < PAGE_SIZE && y * scale < PAGE_SIZE {
-                        changed
-                    } else {
-                        actual[index]
-                    }
-                );
+        for (level, actual) in &levels {
+            let texture = if *level == plan.level {
+                &image.texture
+            } else {
+                &image.reduced[(level - plan.level - 1) as usize].0
+            };
+            let updated = pixels(&r, texture);
+            let scale = 1 << level;
+            let size = extent.map(|n| n.div_ceil(scale));
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    let index = (y * size[0] + x) as usize;
+                    assert_eq!(
+                        updated[index],
+                        if x * scale < PAGE_SIZE && y * scale < PAGE_SIZE {
+                            changed
+                        } else {
+                            actual[index]
+                        }
+                    );
+                }
             }
         }
     }
 }
-
 #[test]
 fn native_navigator_averages_fine_stripes_and_preserves_alpha_and_revision_reuse() {
     let color = DocumentColor {

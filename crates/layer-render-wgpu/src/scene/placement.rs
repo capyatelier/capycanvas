@@ -97,9 +97,9 @@ impl Scene {
         if self.placement_display
             && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
         {
-            let scale = (1 << mip.image.plan.level) as f32;
-            let view = mip.image.view.clone();
-            let size = mip.image.plan.size;
+            let (level, view, size) = mip.image.sample(mip.sample_level);
+            let scale = (1 << level) as f32;
+            let view = view.clone();
             let transform = layer_core::ImageTransform {
                 affine: layer_core::Affine([scale, 0., 0., scale, 0., 0.]).then(transform.affine),
                 ..Default::default()
