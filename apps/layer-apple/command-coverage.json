@@ -2,8 +2,17 @@
   "schema": 3,
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
-    "ios": {"fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable."},
-    "mac": {}
+    "ios": {
+      "fullscreen": "Use the native iPadOS window control, explicitly accepted by the user on 2026-09-16. The installed UIKit SDK has no app-callable full-screen toggle; Mac Catalyst's geometry API does not apply to this target. The shared in-app command remains unavailable.",
+      "soft_proof_setup": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
+      "soft_proof": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
+      "gamut_warning": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff."
+    },
+    "mac": {
+      "soft_proof_setup": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
+      "soft_proof": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff.",
+      "gamut_warning": "GTK-only shared capability; also unavailable on Web/Android. Print proofing is a later milestone in the Apple color-management handoff."
+    }
   },
   "groups": [
     {
@@ -16,10 +25,17 @@
     },
     {
       "name": "Retained photo input",
-      "commands": ["import_image", "paste_image"],
+      "commands": ["import_image", "paste_image", "placement_original_size"],
       "checks": ["native/src/photo_tests.rs", "tests/image-import-owner.swift", "Shared/Tests/DocumentControlChecks.swift"],
-      "ios": "partial: shared worker and Swift/Metal owner preserve original photo profiles, integer depth and samples through Open/Place/Paste; missing-profile choice, cancellation, stale adoption and source-file protection pass on Mac Metal with iPad policy. Native UIKit picker and clipboard delivery remain open; full-app simulator Float32 filtering is unavailable.",
-      "mac": "partial: matching shared/native-owner retention and failure/cancellation checks pass. Existing native image-import controls pass within their recorded pre-SDR scope; the 61 MP synthetic-JPEG G-Pen/history/save/reopen/GPU-replacement regression passes on current Mac Metal. Physical large-photo and provider/clipboard acceptance remain open."
+      "ios": "partial: shared import policy and atomic batch Place/Paste/Drop preserve original profiles, integer depth and samples. Original Size, Apply/Cancel, one-step history, missing-profile retry, failed batch members, stale adoption and delayed-provider cancellation pass through the bridge and Mac Swift/Metal owner with iPad policy. Physical UIKit picker/clipboard/drop delivery, Pencil placement and large-photo execution remain open; full-app simulator Float32 filtering is unavailable.",
+      "mac": "partial: shared/native-owner batch retention, failure/cancellation and exact history checks pass. Native Mac multi-selection, Original Size, Apply/Cancel, controls with panels hidden and cross-application canvas/layer-row drops pass with preserved source bytes. The scoped 61 MP synthetic-JPEG G-Pen/history/save/reopen/GPU-replacement regression passes on Mac Metal. Remaining provider/clipboard and physical large-photo acceptance stay open."
+    },
+    {
+      "name": "Print proofing (GTK-only)",
+      "commands": ["soft_proof_setup", "soft_proof", "gamut_warning"],
+      "checks": ["../../crates/layer-ui/src/lib.rs", "../../docs/development/color-management-m2-apple-handoff.md"],
+      "ios": "unavailable: existing shared policy limits these commands to GTK, matching Web/Android's unavailable capability. The Apple phase-2 handoff places print proofing/HDR later; this entry records the catalog boundary and does not claim native proofing acceptance.",
+      "mac": "unavailable: existing shared policy limits these commands to GTK, matching Web/Android's unavailable capability. The Apple phase-2 handoff places print proofing/HDR later; this entry records the catalog boundary and does not claim native proofing acceptance."
     },
     {
       "name": "Document color and properties",
@@ -47,7 +63,7 @@
       "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
       "checks": ["native/src/tests.rs", "native/src/region_tests.rs", "tests/canvas-native-input.swift", "tests/property-slider-input.swift", "Shared/Tests/CanvasToolChecks.swift", "Shared/Tests/RegionSelectionChecks.swift", "Shared/Tests/CanvasNavigationChecks.swift", "tests/canvas-modifiers.swift"],
       "ios": "partial: native figure/gradient choices, Fill/Auto select sources and applicable settings, lasso selection/direct-fill menus; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; UIKit native gap-closing, positive/negative expansion and smoothing controls pass 14 committed edits with published-value retention after switching tools; physical Pencil artwork and applicable native shape modifiers remain; shared Lasso/Auto select replace selection and expose no add/subtract modifier mode; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies; supplied UIKit mouse/Pencil callbacks on simulator and physical iPad GPU cover all figure shape/paint combinations with/without Shift, all four gradients, cancellation and exact decoded PNG Undo/Redo; physical sensor/key delivery and visible editor hit targets remain separate",
-      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and assembled AppKit editor freehand selection/fill through verified canvas hit targets, Escape/focus/tool cancellation, shared lifecycle interruption/renderer restart without mouseUp, stale-movement exclusion, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; native Mac fields/scrolling/canvas clicks and PNG exports verify Fill/Auto select expansion, contraction, smoothing and gap-closing Fill with exact artwork/Undo and softened-result Redo; AppKit mouse/flagsChanged delivery verifies line, rectangle and ellipse constraints with Shift held, pressed/released after movement, fresh unmodified contact and exact PNG Undo/Redo on both Apple policies; external OS freehand delivery and physical pen refinement remain; shared Lasso/Auto select expose replacement rather than modifier combination modes; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
+      "mac": "partial: mouse figures/gradients, Fill/Auto select sources with distinct sampled results, inversion and history, lasso control routes and assembled AppKit editor freehand selection/fill through verified canvas hit targets, Escape/focus/tool cancellation, shared lifecycle interruption/renderer restart without mouseUp, stale-movement exclusion, next-contact recovery and exact PNG history; windowless Metal Apple bridge checks cover pen/mouse region expansion/contraction and smoothing, pen gap closing/cancellation and exact pixel history; native Mac fields/scrolling/canvas clicks and PNG exports verify Fill/Auto select expansion, contraction, smoothing and gap-closing Fill with exact artwork/Undo and softened-result Redo; AppKit mouse/flagsChanged delivery verifies line, rectangle and ellipse constraints with Shift held, stationary press/release after movement, fresh unmodified contact, captured presented previews before mouse-up and exact PNG Undo/Redo on both Apple policies; external OS freehand delivery and physical pen refinement remain; shared Lasso/Auto select expose replacement rather than modifier combination modes; AppKit-hosted owner/component checks reject retired Auto Select drafts across document replacement and reused layer IDs on both Apple policies"
     },
     {
       "name": "Object transforms",
@@ -69,7 +85,7 @@
       "commands": ["ruler", "show_rulers", "snap_rulers", "delete_ruler"],
       "checks": ["native/src/tests.rs", "tests/canvas-native-input.swift", "tests/canvas-modifiers.swift", "Shared/Tests/CanvasToolChecks.swift"],
       "ios": "partial: native choice/selected state for all three rulers and Show/Snap controls; supplied UIKit mouse/Pencil contacts on simulator and physical iPad GPU verify straight-ruler Shift at start/movement/release, stale modifiers from other controls, interruption/identity reuse, exact saved geometry and one-step Undo/Redo; all three ruler types constrain actual artwork and disabling snapping restores free painting, with exact decoded PNG history; palm rejection passes in either arrival order; physical sensor/key delivery, native handle editing and visible editor hit targets remain",
-      "mac": "partial: real mouse creation/handle editing, visibility, deletion and sampled-overlay Undo/Redo for all three rulers; assembled AppKit editor creation/edit cancellation by Escape/focus/tool, next-contact recovery, straight/parallel Shift press/release, stale control-modifier recovery on new mouse and supplied standalone tablet contacts, exact saved geometry history and constrained/free painting with exact PNG history; external OS constrained-painting delivery, physical tablet and live stationary Shift preview pixels remain"
+      "mac": "partial: real mouse creation/handle editing, visibility, deletion and sampled-overlay Undo/Redo for all three rulers; assembled AppKit editor creation/edit cancellation by Escape/focus/tool, next-contact recovery, straight/parallel Shift press/release, stale control-modifier recovery on new mouse and supplied standalone tablet contacts, exact saved geometry history and constrained/free painting with exact PNG history; captured presented straight/parallel handle previews also change on stationary Shift press/release before mouse-up; external OS constrained-painting delivery and physical tablet input remain"
     },
     {
       "name": "Artwork history",
@@ -131,9 +147,9 @@
     {
       "name": "Application information and links",
       "commands": ["about", "website", "source_code"],
-      "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift", "Shared/Tests/MenuSettingsChecks.swift", "tests/application-links.swift"],
-      "ios": "partial: simulator About information, search/close and real Safari handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; Settings links forward handoff results and report rejection inline; Settings rejection/retry UI acceptance and physical alternate-handler delivery remain separate",
-      "mac": "partial: public OS app name, About information, search/close and real default-browser handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; Settings links forward handoff results and report rejection inline; Settings rejection/retry UI acceptance and alternate-handler OS delivery remain separate"
+      "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift", "Shared/Tests/MenuSettingsChecks.swift", "tests/application-links.swift", "tests/settings-links.swift"],
+      "ios": "partial: simulator About information, search/close and real Safari handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; native AppKit Settings link clicks on both shared policies verify inline rejection and successful retry through supplied OpenURLAction results; physical UIKit and alternate-handler OS delivery remain separate",
+      "mac": "partial: public OS app name, About information, search/close and real default-browser handoff from Help/About for both public links pass; the mounted editor now passes both rejected Help-link callbacks, visible-error state, request completion, subsequent successful handoff and unchanged drawing state on both Apple policies; native AppKit Settings link clicks on both shared policies verify inline rejection and successful retry through supplied OpenURLAction results; alternate-handler OS delivery remains separate"
     }
   ],
   "workspace_commands": {

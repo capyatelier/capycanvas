@@ -273,10 +273,14 @@ do not infer it from the Mac captures or add a renderer workaround for the fixtu
 ### Commands and controls
 
 The source catalog is [command-coverage.json](../../apps/layer-apple/command-coverage.json).
-The current SDR CPU enumeration has **72 commands in 18 groups**, **11 panels**,
+The current Metal-backed enumeration at `37f81472` has **76 commands in 19 groups**, **11 panels**,
 **six Settings pages with 21 rows**, and **43 layer/filter property scenarios**
-per Apple policy. Nine color/photo commands now have explicit workflow/test
-references. Both policies retain their expected unavailable commands and accept
+per Apple policy. Original Size joins the already-qualified photo-placement
+group. The three print-proofing commands are GTK-only under shared policy,
+also unavailable on Web/Android; the Apple color-management handoff places
+print proofing/HDR in a later milestone. This records the existing boundary,
+without claiming native proofing acceptance. Both policies retain their expected
+unavailable commands and accept
 every initially enabled command at the shared-model boundary. The catalog also
 records non-command creation/export options, tagged paint/palettes, corrections
 and masks, color policies, display details and the ICC library.
@@ -287,7 +291,7 @@ routes pass per policy, and the existing verifier rejects all ten corrupted-
 evidence probes per policy. No application runtime path changes. Evidence is
 `artifacts/apple-sdr-inventory-v1/`.
 
-The hardware follow-up now supplies actual rendered content for scale/rotate and
+The earlier hardware follow-up supplies actual rendered content for scale/rotate and
 passes the complete catalog auditor on both policies: **93 resolved tool choices**,
 28 setting IDs, 14 panel control types, six preference kinds and nine workspace
 service commands. All 72 commands and 162 property edit/history/reset routes also
@@ -297,17 +301,26 @@ content for transforms, not native-widget, visual or performance acceptance.
 Evidence is `artifacts/apple-sdr-inventory-v1/`; the original no-GPU failure is
 retained alongside the passing hardware run.
 
+The fresh `37f81472` run retains those dynamic-control and property counts;
+the unchanged strict auditor passes all 76 command entries in 19 groups on both
+policies. All ten property-evidence corruption probes per policy also pass.
+The reconciled map includes published native photo-batch/Original Size and
+Settings-link acceptance, plus the stationary shape/ruler previews below.
+Evidence is `artifacts/apple-release-scope-v1/`. This closes catalog drift,
+not the physical/native workflow gates listed in the table.
+
 | Catalog group | Existing evidence to retain | Remaining behavior, excluding shared R3–R6 checks |
 | --- | --- | --- |
 | Document transport | Local native save/open/export/cancel; painted recovery; OS URL delivery; native Mac invalid-Open preservation/retry and both-policy owner checks below | Provider/destination/interruption cases are owned by R4. |
 | Retained photo input | Shared Open policy and atomic batch Place/Paste/Drop with Original Size, Apply/Cancel and one-step history; both-policy source preservation, missing-profile retry, stale/failed-member rejection and delayed-provider cancellation; native Mac cross-application canvas/row drops, multi-selection and controls with panels hidden; scoped 61 MP synthetic-JPEG painting/history/save/reopen/GPU recovery on Mac Metal | Physical UIKit picker/clipboard/drop delivery, Pencil placement and large-photo execution. Provider/lifecycle cases are shared with R4. |
+| Print proofing (GTK-only) | Shared policy makes Proof Setup, Proof Colors and Gamut Warning unavailable on both Apple hosts, Web and Android | Later print-proofing/HDR milestone under the existing Apple color-management handoff; no native acceptance claim. |
 | Document color and properties | Shared/native-owner profile/depth operations, complete comparisons, atomic adoption, exact history and flattened master preservation; native Mac forms | Physical UIKit property/color forms and SDR appearance; lifecycle cases remain under R4. |
 | Retained source editing | Source-profile repair, ICC import, full-extent rasterization, exact history/save/reopen and native Mac controls | Physical UIKit source/ICC workflows and provider delivery. |
 | Drawing tools | All 34 current presets mapped to retained native control passes: 30 painting/erasing and four Blend/Liquify; Mac artwork/history and catalog-wide numeric bridge edits | No unaccounted catalog brush/group or setting-dispatch route remains. Physical sensors, hover/proximity and interruption belong to R3; perceptual coverage belongs to R5. |
-| Selection, fill and shapes | Native menus/settings; Mac figure/gradient/fill artwork; Mac native expansion/contraction, smoothing and gap-closing artwork/history; UIKit refinement controls and retention; AppKit shape modifier geometry/history; Apple Metal region refinement; supplied UIKit shape/gradient pixel/history checks | Physical/iPad canvas hit targets for freehand selection and shapes; applicable shape modifier delivery is tracked below and in R3. |
+| Selection, fill and shapes | Native menus/settings; Mac figure/gradient/fill artwork; Mac native expansion/contraction, smoothing and gap-closing artwork/history; UIKit refinement controls and retention; AppKit stationary shape modifier previews and committed geometry/history; Apple Metal region refinement; supplied UIKit shape/gradient pixel/history checks | Physical/iPad canvas hit targets for freehand selection and shapes; applicable physical shape modifier delivery remains in R3. |
 | Object transforms | Numeric validation, linked/unlinked content/mask transforms; Mac mouse Move, edge scaling and all four corner handles with artwork/history; UIKit callback corner/modifier checks | Physical tablet/Pencil handle delivery, iPad mask/group Move and interrupted transforms. |
 | Hand, eyedropper and histogram | Native Hand/Fit; Mac visible/layer sampling including transparency; physical iPad two-finger navigation; full-resolution document-space histogram and Point/3×3/5×5 sampling pass Metal checks on both policies and native Mac controls | Pencil sampling and physical trackpad/button navigation (R3); physical UIKit histogram/sampling controls. |
-| Rulers | All three choices; Mac mouse creation/handle editing; constrained/free pixel/history and UIKit modifier callback checks | Physical constrained painting/handles and stationary modifier-preview behavior. |
+| Rulers | All three choices; Mac mouse creation/handle editing; stationary AppKit Shift press/release previews for straight/parallel handles; constrained/free pixel/history and UIKit modifier callback checks | Physical constrained painting/handles and UIKit hardware modifier delivery. |
 | Artwork history | Exact pixel/history checks in each edit family and physical drawing Undo/Redo | Reconcile all remaining edit families in this table with history evidence; do not create a duplicate standalone matrix. |
 | Layer operations | Mask/link/group artwork/history, scrolling/reorder, Layers configuration and previews; coordinated image decode/ownership; user-confirmed physical Pencil upward handle/body reorder and Undo | Native image-provider delivery and remaining hierarchy/interruption interactions. |
 | Pixel selection actions | Native Select All/Fill/Deselect/Invert; Mac assembled freehand cancellation and exact history | Native lasso delivery shared with Selection above; there are no shared add/subtract selection modifiers. |
@@ -407,6 +420,21 @@ No product fix or new simulator run was needed. Evidence is
 `artifacts/apple-native-modifiers-v1/`. This establishes AppKit event delivery
 and committed artwork, not physical tablet/keyboard delivery, UIKit key delivery
 or the intermediate stationary preview's appearance.
+
+The current follow-up closes the AppKit stationary-preview gaps for shapes and
+ruler handles. Fifty-two actual window captures check the dashed geometry before
+mouse-up on both shared Apple policies: 36 line/rectangle/ellipse views and 16
+straight/parallel ruler views. Held Shift, stationary press/release and the next
+unmodified shape contact show the correct constrained/free preview; representative
+pairs are reviewed. The full native fixture passes all 50 groups, including
+committed pixels, exact Undo/Redo, navigation, interruption, lasso and ruler
+history. Its old archive-header assertion is updated to the current v4 fixture
+format. The initial preview assertion expected painted ink instead of the shared
+dashed outline and is corrected without a runtime change. Evidence is
+`artifacts/apple-stationary-preview-v1/`. Physical input and UIKit key delivery
+remain separately scoped. This test, the current catalog reconciliation and
+performance analysis form one native-acceptance milestone; publication
+verification is retained in `artifacts/apple-release-scope-v1/`.
 
 The existing Mac transform workflow also passes with all four corner handles.
 Real mouse drags produce the expected 75% width/height and position while keeping

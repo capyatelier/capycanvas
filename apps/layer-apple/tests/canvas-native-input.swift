@@ -132,6 +132,58 @@ private final class TabletEvent: NSEvent {
             }
             return bytes
         }
+        // Read presented pixels before mouse-up: exporting artwork would commit
+        // the interaction and could conceal a stale stationary preview.
+        func geometryPreview(_ name: String, constrained: Bool, at points: [CGPoint]) async throws {
+            try require(points.count == 2, "Provide distinct constrained and free geometry probes")
+            try await drain(0.15)
+            let file = root.appendingPathComponent("preview.png")
+            let capture = Process(); capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), file.path]
+            try capture.run(); capture.waitUntilExit()
+            try require(capture.terminationStatus == 0, "Capture only the owned canvas window")
+            guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+                let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw HostFailure(message: "Missing presented geometry preview")
+            }
+            if let directory = ProcessInfo.processInfo.environment["CAPY_CANVAS_CAPTURES"] {
+                let target = URL(fileURLWithPath: directory).appendingPathComponent("\(platform)-\(name).png")
+                try Data(contentsOf: file).write(to: target)
+            }
+            let scale = CGFloat(image.width) / window.frame.width
+            try require(abs(CGFloat(image.height) / scale - window.frame.height) < 1,
+                "Window capture must preserve its measured aspect ratio")
+            var bytes = Data(count: image.width * image.height * 4)
+            bytes.withUnsafeMutableBytes { buffer in
+                let context = CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
+                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)!
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+            func outline(_ x: CGFloat, _ y: CGFloat) -> Bool {
+                let camera = store.state["camera"]
+                let local = CGPoint(x: (camera["translation"][0].number + x * camera["zoom"].number) / window.backingScaleFactor,
+                    y: (camera["translation"][1].number + y * camera["zoom"].number) / window.backingScaleFactor)
+                let screen = window.convertPoint(toScreen: canvas.convert(local, to: nil))
+                let px = Int((screen.x - window.frame.minX) * scale)
+                let py = Int((window.frame.maxY - screen.y) * scale)
+                // Figure and ruler previews use dashed geometry.
+                // Sample a small neighborhood so a dash gap cannot look absent.
+                let radius = Int(3 * camera["zoom"].number / window.backingScaleFactor * scale)
+                guard px - radius >= 0 && px + radius < image.width
+                    && py - radius >= 0 && py + radius < image.height else { return false }
+                var marked = 0
+                for y in (py - radius)...(py + radius) { for x in (px - radius)...(px + radius) {
+                    let i = (y * image.width + x) * 4
+                    if bytes[i] < 180 && bytes[i + 1] < 180 && bytes[i + 2] < 180 { marked += 1 }
+                } }
+                return marked >= 3
+            }
+            let matches = outline(points[0].x, points[0].y) == constrained
+                && outline(points[1].x, points[1].y) != constrained
+            try require(matches && !outline(115, 115), "Presented preview must reflect Shift before mouse-up: \(name)")
+        }
         func rulers() async throws -> JSON {
             try? FileManager.default.removeItem(at: project)
             try await invoke("save_document_as")
@@ -142,7 +194,7 @@ private final class TabletEvent: NSEvent {
             // Read the actual saved document's JSON manifest; ruler overlays
             // are intentionally absent from exported artwork.
             let bytes = try Data(contentsOf: project)
-            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{1}\0".utf8), "Expected indexed raster project")
+            try require(bytes.count >= 52 && bytes.prefix(12) == Data("CAPYRASTER\u{4}\0".utf8), "Expected current indexed raster project")
             let count = bytes[12..<20].enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
             try require(count <= bytes.count - 52, "Complete project manifest")
             return JSON(try JSONSerialization.jsonObject(with: bytes.subdata(in: 52..<(52 + Int(count)))))["document"]["rulers"]
@@ -217,6 +269,8 @@ private final class TabletEvent: NSEvent {
             try await action(["type":"set_brush_size", "value":4])
             try await tool(["figure":["shape":shape, "paint":shape == "line" ? "outline" : "fill"]])
             let paper = try await pixels()
+            let previewPoints = shape == "line" ? [CGPoint(x:50,y:50), CGPoint(x:60,y:46)]
+                : [CGPoint(x:60,y:96), CGPoint(x:60,y:68)]
             var constrainedPixels: Data?
             var freePixels: Data?
             for (name, initial, final) in [
@@ -227,7 +281,11 @@ private final class TabletEvent: NSEvent {
             ] {
                 try await send(.leftMouseDown, CGPoint(x:24,y:24), flags: initial ? .shift : [])
                 try await send(.leftMouseDragged, CGPoint(x:96,y:68), flags: initial ? .shift : [])
-                if initial != final { try await shift(final) }
+                try await geometryPreview("\(shape)-\(name)-before", constrained: initial, at: previewPoints)
+                if initial != final {
+                    try await shift(final)
+                    try await geometryPreview("\(shape)-\(name)-after", constrained: final, at: previewPoints)
+                }
                 try await send(.leftMouseUp, CGPoint(x:96,y:68), flags: final ? .shift : [])
                 try await shift(false)
                 let painted = try await pixels()
@@ -251,7 +309,7 @@ private final class TabletEvent: NSEvent {
                 try await invoke("redo")
                 let redone = try await pixels(); try require(redone == painted, "Figure Redo restores every pixel")
                 try await invoke("undo")
-                note("PASS platform \(platform): native \(shape), Shift \(name), constraint geometry and exact PNG history")
+                note("PASS platform \(platform): native \(shape), Shift \(name), presented preview, constraint geometry and exact PNG history")
             }
         }
         // Verify the native navigation adapter against camera geometry and
@@ -444,8 +502,12 @@ private final class TabletEvent: NSEvent {
             }
             if kind != "radial" {
                 let end = CGPoint(x:104,y:64), moved = CGPoint(x:80,y:100)
+                let previewPoints = [CGPoint(x:50,y:90), CGPoint(x:60,y:87)]
                 try await send(.leftMouseDown, end); try await send(.leftMouseDragged, moved)
-                try await shift(true); try await send(.leftMouseUp, moved, flags: .shift); try await shift(false)
+                try await geometryPreview("\(kind)-press-before", constrained: false, at: previewPoints)
+                try await shift(true)
+                try await geometryPreview("\(kind)-press-after", constrained: true, at: previewPoints)
+                try await send(.leftMouseUp, moved, flags: .shift); try await shift(false)
                 let constrained = try await rulers(), geometry = constrained[0]["geometry"]
                 let dx = geometry["end"]["x"].number - geometry["start"]["x"].number
                 let dy = geometry["end"]["y"].number - geometry["start"]["y"].number
@@ -481,11 +543,15 @@ private final class TabletEvent: NSEvent {
                     "A standalone tablet contact must clear stale Shift from another control")
                 try await invoke("undo")
                 try await send(.leftMouseDown, end); try await shift(true)
-                try await send(.leftMouseDragged, moved, flags: .shift); try await shift(false)
+                try await send(.leftMouseDragged, moved, flags: .shift)
+                try await geometryPreview("\(kind)-release-before", constrained: true, at: previewPoints)
+                try await shift(false)
+                try await geometryPreview("\(kind)-release-after", constrained: false, at: previewPoints)
                 try await send(.leftMouseUp, moved)
                 let released = try await rulers(), point = released[0]["geometry"]["end"]
                 try require(abs(point["x"].number - 80) < 0.01 && abs(point["y"].number - 100) < 0.01, "Releasing Shift restores free handle movement")
                 try await invoke("undo")
+                note("PASS platform \(platform): native \(kind) stationary Shift press/release previews before mouse-up")
             }
             let untouched = try await pixels(); try require(untouched == paper, "Ruler edits and cancellations must never paint the document")
             note("PASS platform \(platform): native \(kind) ruler cancellation/recovery, handle editing, applicable Shift and exact saved geometry history")

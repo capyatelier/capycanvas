@@ -16,6 +16,44 @@ before choosing another change. The current Mac ten-minute watercolor result
 also supports retaining the shared design, within its separately documented
 [workload scope](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17).
 
+## Current-code decision
+
+Rechecking main at `37f81472` confirms that the sparse planner and finalization
+overlap are already present; the composition source has the same SHA-256 as the
+qualified scheduling change. The earlier algorithm table below describes the
+build that motivated those changes, not additional unimplemented work.
+
+| Current stage | Remaining cost | Decision |
+| --- | --- | --- |
+| Shared touched-tile plan | O(K log T) planning for K contact/tile intersections and T touched tiles; some resident-page lookups still scan N pages | Keep the single plan. O(TN) lookup work is a candidate only if profiling makes it material. |
+| Ordered contact evaluation | Each pixel tests its tile's first-to-last contact span, including gaps when a path leaves and returns | Correct, but not asymptotically optimal for every path. Measure shader cost before adding per-tile contact lists. |
+| Paint preservation | Full color/coverage tiles are copied before clipped updates | Possible bandwidth savings, but in-place edits must preserve destination reads, prediction and nonlocal brush dependencies. No rewrite is justified yet. |
+| Composition and submission | Bounded batches now overlap command finalization with GPU execution; source uploads still have their own limits | Retain the measured improvement. Attribute remaining GPU passes and synchronization before changing batching or storage. |
+| Display and prediction | Completed drawing/mips are reused; unfinished prediction is rebuilt | Retain. Do not trade image precision or input fidelity for a favorable benchmark. |
+
+For the dry shader, tile planning is only one term: contact evaluation can scale
+with the sum of each tile's shaded area multiplied by its retained contact-span
+length. A small distinct painted area therefore does not imply little arithmetic.
+Conversely, dirty-rectangle traversal can visit untouched tile coordinates, but
+the sparse membership check prevents painting/compositing those tiles. Neither
+observation establishes the dominant device cost.
+
+At 120 Hz, 50 ms spans six refresh periods. It is a tail statistic, not evidence
+of sustained 20 fps or a measurement of input-to-display latency. A frame can
+also wait for work encoded in an earlier phase, so the large composition CPU
+interval does not prove that composition shaders dominate. The bandwidth
+estimates below isolate illustrative transfer costs; they do not predict a
+complete frame or prove how much faster this workload can become.
+
+Recommendation: keep the current architecture and qualified shared changes.
+Do not declare the remaining 50 ms unavoidable. If the tail still visibly
+interrupts drawing, make one bounded investigation of GPU pass execution and
+idle gaps on the installed build, then retain only a broadly useful change
+with repeatable replay gains, unchanged pixels/history and bounded memory.
+If drawing meets the accepted smoothness standard, prioritize the remaining
+release gates. There is no evidence here that another architecture or larger
+cache is necessary to finish the Apple goal.
+
 ## Evidence and its limits
 
 The user confirms faster physical iPad drawing after the preview-composition
@@ -75,7 +113,7 @@ per-pixel contact evaluations, plus CPU encoding, synchronization and cold
 resource costs. Neither peak bandwidth nor one diagnostic percentile supplies
 all of these terms.
 
-## Algorithm assessment of the reviewed iPad build
+## Original algorithm assessment before the shared follow-up
 
 | Stage | Current property | Assessment |
 | --- | --- | --- |
@@ -98,7 +136,7 @@ the GPU occupied; overly frequent submissions can cause synchronization stalls.
 That supports reviewing this scheduling boundary, not an unbounded submission
 queue. [Metal command-buffer guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/CommandBuffers.html).
 
-## Direct next work and stopping rule
+## Original optimization plan and stopping rule
 
 1. Unify conservative touched-tile planning for pointwise contacts and use it
    before allocation/source loading, preserving the current conservative
@@ -328,6 +366,23 @@ and exact Undo/Redo. Dab counts, composited pixels, source misses, display batch
 counts and retained display bytes match across all runs. Equal display bytes do
 not establish equal process RSS or native driver allocation peaks. The 64-sample
 case remains a stress batch representing approximately 267 ms of input.
+
+A recheck of those same CSVs restricts the comparison to frames with new dabs,
+excluding stroke-phase frames that submit no new brush work. This changes the
+ordinary median substantially; the earlier table is not the typical cost of a
+painting frame. No benchmark is rerun for this calculation.
+
+| Workload | Frames with new dabs per run | Median before, ms | Median after, ms |
+| --- | ---: | ---: | ---: |
+| Ordinary circles | 182 | 10.32–10.72 | 9.47–9.61 |
+| Small zigzags | 292 | 11.67–11.99 | 10.54–10.60 |
+| Wide circles | 168 | 24.10–24.39 | 19.78–20.14 |
+| Coalesced circles | 48 | 39.23–39.67 | 30.47–31.53 |
+
+Both populations support retaining the correction. Neither transfers Mac
+completion times to iPad or measures individual GPU pass cost. In particular,
+the first pair's slowest small-zigzag completion is 75.86 ms while composition
+accounts for 15.84 ms; aggregate CPU phase shares do not explain every tail.
 
 Keep this small ordering correction. The measurements justify it without a
 brush-specific threshold, larger cache, lower precision or architecture rewrite.

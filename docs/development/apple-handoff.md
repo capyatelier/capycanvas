@@ -982,9 +982,13 @@ restarting its process. Evidence is `artifacts/apple-watercolor-gpu-v1/`.
 
 ## SDR form fit and feature inventory
 
-The current inventory covers 72 commands in 18 groups, 11 panels, six Settings
-pages with 21 rows, and 43 property scenarios per Apple policy. Nine color/photo
-commands and the dynamic SDR controls now have explicit workflow references.
+The current Metal-backed inventory at `37f81472` covers 76 commands in 19 groups,
+11 panels, six Settings pages with 21 rows, and 43 property scenarios per Apple
+policy. Original Size has the existing shared/native photo-placement evidence.
+The three print-proofing commands are GTK-only by shared policy, also unavailable
+on Web/Android; the Apple color-management handoff places print proofing/HDR later.
+The map records that boundary without claiming native proofing acceptance.
+Color/photo commands and the dynamic SDR controls have explicit workflow references.
 The CPU generator's obsolete RGBA-array assumptions are replaced with shared
 `RgbColor` and `GradientStop` values. Both policies pass 162 property edit/history/
 reset routes and all ten corruption probes. The subsequent offscreen hardware
@@ -992,8 +996,14 @@ run resolves scale/rotate with actual content and passes the full auditor: 93
 tool choices (the previous 90 plus Point/3×3/5×5 sampling), 28 setting IDs, 14 panel
 control types, six preference kinds and nine workspace service commands per
 policy. This qualifies model routing, not physical/native-widget acceptance.
-The original no-GPU failure and hardware follow-up are retained under
-`artifacts/apple-sdr-inventory-v1/`.
+The original no-GPU failure and 72-command hardware follow-up are retained under
+`artifacts/apple-sdr-inventory-v1/`. The fresh current run and unchanged strict
+auditor pass all 76 commands with the same dynamic-control/property counts;
+all ten corruption probes per policy pass. Evidence is
+`artifacts/apple-release-scope-v1/`, including the original four-entry coverage
+drift. The map also reconciles published photo-batch and Settings-link acceptance
+and the stationary native previews below. Physical gates remain in the release
+checklist; a catalog pass does not close them.
 
 Thirty-six UIKit component captures cover New Drawing, numeric color, palettes,
 missing-photo-profile choice, the empty ICC library, Assign Profile, Convert Color
@@ -1059,6 +1069,36 @@ OS browser handler or complete Settings appearance. The owned fixture is closed
 and artist apps are unchanged. The new fixture is `tests/settings-links.swift`;
 evidence and the initial inaccessible-tree failure are retained under
 `artifacts/apple-settings-link-input-v1/`.
+
+## Stationary native geometry previews — 2026-09-17
+
+The existing AppKit canvas fixture now reads actual presented window pixels
+before mouse-up, so exporting committed artwork cannot conceal a stale preview.
+Thirty-six captures cover line, rectangle and ellipse on both shared Apple
+policies: held Shift, press/release after movement stops and a following free
+contact. Independent document-space samples verify the dashed outline geometry;
+representative before/after captures confirm the pointer remains stationary as
+the shape changes. The same helper adds sixteen straight/parallel ruler-handle
+captures, verifying stationary Shift press and release before committing the
+edit. Existing exact committed PNG, ruler geometry and Undo/Redo checks pass.
+
+The complete fixture passes all 50 groups without compiler warnings, including
+navigation, suspension/restart, lasso cancellation and ruler geometry/history.
+The ruler archive assertion now expects the current v4 format for its unplaced
+fixture. An initial preview assertion wrongly expected blue ink before commit;
+the shared UI intentionally shows dashed geometry, and the assertion is corrected.
+No runtime change or device install is needed. Physical tablet/keyboard delivery
+and UIKit key delivery remain unqualified by this check. Evidence is
+`artifacts/apple-stationary-preview-v1/`. The test, current catalog reconciliation
+and performance analysis form one native-acceptance milestone; publication
+verification is retained in `artifacts/apple-release-scope-v1/`.
+
+A read-only device query recorded the original combined iPad review process
+still live and the device unlocked. The three development-app slots contained
+live editors, leaving no spare slot for an additional XCTest runner under the
+previously observed profile limit. No install, removal or restart is attempted.
+The pending physical fast-stroke/save-reopen review and all drawings are retained;
+device details stay private in `artifacts/apple-remaining-device-v1/`.
 
 ## Recovery publication under process interruption
 
