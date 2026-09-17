@@ -1168,6 +1168,7 @@ dependencies = [
  "layer-render",
  "libc",
  "naga",
+ "objc2-metal",
  "png 0.17.16",
  "pollster",
  "wasm-bindgen-futures",

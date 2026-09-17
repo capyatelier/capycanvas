@@ -68,6 +68,83 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Metal display admission — 2026-09-16
+
+Apple now admits the existing shared complete display and placed-photo caches
+using one quarter of the smaller of current process/system headroom and Metal's
+recommended working set minus existing GPU allocations. Unknown or exhausted
+headroom admits zero and retains the bounded fallback. The fraction is our
+application policy; Metal's [recommended working set](https://developer.apple.com/documentation/metal/mtldevice/recommendedmaxworkingsetsize)
+is a performance estimate, not free memory or a reservation. iPadOS process
+headroom uses the existing `os_proc_available_memory` wrapper. No new shader,
+cache implementation, fixed memory-limit increase or scheduling path is added.
+
+The paired Mac Metal navigation fixture runs both policies in the same Release
+executable, using synthetic ProPhoto U16 sources with five adjustments and a
+native mask. Each policy completes 960 offscreen viewport frames per size, with
+unchanged source/paint/mask roots and artwork revision:
+
+| Case | Bounded fallback | Measured admission |
+| --- | ---: | ---: |
+| 24 MP native-scale median completion | 0.765 ms | 0.580 ms |
+| 24 MP peak display storage | 506.93 MiB | 489.14 MiB |
+| 60 MP native-scale median completion | 2.753 ms | 0.591 ms |
+| 60 MP all-navigation p99 completion | 4.851 ms | 0.927 ms |
+| 60 MP maximum completion | 28.087 ms | 1.506 ms |
+| 60 MP peak display storage | 561.32 MiB | 1220.82 MiB |
+
+The larger admitted cache trades measured memory headroom for avoiding repeated
+composition/source decoding during navigation. All admitted camera frames reuse
+completed pixels. These are offscreen completion measurements, not physical
+input-to-display or iPad large-photo acceptance. The fixture's new
+`--bounded-display` option makes this comparison reproducible; its Linux-only
+`/proc` memory report is now guarded on other hosts.
+
+Both Release builds pass without warnings. Two admission checks, 16 display,
+12 placement and 13 watercolor checks pass; the placement hardware benchmark
+remains ignored. All 68 ordinary Apple bridge tests pass, followed by the
+separate 61 MP JPEG painting, exact history/save/reopen and GPU-recovery test
+on Mac Metal for both Apple policies. The 512-frame watercolor replay retains
+exact artwork and per-frame work. Its unpaired renderer-only GPU median rises
+from 4.618 to 5.411 ms; no painting-speed improvement is claimed.
+
+Short timer-off native watercolor runs remain near their preceding results:
+37/3788 (0.977%) long active intervals on Mac and 566/4544 (12.456%) on iPad.
+Both have nominal thermal state, no frame errors, rejected input or missing
+measured presentation callbacks, and reviewed artwork/previews. Peak process
+footprints are 2.17 GB/2.23 GB; these short runs do not qualify sustained memory
+pressure. Heavy-watercolor acceptance remains open. The iPad is restored to
+ordinary review with all ten recoveries and 59 pre-existing files preserved;
+the Mac artist review is untouched. Evidence is
+`artifacts/apple-display-admission-v1/`.
+
+## Integrated renderer GPU follow-up — 2026-09-16
+
+At `a5f57e2c`, the 512-frame 4K watercolor replay reproduces the preceding
+tile-copy milestone's final RGBA bytes and all per-frame composition, upload
+and page counts. Active GPU median is 4.618 ms versus 4.650 ms; this short,
+synchronous Mac replay establishes neither iPad cadence nor a performance gain.
+
+The integrated Release is then installed on the approved physical iPad in
+place, with all ten recoveries and 58 existing files preserved. A two-second
+Metal capture during the existing 45-second heavy-watercolor workload matches
+229 native frames to their observed encoders. GPU active time is median
+5.008 ms, p95 7.350 ms and p99 8.038 ms (maximum 9.203 ms). Tile copies,
+watercolor transport, scene composition and the viewport remain the dominant
+observed costs. There are no invalid active intervals; 73 GPU intervals lack
+their CPU encoder in the capture window, so this is diagnostic attribution,
+not complete GPU coverage or presentation acceptance. Runtime errors, rejected
+input, missing measured presentation callbacks and non-nominal thermal states
+are absent. Captures show completed artwork and populated previews.
+
+A local experiment using hardware bilinear filtering within atlas pages is
+discarded: 15 display regressions pass, but rotating between different atlas
+layouts changes Float32 samples by 0.0017832 in the remaining case. The original
+shader and assertions are retained; no candidate was installed. Ordinary iPad
+review is restored with recording disabled and all saved artwork unchanged.
+Evidence is `artifacts/apple-watercolor-gpu-v2/`. Heavy-watercolor acceptance
+remains open; the instrumented run does not replace the timer-off results below.
+
 ## Watercolor tile-copy batching — 2026-09-16
 
 A two-second Metal System Trace on the physical iPad identifies interleaved

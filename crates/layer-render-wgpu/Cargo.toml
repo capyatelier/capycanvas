@@ -28,6 +28,9 @@ ash = { version = "0.38.0", default-features = false }
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDevice"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.78"
 futures-channel = "0.3"

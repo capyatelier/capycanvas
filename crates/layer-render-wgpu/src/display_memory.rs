@@ -1,6 +1,6 @@
-//! Vulkan admission for a complete Float32 display pyramid. Query the Vulkan
-//! driver's current process budget, or measured system headroom on Android
-//! integrated GPUs. Installed VRAM is not free GPU memory.
+//! Admission for a complete Float32 display pyramid. Query the GPU driver's
+//! remaining allowance and applicable process/system headroom. Installed RAM
+//! or VRAM is not free GPU memory.
 //! This is an admission snapshot, not a reservation against other applications.
 
 fn allowance(headroom: Option<u64>, divisor: u64) -> u64 {
@@ -10,6 +10,7 @@ fn allowance(headroom: Option<u64>, divisor: u64) -> u64 {
     headroom.map_or(0, |bytes| bytes / divisor)
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
     let headroom = vulkan_headroom(device);
     #[cfg(target_os = "android")]
@@ -31,6 +32,31 @@ pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
     allowance(headroom, 4)
 }
 
+#[cfg(target_vendor = "apple")]
+pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
+    // SAFETY: the guard retains wgpu's live device. These read-only Metal
+    // properties neither allocate resources nor submit work.
+    let Some(hal) = (unsafe { device.as_hal::<wgpu::hal::api::Metal>() }) else {
+        return 0;
+    };
+    use objc2_metal::MTLDevice;
+    let metal = hal.raw_device();
+    let headroom = metal_headroom(
+        metal.recommendedMaxWorkingSetSize(),
+        metal.currentAllocatedSize() as u64,
+        layer_color::photo::PhotoMemoryBudget::available_memory(),
+    );
+    allowance(headroom, 4)
+}
+
+#[cfg(target_vendor = "apple")]
+fn metal_headroom(recommended: u64, allocated: u64, available: Option<u64>) -> Option<u64> {
+    // Metal's recommendation is a performance threshold, not free memory.
+    // iPadOS's process allowance also accounts for the app's termination limit.
+    available.map(|bytes| bytes.min(recommended.saturating_sub(allocated)))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn vulkan_headroom(device: &wgpu::Device) -> Option<u64> {
     use ash::vk;
     // SAFETY: the guard keeps wgpu's device/instance alive. We only query
@@ -70,6 +96,16 @@ fn vulkan_headroom(device: &wgpu::Device) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(target_vendor = "apple")]
+    fn metal_admission_respects_existing_allocations_and_process_headroom() {
+        assert_eq!(metal_headroom(4096, 1024, Some(8192)), Some(3072));
+        assert_eq!(metal_headroom(4096, 1024, Some(512)), Some(512));
+        assert_eq!(metal_headroom(4096, 8192, Some(8192)), Some(0));
+        assert_eq!(metal_headroom(0, 0, Some(8192)), Some(0));
+        assert_eq!(metal_headroom(4096, 0, Some(0)), Some(0));
+        assert_eq!(metal_headroom(4096, 0, None), None);
+    }
     #[test]
     fn complete_pyramid_admission_scales_with_remaining_headroom() {
         assert_eq!(allowance(None, 4), 0);

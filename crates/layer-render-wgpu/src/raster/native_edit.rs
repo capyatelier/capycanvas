@@ -71,9 +71,9 @@ impl NativeEdit {
             display_dense_bytes: crate::live_display::DENSE_BYTES,
             display_cache_bytes: crate::live_display::CACHE_BYTES,
             display_complete_bytes: {
-                #[cfg(any(target_os = "linux", target_os = "android"))]
+                #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
                 { crate::display_memory::complete_budget(&r.device) }
-                #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
                 { 0 }
             },
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,

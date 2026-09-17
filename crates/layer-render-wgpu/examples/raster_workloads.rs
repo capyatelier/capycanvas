@@ -1,6 +1,7 @@
 //! Dense raster, concurrent-save and multiple-document qualification.
 //! Run in release on a physical GPU. Synthetic images are reproducible workloads,
 //! not claims of photographic color accuracy. Export/undo timings are cold paths.
+//! Use --bounded-display to compare the atlas fallback with host memory admission.
 use layer_core::*;
 use layer_core::color::{ColorProfile, DocumentColor, IntegerDepth, RgbSpace, source::*};
 use layer_engine::{
@@ -98,6 +99,9 @@ impl Canvas {
             document.layers.insert(1, Layer::paint(id, "empty"));
         }
         let mut gpu = WgpuRasterizer::new_native_headless(color)?;
+        if std::env::args().any(|arg| arg == "--bounded-display") {
+            gpu.set_complete_display_allowance(0);
+        }
         gpu.set_telemetry_enabled(true);
         let (input, consumer) = input_queue(64);
         let scale = (1024. / extent[0] as f32).min(768. / extent[1] as f32);
@@ -331,6 +335,7 @@ impl Canvas {
                 .map(|s| s.resident_bytes()).sum::<usize>() as f64
                 / 1048576.
         );
+        #[cfg(target_os = "linux")]
         for line in std::fs::read_to_string("/proc/self/status")?
             .lines()
             .filter(|l| l.starts_with("VmRSS:") || l.starts_with("VmHWM:"))
@@ -408,6 +413,7 @@ fn main() -> Result<()> {
             "--photo" => photo = true,
             "--photo-capture" => { photo = true; capture_only = true; },
             "--photo-navigation" => navigation_only = true,
+            "--bounded-display" => {},
             "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
             "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
             "--space" => color.space = match arguments.next().map(String::as_str) {
@@ -422,7 +428,7 @@ fn main() -> Result<()> {
                 Some("16") => IntegerDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
-            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--bounded-display] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
     }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");

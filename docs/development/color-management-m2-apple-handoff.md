@@ -81,9 +81,22 @@ Apple bridge checks pass 68 tests; the integrated renderer's new preview fixture
 passes after explicitly supplying its test allowance. All 163 filter images
 reproduce the preceding comparison. See the
 [integration qualification](apple-filter-qualification.md#retained-photo-integration--2026-09-16).
-Installed artist review apps retain their earlier qualified builds. Physical
-performance numbers above remain source-scoped; qualify the incoming renderer
-before replacing those apps or claiming current hardware performance.
+The subsequent `a5f57e2c` replay reproduces the earlier watercolor pixels and
+per-frame work. The integrated iPad Release now runs in place with all ten
+recoveries preserved; a short GPU trace confirms the remaining transport,
+copy and composition cost. Ordinary review is restored with recording disabled.
+The Mac artist review is unchanged. See the
+[GPU follow-up](../../apps/layer-apple/PERFORMANCE.md#integrated-renderer-gpu-follow-up--2026-09-16).
+Earlier presentation results remain source-scoped; the instrumented iPad run
+does not establish sustained performance of the integrated renderer.
+The next milestone enables the shared display caches using measured Metal and
+process/system headroom. Paired 60 MP ProPhoto U16 Mac navigation improves from
+2.753 to 0.591 ms median at native scale, with intact source/paint/mask roots.
+Both Release builds, focused renderer checks and all 69 Apple bridge cases
+(including the separate 61 MP JPEG regression) pass on Mac Metal. The updated
+iPad review retains all ten recoveries. Short heavy-watercolor cadence remains
+near the prior result, so this is a large-photo display improvement, not closure
+of that blocker. See the [admission record](../../apps/layer-apple/PERFORMANCE.md#metal-display-admission--2026-09-16).
 Continue with that GPU/display diagnosis, remaining current SDR profiles, provider/
 background workflows in step 4 and remaining physical SDR controls/display checks. Device
 performance and provider delivery are not fully closed.
