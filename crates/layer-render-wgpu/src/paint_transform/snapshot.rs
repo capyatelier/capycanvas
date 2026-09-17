@@ -18,7 +18,7 @@ pub(super) struct TileSnapshot {
     )>,
     pub bounds: PixelRect,
 }
-pub(super) struct RegionJob {
+pub(crate) struct RegionJob {
     pub coordinate: [u32; 2],
     pub region: PixelRect,
     pub sources: Vec<[u32; 2]>,
@@ -65,116 +65,9 @@ impl TileSnapshot {
         coordinates: impl Iterator<Item = [u32; 2]>,
         regions: &[PixelRect],
     ) -> Result<Vec<RegionJob>, GpuRasterError> {
-        let inverse = transform
-            .affine
-            .inverse()
-            .ok_or(GpuRasterError::InvalidTransform(
-                "Transform must be finite and invertible",
-            ))?
-            .0;
-        let mut jobs = Vec::new();
-        for coordinate in coordinates {
-            let region = regions
-                .iter()
-                .copied()
-                .map(|b| b.intersect(page_rect(coordinate)))
-                .fold(PixelRect::EMPTY, PixelRect::union);
-            if region.is_empty() {
-                continue;
-            }
-            let mut pending = vec![region];
-            while let Some(region) = pending.pop() {
-                let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
-                if self.contains(coordinate) {
-                    required.push(coordinate);
-                }
-                if transform.affine != layer_core::Affine::IDENTITY {
-                    let mut low = [f64::INFINITY; 2];
-                    let mut high = [f64::NEG_INFINITY; 2];
-                    for x in [region.min_x() as f64 + 0.5, region.max_x() as f64 - 0.5] {
-                        for y in [region.min_y() as f64 + 0.5, region.max_y() as f64 - 0.5] {
-                            for axis in 0..2 {
-                                let terms = [
-                                    f64::from(inverse[axis]) * x,
-                                    f64::from(inverse[axis + 2]) * y,
-                                    f64::from(inverse[axis + 4]),
-                                ];
-                                let value = terms.into_iter().sum::<f64>();
-                                // Include separate-operation/fused Float32 rounding.
-                                let error = terms.into_iter().map(f64::abs).sum::<f64>()
-                                    * f64::from(f32::EPSILON)
-                                    * 4.;
-                                low[axis] = low[axis].min(value - error - 1.);
-                                high[axis] = high[axis].max(value + error + 1.);
-                            }
-                        }
-                    }
-                    let footprint = PixelRect::new(
-                        low[0].floor().max(0.) as u32,
-                        low[1].floor().max(0.) as u32,
-                        high[0].ceil().max(0.) as u32,
-                        high[1].ceil().max(0.) as u32,
-                    )
-                    .intersect(self.bounds);
-                    if !footprint.is_empty() {
-                        for c in page_coordinates(footprint) {
-                            if c != coordinate && self.contains(c) {
-                                required.push(c);
-                            }
-                            if required.len() > TRANSFORM_SLOTS {
-                                break;
-                            }
-                        }
-                    }
-                }
-                if required.len() <= TRANSFORM_SLOTS {
-                    if jobs.len() == 65_536 {
-                        return Err(GpuRasterError::InvalidTransform(
-                            "Transform requires too many source regions",
-                        ));
-                    }
-                    required.sort_unstable();
-                    jobs.push(RegionJob {
-                        coordinate,
-                        region: region.page_local(coordinate),
-                        sources: required,
-                    });
-                } else if region.width() >= region.height() && region.width() > 1 {
-                    let middle = region.min_x() + region.width() / 2;
-                    pending.push(PixelRect::new(
-                        middle,
-                        region.min_y(),
-                        region.max_x(),
-                        region.max_y(),
-                    ));
-                    pending.push(PixelRect::new(
-                        region.min_x(),
-                        region.min_y(),
-                        middle,
-                        region.max_y(),
-                    ));
-                } else if region.height() > 1 {
-                    let middle = region.min_y() + region.height() / 2;
-                    pending.push(PixelRect::new(
-                        region.min_x(),
-                        middle,
-                        region.max_x(),
-                        region.max_y(),
-                    ));
-                    pending.push(PixelRect::new(
-                        region.min_x(),
-                        region.min_y(),
-                        region.max_x(),
-                        middle,
-                    ));
-                } else {
-                    return Err(GpuRasterError::InvalidTransform(
-                        "Transform exceeds stable Float32 coordinate precision",
-                    ));
-                }
-            }
-        }
-        Ok(jobs)
+        region_jobs(self.bounds, transform, coordinates, regions, |c| {
+            self.contains(c)
+        })
     }
     pub fn binding(
         &self,
@@ -239,4 +132,124 @@ impl TileSnapshot {
             .map_err(GpuRasterError::InvalidTransform)?;
         Ok(source)
     }
+}
+
+/// Shared finite, inverse-mapped neighborhoods for pixel edits and retained placement.
+pub(crate) fn region_jobs(
+    bounds: PixelRect,
+    transform: layer_core::ImageTransform,
+    coordinates: impl Iterator<Item = [u32; 2]>,
+    regions: &[PixelRect],
+    contains: impl Fn([u32; 2]) -> bool,
+) -> Result<Vec<RegionJob>, GpuRasterError> {
+    let inverse = transform
+        .affine
+        .inverse()
+        .ok_or(GpuRasterError::InvalidTransform(
+            "Transform must be finite and invertible",
+        ))?
+        .0;
+    let mut jobs = Vec::new();
+    for coordinate in coordinates {
+        let region = regions
+            .iter()
+            .copied()
+            .map(|b| b.intersect(page_rect(coordinate)))
+            .fold(PixelRect::EMPTY, PixelRect::union);
+        if region.is_empty() {
+            continue;
+        }
+        let mut pending = vec![region];
+        while let Some(region) = pending.pop() {
+            let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
+            if contains(coordinate) {
+                required.push(coordinate);
+            }
+            if transform.affine != layer_core::Affine::IDENTITY {
+                let mut low = [f64::INFINITY; 2];
+                let mut high = [f64::NEG_INFINITY; 2];
+                for x in [region.min_x() as f64 + 0.5, region.max_x() as f64 - 0.5] {
+                    for y in [region.min_y() as f64 + 0.5, region.max_y() as f64 - 0.5] {
+                        for axis in 0..2 {
+                            let terms = [
+                                f64::from(inverse[axis]) * x,
+                                f64::from(inverse[axis + 2]) * y,
+                                f64::from(inverse[axis + 4]),
+                            ];
+                            let value = terms.into_iter().sum::<f64>();
+                            // Include separate-operation/fused Float32 rounding.
+                            let error = terms.into_iter().map(f64::abs).sum::<f64>()
+                                * f64::from(f32::EPSILON)
+                                * 4.;
+                            low[axis] = low[axis].min(value - error - 1.);
+                            high[axis] = high[axis].max(value + error + 1.);
+                        }
+                    }
+                }
+                let footprint = PixelRect::new(
+                    low[0].floor().max(0.) as u32,
+                    low[1].floor().max(0.) as u32,
+                    high[0].ceil().max(0.) as u32,
+                    high[1].ceil().max(0.) as u32,
+                )
+                .intersect(bounds);
+                if !footprint.is_empty() {
+                    for c in page_coordinates(footprint) {
+                        if c != coordinate && contains(c) {
+                            required.push(c);
+                        }
+                        if required.len() > TRANSFORM_SLOTS {
+                            break;
+                        }
+                    }
+                }
+            }
+            if required.len() <= TRANSFORM_SLOTS {
+                if jobs.len() == 65_536 {
+                    return Err(GpuRasterError::InvalidTransform(
+                        "Transform requires too many source regions",
+                    ));
+                }
+                required.sort_unstable();
+                jobs.push(RegionJob {
+                    coordinate,
+                    region: region.page_local(coordinate),
+                    sources: required,
+                });
+            } else if region.width() >= region.height() && region.width() > 1 {
+                let middle = region.min_x() + region.width() / 2;
+                pending.push(PixelRect::new(
+                    middle,
+                    region.min_y(),
+                    region.max_x(),
+                    region.max_y(),
+                ));
+                pending.push(PixelRect::new(
+                    region.min_x(),
+                    region.min_y(),
+                    middle,
+                    region.max_y(),
+                ));
+            } else if region.height() > 1 {
+                let middle = region.min_y() + region.height() / 2;
+                pending.push(PixelRect::new(
+                    region.min_x(),
+                    middle,
+                    region.max_x(),
+                    region.max_y(),
+                ));
+                pending.push(PixelRect::new(
+                    region.min_x(),
+                    region.min_y(),
+                    region.max_x(),
+                    middle,
+                ));
+            } else {
+                return Err(GpuRasterError::InvalidTransform(
+                    "Transform exceeds stable Float32 coordinate precision",
+                ));
+            }
+        }
+    }
+    Ok(jobs)
 }

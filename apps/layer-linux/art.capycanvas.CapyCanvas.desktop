@@ -2,10 +2,11 @@
 Type=Application
 Name=Capy Canvas
 Comment=Draw and paint with a GPU-accelerated canvas
-Exec=capycanvas
+Exec=capycanvas %F
 Icon=art.capycanvas.CapyCanvas
 Terminal=false
 Categories=Graphics;2DGraphics;RasterGraphics;
 Keywords=Drawing;Painting;Illustration;
 StartupNotify=true
 StartupWMClass=art.capycanvas.CapyCanvas
+MimeType=application/x-capycanvas;image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/gif;image/heif;image/heic;image/avif;

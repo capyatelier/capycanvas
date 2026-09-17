@@ -156,7 +156,7 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let [w, h] = r.document_extent;
+        let [w, h] = match request.source { layer_render::RegionSource::Layer(id) => r.target_extent(id), _ => r.document_extent };
         let layer = match &request.source {
             layer_render::RegionSource::Layer(id) => Some(*id),
             _ => None,

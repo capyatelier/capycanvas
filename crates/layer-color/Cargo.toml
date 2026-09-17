@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Portable ICC transforms and profiled SDR image interchange"
 
+[features]
+heif = ["dep:libloading"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../layer-core" }
@@ -13,6 +16,12 @@ moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }
 png = "=0.18.1"
 # Bilevel/fax TIFF is outside the supported unsigned 8/16-bit photo matrix.
 tiff = { version = "=0.10.3", default-features = false, features = ["deflate", "jpeg", "lzw"] }
+image = { version = "=0.25.9", default-features = false, features = ["bmp"] }
+gif = "=0.14.2"
+image-webp = "=0.2.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "=0.8.9", optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }

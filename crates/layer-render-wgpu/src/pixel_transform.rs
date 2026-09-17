@@ -38,6 +38,7 @@ pub struct TransformTarget<'a> {
 pub(super) struct TiledTransformRecord<'a> {
     pub target: [u32; 2],
     pub sources: &'a [[u32; 2]],
+    pub source_size: [u32; 2],
 }
 struct SourceBinding {
     used: u64,
@@ -47,6 +48,7 @@ struct SourceBinding {
 }
 
 pub struct PixelTransform {
+    placement: bool,
     scalar: bool,
     visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
@@ -200,6 +202,7 @@ impl PixelTransform {
             })
         });
         Self {
+            placement: false,
             scalar,
             visibility,
             pipeline,
@@ -237,6 +240,7 @@ impl PixelTransform {
     /// Their region uniform ranges remain independent.
     pub(super) fn fork(&self) -> Self {
         Self {
+            placement: self.placement,
             scalar: self.scalar,
             visibility: self.visibility,
             pipeline: self.pipeline.clone(),
@@ -257,6 +261,11 @@ impl PixelTransform {
             records: Vec::new(),
             next_record: 0,
         }
+    }
+    pub(super) fn placement_pass(&self) -> Self {
+        let mut pass = self.fork();
+        pass.placement = true;
+        pass
     }
     /// Input is linear premultiplied RGBA, optionally cropped to all content.
     /// Selection uses the existing packed brush-coverage buffer (None = all).
@@ -531,7 +540,7 @@ impl PixelTransform {
                 job.sources.iter().map(|c| {
                     (
                         c.map(|v| (v * super::PAGE_SIZE) as i32),
-                        [super::PAGE_SIZE; 2],
+                        job.source_size,
                     )
                 }),
             );
@@ -557,7 +566,8 @@ impl PixelTransform {
                     (job.target[0] * super::PAGE_SIZE) as f32,
                     (job.target[1] * super::PAGE_SIZE) as f32,
                     f32::from(transform.interpolation == Interpolation::Linear)
-                        + 2. * f32::from(identity || transform.affine == Affine::IDENTITY),
+                        + 2. * f32::from(identity || transform.affine == Affine::IDENTITY)
+                        + 4. * f32::from(self.placement),
                     background,
                 ];
                 let offset = (i * 2 + usize::from(identity)) * self.stride as usize;

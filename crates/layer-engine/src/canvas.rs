@@ -442,6 +442,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             operations.push((
                 target.layer,
                 layer_core::LayerOperation {
+                    placement: layer_core::Affine::IDENTITY,
                     coverage,
                     kind: layer_core::LayerOperationKind::Transform(target.transform),
                 },
@@ -455,11 +456,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn display_selection(&self) -> Option<std::borrow::Cow<'_, layer_core::Selection>> {
         if let Some(preview) = &self.transform_preview {
             let selection = preview.selection.as_ref()?;
-            let offset = self.document().layer_offset(preview.layer);
+            let basis = self.document().layer_transform(preview.layer);
             return selection
                 .transformed(preview.transform.affine)
                 .ok()
-                .map(|s| std::borrow::Cow::Owned(s.translated(offset)));
+                .and_then(|s| s.transformed(basis).ok())
+                .map(std::borrow::Cow::Owned);
         }
         self.document()
             .selection
@@ -499,7 +501,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let layer = layers.entry(owner.id).or_insert_with(|| owner.clone());
             let history = layer.target_operations_mut(id).unwrap();
             let index = history.len() as u32;
-            let damage = operation.bounds([self.document().width, self.document().height]);
+            let damage = operation.bounds(self.document().target_extent(id));
             history.push(operation);
             if id == layer.id {
                 layer.raster = layer_core::raster::RasterRevision::pending();
@@ -754,7 +756,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         first_dab: 0,
                         dab_count: 0,
                         style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
-                        damage: operation.bounds([document.width, document.height]),
+                        damage: operation.bounds(layer.local_extent([document.width, document.height])),
                     });
                 }
             }
@@ -1236,12 +1238,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     }
                 }
                 let mut style = style_for(&brush, tool);
+                style.brush_to_layer = layer_core::Affine::translation(offset)
+                    .then(self.document().layer_transform(layer_id).inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
                 style.selection = self.document().selection.as_ref().map(|selection| {
-                    std::sync::Arc::new(selection.translated(layer_core::Point {
-                        x: -offset.x,
-                        y: -offset.y,
-                    }))
+                    std::sync::Arc::new(selection.transformed(
+                        self.document().layer_transform(layer_id).inverse().expect("validated layer geometry")
+                    ).expect("invertible selection placement"))
                 });
                 let active = ActiveStroke {
                     before: self.document().target_raster(layer_id).unwrap().clone(),
@@ -1698,6 +1701,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         {
             self.rebuild_completed = false;
             let mut style = style_for(&stroke.brush, stroke.tool);
+            style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
+                .then(self.document().layer_transform(stroke.layer_id).inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
             style.selection = stroke.selection.clone();
             let mut generator = DabGenerator::new(self.document().color.space);
@@ -1962,6 +1967,7 @@ fn rect_area(rect: Rect) -> f32 {
 
 fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
     DabStyle {
+        brush_to_layer: layer_core::Affine::IDENTITY,
         alpha_locked: false,
         selection: None,
         tip: brush.tip.clone(),
@@ -2825,7 +2831,7 @@ mod tests {
             let count = engine.backend.persistent_dabs;
             let coverage =
                 layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-            let op = layer_core::LayerOperation { coverage, kind };
+            let op = layer_core::LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
             engine.append_layer_operation(id, op).unwrap();
             assert!(engine.has_pending_document_edits());
             let operated = engine.document().layer(id).unwrap().raster.identity();

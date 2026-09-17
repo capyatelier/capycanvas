@@ -16,6 +16,7 @@ pub(super) struct SelectionClip {
     pub binding: Option<wgpu::BindGroup>,
     geometry: Option<Arc<layer_core::Selection>>,
     region: Option<PixelRect>,
+    extent: Option<[u32; 2]>,
     pub generations: u64,
     pub bytes: u64,
     pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer)>,
@@ -90,6 +91,7 @@ impl SelectionClip {
             binding: None,
             geometry: None,
             region: None,
+            extent: None,
             generations: 0,
             bytes: 0,
             pixels: BTreeMap::new(),
@@ -107,6 +109,7 @@ impl SelectionClip {
         self.binding = None;
         self.geometry = None;
         self.region = None;
+        self.extent = None;
         self.bytes = 0;
         self.prune_pixels();
     }
@@ -176,7 +179,7 @@ impl SelectionClip {
         geometry: &Arc<layer_core::Selection>,
         region: Option<PixelRect>,
     ) -> Result<(), GpuRasterError> {
-        if self.region == region && self.geometry.as_ref().is_some_and(|old| old == geometry) {
+        if self.extent == Some(extent) && self.region == region && self.geometry.as_ref().is_some_and(|old| old == geometry) {
             return Ok(());
         }
         let inverse = geometry
@@ -346,6 +349,7 @@ impl SelectionClip {
                 pass.set_bind_group(0, &binding, &[]);
                 pass.dispatch_workgroups(bounds.width().div_ceil(512), bounds.height(), 1);
             }
+            self.extent = Some(extent);
             self.geometry = Some(geometry.clone());
             self.region = region;
             self.generations += 1;
@@ -393,6 +397,7 @@ impl SelectionClip {
         pass.dispatch_workgroups(edge_count, 1, 1);
         pass.set_pipeline(&self.fill);
         pass.dispatch_workgroups(bounds.height(), 1, 1);
+        self.extent = Some(extent);
         self.geometry = Some(geometry.clone());
         self.region = region;
         self.generations += 1;

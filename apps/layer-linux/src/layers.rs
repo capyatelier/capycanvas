@@ -290,6 +290,33 @@ impl LayerPanel {
     pub fn preview_requests(&self) -> u64 {
         self.next_preview.get() - 1
     }
+    #[cfg(test)]
+    pub(super) fn preview_texture(&self, id: u64, revision: u64, extra: &[Rc<Self>]) -> Option<gdk::Texture> {
+        let previews = self.previews.borrow();
+        let (current, texture) = previews.get(&(id, false))?;
+        if *current != revision { return None; }
+        std::iter::once(self).chain(extra.iter().map(|v| v.as_ref()))
+            .filter(|view| view.root.is_mapped())
+            .find_map(|view| view.rows.borrow().values().find(|row| row.id.get() == id)
+                .and_then(|row| row.content_image.paintable())
+                .and_then(|paintable| paintable.downcast::<gdk::Texture>().ok())
+                .filter(|visible| visible == texture))
+    }
+    #[cfg(test)]
+    pub(super) fn preview_debug(&self, extra: &[Rc<Self>]) -> serde_json::Value {
+        serde_json::json!({
+            "pending": self.pending.borrow().iter().collect::<Vec<_>>(),
+            "requested": self.requested.borrow().iter().collect::<Vec<_>>(),
+            "cached": self.previews.borrow().iter().map(|(key,(revision,_))| (key, revision)).collect::<Vec<_>>(),
+            "views": std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())).map(|view| serde_json::json!({
+                "mapped": view.root.is_mapped(),
+                "rows": view.rows.borrow().values().map(|row| serde_json::json!({
+                    "id": row.id.get(), "mapped": row.root.is_mapped(),
+                    "paintable": row.content_image.paintable().is_some(),
+                })).collect::<Vec<_>>()
+            })).collect::<Vec<_>>()
+        })
+    }
     pub fn new() -> Self {
         let owner: Rc<RefCell<Weak<Workspace>>> = Rc::default();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -668,6 +695,7 @@ impl LayerPanel {
                 root.add_controller(hold.clone());
                 hold.group_with(&drag);
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+                drop.connect_accept(|_, drop| !drop.formats().contain_mime_type("text/uri-list"));
                 drop.connect_enter(glib::clone!(
                     #[weak]
                     item,
@@ -737,6 +765,12 @@ impl LayerPanel {
                     }
                 ));
                 root.add_controller(drop);
+                crate::files::drop::install_row(&root, glib::clone!(
+                    #[weak] item,
+                    #[strong] owner,
+                    #[upgrade_or] None,
+                    move || Some((owner.borrow().upgrade()?, row_state(&item)?.id))
+                ));
                 item.set_child(Some(&root));
                 rows.borrow_mut().insert(
                     item.as_ptr() as usize,
@@ -789,6 +823,7 @@ impl LayerPanel {
             rows,
             move |_, item| {
                 if let Some(row) = rows.borrow().get(&(item.as_ptr() as usize)) {
+                    crate::files::drop::clear_row(&row.root);
                     row.id.set(0);
                 }
             }

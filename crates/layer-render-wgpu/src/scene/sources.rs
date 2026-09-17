@@ -391,25 +391,7 @@ impl DecodedTiles {
                     let bpp = samples.channels.count() * step;
                     let row_bytes = PAGE_SIZE as usize * 4 * step;
                     for (y, input) in decoded.chunks_exact(PAGE_SIZE as usize * bpp).enumerate() {
-                        for (pixel, rgba) in input
-                            .chunks_exact(bpp)
-                            .zip(row[..row_bytes].chunks_exact_mut(4 * step))
-                        {
-                            for c in 0..3 {
-                                let channel = if samples.channels == SourceChannels::Rgb {
-                                    c
-                                } else {
-                                    0
-                                };
-                                rgba[c * step..(c + 1) * step]
-                                    .copy_from_slice(&pixel[channel * step..(channel + 1) * step]);
-                            }
-                            if samples.channels.has_alpha() {
-                                rgba[3 * step..].copy_from_slice(&pixel[bpp - step..]);
-                            } else {
-                                rgba[3 * step..].fill(255);
-                            }
-                        }
+                        expand_source_row(input, &mut row[..row_bytes], samples.channels, samples.depth);
                         mapped
                             .slice(y * row_bytes..(y + 1) * row_bytes)
                             .copy_from_slice(&row[..row_bytes]);
@@ -545,6 +527,44 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
         ));
     }
     Ok(())
+}
+
+/// Expand integer source channels without changing their codes or byte order.
+/// Fixed pixel widths keep the hot upload path out of per-channel dynamic copies.
+fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: IntegerDepth) {
+    match (depth, channels) {
+        (IntegerDepth::U8, SourceChannels::Rgb) => {
+            for (p, o) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
+                o.copy_from_slice(&[p[0], p[1], p[2], 255]);
+            }
+        }
+        (IntegerDepth::U8, SourceChannels::Gray) => {
+            for (p, o) in input.iter().zip(output.chunks_exact_mut(4)) {
+                o.copy_from_slice(&[*p, *p, *p, 255]);
+            }
+        }
+        (IntegerDepth::U8, SourceChannels::GrayAlpha) => {
+            for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(4)) {
+                o.copy_from_slice(&[p[0], p[0], p[0], p[1]]);
+            }
+        }
+        (IntegerDepth::U16, SourceChannels::Rgb) => {
+            for (p, o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) {
+                o.copy_from_slice(&[p[0], p[1], p[2], p[3], p[4], p[5], 255, 255]);
+            }
+        }
+        (IntegerDepth::U16, SourceChannels::Gray) => {
+            for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(8)) {
+                o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], 255, 255]);
+            }
+        }
+        (IntegerDepth::U16, SourceChannels::GrayAlpha) => {
+            for (p, o) in input.chunks_exact(4).zip(output.chunks_exact_mut(8)) {
+                o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], p[2], p[3]]);
+            }
+        }
+        (_, SourceChannels::Rgba | SourceChannels::Cmyk) => unreachable!("RGBA copies directly; CMYK uses its ICC transform"),
+    }
 }
 
 fn builtin_settings(

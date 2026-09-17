@@ -20,7 +20,7 @@ struct Target {
     revision: u64,
     layer: LayerId,
     operation: Option<layer_core::LayerOperationKind>,
-    offset: Point,
+    basis: layer_core::Affine,
 }
 impl Default for RegionTools {
     fn default() -> Self {
@@ -147,19 +147,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if fill && (!LayerControls::for_layer(doc, target).fill || doc.active_mask) {
                     return;
                 }
-                let offset = if source == RegionSource::Editing {
-                    doc.layer_offset(doc.active_layer)
-                } else {
-                    Point::default()
-                };
-                point.x -= offset.x;
-                point.y -= offset.y;
+                let (basis, extent) = if source == RegionSource::Editing {
+                    (doc.layer_transform(doc.active_layer), doc.target_extent(doc.active_layer))
+                } else { (layer_core::Affine::IDENTITY, [doc.width, doc.height]) };
+                let Some(inverse) = basis.inverse() else { return; };
+                point = inverse.map(point);
                 if !point.x.is_finite()
                     || !point.y.is_finite()
                     || point.x < 0.
                     || point.y < 0.
-                    || point.x >= doc.width as f32
-                    || point.y >= doc.height as f32
+                    || point.x >= extent[0] as f32
+                    || point.y >= extent[1] as f32
                 {
                     return;
                 }
@@ -183,12 +181,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     tolerance: self.region_tools.tolerance,
                     refinement: self.region_tools.refinement,
                     limit: if fill {
-                        doc.selection.as_ref().map(|s| {
-                            std::sync::Arc::new(s.translated(Point {
-                                x: -offset.x,
-                                y: -offset.y,
-                            }))
-                        })
+                        doc.selection.as_ref().and_then(|s| s.transformed(inverse).ok()).map(std::sync::Arc::new)
                     } else {
                         None
                     },
@@ -198,7 +191,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     revision: doc.revision,
                     layer: doc.active_layer,
                     operation: fill.then(|| self.fill_operation()),
-                    offset,
+                    basis,
                 });
             }
             PenPhase::Cancel => self.region_tools.cancel(),
@@ -226,7 +219,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if target.operation.is_some() && result.pixels.bounds() == [0; 4] {
                         return Ok(()); // No paint and no empty undo entry.
                     }
-                    let selection = Selection::pixels(result.pixels).translated(target.offset);
+                    let selection = Selection::pixels(result.pixels).transformed(target.basis).map_err(error)?;
                     if let Some(operation) = target.operation {
                         self.paint_operation(Some(selection), operation)?;
                     } else {

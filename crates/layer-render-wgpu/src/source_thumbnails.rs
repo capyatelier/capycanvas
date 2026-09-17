@@ -35,6 +35,7 @@ pub(super) struct SourceThumbnails {
     vertical: wgpu::ComputePipeline,
     display: wgpu::RenderPipeline,
     display_binding: wgpu::BindGroup,
+    display_parameters: wgpu::Buffer,
     parameters: wgpu::Buffer,
     rows: wgpu::Buffer,
     working: wgpu::Buffer,
@@ -100,16 +101,28 @@ impl SourceThumbnails {
         };
         let display_layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("photo overview display"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(OVERVIEW_BYTES),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(OVERVIEW_BYTES),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(16),
+                    },
+                    count: None,
+                },
+            ],
         });
         let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("photo overview display"),
@@ -129,13 +142,25 @@ impl SourceThumbnails {
             "photo overview display",
         );
         let working = overview_buffer(d);
+        let display_parameters = d.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photo thumbnail orientation"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let display_binding = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("photo overview display"),
             layout: &display_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: working.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: working.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: display_parameters.as_entire_binding(),
+                },
+            ],
         });
         Self {
             horizontal: pipeline("horizontal"),
@@ -143,6 +168,7 @@ impl SourceThumbnails {
             layout,
             display,
             display_binding,
+            display_parameters,
             working,
             parameters: d.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ordered photo overview parameters"),
@@ -164,6 +190,7 @@ impl SourceThumbnails {
     pub fn storage_bytes(&self) -> u64 {
         ROW_BYTES
             + 48
+            + 16
             + OVERVIEW_BYTES
             + self
                 .cache
@@ -182,6 +209,9 @@ impl SourceThumbnails {
         tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
         let source = r.tiled_sources[&layer].clone();
+        // Same finite local backing as Layer::local_extent, including original
+        // pixels beyond the canvas. Placement changes only the display pass.
+        let extent = std::array::from_fn(|i| source.extent[i].max(r.document_extent[i]));
         let weak = Arc::downgrade(&source);
         self.cache.retain(|c| {
             c.source.strong_count() > 0 && c.valid.load(std::sync::atomic::Ordering::Acquire)
@@ -189,12 +219,12 @@ impl SourceThumbnails {
         let cached = self
             .cache
             .iter()
-            .position(|c| c.source.ptr_eq(&weak) && c.extent == r.document_extent);
+            .position(|c| c.source.ptr_eq(&weak) && c.extent == extent);
         let mut overview = if let Some(index) = cached {
             self.cache.remove(index).unwrap()
         } else {
             let pixels = overview_buffer(&r.device);
-            let (tiles, bytes) = contribution_layout(&source, r.document_extent)?;
+            let (tiles, bytes) = contribution_layout(&source, extent)?;
             let contributions = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("compact original tile thumbnail contributions"),
                 size: bytes.max(16),
@@ -203,7 +233,7 @@ impl SourceThumbnails {
             });
             Overview {
                 source: weak,
-                extent: r.document_extent,
+                extent,
                 pixels,
                 contributions,
                 remaining: tiles.keys().copied().collect(),
@@ -223,6 +253,7 @@ impl SourceThumbnails {
                 self.integrate(
                     r,
                     encoder,
+                    overview.extent,
                     coordinate,
                     &tile.view,
                     false,
@@ -268,7 +299,7 @@ impl SourceThumbnails {
         coordinates.extend(r.native_color_coordinates(layer));
         for coordinate in coordinates {
             if page_rect(coordinate)
-                .intersect(PixelRect::full(r.document_extent))
+                .intersect(PixelRect::full(overview.extent))
                 .is_empty()
             {
                 continue;
@@ -277,6 +308,7 @@ impl SourceThumbnails {
             self.integrate(
                 r,
                 encoder,
+                overview.extent,
                 coordinate,
                 &tile.view,
                 true,
@@ -285,6 +317,22 @@ impl SourceThumbnails {
                 overview.tiles.get(&coordinate).copied().unwrap_or_default(),
             )?;
         }
+        let placement = r
+            .thumbnails
+            .source_placements
+            .get(&layer)
+            .copied()
+            .unwrap_or_default();
+        let mapping = overview_mapping(overview.extent, placement);
+        r.uploads.write(
+            encoder,
+            &r.queue,
+            &self.display_parameters,
+            &mapping
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )?;
         self.cache.push_back(overview);
         while self.cache.len() > OVERVIEWS {
             self.cache.pop_front();
@@ -324,6 +372,7 @@ impl SourceThumbnails {
         &self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
+        extent: [u32; 2],
         coordinate: [u32; 2],
         pixels: &wgpu::TextureView,
         difference: bool,
@@ -334,8 +383,8 @@ impl SourceThumbnails {
         let record = [
             coordinate[0] * PAGE_SIZE,
             coordinate[1] * PAGE_SIZE,
-            r.document_extent[0],
-            r.document_extent[1],
+            extent[0],
+            extent[1],
             contribution.bounds[0],
             contribution.bounds[1],
             contribution.bounds[2],
@@ -388,6 +437,21 @@ impl SourceThumbnails {
         pass.dispatch_workgroups(4, 4, 1);
         Ok(())
     }
+}
+
+/// Fit the complete local rectangle after its linear transform. Translation
+/// and uniform scale cancel under content framing, as with paint thumbnails.
+/// Compute in f64 so large/small valid placements do not overflow intermediate
+/// bounds. Only this disposable display overview is resampled.
+fn overview_mapping(extent: [u32; 2], placement: layer_core::Affine) -> [f32; 4] {
+    let [a, b, c, d, _, _] = placement.0.map(f64::from);
+    let [width, height] = extent.map(f64::from);
+    let side = (a.abs() * width + c.abs() * height).max(b.abs() * width + d.abs() * height);
+    let factor = side / width.max(height) / (a * d - b * c);
+    // Extremely thin valid content can collapse below a preview pixel. Keep
+    // shader coordinates finite even then; off-overview samples are transparent.
+    let limit = f64::from(f32::MAX) / 64.;
+    [d, -b, -c, a].map(|v| (v * factor).clamp(-limit, limit) as f32)
 }
 fn contribution_layout(
     source: &SourceImage,

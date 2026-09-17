@@ -15,6 +15,8 @@ mod raster;
 mod submissions;
 #[path = "paint_transform_tests.rs"]
 mod transforms;
+#[path = "placement_tests.rs"]
+mod placement;
 
 fn view() -> ViewState {
     ViewState {
@@ -51,6 +53,7 @@ fn batch(id: u64) -> DabBatch {
         first_dab: 0,
         dab_count: 1,
         style: DabStyle {
+            brush_to_layer: layer_core::Affine::IDENTITY,
             alpha_locked: false,
             selection: None,
             tip: BrushTip::AnalyticEllipse,
@@ -171,6 +174,7 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
         mask.default_coverage = f32::from(inverse);
         mask.initial = Some(selected.clone());
         fill.pending_operations = vec![LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
             coverage: mask.clone(),
             kind: LayerOperationKind::Fill {
                 color: [0., 0., 1., 1.],
@@ -328,6 +332,7 @@ fn refined_region_antialias_survives_fill_and_history_replay() {
         coverage.initial = Some(Selection::pixels(selected));
         coverage.default_coverage = 0.;
         fill.pending_operations.push(LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
             coverage,
             kind: LayerOperationKind::Fill {
                 color: [0., 0., 1., 1.],
@@ -686,6 +691,7 @@ fn left_mask(id: u64) -> LayerMask {
 fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
     let brush = layer_core::default_brush(preset);
     DabStyle {
+        brush_to_layer: layer_core::Affine::IDENTITY,
         alpha_locked: false,
         selection: None,
         tip: brush.tip,
@@ -927,6 +933,7 @@ fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
             mask.default_coverage = f32::from(inverted);
             mask.initial = Some(selection.clone());
             layer.pending_operations = vec![LayerOperation {
+                placement: layer_core::Affine::IDENTITY,
                 coverage: mask.clone(),
                 kind: LayerOperationKind::Fill {
                     color: [1.; 4],
@@ -1965,6 +1972,7 @@ fn gradients_share_fill_compositing_and_respect_coverage_and_alpha_lock() {
                         LayerMask::reveal_all(LayerId(9), Point::default())
                     };
                     layer.pending_operations.push(LayerOperation {
+                        placement: layer_core::Affine::IDENTITY,
                         coverage,
                         kind: LayerOperationKind::Gradient {
                             start: Point { x: 16.0, y: 64.0 },
@@ -2037,6 +2045,7 @@ fn gradient_respects_layer_mask_and_clipping_base_alpha() {
     gradient.properties.clipped = true;
     gradient.mask = Some(left_mask(8));
     gradient.pending_operations.push(LayerOperation {
+        placement: layer_core::Affine::IDENTITY,
         coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
         kind: LayerOperationKind::Gradient {
             start: Point::default(),
@@ -2095,6 +2104,7 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
             .unwrap(),
         );
         layer.pending_operations.push(LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
             coverage,
             kind: LayerOperationKind::Gradient {
                 start: Point { x: 160., y: 64. },
@@ -2324,6 +2334,7 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
     let mut mask = l.mask.take().unwrap();
     mask.show_area = false;
     l.pending_operations.push(LayerOperation {
+        placement: layer_core::Affine::IDENTITY,
         coverage: mask,
         kind: LayerOperationKind::ApplyMask,
     });
@@ -2397,6 +2408,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                     layer.asset = Some(asset.clone());
                     layer.opacity = opacity;
                     layer.pending_operations.push(LayerOperation {
+                        placement: layer_core::Affine::IDENTITY,
                         coverage: left_mask(9),
                         kind: kind.clone(),
                     });
@@ -2812,7 +2824,7 @@ fn paint_operation_latency() {
             };
             layer
                 .pending_operations
-                .push(LayerOperation { coverage, kind });
+                .push(LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind });
             let op = DabBatch {
                 kind: DabBatchKind::LayerOperation(0),
                 dab_count: 0,

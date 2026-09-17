@@ -94,6 +94,13 @@ impl Requirements {
         if plan.reservoir {
             self.render.push(r.pipelines.reservoir.clone());
         }
+        if let Some(index) = match style.execution {
+            BrushExecution::Liquify => Some(0),
+            BrushExecution::Smudge => Some(1),
+            _ => None,
+        } {
+            self.render.push(r.pipelines.material_gather[index].clone());
+        }
         if plan.stroke_edge {
             self.render.push(r.pipelines.stroke_edge.clone());
         }
@@ -347,6 +354,7 @@ impl WgpuRasterizer {
                 .direct
                 .iter()
                 .chain(&self.pipelines.material)
+                .chain(&self.pipelines.material_gather)
                 .chain(&self.pipelines.watercolor_transport)
                 .chain([
                     &self.pipelines.reservoir,
@@ -454,6 +462,7 @@ impl WgpuRasterizer {
 }
 fn style(brush: &BrushSnapshot, tool: StrokeTool, alpha_locked: bool) -> layer_render::DabStyle {
     layer_render::DabStyle {
+        brush_to_layer: layer_core::Affine::IDENTITY,
         alpha_locked,
         selection: None,
         tip: brush.tip.clone(),
@@ -762,6 +771,7 @@ mod gpu_tests {
             doc.layers[0]
                 .pending_operations
                 .push(layer_core::LayerOperation {
+                    placement: layer_core::Affine::IDENTITY,
                     coverage: layer_core::LayerMask::reveal_all(
                         LayerId(100),
                         layer_core::Point::default(),

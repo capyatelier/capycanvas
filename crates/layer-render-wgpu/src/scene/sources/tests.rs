@@ -161,21 +161,39 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
         tables.prepare(&r.device, space).unwrap();
     }
     assert_eq!(tables.gpu_bytes(), 3 * transfer::TABLE_BYTES);
-    let cache = DecodedTiles::default();
-    for tile_bytes in [FLOAT_TILE_BYTES / 4, FLOAT_TILE_BYTES / 2, FLOAT_TILE_BYTES] {
+    for sizes in [
+        [256 * 1024; 3],                       // Native U8.
+        [512 * 1024; 3],                       // Native U16.
+        [1024 * 1024; 3],                      // ICC Float32.
+        [256 * 1024, 1024 * 1024, 512 * 1024], // Mixed source representations.
+    ] {
+        let cache = DecodedTiles::default();
         let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let mut count = 0;
+        let mut uploads = 0;
         while !cache.uploads_full() {
-            let bytes = cache.charge_upload(&abandoned, tile_bytes);
-            assert!(bytes <= SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES);
-            count += 1;
+            let bytes = sizes[uploads % sizes.len()];
+            let total = cache.charge_upload(&abandoned, bytes);
+            assert!(
+                total <= 16 * 1024 * 1024,
+                "staging exceeds its existing ceiling"
+            );
+            uploads += 1;
+            assert!(
+                uploads <= 64,
+                "admission must eventually drain pending uploads"
+            );
         }
-        assert!(count >= SOURCE_SLOTS);
-        if tile_bytes < FLOAT_TILE_BYTES { assert!(count > SOURCE_SLOTS); }
+        if sizes[0] < 1024 * 1024 {
+            assert!(
+                uploads > 16,
+                "small uploads must use the available byte allowance"
+            );
+        }
         drop(abandoned);
         assert!(!cache.uploads_full());
         assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
     }
+    let cache = DecodedTiles::default();
     // A final maximum-sized upload must also fit after mixed smaller inputs.
     let abandoned = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     while !cache.uploads_full() {
@@ -578,7 +596,13 @@ fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
 
 #[test]
 fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_values() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    check_cache_ownership(WgpuRasterizer::new_headless().unwrap());
+    check_cache_ownership(
+        WgpuRasterizer::new_native_headless(Default::default()).unwrap(),
+    );
+}
+
+fn check_cache_ownership(r: WgpuRasterizer) {
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     let mut source_builder = SourceBuilder::new(

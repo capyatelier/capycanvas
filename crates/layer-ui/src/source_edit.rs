@@ -3,6 +3,32 @@ use super::*;
 use layer_core::{Edit, Layer, Project, color::source::SourceImage};
 use std::sync::Arc;
 
+/// Host preview identities follow immutable source replacement, including
+/// profile-only repair. Weak owners prevent both source retention and allocator
+/// address reuse while an identity is cached; no photo/profile bytes are hashed
+/// on a UI refresh.
+#[derive(Default)]
+pub(super) struct PreviewRevisions {
+    layers: std::collections::BTreeMap<LayerId, (std::sync::Weak<SourceImage>, u64)>,
+    next: u64,
+}
+impl PreviewRevisions {
+    pub(super) fn update(&mut self, layers: &[Layer]) {
+        self.layers.retain(|id, _| layers.iter().any(|l| l.id == *id && l.source.is_some()));
+        for layer in layers {
+            let Some(source) = &layer.source else { continue };
+            let weak = Arc::downgrade(source);
+            if self.layers.get(&layer.id).is_none_or(|(old, _)| !old.ptr_eq(&weak)) {
+                self.next = self.next.wrapping_add(1);
+                self.layers.insert(layer.id, (weak, self.next));
+            }
+        }
+    }
+    pub(super) fn id(&self, id: LayerId) -> u64 {
+        self.layers.get(&id).map_or(0, |(_, revision)| *revision)
+    }
+}
+
 fn baked(layer: &Layer) -> bool {
     !layer.raster.is_empty() || !layer.pending_operations.is_empty() || layer.asset.is_some()
 }
@@ -25,6 +51,7 @@ fn repair_edit(
     let mut replacement = Layer::paint(next, name.as_str());
     replacement.properties.parent = layer.properties.parent;
     replacement.properties.offset = layer.properties.offset;
+    replacement.properties.placement = layer.properties.placement;
     replacement.source = Some(Arc::new(corrected));
     (
         Edit::Batch(vec![
@@ -47,9 +74,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         allocated: Option<LayerId>,
         limits: layer_core::ProjectLimits,
     ) -> Result<Project, String> {
+        self.source_edit_candidates(edit, allocated.as_slice(), limits)
+    }
+    pub(super) fn source_edit_candidates(
+        &self,
+        edit: &Edit,
+        allocated: &[LayerId],
+        limits: layer_core::ProjectLimits,
+    ) -> Result<Project, String> {
         let mut project = self.capture_project_recovery()?;
-        if let Some(id) = allocated {
-            if project.document.allocate_layer_id() != id {
+        for id in allocated {
+            if project.document.allocate_layer_id() != *id {
                 return Err("The layer allocation changed; try again".into());
             }
         }

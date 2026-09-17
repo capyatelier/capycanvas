@@ -55,6 +55,7 @@ impl MaskRenderer {
                     label: Some("mask coverage brush"),
                     source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                         include_str!("brush.wgsl"),
+                        include_str!("brush_geometry.wgsl"),
                         include_str!("selection_clip.wgsl"),
                     ])),
                 })
@@ -226,6 +227,7 @@ impl MaskRenderer {
         });
         self.definitions = Self::masks(layers).map(|m| (m.id, m.clone())).collect();
         for mask in Self::masks(layers) {
+            let extent = layers.iter().find(|layer| layer.masks().any(|m| m.id == mask.id)).map_or(extent, |layer| layer.local_extent(extent));
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
                 let bounds = pixel_rect(selection.bounds(), extent);
@@ -348,7 +350,7 @@ impl WgpuRasterizer {
                         encoder,
                         batch.layer_id,
                         operation,
-                        self.document_extent,
+                        self.target_extent(batch.layer_id),
                     );
                     self.transforms = Some(transforms);
                     result?;
@@ -358,8 +360,8 @@ impl WgpuRasterizer {
             if batch.dab_count == 0 {
                 continue;
             }
-            self.prepare_selection(encoder, &batch.style)?;
-            let damage = batch_pixel_rect(batch, self.document_extent);
+            self.prepare_target_selection(encoder, &batch.style, self.target_extent(batch.layer_id))?;
+            let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
             for coordinate in page_coordinates(damage) {
                 let Some(page) = self.layer_masks.pages.get(&(batch.layer_id, coordinate)) else {
                     continue;
@@ -396,7 +398,7 @@ impl WgpuRasterizer {
                 pass.set_bind_group(
                     1,
                     self.paint_target_binding(&batch.style),
-                    &[self.target_offset(coordinate)],
+                    &[self.layer_target_offset(batch.layer_id, coordinate)],
                 );
                 if let BrushTip::Mask(id) = &batch.style.tip {
                     pass.set_bind_group(2, &self.mask(id)?.bind_group, &[]);

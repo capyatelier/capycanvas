@@ -26,7 +26,34 @@ pub fn target_offset(layers: &[Layer], id: LayerId) -> Point {
     offset
 }
 
+/// Paint/mask-local pixels to document pixels. Groups retain their existing
+/// translation semantics. A linked mask follows the owner's placement while an
+/// unlinked mask stays in its independently translated document position.
+pub fn target_transform(layers: &[Layer], id: LayerId) -> Affine {
+    let Some(owner) = layers.iter().find(|l| {
+        l.id == id || l.mask.as_ref().is_some_and(|m| m.id == id)
+    }) else {
+        return Affine::IDENTITY;
+    };
+    if owner.id == id {
+        return owner.properties.placement.then(Affine::translation(target_offset(layers, id)));
+    }
+    let mask = owner.mask.as_ref().unwrap();
+    let world = target_offset(layers, owner.id);
+    mask.transform_in_parent(&owner.properties).then(Affine::translation(Point {
+        x: world.x - owner.properties.offset.x,
+        y: world.y - owner.properties.offset.y,
+    }))
+}
+
 impl Layer {
+    /// Finite editable local extent. A retained photo can be larger than its
+    /// document; placement never changes this extent or crops its backing.
+    pub fn local_extent(&self, canvas: [u32; 2]) -> [u32; 2] {
+        self.source.as_ref().map_or(canvas, |source| {
+            std::array::from_fn(|i| canvas[i].max(source.extent[i]))
+        })
+    }
     /// Pending Apply mask keeps coverage alive until its submission completes.
     pub fn masks(&self) -> impl Iterator<Item = &LayerMask> {
         self.mask.iter().chain(
@@ -59,8 +86,33 @@ impl Layer {
 mod organization_tests {
     use super::*;
     #[test]
+    fn placement_composes_group_offsets_and_linked_masks() {
+        let mut doc = Document::new("geometry", 2000, 1500);
+        let mut group = Layer::paint(LayerId(10), "group");
+        group.kind = LayerKind::Group;
+        group.properties.offset = Point { x: 20., y: -30. };
+        let layer = &mut doc.layers[0];
+        let id = layer.id;
+        layer.properties.parent = Some(group.id);
+        layer.properties.offset = Point { x: 6., y: 9. };
+        layer.properties.placement = Affine([0.5, 0., 0., 0.5, -100., 50.]);
+        let mut mask = LayerMask::reveal_all(LayerId(11), layer.properties.offset);
+        mask.offset.x += 4.;
+        layer.mask = Some(mask);
+        doc.layers.push(group);
+        let p = Point { x: 100., y: 200. };
+        assert_eq!(doc.layer_transform(id).map(p), Point { x: -24., y: 129. });
+        assert_eq!(doc.layer_transform(LayerId(11)).map(p), Point { x: -22., y: 129. });
+        doc.layers[0].mask.as_mut().unwrap().linked = false;
+        assert_eq!(doc.layer_transform(LayerId(11)).map(p), Point { x: 130., y: 179. });
+        let mut invalid = doc.layers[0].clone();
+        invalid.properties.placement = Affine([0.; 6]);
+        assert!(doc.validate_layer(&invalid).is_err());
+    }
+    #[test]
     fn pending_mask_operations_validate_before_submission() {
         let op = LayerOperation {
+            placement: crate::Affine::IDENTITY,
             coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
             kind: LayerOperationKind::Transform(ImageTransform::default()),
         };
@@ -68,10 +120,17 @@ mod organization_tests {
         mask.pending_operations = Arc::new(vec![op.clone()]);
         assert!(mask.validate().is_ok());
         let mut snapshot = LayerOperation {
+            placement: crate::Affine::IDENTITY,
             coverage: mask.clone(),
             kind: LayerOperationKind::ApplyMask,
         };
         assert!(snapshot.validate().is_ok());
+        // These operations already encode geometry in their transform/coverage.
+        // A second placement would be ignored by rendering and must not persist.
+        for mut operation in [op.clone(), snapshot.clone()] {
+            operation.placement = Affine::translation(Point { x: 12., y: -7. });
+            assert!(operation.validate().is_err());
+        }
         snapshot.kind = op.kind.clone();
         assert!(
             snapshot.validate().is_err(),
@@ -294,6 +353,10 @@ impl LayerBlend {
 pub struct LayerProperties {
     pub parent: Option<LayerId>,
     pub offset: Point,
+    /// Persistent placement of local source AND raster pixels, before offset.
+    /// Missing in older projects means identity; Apply never resamples backing.
+    #[serde(default)]
+    pub placement: Affine,
     pub alpha_locked: bool,
     pub locked: bool,
     pub clipped: bool,
@@ -547,6 +610,9 @@ pub struct LayerMask {
     pub raster: raster::RasterRevision,
     pub enabled: bool,
     pub linked: bool,
+    /// Independent geometry preserves the visible mask when linking changes.
+    #[serde(default)]
+    pub placement: Affine,
     pub offset: Point,
     pub initial: Option<Selection>,
     pub default_coverage: f32,
@@ -563,6 +629,9 @@ pub struct LayerMask {
 /// Raster revisions own the resulting pixels, undo states, and recovery data.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerOperation {
+    /// Figure/gradient coordinates to local pixels. Coverage is already local.
+    #[serde(default)]
+    pub placement: Affine,
     pub coverage: LayerMask,
     pub kind: LayerOperationKind,
 }
@@ -588,7 +657,7 @@ impl LayerOperation {
     /// applying a mask can change pixels outside the selection's geometry.
     pub fn bounds(&self, extent: [u32; 2]) -> Rect {
         let mut bounds = match &self.kind {
-            LayerOperationKind::Figure(figure) => figure.bounds(),
+            LayerOperationKind::Figure(figure) => self.placement.bounds(figure.bounds()),
             _ => Rect {
                 min: Point::default(),
                 max: Point {
@@ -617,6 +686,9 @@ impl LayerOperation {
         }
     }
     fn validate(&self) -> Result<(), DocumentError> {
+        if self.placement.inverse().is_none() {
+            return Err(DocumentError::InvalidLayerOperation("Invalid paint operation placement"));
+        }
         if !self.coverage.pending_operations.is_empty()
             && self.kind != LayerOperationKind::ApplyMask
         {
@@ -637,9 +709,10 @@ impl LayerOperation {
         }
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
         let valid = match &self.kind {
-            LayerOperationKind::ApplyMask => true,
+            LayerOperationKind::ApplyMask => self.placement == Affine::IDENTITY,
             LayerOperationKind::Transform(transform) => {
-                transform.affine.inverse().is_some()
+                self.placement == Affine::IDENTITY
+                    && transform.affine.inverse().is_some()
                     && self.coverage.raster.is_empty()
                     && self.coverage.offset == Point::default()
                     && self.coverage.enabled
@@ -676,11 +749,35 @@ impl LayerOperation {
     }
 }
 impl LayerMask {
+    pub fn transform_in_parent(&self, owner: &LayerProperties) -> Affine {
+        if self.linked {
+            self.placement.then(Affine::translation(Point {
+                x: self.offset.x - owner.offset.x,
+                y: self.offset.y - owner.offset.y,
+            })).then(owner.placement).then(Affine::translation(owner.offset))
+        } else {
+            self.placement.then(Affine::translation(self.offset))
+        }
+    }
+    /// Change future following behavior without moving/resampling current pixels.
+    pub fn set_linked(&mut self, linked: bool, owner: &LayerProperties) -> Result<(), DocumentError> {
+        if self.linked == linked { return Ok(()); }
+        let current = self.transform_in_parent(owner);
+        let mut next = self.clone();
+        next.linked = linked;
+        next.placement = Affine::IDENTITY;
+        next.placement = current.then(next.transform_in_parent(owner).inverse()
+            .ok_or(DocumentError::InvalidLayerOperation("Invalid mask placement"))?);
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
     fn validate(&self) -> Result<(), DocumentError> {
         if !self.default_coverage.is_finite()
             || !(0.0..=1.0).contains(&self.default_coverage)
             || !self.offset.x.is_finite()
             || !self.offset.y.is_finite()
+            || self.placement.inverse().is_none()
             || self
                 .initial
                 .as_ref()
@@ -703,6 +800,7 @@ impl LayerMask {
             id,
             enabled: true,
             linked: true,
+            placement: Affine::IDENTITY,
             offset,
             initial: None,
             default_coverage: 1.0,
@@ -1061,6 +1159,13 @@ impl Document {
     pub fn layer_offset(&self, id: LayerId) -> Point {
         target_offset(&self.layers, id)
     }
+    pub fn layer_transform(&self, id: LayerId) -> Affine {
+        target_transform(&self.layers, id)
+    }
+    pub fn target_extent(&self, id: LayerId) -> [u32; 2] {
+        let canvas = [self.width, self.height];
+        self.target_owner(id).map_or(canvas, |l| l.local_extent(canvas))
+    }
     pub fn is_locked(&self, id: LayerId) -> bool {
         let mut target = self.target_owner(id);
         for _ in 0..self.layers.len() {
@@ -1119,6 +1224,9 @@ impl Document {
             || !(0.0..=1.0).contains(&layer.opacity)
             || !layer.properties.offset.x.is_finite()
             || !layer.properties.offset.y.is_finite()
+            || layer.properties.placement.inverse().is_none()
+            || (layer.properties.placement != Affine::IDENTITY
+                && !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion))
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer value"));
         }

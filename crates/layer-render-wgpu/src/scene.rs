@@ -10,9 +10,11 @@ mod metadata;
 pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
 mod sources;
+mod placement;
 
 #[derive(Clone)]
 enum Job {
+    Placement(Box<placement::PlacementJob>),
     DecodedTile(std::sync::Arc<sources::PendingTile>),
     SourceUpload {
         buffer: wgpu::Buffer,
@@ -21,7 +23,7 @@ enum Job {
     Effect {
         target: wgpu::TextureView,
         sources: [wgpu::TextureView; 2],
-        data: [f32; 24],
+        data: [f32; 32],
         prepared: effects::PreparedEffect,
         // Keep ordinary draw jobs small: only effects carry the mask inputs.
         masks: Box<[wgpu::TextureView; effects::MASK_SLOTS]>,
@@ -29,12 +31,13 @@ enum Job {
     Draw {
         target: wgpu::TextureView,
         sources: [wgpu::TextureView; 2],
-        data: [f32; 24],
+        data: [f32; 32],
         over: bool,
         clip: Option<PixelRect>,
     },
     Clear(wgpu::TextureView, wgpu::Color),
     Watercolor {
+        layer: LayerId,
         target: wgpu::TextureView,
         binding: wgpu::BindGroup,
         record: u32,
@@ -50,6 +53,9 @@ enum Job {
     },
 }
 pub(super) struct Scene {
+    placement: pixel_transform::PixelTransform,
+    placement_display: bool,
+    placement_mips: std::collections::HashMap<LayerId, placement::Mip>,
     source_tiles: sources::DecodedTiles,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -126,10 +132,17 @@ impl Scene {
     pub fn source_cache_work(&self) -> [u64; 2] {
         [self.source_tiles.hits, self.source_tiles.misses]
     }
+    #[cfg(test)]
+    pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
+        let mip = self.placement_mips.get(&id)?;
+        Some((mip.image.texture.clone(), mip.updates, mip.image.plan.level))
+    }
     pub fn scratch_bytes(&self) -> u64 {
         let mut bytes = self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
+            + self.placement.storage_bytes()
+            + self.placement_mips.values().map(|m| m.image.storage_bytes()).sum::<u64>()
             + self.images.storage_bytes();
         { bytes += self.source_tiles.gpu_bytes(); }
         bytes
@@ -180,7 +193,7 @@ impl Scene {
                     usage: wgpu::BufferUsages::COPY_SRC,
                 });
                 self.jobs.push(Job::SourceUpload { buffer, texture: texture.clone() });
-                let mut data = [0.; 24];
+                let mut data = [0.; 32];
                 data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
                 data[8] = 8.;
                 self.jobs.push(Job::Draw {
@@ -248,7 +261,7 @@ impl Scene {
                     .map(|p| (p.coordinate, p.primary.view.clone()))).collect();
             for (coordinate, target) in pages {
                 let Some(view) = self.source_tile(r, layer, coordinate)? else { continue; };
-                let mut data = [0.; 24];
+                let mut data = [0.; 32];
                 data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
                 data[8] = 1.;
                 data[9] = 1.;
@@ -279,7 +292,7 @@ impl Scene {
             let Some(view) = self.source_tile(r, layer, coordinate)? else {
                 continue;
             };
-            let mut data = [0.; 24];
+            let mut data = [0.; 32];
             data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
             data[8] = 1.;
             data[9] = 1.;
@@ -294,6 +307,7 @@ impl Scene {
         self.encode_jobs(r, encoder)
     }
     pub fn begin_frame(&mut self) {
+        self.placement.begin_frame();
         self.record_count = 0;
         self.effect_passes = 0;
     }
@@ -306,7 +320,7 @@ impl Scene {
             ..
         } = r.scene_pipelines.clone();
         let pipeline = pipeline.map(|p| p.compile().clone());
-        let stride = device.limits().min_uniform_buffer_offset_alignment.max(96) as usize;
+        let stride = device.limits().min_uniform_buffer_offset_alignment.max(128) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
             size: stride as u64 * 128,
@@ -316,6 +330,12 @@ impl Scene {
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
+            placement_display: false,
+            placement_mips: Default::default(),
+            placement: r.transforms.as_ref().map_or_else(
+                || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
+                paint_transform::PaintTransforms::placement_pass,
+            ),
             source_tiles: sources::DecodedTiles::new(r.document_color().space),
             pool: Vec::new(),
             used: Vec::new(),
@@ -525,13 +545,13 @@ impl Scene {
         let mask =
             if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
                 layer.mask.as_ref().filter(|m| m.enabled).map(|m| {
-                    self.mask_tile(r, m, world_offset(packet.layers, layer.id, true), tile)
-                })
+                    self.mask_at(r, m, layer_core::target_transform(packet.layers, m.id), layer.local_extent(packet.document_extent), tile)
+                }).transpose()?
             } else {
                 None
             };
         let out = self.reserve(r);
-        let mut data = [0.; 24];
+        let mut data = [0.; 32];
         data[..4].copy_from_slice(&[0., 0., 256., 256.]);
         data[4..6].copy_from_slice(&[256., 256.]);
         data[11] = f32::from(mask.is_some());
@@ -622,7 +642,7 @@ impl Scene {
         options: [f32; 4],
         over: bool,
     ) {
-        let mut data = [0.; 24];
+        let mut data = [0.; 32];
         data[..4].copy_from_slice(&rect);
         data[4..8].copy_from_slice(&[256., 256., 0., 0.]);
         data[8..12].copy_from_slice(&options);
@@ -738,6 +758,8 @@ impl Scene {
             let input = self.alloc(r, wgpu::Color::TRANSPARENT);
             // Generator coverage is applied below with ordinary layer masks.
             self.effect(r, packet, &[index], tile, input)?
+        } else if layer.properties.placement != layer_core::Affine::IDENTITY {
+            self.placed_tile(r, packet, index, tile)?
         } else {
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             let offset = world_offset(packet.layers, layer.id, false);
@@ -789,6 +811,7 @@ impl Scene {
                         let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
                         let page = self.alloc(r, wgpu::Color::TRANSPARENT);
                         self.jobs.push(Job::Watercolor {
+                            layer: layer.id,
                             target: self.pool[page].view.clone(),
                             binding,
                             record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
@@ -843,7 +866,7 @@ impl Scene {
             out
         };
         if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
-            let m = self.mask_tile(r, mask, world_offset(packet.layers, layer.id, true), tile);
+            let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
             let result = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.draw(
                 r,
@@ -1040,6 +1063,7 @@ impl Scene {
     ) -> Result<bool, GpuRasterError> {
         let layer = &packet.layers[index];
         if layer.kind != LayerKind::Paint
+            || layer.properties.placement != layer_core::Affine::IDENTITY
             || layer.properties.blend != layer_core::LayerBlend::Normal
             || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
             || r.preview_layer_id == Some(layer.id)
@@ -1047,8 +1071,7 @@ impl Scene {
             return Ok(false);
         }
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
-        if mask.is_some()
-            && world_offset(packet.layers, layer.id, true) != layer_core::Point::default()
+        if mask.is_some_and(|m| layer_core::target_transform(packet.layers, m.id) != layer_core::Affine::IDENTITY)
         {
             return Ok(false);
         }
@@ -1102,7 +1125,8 @@ impl Scene {
         self.used.fill(false);
         let layer = &packet.layers[layer_index];
         let op = &layer.pending_operations[operation_index];
-        let damage = pixel_rect(op.bounds(packet.document_extent), packet.document_extent);
+        let extent = layer.local_extent(packet.document_extent);
+        let damage = pixel_rect(op.bounds(extent), extent);
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(());
         };
@@ -1120,7 +1144,7 @@ impl Scene {
             .collect();
         let watercolor = stored.watercolor.is_some() && op.kind == LayerOperationKind::ApplyMask;
         for (c, source, destination) in pages {
-            let mask = self.mask_tile(r, &op.coverage, op.coverage.offset, c);
+            let mask = self.mask_at(r, &op.coverage, op.coverage.placement.then(layer_core::Affine::translation(op.coverage.offset)), layer.local_extent(packet.document_extent), c)?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
                 LayerOperationKind::Transform(_) => {
@@ -1132,6 +1156,7 @@ impl Scene {
                         let binding = self.watercolor_binding(r, layer, stored, c, false)?;
                         let p = self.alloc(r, wgpu::Color::TRANSPARENT);
                         self.jobs.push(Job::Watercolor {
+                            layer: layer.id,
                             target: self.pool[p].view.clone(),
                             binding,
                             record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
@@ -1199,6 +1224,7 @@ impl Scene {
                         data[12..16].copy_from_slice(&colors[0]);
                         data[16..20].copy_from_slice(&colors[1]);
                         data[20..24].copy_from_slice(&endpoints);
+                        data[24..30].copy_from_slice(&op.placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid paint operation placement"))?.0);
                     }
                 }
             }
@@ -1275,6 +1301,10 @@ impl Scene {
         parent: Option<LayerId>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        if self.placement_display && !self.placement_mips.is_empty() {
+            self.images = images::ImageStages::default();
+        }
+        self.placement_display = false;
         if region.is_empty() || region.intersect(PixelRect::full(packet.document_extent)) != region
             || destination.width() < region.width() || destination.height() < region.height()
         {
@@ -1308,6 +1338,7 @@ impl Scene {
         overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        self.prepare_placement_mips(r, packet, encoder)?;
         if let Some(native) = &r.native_edit
             && let Some(plan) = windows::Plan::new(packet.layers, packet.document_extent, native.image_pixel_bytes)?
         {
@@ -1397,12 +1428,7 @@ impl Scene {
             if overlay {
                 for layer in packet.layers {
                     if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
-                        let m = self.mask_tile(
-                            r,
-                            mask,
-                            world_offset(packet.layers, layer.id, true),
-                            tile,
-                        );
+                        let m = self.mask_at(r, mask, layer_core::target_transform(packet.layers, mask.id), layer.local_extent(packet.document_extent), tile)?;
                         let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
                         self.draw(
                             r,
@@ -1504,9 +1530,9 @@ impl Scene {
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
-            let data = match job {
-                Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data),
-                Job::DecodedTile(pending) => pending.data.as_ref(),
+            let data: Option<&[f32]> = match job {
+                Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data.as_slice()),
+                Job::DecodedTile(pending) => pending.data.as_ref().map(|data| data.as_slice()),
                 _ => None,
             };
             if let Some(data) = data {
@@ -1533,6 +1559,7 @@ impl Scene {
                 continue;
             }
             match job {
+                Job::Placement(job) => placement::encode(&mut self.placement, r, encoder, job)?,
                 Job::DecodedTile(pending) => {
                     if self.source_tiles.uploads_full() {
                         Self::submit_source_uploads(r, encoder)?;
@@ -1669,6 +1696,7 @@ impl Scene {
                     encoded_through = end;
                 }
                 Job::Watercolor {
+                    layer,
                     target,
                     binding,
                     record,
@@ -1684,7 +1712,7 @@ impl Scene {
                     let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
                     pass.set_pipeline(&r.pipelines.watercolor_composite);
                     pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
-                    pass.set_bind_group(1, &r.target_bind_group, &[r.target_offset(*coordinate)]);
+                    pass.set_bind_group(1, &r.target_bind_group, &[r.layer_target_offset(*layer, *coordinate)]);
                     pass.set_bind_group(2, binding, &[]);
                     pass.draw(0..3, 0..1);
                 }
@@ -1708,7 +1736,7 @@ impl Pipelines {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(96),
+                    min_binding_size: NonZeroU64::new(128),
                 },
                 count: None,
             }],
@@ -1785,7 +1813,7 @@ fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
 
 fn direct_effect_mask(layers: &[Layer], layer: &Layer) -> bool {
     layer.mask.as_ref().is_none_or(|m| {
-        !m.enabled || world_offset(layers, layer.id, true) == layer_core::Point::default()
+        !m.enabled || layer_core::target_transform(layers, m.id) == layer_core::Affine::IDENTITY
     })
 }
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -1813,7 +1841,7 @@ fn uniform_binding(
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer,
                 offset: 0,
-                size: NonZeroU64::new(96),
+                size: NonZeroU64::new(128),
             }),
         }],
     })

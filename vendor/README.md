@@ -1,4 +1,26 @@
-# wgpu platform fixes
+# Pinned dependency fixes
+
+## WebP entropy-table admission
+
+`image-webp` is the published 0.2.4 crate, retaining its MIT/Apache licenses.
+Registry archive SHA-256:
+`525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3`.
+Upstream: <https://github.com/image-rs/image-webp>.
+
+The original decoder's memory limit applies to metadata but leaves entropy-table
+allocations unbounded by that limit. `image-webp-memory.patch` propagates it to
+lossless still, animation and compressed-alpha decoding, admits the group vector
+before allocation, and accounts retained Huffman tree/table capacities. One
+temporary tree is built before its capacity is known; the photo reader reserves
+1 MiB for that bounded temporary and small codec state.
+
+The photo adapter separately validates outer/inner frame dimensions and admits
+encoded data, full-frame buffers, transform workspaces and source packing bands.
+It assigns a quarter of the codec budget to entropy tables. This is explicit
+codec admission, not an operating-system process memory limit. Regression:
+`cargo test --locked --offline -p layer-color --lib photo::raster_tests`.
+
+## wgpu platform fixes
 
 These are the published `wgpu`, `wgpu-hal` and `wgpu-types` 30.0.1 crates,
 upstream revision `40f4a34ebaf56f9a046231f54125ad046239d3f3`. The crate archives'
@@ -43,3 +65,28 @@ precision, publication, rendering or presentation algorithm is changed.
 
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when neither patch remains necessary.
+## HEIF/AVIF source color preservation
+
+`libheif-source-profile.patch` applies to upstream libheif **1.23.4**. With
+`output_image_nclx_profile_passthrough` enabled, the RGB conversion pipeline can
+return pixels without their source NCLX primaries/transfer. The patch restores
+an actually present source profile after successful passthrough conversion,
+including profiles signalled only by the compressed bitstream. It does not
+invent a profile for an untagged source or change sample conversion.
+
+The pinned archive, dynamic libde265 backend and bridge are built by
+[`tools/build/photo-codecs.py`](../tools/build/photo-codecs.py). No codec source
+is downloaded during a Cargo build. GTK packaging verifies the source/recipe,
+patch and library checksums and includes corresponding sources and licenses.
+The patch is supplied under libheif's LGPL-3.0-or-later terms.
+
+Reference: [libheif 1.23.4 decoding options](https://github.com/strukturag/libheif/blob/v1.23.4/libheif/api/libheif/heif_decoding.h).
+
+AVIF now uses unmodified **libavif 1.4.2** with **dav1d 1.5.3**, both BSD-2-Clause,
+through bridge ABI 2. The shared source archive/notice packaging includes both.
+libavif supplies still/sequence metadata; Rust applies clean aperture, rotation
+and mirroring while packing original samples into tiles. The HEIF profile patch
+continues to apply only to the libheif/HEIC route. The independent AVIF oracle uses
+system libavif 1.3.0 with AOM; source-constructed lossless fixtures additionally
+compare against known samples. Reference:
+[libavif 1.4.2 API](https://github.com/AOMediaCodec/libavif/blob/v1.4.2/include/avif/avif.h).

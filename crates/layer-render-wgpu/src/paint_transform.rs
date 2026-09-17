@@ -3,11 +3,14 @@
 //! Linked paint and mask targets run the same transaction with separate origins.
 use super::*;
 use pixel_transform::{PixelTransform, TransformSource, TransformTarget};
-mod snapshot;
+pub(super) mod snapshot;
 use snapshot::TileSnapshot;
 
 pub(super) struct PaintTransforms([ImageTransformState; 2]);
 impl PaintTransforms {
+    pub(super) fn placement_pass(&self) -> PixelTransform {
+        self.0[0].color.placement_pass()
+    }
     pub fn new(device: &PipelineDevice) -> Self {
         let primary = ImageTransformState::new(device);
         let companion = primary.fork();
@@ -58,7 +61,8 @@ impl PaintTransforms {
         operation: &layer_core::LayerOperation,
         extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        self.0[0].apply(r, encoder, layer, operation, extent)
+        let _ = extent;
+        self.0[0].apply(r, encoder, layer, operation, r.target_extent(layer))
     }
     pub fn consume_commit(&mut self, packet: FramePacket<'_>) -> Vec<(LayerId, u32)> {
         let Some(matches) = self
@@ -93,9 +97,10 @@ impl PaintTransforms {
         layers: &[Layer],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let companion = next.companion(layers);
-        let mut damage = self.0[0].update_preview(r, encoder, next, extent)?;
+        let _ = extent;
+        let mut damage = self.0[0].update_preview(r, encoder, next, r.target_extent(next.layer))?;
         if let Some(companion) = companion {
-            damage.extend(self.0[1].update_preview(r, encoder, &companion, extent)?);
+            damage.extend(self.0[1].update_preview(r, encoder, &companion, r.target_extent(companion.layer))?);
         } else {
             damage.extend(self.0[1].cancel_preview(r, encoder)?);
         }
@@ -370,7 +375,7 @@ impl ImageTransformState {
         let index = r.paint_layers.iter().position(|l| l.id == layer);
         let material = self.sources[1].is_some();
         let watercolor = self.sources[2].is_some();
-        let support = self.channel_regions(transform, r.document_extent);
+        let support = self.channel_regions(transform, r.target_extent(layer));
         let coordinates: std::collections::BTreeSet<_> = regions
             .iter()
             .copied()
@@ -529,6 +534,7 @@ impl ImageTransformState {
             let records: Vec<_> = jobs
                 .iter()
                 .map(|job| pixel_transform::TiledTransformRecord {
+                    source_size: [PAGE_SIZE; 2],
                     target: job.coordinate,
                     sources: &job.sources,
                 })
@@ -800,7 +806,7 @@ impl ImageTransformState {
         transform: Option<layer_core::ImageTransform>,
     ) {
         let support = transform
-            .map(|t| self.channel_regions(t, r.document_extent))
+            .map(|t| self.channel_regions(t, r.target_extent(id)))
             .unwrap_or([[PixelRect::EMPTY; 2]; 3]);
         let keep = |c: [u32; 2], original: &Vec<_>, regions: &[PixelRect]| {
             original.contains(&c) || regions.iter().any(|b| !b.page_local(c).is_empty())

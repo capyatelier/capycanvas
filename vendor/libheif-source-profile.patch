@@ -1,0 +1,23 @@
+diff --git a/libheif/context.cc b/libheif/context.cc
+--- a/libheif/context.cc
++++ b/libheif/context.cc
+@@ -1637,9 +1637,18 @@ Result<std::shared_ptr<HeifPixelImage>> HeifContext::convert_to_output_colorspace(
+       output_profile.set_sRGB_defaults();
+     }
+ 
+-    return convert_colorspace(img, target_colorspace, target_chroma, output_profile, converted_output_bpp,
++    const auto source_nclx = img->get_color_profile_nclx();
++    auto converted = convert_colorspace(img, target_colorspace, target_chroma, output_profile, converted_output_bpp,
+                                          options.color_conversion_options, options.color_conversion_options_ext,
+                                          get_security_limits());
++    // RGB conversion states may omit NCLX because YCbCr matrix/range no longer
++    // participates in RGB layout matching. Passthrough must still retain the
++    // source primaries/transfer, including color signalled only in the bitstream.
++    // Preserve an actually present profile; do not invent one for untagged input.
++    if (converted && nclx_passthrough && source_nclx.is_defined()) {
++      (*converted)->set_color_profile_nclx(source_nclx);
++    }
++    return converted;
+   }
+   else {
+     return img;

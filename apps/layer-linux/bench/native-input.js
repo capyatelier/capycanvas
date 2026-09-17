@@ -116,8 +116,13 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, false]);
     }
     if (nativeTest || workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
-        let step = 0, events = null, index = 0, previous = [0, 0];
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceMotion ? 4 : 60, () => {
+        let step = 0, events = null, index = 0, previous = [0, 0], trace = [], resumeAt = 0;
+        const interval = Number(GLib.getenv('LAYER_NATIVE_EVENT_MS') || (workspaceMotion ? 4 : 60));
+        if (!Number.isInteger(interval) || interval < 1 || interval > 1000)
+            throw Error('LAYER_NATIVE_EVENT_MS must be an integer from 1 to 1000');
+        const tracing = GLib.getenv('LAYER_NATIVE_INPUT_TRACE') === '1';
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, interval, () => {
+            if (GLib.get_monotonic_time() < resumeAt) return GLib.SOURCE_CONTINUE;
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
                 send('Stop', '()', []);
                 return GLib.SOURCE_REMOVE;
@@ -128,12 +133,21 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 const [, bytes] = file.load_contents(null);
                 events = JSON.parse(new TextDecoder().decode(bytes));
                 index = 0;
+                trace = [];
             }
             if (index === events.length) {
+                if (tracing) GLib.file_set_contents(`${output}/trace-${step}.json`, JSON.stringify(trace));
                 GLib.file_set_contents(`${output}/done-${step++}`, 'done');
                 events = null;
             } else {
                 const event = events[index++];
+                if (tracing) trace.push({ns: GLib.get_monotonic_time() * 1000, event});
+                if ('wait_ms' in event) {
+                    if (!Number.isFinite(event.wait_ms) || event.wait_ms < 0 || event.wait_ms > 10000)
+                        throw Error('Native event wait must be 0..10000 ms');
+                    resumeAt = GLib.get_monotonic_time() + event.wait_ms * 1000;
+                    return GLib.SOURCE_CONTINUE;
+                }
                 if (event.key) {
                     send('NotifyKeyboardKeysym', '(ub)', [event.key, event.down]);
                     return GLib.SOURCE_CONTINUE;

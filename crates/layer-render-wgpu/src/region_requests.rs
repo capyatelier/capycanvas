@@ -46,7 +46,7 @@ impl RegionRequests {
         if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
-        let extent = r.document_extent;
+        let extent = match request.source { layer_render::RegionSource::Layer(id) => r.target_extent(id), _ => r.document_extent };
         if extent.contains(&0)
             || request.position[0] >= extent[0]
             || request.position[1] >= extent[1]

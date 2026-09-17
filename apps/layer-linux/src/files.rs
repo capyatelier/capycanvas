@@ -8,9 +8,11 @@ use std::rc::Rc;
 
 pub(crate) mod export;
 pub(crate) mod open;
+pub(crate) mod launch;
 mod properties;
 mod color;
 mod place;
+pub(crate) mod drop;
 pub(crate) mod profile;
 mod source;
 mod preview;
@@ -222,18 +224,14 @@ async fn document_request(
     };
     match request {
         DocumentRequest::Open => {
-            let policy = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.state().settings.photo_open;
-            let Some((mut project, location)) = open::run(w, path, location, policy).await? else {
+            let (policy, working) = {
+                let gpu = w.gpu.borrow();
+                let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+                (session.state().settings.photo_open, session.engine().document().color.space)
+            };
+            let Some((project, location)) = open::prepare(&w.window, file, policy, working).await? else {
                 return Ok(false);
             };
-            if location.is_none() {
-                let source = std::sync::Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
-                let Some(source) = open::interpret(w, source, policy).await? else { return Ok(false); };
-                let profile = source.interpretation.profile.clone();
-                project.document.color.space = gio::spawn_blocking(move || layer_color::suggested_working_space(&profile))
-                    .await.map_err(|_| "Profile reader failed")??.unwrap_or(layer_core::color::RgbSpace::ProPhoto);
-                project.document.layers[0].source = Some(std::sync::Arc::new(source));
-            }
             w.open_document
                 .borrow()
                 .as_ref()
@@ -272,6 +270,11 @@ async fn choose_file(
     {
         return Ok(Some(gio::File::for_uri(&location.uri)));
     }
+    if matches!(request, DocumentRequest::Open)
+        && let Some(incoming) = w.image_drop.borrow_mut().take()
+    {
+        return Ok(Some(incoming.files.into_iter().next().ok_or("No drawing to open")?));
+    }
     let dialog = gtk::FileDialog::builder()
         .title(request.title())
         .accept_label(request.accept_label())
@@ -292,7 +295,7 @@ async fn choose_file(
     filter.add_suffix(extension);
     if matches!(request, DocumentRequest::Open) {
         filter.set_name(Some("Drawings and photos"));
-        for suffix in ["jpg", "jpeg", "png", "tif", "tiff"] { filter.add_suffix(suffix); }
+        for suffix in layer_color::photo::extensions() { filter.add_suffix(suffix); }
     }
     let filters = gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);

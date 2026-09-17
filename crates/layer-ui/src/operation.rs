@@ -5,6 +5,10 @@ use crate::*;
 use layer_core::{Affine, Document, ImageTransform, LayerKind, LayerOperationKind, Point, Rect};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment, TransformPreview};
+#[path = "operation/placement.rs"]
+mod placement;
+use placement::Placement;
+pub(crate) use placement::PlacementInsertion;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pose {
@@ -38,9 +42,10 @@ struct Drag {
     pose: Pose,
 }
 struct Transaction {
+    placement: Option<Placement>,
     request: TransformPreview,
     revision: u64,
-    offset: Point,
+    basis: Affine,
     bounds: Rect,
     pose: Pose,
     drag: Option<Drag>,
@@ -55,6 +60,9 @@ pub(super) struct Operation {
 impl Operation {
     pub fn active(&self) -> bool {
         self.current.is_some()
+    }
+    pub fn placing(&self) -> bool {
+        self.current.as_ref().is_some_and(|t| t.placement.is_some())
     }
 }
 fn center(b: Rect) -> Point {
@@ -124,15 +132,16 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
 
 // Conservative allocated tile geometry avoids a readback at interaction start. Erased
 // regions may leave extra transparent room; operations and assets remain bounded
-// by the finite raster canvas. Selecting an area uses that area's bounds instead.
+// by the finite local editing area. Selecting an area uses that area's bounds instead.
 fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
     let layer = doc.target_owner(target).unwrap();
     let operations = layer.target_operations(target).unwrap();
+    let extent = doc.target_extent(target);
     let canvas = Rect {
         min: Point::default(),
         max: Point {
-            x: doc.width as f32,
-            y: doc.height as f32,
+            x: extent[0] as f32,
+            y: extent[1] as f32,
         },
     };
     let mut bounds = if doc
@@ -173,7 +182,7 @@ fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
                 t.affine.bounds(bounds)
             }
             LayerOperationKind::ApplyMask => bounds,
-            _ => bounds.union(op.bounds([doc.width, doc.height])),
+            _ => bounds.union(op.bounds(extent)),
         };
     }
     Rect {
@@ -213,15 +222,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         self.cancel_layer_gesture()?;
+        if !self.engine.document().active_mask
+            && self.engine.document().selection.is_none()
+            && self.engine.document().layer(self.engine.document().active_layer).is_some_and(|l| l.source.is_some())
+        {
+            return self.begin_layer_placement(None);
+        }
         let doc = self.engine.document();
         let target = doc.active_target();
-        let offset = doc.layer_offset(target);
-        let selection = doc.selection.as_ref().map(|s| {
-            s.translated(Point {
-                x: -offset.x,
-                y: -offset.y,
-            })
-        });
+        let basis = doc.layer_transform(target);
+        let inverse = basis.inverse().ok_or("Invalid layer placement")?;
+        let selection = doc.selection.as_ref().map(|s| s.transformed(inverse)).transpose().map_err(error)?;
         let mut bounds = content_bounds(doc, target);
         let request = TransformPreview {
             transaction: 0,
@@ -230,16 +241,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             transform: Default::default(),
         };
         if let Some(companion) = request.companion(&doc.layers) {
-            let other_offset = doc.layer_offset(companion.layer);
             let other = content_bounds(doc, companion.layer);
             if !other.is_empty() {
-                bounds = bounds.union(
-                    layer_core::Affine::translation(Point {
-                        x: other_offset.x - offset.x,
-                        y: other_offset.y - offset.y,
-                    })
-                    .bounds(other),
-                );
+                bounds = bounds.union(doc.layer_transform(companion.layer).then(inverse).bounds(other));
             }
         }
         if bounds.is_empty() && doc.active_mask {
@@ -248,8 +252,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             bounds = Rect {
                 min: Point::default(),
                 max: Point {
-                    x: doc.width as f32,
-                    y: doc.height as f32,
+                    x: doc.target_extent(target)[0] as f32,
+                    y: doc.target_extent(target)[1] as f32,
                 },
             };
         }
@@ -267,6 +271,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         bounds.max.y = bounds.max.y.max(bounds.min.y + 1.);
         self.operation.serial = self.operation.serial.wrapping_add(1);
         self.operation.current = Some(Transaction {
+            placement: None,
             request: TransformPreview {
                 transaction: self.operation.serial,
                 layer: target,
@@ -274,7 +279,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 transform: ImageTransform::default(),
             },
             revision: doc.revision,
-            offset,
+            basis,
             bounds,
             pose: Pose::identity(),
             drag: None,
@@ -287,6 +292,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {
         self.require_idle()?;
+        if self.operation.placing() {
+            return self.finish_layer_placement(apply);
+        }
         if apply {
             self.engine.commit_transform().map_err(error)?;
         }
@@ -294,6 +302,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
+        if self.operation.placing() {
+            self.finish_layer_placement(false)?;
+            return Ok(true);
+        }
         if self.operation.current.take().is_none() {
             return Ok(false);
         }
@@ -321,9 +333,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         };
         t.request.transform.affine = t.pose.affine(center(t.bounds));
-        self.engine
-            .set_transform_preview(Some(t.request.clone()))
-            .map_err(error)?;
+        if let Some(placement) = &t.placement {
+            let mut edits = Vec::new();
+            for layer in placement.preview_layers(self.engine.document(), t.request.transform.affine)? {
+                if self.engine.document().is_locked(layer.id) {
+                    return Err("The destination layer is locked".into());
+                }
+                if self.engine.document().layer(layer.id) != Some(&layer) {
+                    edits.push(layer_core::Edit::ReplaceLayer(Box::new(layer)));
+                }
+            }
+            if !edits.is_empty() {
+                self.engine.preview_edit(layer_core::Edit::Batch(edits)).map_err(error)?;
+            }
+            t.revision = self.engine.document().revision;
+            self.layer_interaction.changed = true;
+        } else {
+            self.engine
+                .set_transform_preview(Some(t.request.clone()))
+                .map_err(error)?;
+        }
         self.refresh_tools();
         self.operation.changed = true;
         Ok(())
@@ -442,7 +471,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
-        let p = sub(p, t.offset);
+        let p = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
         match event.phase {
             PenPhase::Down => {
                 if let Some(handle) = t.hit(p, reach) {
@@ -501,7 +530,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .logical_viewport
             .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
         let map = |p| {
-            let p = camera.map(add(p, t.offset));
+            let p = camera.map(t.basis.map(p));
             [p.x / dpi, p.y / dpi]
         };
         let affine = t.pose.affine(center(t.bounds));
@@ -548,34 +577,26 @@ impl Transaction {
             .affine(center(self.bounds))
             .map(local_handle(self.bounds, [0., -1.]));
         let (s, c) = self.pose.angle.sin_cos();
-        add(
-            top,
-            Point {
-                x: s * reach * 2.5 * self.pose.scale[1].signum(),
-                y: -c * reach * 2.5 * self.pose.scale[1].signum(),
-            },
-        )
+        let [a, b, d, e, _, _] = self.basis.0;
+        let length = (a * s - d * c).hypot(b * s - e * c);
+        let distance = reach * 2.5 * self.pose.scale[1].signum() / length;
+        add(top, Point { x: s * distance, y: -c * distance })
     }
     fn hit(&self, p: Point, reach: f32) -> Option<Handle> {
-        let distance = |q: Point| (p.x - q.x).hypot(p.y - q.y);
-        if distance(self.rotate_handle(reach)) <= reach {
-            return Some(Handle::Rotate);
-        }
+        let world = self.basis.map(p);
+        let distance = |q: Point| {
+            let q = self.basis.map(q);
+            (world.x - q.x).hypot(world.y - q.y)
+        };
+        if distance(self.rotate_handle(reach)) <= reach { return Some(Handle::Rotate); }
         let affine = self.pose.affine(center(self.bounds));
-        if let Some((_, h)) = HANDLES
-            .into_iter()
+        if let Some((_, h)) = HANDLES.into_iter()
             .map(|h| (distance(affine.map(local_handle(self.bounds, h))), h))
-            .filter(|(d, _)| *d <= reach)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-        {
-            return Some(Handle::Scale(h));
-        }
+            .filter(|(d, _)| *d <= reach).min_by(|a, b| a.0.total_cmp(&b.0))
+        { return Some(Handle::Scale(h)); }
         let q = affine.inverse()?.map(p);
-        (q.x >= self.bounds.min.x
-            && q.y >= self.bounds.min.y
-            && q.x <= self.bounds.max.x
-            && q.y <= self.bounds.max.y)
-            .then_some(Handle::Move)
+        (q.x >= self.bounds.min.x && q.y >= self.bounds.min.y
+            && q.x <= self.bounds.max.x && q.y <= self.bounds.max.y).then_some(Handle::Move)
     }
     fn drag_pose(&self, drag: Drag, p: Point, modifiers: Modifiers, aspect: bool) -> Pose {
         let mut pose = drag.pose;
@@ -670,6 +691,7 @@ mod tests {
     use super::*;
     fn transaction() -> Transaction {
         Transaction {
+            placement: None,
             request: TransformPreview {
                 transaction: 1,
                 layer: layer_core::LayerId(1),
@@ -677,7 +699,7 @@ mod tests {
                 transform: Default::default(),
             },
             revision: 0,
-            offset: Point { x: 7., y: 11. },
+            basis: Affine::translation(Point { x: 7., y: 11. }),
             bounds: Rect {
                 min: Point { x: 20., y: 40. },
                 max: Point { x: 240., y: 190. },

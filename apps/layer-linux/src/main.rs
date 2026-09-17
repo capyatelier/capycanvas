@@ -44,8 +44,18 @@ fn main() -> gtk::glib::ExitCode {
     // SAFETY: first operation, before GTK initialization or worker creation.
     unsafe { display_color::enable_gtk_color_management() };
     glib::set_application_name(layer_ui::APP_NAME);
+    let (app, active) = application("art.capycanvas.CapyCanvas");
+    let result = app.run();
+    let windows = std::mem::take(&mut *active.borrow_mut());
+    drop(windows);
+    layer_render_wgpu::finish_shader_compiler_shutdown();
+    result
+}
+
+fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
     let app = adw::Application::builder()
-        .application_id("art.capycanvas.CapyCanvas")
+        .application_id(id)
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {
@@ -66,31 +76,21 @@ fn main() -> gtk::glib::ExitCode {
                 workspace.window.present();
                 return;
             }
+            // A file launch can be preparing its source before any canvas exists.
+            if let Some(window) = app.active_window().or_else(|| app.windows().first().cloned()) {
+                window.present();
+                return;
+            }
             app.activate_action("new-window", None);
             let workspace = active.borrow().last().unwrap().clone();
             recovery::offer_stale(&workspace);
-            if let Ok(path) = std::env::var("LAYER_UI_CAPTURE") {
-                let app = app.clone();
-                gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
-                    assert!(
-                        workspace.gpu.borrow().is_some(),
-                        "GTK GPU initialization failed"
-                    );
-                    capture(&workspace, &path);
-                    workspace.window.close();
-                    app.quit();
-                });
-            }
         }
     ));
-    let result = app.run();
-    let windows = std::mem::take(&mut *active.borrow_mut());
-    drop(windows);
-    layer_render_wgpu::finish_shader_compiler_shutdown();
-    result
+    (app, active)
 }
 
 fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>) {
+    files::launch::install(app, active);
     let settings_changed =
         gtk::gio::SimpleAction::new("settings-changed", Some(glib::VariantTy::STRING));
     settings_changed.connect_activate(glib::clone!(
@@ -171,6 +171,17 @@ fn open_workspace(
     workspace.window.present();
     if let Some(settings) = settings {
         workspace.dispatch(layer_ui::UiAction::RestoreSettings { settings });
+    }
+    // Capture the prepared document for both ordinary activation and file
+    // launches. Starting here also excludes photo decoding from the delay.
+    if let Ok(path) = std::env::var("LAYER_UI_CAPTURE") {
+        let app = app.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+            assert!(workspace.gpu.borrow().is_some(), "GTK GPU initialization failed");
+            capture(&workspace, &path);
+            workspace.window.close();
+            app.quit();
+        });
     }
 }
 

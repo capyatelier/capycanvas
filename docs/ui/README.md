@@ -32,7 +32,12 @@ provide initial arrangements for these tasks and remain editable workspaces.
 
 The proposed [color-management user journeys](color-management.md) describe
 creation, photo import and adjustments, color entry, export, print proofing and HDR.
-They are a design target for the color-management upgrade, not current behavior.
+The [current SDR handoff](../history/color-management-m2-port-handoff.md) records
+delivered workflows, qualification limits and the remaining platform ports.
+
+The [image Open, Import and drop assessment](image-open-import-proposal.md)
+distinguishes upstream photo workflows from local GTK placement work and sets
+out the remaining editing, external-drop, format and native performance gates.
 
 ## Session, actions and views
 

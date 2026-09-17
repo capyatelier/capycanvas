@@ -6,6 +6,7 @@ fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOper
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
     coverage.initial = selection;
     LayerOperation {
+        placement: layer_core::Affine::IDENTITY,
         coverage,
         kind: LayerOperationKind::Transform(ImageTransform {
             affine,
@@ -356,6 +357,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                 coverage.offset.x -= paint.properties.offset.x;
                 coverage.offset.y -= paint.properties.offset.y;
                 let apply = LayerOperation {
+                    placement: layer_core::Affine::IDENTITY,
                     coverage,
                     kind: LayerOperationKind::ApplyMask,
                 };

@@ -1,0 +1,125 @@
+--- a/src/decoder.rs
++++ b/src/decoder.rs
+@@ -679,7 +679,8 @@
+             self.animation = saved;
+             result?;
+         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
+-            let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
++            let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?)
++                .with_memory_limit(self.memory_limit);
+ 
+             if self.has_alpha {
+                 decoder.decode_frame(self.width, self.height, false, buf)?;
+@@ -713,6 +714,7 @@
+                     &mut range_reader(&mut self.r, range)?,
+                     self.width as u16,
+                     self.height as u16,
++                    self.memory_limit,
+                 )?;
+ 
+                 for y in 0..frame.height {
+@@ -812,7 +814,7 @@
+             }
+             WebPRiffChunk::VP8L => {
+                 let reader = (&mut self.r).take(chunk_size);
+-                let mut lossless_decoder = LosslessDecoder::new(reader);
++                let mut lossless_decoder = LosslessDecoder::new(reader).with_memory_limit(self.memory_limit);
+                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                 lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
+                 (rgba_frame, true)
+@@ -826,7 +828,7 @@
+                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded;
+                 let mut reader = (&mut self.r).take(chunk_size);
+                 let alpha_chunk =
+-                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
++                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16, self.memory_limit)?;
+ 
+                 // read opaque
+                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
+--- a/src/extended.rs
++++ b/src/extended.rs
+@@ -273,6 +273,7 @@
+     reader: &mut R,
+     width: u16,
+     height: u16,
++    memory_limit: usize,
+ ) -> Result<AlphaChunk, DecodingError> {
+     let info_byte = reader.read_u8()?;
+ 
+@@ -301,7 +302,7 @@
+     };
+ 
+     let data = if lossless_compression {
+-        let mut decoder = LosslessDecoder::new(reader);
++        let mut decoder = LosslessDecoder::new(reader).with_memory_limit(memory_limit);
+ 
+         let mut data = vec![0; usize::from(width) * usize::from(height) * 4];
+         decoder.decode_frame(u32::from(width), u32::from(height), true, &mut data)?;
+--- a/src/huffman.rs
++++ b/src/huffman.rs
+@@ -38,6 +38,15 @@
+ }
+ 
+ impl HuffmanTree {
++    pub(crate) fn allocated_bytes(&self) -> usize {
++        match &self.0 {
++            HuffmanTreeInner::Single(_) => 0,
++            HuffmanTreeInner::Tree { tree, table, .. } =>
++                tree.capacity() * std::mem::size_of::<HuffmanTreeNode>()
++                    + table.capacity() * std::mem::size_of::<u32>(),
++        }
++    }
++
+     /// Builds a tree implicitly, just from code lengths
+     pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
+         // Count symbols and build histogram
+--- a/src/lossless.rs
++++ b/src/lossless.rs
+@@ -67,6 +67,7 @@
+     transform_order: Vec<u8>,
+     width: u16,
+     height: u16,
++    memory_limit: usize,
+ }
+ 
+ impl<R: BufRead> LosslessDecoder<R> {
+@@ -78,7 +79,13 @@
+             transform_order: Vec::new(),
+             width: 0,
+             height: 0,
+-        }
++            memory_limit: usize::MAX,
++        }
++    }
++
++    pub(crate) fn with_memory_limit(mut self, limit: usize) -> Self {
++        self.memory_limit = limit;
++        self
+     }
+ 
+     /// Decodes a frame.
+@@ -325,7 +332,14 @@
+                 .collect::<Vec<u16>>();
+         }
+ 
++        let mut allocated = (num_huff_groups as usize)
++            .checked_mul(std::mem::size_of::<HuffmanCodeGroup>())
++            .filter(|bytes| *bytes <= self.memory_limit)
++            .ok_or(DecodingError::MemoryLimitExceeded)?;
+         let mut hufftree_groups = Vec::new();
++        hufftree_groups.try_reserve_exact(num_huff_groups as usize)
++            .map_err(|_| DecodingError::MemoryLimitExceeded)?;
++        allocated = allocated.max(hufftree_groups.capacity() * std::mem::size_of::<HuffmanCodeGroup>());
+ 
+         for _i in 0..num_huff_groups {
+             let mut group: HuffmanCodeGroup = Default::default();
+@@ -338,6 +352,9 @@
+                 }
+ 
+                 let tree = self.read_huffman_code(alphabet_size)?;
++                allocated = allocated.checked_add(tree.allocated_bytes())
++                    .filter(|bytes| *bytes <= self.memory_limit)
++                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                 group[j] = tree;
+             }
+             hufftree_groups.push(group);

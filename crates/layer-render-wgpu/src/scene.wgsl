@@ -5,6 +5,8 @@ struct Settings {
     color: vec4<f32>,
     source_over: vec4<f32>,
     backdrop: vec4<f32>,
+    operation_linear: vec4<f32>,
+    operation_offset: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(1) @binding(0) var front: texture_2d<f32>;
@@ -142,7 +144,8 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     let raw = scene_read(front,v);
     if op == 6u || op == 11u {
         // Constant fills are the degenerate case (equal endpoint colors).
-        let p = settings.extent.zw + v.uv * settings.rect.zw;
+        let local = settings.extent.zw + v.uv * settings.rect.zw;
+        let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
         var src: vec4<f32>;
         if op == 11u { src = figure_color(p)*raw.r; }
         else {

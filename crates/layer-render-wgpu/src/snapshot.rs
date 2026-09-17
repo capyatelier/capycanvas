@@ -294,6 +294,7 @@ impl SnapshotRenderer {
             || layer.opacity != 1.
             || layer.properties.parent.is_some()
             || layer.properties.offset != layer_core::Point::default()
+            || layer.properties.placement != layer_core::Affine::IDENTITY
             || layer.properties.blend != layer_core::LayerBlend::Normal
             || layer.properties.clipped
             || layer.mask.as_ref().is_some_and(|m| m.enabled)
@@ -445,26 +446,18 @@ impl SnapshotRenderer {
             for (id, mask) in
                 std::iter::once((layer.id, false)).chain(layer.masks().map(|m| (m.id, true)))
             {
-                let offset = scene::world_offset(&self.layers, layer.id, mask);
-                let local = pixel_rect(
-                    layer_core::Rect {
-                        min: layer_core::Point {
-                            x: pages.min_x() as f32 - offset.x,
-                            y: pages.min_y() as f32 - offset.y,
-                        },
-                        max: layer_core::Point {
-                            x: pages.max_x() as f32 - offset.x,
-                            y: pages.max_y() as f32 - offset.y,
-                        },
-                    },
-                    self.extent,
-                )
-                .expand(if mask { 1 } else { PAGE_SIZE }, self.extent);
+                let extent = layer.local_extent(self.extent);
+                let inverse = layer_core::target_transform(&self.layers, id).inverse()
+                    .ok_or(GpuRasterError::InvalidTransform("Invalid snapshot layer placement"))?;
+                let local = pixel_rect(inverse.bounds(layer_core::Rect {
+                    min: layer_core::Point { x: pages.min_x() as f32, y: pages.min_y() as f32 },
+                    max: layer_core::Point { x: pages.max_x() as f32, y: pages.max_y() as f32 },
+                }), extent).expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
                     if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {
                         planned = planned
-                            .saturating_add(self.extent[0] as u64 * self.extent[1] as u64 / 2 + 64);
+                            .saturating_add(extent[0] as u64 * extent[1] as u64 / 2 + 64);
                         planned = planned
                             .saturating_add(page_coordinates(local).count() as u64 * 256 * 256 * 5);
                     }

@@ -18,6 +18,10 @@ struct Style {
     contact_a: vec4<f32>,
     contact_b: vec4<f32>,
     contact_c: vec4<f32>,
+    brush_to_layer_linear: vec4<f32>,
+    brush_to_layer_offset: vec4<f32>,
+    layer_to_brush_linear: vec4<f32>,
+    layer_to_brush_offset: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -95,13 +99,14 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
         let start = input.center - input.motion;
         world = mix(min(start, input.center) - vec2<f32>(radius), max(start, input.center) + vec2<f32>(radius), local * 0.5 + vec2<f32>(0.5));
     }
+    let placed = brush_to_layer(world);
     let origin = render_target.origin_extent.xy;
     let extent = render_target.origin_extent.zw;
 
     var output: VertexOutput;
     output.position = vec4<f32>(
-        (world.x - origin.x) / extent.x * 2.0 - 1.0,
-        1.0 - (world.y - origin.y) / extent.y * 2.0,
+        (placed.x - origin.x) / extent.x * 2.0 - 1.0,
+        1.0 - (placed.y - origin.y) / extent.y * 2.0,
         0.0,
         1.0,
     );
@@ -129,7 +134,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if coverage <= 0.0 { discard; }
         let exposure = contact_exposure(input.motion, input.geometry.xy, input.geometry.zw, input.flow_hardness.y);
         let alpha = (1.0 - exp(-coverage * input.flow_hardness.x * input.color.a * exposure * 6.0))
-            * brush_selection_at(input.world);
+            * brush_selection_at(brush_to_layer(input.world));
         return vec4<f32>(input.color.rgb * alpha, alpha);
     }
     var coverage = tip_coverage(
@@ -195,7 +200,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let alpha = clamp(
-        coverage * brush_selection_at(input.world)
+        coverage * brush_selection_at(brush_to_layer(input.world))
             * input.flow_hardness.x * style.canvas_opacity.z * input.color.a,
         0.0,
         1.0,

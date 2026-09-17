@@ -1,6 +1,11 @@
 struct Style {
     color: vec4<f32>,
     canvas_opacity: vec4<f32>,
+    unused_brush_material: array<vec4<f32>, 17>,
+    brush_to_layer_linear: vec4<f32>,
+    brush_to_layer_offset: vec4<f32>,
+    layer_to_brush_linear: vec4<f32>,
+    layer_to_brush_offset: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -54,13 +59,14 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
         scaled.x * input.rotation.x - scaled.y * input.rotation.y,
         scaled.x * input.rotation.y + scaled.y * input.rotation.x,
     );
+    let placed = brush_to_layer(world);
     let origin = render_target.origin_extent.xy;
     let extent = render_target.origin_extent.zw;
 
     var output: VertexOutput;
     output.position = vec4<f32>(
-        (world.x - origin.x) / extent.x * 2.0 - 1.0,
-        1.0 - (world.y - origin.y) / extent.y * 2.0,
+        (placed.x - origin.x) / extent.x * 2.0 - 1.0,
+        1.0 - (placed.y - origin.y) / extent.y * 2.0,
         0.0,
         1.0,
     );

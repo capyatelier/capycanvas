@@ -54,7 +54,7 @@ mod shortcuts;
 mod theme;
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
+pub use session::{ImageLayerDestination, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
@@ -466,6 +466,7 @@ pub enum CommandId {
     ApplyTransform,
     CancelTransform,
     TransformAspect,
+    PlacementOriginalSize,
     Hand,
     Eyedropper,
     Gradient,
@@ -612,6 +613,7 @@ impl CommandId {
             Self::ApplyTransform => "check",
             Self::CancelTransform => "close",
             Self::TransformAspect => "link",
+            Self::PlacementOriginalSize => "transform",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
@@ -653,7 +655,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 73] = [
         Self::Histogram,
         Self::ImportImage,
         Self::PasteImage,
@@ -683,6 +685,7 @@ impl CommandId {
         Self::ApplyTransform,
         Self::CancelTransform,
         Self::TransformAspect,
+        Self::PlacementOriginalSize,
         Self::Hand,
         Self::Eyedropper,
         Self::Gradient,
@@ -784,6 +787,7 @@ impl CommandId {
             Self::ApplyTransform => "Apply transform",
             Self::CancelTransform => "Cancel transform",
             Self::TransformAspect => "Keep proportions",
+            Self::PlacementOriginalSize => "Original Size (100%)",
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",
             Self::Gradient => "Gradient",

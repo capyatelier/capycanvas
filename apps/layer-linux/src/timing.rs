@@ -26,9 +26,20 @@ pub struct Stats {
     /// Frame id, document-to-surface matrix, artwork preview revision. Allows
     /// camera requests to be matched to actual presentation without timing guesses.
     pub camera_views: Vec<(u64, [f32; 6], u64)>,
+    /// GTK owner delivery ns, source layer id, surface point, resulting pose.
+    pub photo_inputs: Vec<(u64, u64, [f32; 2], [f32; 6])>,
+    /// Frame id, source layer id and its submitted placement for presentation correlation.
+    pub photo_frames: Vec<(u64, u64, [f32; 6])>,
     /// Frame id, cumulative recomposited pixels, display bytes, source tile misses,
     /// and this canvas frame's source misses (excludes background thumbnail work).
     pub camera_work: Vec<[u64; 5]>,
+    /// Frame id, cumulative full-resolution material gather jobs/passes, field bytes.
+    pub material_samples: Vec<[u64; 4]>,
+    pub renderer_phases: Vec<(u64, [f64; 6])>,
+    pub material_phases: Vec<(u64, [f64; 5])>,
+    /// Frame id, cumulative source upload submissions, peak staging bytes.
+    pub source_transfers: Vec<[u64; 3]>,
+    pub pen_routes: Vec<(u64, String, &'static str)>,
     /// Frame id and enqueue timestamp for a native raster publication.
     pub raster_commits: Vec<[u64; 2]>,
     pub overview_revisions: Vec<u64>,
@@ -67,6 +78,11 @@ pub fn thread_cpu_ms() -> f64 {
     time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
 }
 impl Timing {
+    pub fn photo_frame(&self, layers: &[layer_core::Layer]) {
+        self.stats.lock().unwrap().photo_frames.extend(layers.iter()
+            .filter(|layer| layer.source.is_some())
+            .map(|layer| (self.id, layer.id.0, layer.properties.placement.0)));
+    }
     pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {
         let mut stats = self.stats.lock().unwrap();
         stats.camera_views.push((
@@ -78,6 +94,12 @@ impl Timing {
         stats.camera_work.push([self.id, metrics.composited_pixels,
             metrics.composite_storage_bytes, metrics.source_tile_misses,
             metrics.source_tile_misses.saturating_sub(self.source_misses_before)]);
+        stats.material_samples.push([self.id, metrics.material_sample_jobs,
+            metrics.material_sample_passes, metrics.material_sample_storage_bytes]);
+        stats.renderer_phases.push((self.id, metrics.frame_cpu_ms));
+        stats.material_phases.push((self.id, metrics.material_cpu_ms));
+        stats.source_transfers.push([self.id, metrics.source_upload_submissions,
+            metrics.source_upload_peak_bytes]);
     }
     pub fn raster_commit(&self) {
         self.stats.lock().unwrap().raster_commits.push([self.id, self.queued_ns]);

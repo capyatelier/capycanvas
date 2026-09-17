@@ -17,6 +17,10 @@ mod export_resize;
 mod new_photo;
 #[path = "place_source_tests.rs"]
 mod place_source;
+#[path = "photo_drop_tests.rs"]
+mod photo_drop;
+#[path = "file_launch_tests.rs"]
+mod file_launch;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]

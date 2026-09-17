@@ -822,6 +822,7 @@ pub struct Workspace {
     opacity: crate::number_control::NumberControl,
     color: Rc<crate::color_editor::ColorButton>,
     tool_settings: crate::tool_panels::ToolSettings,
+    placement_actions: crate::tool_panels::PlacementActions,
     color_panel: crate::tool_panels::ColorPanel,
     navigator: crate::navigator::Navigator,
     navigator_overviews: Rc<crate::navigator::Overviews>,
@@ -836,6 +837,8 @@ pub struct Workspace {
     pub(crate) servicing: Cell<bool>,
     pub(crate) histogram: RefCell<Option<Rc<crate::histogram::Inspector>>>,
     pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
+    pub(crate) image_drop: RefCell<Option<crate::files::drop::Incoming>>,
+    pub(crate) image_drop_label: gtk::Label,
     initial_project: RefCell<Option<(layer_core::Project, Option<DocumentLocation>)>>,
     customization: customization::Customization,
     pub(crate) drawer: Rc<drawers::Drawer>,
@@ -965,11 +968,22 @@ impl Workspace {
         notices.append(&restart_canvas);
         notices.append(&workspaces.root);
         content.add_overlay(&notices);
+        let image_drop_label = gtk::Label::new(Some("Add image as layer"));
+        image_drop_label.set_halign(gtk::Align::Center);
+        image_drop_label.set_valign(gtk::Align::Center);
+        image_drop_label.add_css_class("card");
+        image_drop_label.set_can_target(false);
+        image_drop_label.set_visible(false);
+        content.add_overlay(&image_drop_label);
+        let placement_actions = crate::tool_panels::PlacementActions::new();
+        content.add_overlay(&placement_actions.root);
         window.set_content(Some(&content));
         let this = Rc::new(Self {
             window,
             area,
             gpu: RefCell::new(None),
+            image_drop: RefCell::new(None),
+            image_drop_label,
             recovery: Rc::new(crate::recovery::Recovery::default()),
             surface,
             palette_css,
@@ -1005,6 +1019,7 @@ impl Workspace {
             opacity,
             color,
             tool_settings,
+            placement_actions,
             color_panel,
             navigator,
             navigator_overviews,
@@ -1040,6 +1055,7 @@ impl Workspace {
         ));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
+        this.placement_actions.bind(&this);
         this.color_panel.bind(&this);
         this.navigator.bind(&this);
         this.navigator_overviews.bind(&this);
@@ -2093,6 +2109,7 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);
+            self.placement_actions.refresh(&state);
         }
         if regions & regions::BRUSH != 0 {
             self.color_panel.refresh(&state.colors, self.view_color());
@@ -2652,6 +2669,7 @@ impl Workspace {
         )
     }
     fn install_drop_target(self: &Rc<Self>) {
+        crate::files::drop::install(self);
         self.install_workspace_drag();
         let drop = gtk::DropTarget::new(NativeDockItem::static_type(), gdk::DragAction::MOVE);
         drop.set_preload(true);

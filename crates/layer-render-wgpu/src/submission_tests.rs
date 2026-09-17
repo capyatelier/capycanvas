@@ -10,6 +10,7 @@ fn multilayer_4k_fill_replay_matches_incremental_submissions() {
         .map(|id| {
             let mut layer = Layer::paint(LayerId(id), "replay fixture");
             layer.pending_operations.push(LayerOperation {
+                placement: layer_core::Affine::IDENTITY,
                 coverage: LayerMask::reveal_all(LayerId(100 + id), Point::default()),
                 kind: LayerOperationKind::Fill {
                     color: [0.1 + (id % 3) as f32 * 0.3, 0.25, 0.55, 0.2],

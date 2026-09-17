@@ -5,6 +5,18 @@ Capy Canvas's original code and non-brand assets are licensed under
 retains its own terms; our dual license does not relicense dependencies.
 The project-owned capybara mark is a separate exception under [BRANDING.md](BRANDING.md).
 
+## Native HEIF/AVIF photo decoders
+
+GTK packages include dynamically loaded libheif 1.23.4 and libde265 1.1.3
+(LGPL-3.0-or-later), plus libavif 1.4.2 and dav1d 1.5.3 (BSD-2-Clause). Their original licenses,
+corresponding source archives, pinned checksums, local patch and build recipe
+are included in `share/doc/capycanvas-photo-codecs/` in the native package.
+These shared libraries remain replaceable in `lib/capycanvas/photo/`.
+
+The narrow Capy Canvas C bridge uses the project's MIT OR Apache-2.0 terms.
+The libheif patch preserves source color metadata after RGB conversion and
+retains libheif's original license. See [codec provenance](vendor/README.md#heifavif-source-color-preservation).
+
 ## Oklab color conversion — MIT
 
 The `working_to_oklab` and `working_from_oklab` functions in

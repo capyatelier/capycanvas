@@ -297,6 +297,7 @@ fn native_large_source_transform(linked_mask: bool) {
     } else {
         let mask_id = live.allocate_layer_id();
         live.append_layer_operation(id, LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
             coverage: LayerMask::reveal_all(mask_id, Point::default()),
             kind: LayerOperationKind::Transform(transform),
         }).unwrap();

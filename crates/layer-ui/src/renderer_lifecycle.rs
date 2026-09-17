@@ -9,7 +9,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn command_without_renderer(command: CommandId) -> bool {
         matches!(
             command,
-            CommandId::SaveDocument
+            CommandId::CancelTransform
+                | CommandId::SaveDocument
                 | CommandId::SaveDocumentAs
                 | CommandId::CloseDocument
                 | CommandId::Settings

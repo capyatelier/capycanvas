@@ -555,7 +555,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         if kind == LayerOperationKind::ApplyMask {
             coverage.default_coverage = 0.5;
         }
-        let operation = LayerOperation { coverage, kind };
+        let operation = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
         let batch = DabBatch {
             material_update: 0,
             stroke_id: StrokeId(8),

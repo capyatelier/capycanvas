@@ -18,6 +18,10 @@ struct Style {
     contact_a: vec4<f32>,
     contact_b: vec4<f32>,
     contact_c: vec4<f32>,
+    brush_to_layer_linear: vec4<f32>,
+    brush_to_layer_offset: vec4<f32>,
+    layer_to_brush_linear: vec4<f32>,
+    layer_to_brush_offset: vec4<f32>,
 }
 
 // The pass planner supplies the operation as a pipeline constant so the GPU
@@ -67,6 +71,12 @@ struct Dab {
 @group(2) @binding(9) var<storage, read> dabs: array<Dab>;
 @group(2) @binding(10) var stroke_coverage_texture: texture_2d<f32>;
 @group(2) @binding(11) var reservoir_texture: texture_2d<f32>;
+struct MaterialSources {
+    // 0: adjacent pages; 1: disjoint gather pages; 2: gathered sample field.
+    header: vec4<u32>,
+    pages: array<vec4<u32>, 9>,
+}
+@group(2) @binding(12) var<uniform> material_sources: MaterialSources;
 
 @group(3) @binding(0) var primary_texture: texture_2d<f32>;
 @group(3) @binding(1) var grain_texture: texture_2d<f32>;
@@ -99,9 +109,19 @@ fn load_neighborhood(index: i32, coordinate: vec2<i32>) -> vec4<f32> {
     }
 }
 
-fn canvas_load(document_position: vec2<f32>) -> vec4<f32> {
+fn local_canvas_load(document_position: vec2<f32>) -> vec4<f32> {
     if any(document_position < vec2<f32>(0.0))
         || any(document_position >= render_target.document_extent.xy) {
+        return vec4<f32>(0.0);
+    }
+    if material_sources.header.x == 1u {
+        let page = vec2<u32>(floor(document_position / 256.0));
+        let local = vec2<i32>(floor(document_position)) - vec2<i32>(page * 256u);
+        for (var index = 0u; index < material_sources.header.y; index += 1u) {
+            if all(page == material_sources.pages[index].xy) {
+                return load_neighborhood(i32(index), local);
+            }
+        }
         return vec4<f32>(0.0);
     }
     let relative = document_position - render_target.origin_extent.xy;
@@ -115,19 +135,24 @@ fn canvas_load(document_position: vec2<f32>) -> vec4<f32> {
     return load_neighborhood(index, coordinate);
 }
 
-fn canvas_sample(document_position: vec2<f32>) -> vec4<f32> {
+fn canvas_load(brush_position: vec2<f32>) -> vec4<f32> {
+    return local_canvas_load(brush_to_layer(brush_position));
+}
+
+fn canvas_sample(brush_position: vec2<f32>) -> vec4<f32> {
+    let document_position = brush_to_layer(brush_position);
     // Manual bilinear filtering stays correct across sparse page boundaries;
     // filtering each page texture independently would clamp at its edge.
     let base = floor(document_position - vec2<f32>(0.5)) + vec2<f32>(0.5);
     let fraction = clamp(document_position - base, vec2<f32>(0.0), vec2<f32>(1.0));
     let top = mix(
-        canvas_load(base),
-        canvas_load(base + vec2<f32>(1.0, 0.0)),
+        local_canvas_load(base),
+        local_canvas_load(base + vec2<f32>(1.0, 0.0)),
         fraction.x,
     );
     let bottom = mix(
-        canvas_load(base + vec2<f32>(0.0, 1.0)),
-        canvas_load(base + vec2<f32>(1.0, 1.0)),
+        local_canvas_load(base + vec2<f32>(0.0, 1.0)),
+        local_canvas_load(base + vec2<f32>(1.0, 1.0)),
         fraction.x,
     );
     return mix(top, bottom, fraction.y);
@@ -179,7 +204,7 @@ fn watercolor_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
 fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
     if style.contact_a.x > 0.5 {
         return evolving_contact(world, dab.center, dab.radii, dab.rotation, dab.motion,
-            dab.previous, dab.contact, dab.previous_contact, dab.hardness) * brush_selection_at(world);
+            dab.previous, dab.contact, dab.previous_contact, dab.hardness) * brush_selection_at(brush_to_layer(world));
     }
     let delta = world - dab.center;
     let local = rotate(delta, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));
@@ -231,7 +256,7 @@ fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
         coverage = combine_coverage(coverage, secondary, style.dual_offset_flags.z);
     }
     if coverage < style.dual_offset_flags.w { return 0.0; }
-    return coverage * brush_selection_at(world);
+    return coverage * brush_selection_at(brush_to_layer(world));
 }
 
 fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
@@ -648,7 +673,7 @@ fn wet_fragment(
 }
 
 fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
-    let world = render_target.origin_extent.xy + fragment_position.xy;
+    let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
     let first = style.operation.x;
     let count = style.operation.y;
     if MATERIAL_OPERATION == OP_WATERCOLOR {
@@ -660,7 +685,12 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     if MATERIAL_OPERATION == OP_SMUDGE {
         let original = canvas_load(world);
         let trace = trace_smudge(world, first, count);
-        let dragged = blurred_canvas_sample(trace.coordinate, style.material_b.z);
+        var dragged = vec4<f32>(0.0);
+        if material_sources.header.x == 2u {
+            dragged = textureLoad(reservoir_texture, vec2<i32>(floor(fragment_position.xy)), 0);
+        } else {
+            dragged = blurred_canvas_sample(trace.coordinate, style.material_b.z);
+        }
         return MaterialOutput(
             mix_smudged_material(original, dragged, trace.influence),
             vec4<f32>(0.0),
@@ -668,6 +698,12 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         );
     }
     if MATERIAL_OPERATION == OP_LIQUIFY {
+        if material_sources.header.x == 2u {
+            return MaterialOutput(
+                textureLoad(reservoir_texture, vec2<i32>(floor(fragment_position.xy)), 0),
+                vec4<f32>(0.0), vec4<f32>(0.0),
+            );
+        }
         return MaterialOutput(
             canvas_sample(deform_coordinate(world, first, count)),
             vec4<f32>(0.0),
@@ -696,7 +732,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         );
         if style.contact_a.x > 0.5 && style.render_mode.y < 0.5 {
             let exposure = contact_exposure(dab.motion, dab.radii, dab.rotation, dab.hardness);
-            let selected = brush_selection_at(world);
+            let selected = brush_selection_at(brush_to_layer(world));
             let unselected_coverage = coverage / max(selected, 0.000001);
             requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * exposure * 6.0)) * selected;
         }
@@ -729,10 +765,25 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
 }
 
 @fragment
+fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let world = layer_to_brush(render_target.origin_extent.xy + position.xy);
+    var value = vec4<f32>(0.0);
+    if MATERIAL_OPERATION == OP_SMUDGE {
+        let trace = trace_smudge(world, style.operation.x, style.operation.y);
+        value = blurred_canvas_sample(trace.coordinate, style.material_b.z);
+    } else {
+        value = canvas_sample(deform_coordinate(world, style.operation.x, style.operation.y));
+    }
+    // Each source page occurs in exactly one pass. Linear filtering weights
+    // therefore sum exactly without requiring Float32 hardware blending.
+    return value + textureLoad(reservoir_texture, vec2<i32>(floor(position.xy)), 0);
+}
+
+@fragment
 fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
     var result = paint_fragment(fragment_position);
     if style.color.a > 0.5 {
-        let world = render_target.origin_extent.xy + fragment_position.xy;
+        let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
         let original = canvas_load(world);
         if style.operation.w != 0u { result.color = original; }
         else {

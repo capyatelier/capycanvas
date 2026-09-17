@@ -4,13 +4,15 @@ import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stagePhotoCodecs, verifyPhotoCodecs } from "./photo-codecs.mjs";
 
 const app = dirname(fileURLToPath(import.meta.url)), root = resolve(app, "../..");
 const output = join(root, "dist/capycanvas-linux"), marker = join(output, ".capy-package");
 if (existsSync(output) && !existsSync(marker)) throw new Error("Refusing to overwrite an unmarked native package directory");
+const photoCodecs = verifyPhotoCodecs(root);
 const flags = [...(process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f") || []),
   `--remap-path-prefix=${homedir()}=/build-home`, `--remap-path-prefix=${root}=/capycanvas`];
-const records = execFileSync("cargo", ["build", "--release", "-p", "layer-linux", "--message-format=json"], {
+const records = execFileSync("cargo", ["build", "--locked", "--release", "-p", "layer-linux", "--message-format=json"], {
   cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"],
   env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") },
 }).trim().split("\n").map(line => JSON.parse(line));
@@ -20,12 +22,14 @@ if (!binary || !generated) throw new Error("Cargo did not report the native bina
 const files = [
   [binary, "bin/capycanvas"],
   [join(app, "art.capycanvas.CapyCanvas.desktop"), "share/applications/art.capycanvas.CapyCanvas.desktop"],
+  [join(app, "art.capycanvas.CapyCanvas.xml"), "share/mime/packages/art.capycanvas.CapyCanvas.xml"],
   [join(generated, "art.capycanvas.CapyCanvas.svg"), "share/icons/hicolor/scalable/apps/art.capycanvas.CapyCanvas.svg"],
   ...readdirSync(join(root, "assets/filters")).filter(name => /\.(json|wgsl)$/.test(name))
     .map(name => [join(root, "assets/filters", name), `bin/filters/${name}`]),
   ...["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"].map(name => [join(root, name), `share/doc/capycanvas/${name}`]),
 ];
 for (const [source, relative] of files) { const target = join(output, relative); mkdirSync(dirname(target), { recursive: true }); cpSync(source, target); }
+stagePhotoCodecs(photoCodecs, output);
 execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas")]);
 execFileSync("desktop-file-validate", [join(output, "share/applications/art.capycanvas.CapyCanvas.desktop")]);
 writeFileSync(marker, "Generated Capy Canvas native package\n");

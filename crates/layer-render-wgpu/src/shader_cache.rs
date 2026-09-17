@@ -355,6 +355,7 @@ mod tests {
             first_dab: 0,
             dab_count: 1,
             style: layer_render::DabStyle {
+                brush_to_layer: layer_core::Affine::IDENTITY,
                 alpha_locked: false,
                 selection: None,
                 tip: brush.tip.clone(),

@@ -642,7 +642,7 @@ impl WgpuRasterizer {
                             &current.data,
                             &data,
                             &current.changed,
-                            packet.document_extent,
+                            self.target_extent(*id),
                         )
                         .into_iter()
                         .map(|rect| (*id, rect)),
@@ -691,7 +691,7 @@ impl WgpuRasterizer {
                                     &current.data,
                                     &data,
                                     &current.changed,
-                                    packet.document_extent,
+                                    self.target_extent(id),
                                 )
                                 .into_iter()
                                 .map(|rect| (id, rect)),
@@ -719,7 +719,7 @@ impl WgpuRasterizer {
                                     &RasterData::default(),
                                     &data,
                                     &BTreeSet::new(),
-                                    packet.document_extent,
+                                    self.target_extent(id),
                                 )
                                 .into_iter()
                                 .map(|rect| (id, rect)),
@@ -749,7 +749,7 @@ impl WgpuRasterizer {
                     // already accumulated their changed pages in this target.
                     // Operation damage already includes selection bounds and
                     // transformed source/destination footprints.
-                    let damage = batch_pixel_rect(batch, packet.document_extent);
+                    let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
                     target.changed.extend(page_coordinates(damage));
                     if batch.stroke_end
                         && batch.style.rendering.edge_after_stroke
@@ -1028,7 +1028,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let index = self.paint_layers.iter().position(|l| l.id == target);
         let mask = index.is_none();
-        data.validate_index(self.document_extent, mask, self.document_color())
+        data.validate_index(self.target_extent(target), mask, self.document_color())
             .map_err(GpuRasterError::Effect)?;
         // Stage GPU pages before publishing the revision. Keep only one decoded
         // tile on the CPU, rather than a second full decoded document. A failed

@@ -221,6 +221,60 @@ pub(crate) fn matrix_profile(
     ))
 }
 
+/// BMP V4/V5 endpoints are XYZ colorants and per-channel decoding gamma.
+pub(crate) fn calibrated_rgb_profile(
+    endpoints: [[f64; 3]; 3],
+    gamma: [f64; 3],
+) -> Result<ColorProfile, String> {
+    let chromaticity = |xyz: [f64; 3]| -> Result<[f64; 2], String> {
+        if xyz.iter().any(|v| !v.is_finite() || *v < 0.) {
+            return Err("Unsupported calibrated BMP colorants".into());
+        }
+        let total: f64 = xyz.iter().sum();
+        if total <= 0. || xyz[1] <= 0. {
+            return Err("Invalid calibrated BMP colorants".into());
+        }
+        Ok([xyz[0] / total, xyz[1] / total])
+    };
+    let white = chromaticity(std::array::from_fn(|i| endpoints.iter().map(|v| v[i]).sum()))?;
+    let [red, green, blue] = endpoints.map(chromaticity);
+    if gamma.iter().any(|g| !(0.1..=10.).contains(g)) {
+        return Err("Unsupported calibrated BMP gamma".into());
+    }
+    let mut profile = definition(white, [red?, green?, blue?],
+        ToneReprCurve::Parametric(vec![gamma[0] as f32]), false)?;
+    profile.green_trc = Some(ToneReprCurve::Parametric(vec![gamma[1] as f32]));
+    profile.blue_trc = Some(ToneReprCurve::Parametric(vec![gamma[2] as f32]));
+    describe(&mut profile, "Calibrated BMP RGB");
+    Ok(ColorProfile::Icc(stable_bytes(&profile)?.into()))
+}
+
+/// Materialize supported SDR CICP transfer/primaries as a reusable source ICC.
+#[cfg(all(feature = "heif", target_os = "linux"))]
+pub(crate) fn nclx_profile(xy: [f32; 8], transfer: u32) -> Result<ColorProfile, String> {
+    if xy.chunks_exact(2).any(|p| !p[0].is_finite() || !p[1].is_finite()
+        || p[0] < 0. || p[1] <= 0. || p[0] + p[1] > 1.00001) {
+        return Err("Unsupported HEIF/AVIF color primaries".into());
+    }
+    let curve = match transfer {
+        13 => curve(RgbSpace::Srgb),
+        1 | 6 | 14 | 15 => {
+            let alpha: f32 = if transfer == 15 { 1.0993 } else { 1.099 };
+            let beta: f32 = if transfer == 15 { 0.0181 } else { 0.018 };
+            ToneReprCurve::Parametric(vec![1. / 0.45, 1. / alpha, (alpha - 1.) / alpha, 1. / 4.5, 4.5 * beta])
+        }
+        4 => ToneReprCurve::Parametric(vec![2.2]),
+        5 => ToneReprCurve::Parametric(vec![2.8]),
+        8 => ToneReprCurve::Parametric(vec![1.]),
+        16 | 18 => return Err("HDR HEIF/AVIF needs an explicit SDR conversion before import".into()),
+        _ => return Err("Unsupported HEIF/AVIF transfer characteristic".into()),
+    };
+    let mut profile = definition([xy[6] as f64, xy[7] as f64],
+        std::array::from_fn(|i| [xy[i * 2] as f64, xy[i * 2 + 1] as f64]), curve, false)?;
+    describe(&mut profile, "HEIF/AVIF source RGB");
+    Ok(ColorProfile::Icc(stable_bytes(&profile)?.into()))
+}
+
 fn stable_bytes(profile: &Profile) -> Result<Vec<u8>, String> {
     // moxcms 0.9.1's writer currently writes the wall clock instead of the
     // profile's creation_date_time. ICC permits an unspecified (zero) ID.

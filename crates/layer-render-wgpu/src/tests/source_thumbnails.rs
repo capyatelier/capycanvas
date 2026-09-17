@@ -80,6 +80,179 @@ fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
         .unwrap();
     r.thumbnails.take().unwrap().unwrap().bytes
 }
+
+#[test]
+fn placed_photo_thumbnail_keeps_full_source_orientation_and_off_canvas_paint() {
+    let mut builder = SourceBuilder::new(
+        [1024, 512],
+        SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: IntegerDepth::U8,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb),
+            profile_assumed: false,
+        },
+        8 * 1024 * 1024,
+    )
+    .unwrap();
+    let colors = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 0, 255],
+    ];
+    for y in 0..512 {
+        let row: Vec<u8> = (0..1024)
+            .flat_map(|x| colors[(y / 256 * 2 + x / 512) as usize])
+            .collect();
+        builder.push_row(&row).unwrap();
+    }
+    let source = Arc::new(builder.finish().unwrap());
+    let mut layer = Layer::paint(LayerId(1), "oversized photo");
+    layer.source = Some(source.clone());
+    layer.properties.placement = layer_core::Affine([0.125, 0., 0., 0.125, 17., -30.]);
+    let mut sibling = layer.clone();
+    sibling.id = LayerId(2);
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.ensure_document([128, 64], &[layer.clone(), sibling.clone()])
+        .unwrap();
+    let pixel = |bytes: &[u8], x: usize, y: usize| {
+        <[u8; 4]>::try_from(&bytes[(y * 32 + x) * 4..(y * 32 + x + 1) * 4]).unwrap()
+    };
+    let fitted = thumbnail(&mut r, layer.id);
+    for (x, y, color) in [
+        (8, 12, colors[0]),
+        (24, 12, colors[1]),
+        (8, 20, colors[2]),
+        (24, 20, colors[3]),
+    ] {
+        assert_eq!(pixel(&fitted, x, y), color, "full source at {x},{y}");
+    }
+    assert_eq!(thumbnail(&mut r, sibling.id), fitted);
+    let owners = Arc::strong_count(&source);
+    let work = r.scene.as_ref().unwrap().source_cache_work()[1];
+    // Content framing ignores translation/uniform zoom, including Original Size.
+    layer.properties.placement = layer_core::Affine([1., 0., 0., 1., -8000., 9000.]);
+    r.ensure_document([128, 64], &[layer.clone(), sibling.clone()])
+        .unwrap();
+    assert_eq!(thumbnail(&mut r, layer.id), fitted);
+    // Rotation must change the visible content, without rebuilding the original.
+    layer.properties.placement = layer_core::Affine([0., 0.25, -0.25, 0., 12., 98.]);
+    r.ensure_document([128, 64], &[layer.clone(), sibling.clone()])
+        .unwrap();
+    let rotated = thumbnail(&mut r, layer.id);
+    for (x, y, color) in [
+        (12, 8, colors[2]),
+        (20, 8, colors[0]),
+        (12, 24, colors[3]),
+        (20, 24, colors[1]),
+    ] {
+        assert_eq!(pixel(&rotated, x, y), color, "rotated source at {x},{y}");
+    }
+    assert_eq!(
+        thumbnail(&mut r, sibling.id),
+        fitted,
+        "shared source has independent placement"
+    );
+    assert_eq!(
+        r.scene.as_ref().unwrap().source_cache_work()[1],
+        work,
+        "geometry never decodes the source again"
+    );
+    assert_eq!(r.thumbnails.sources.as_ref().unwrap().builds, 1);
+    assert_eq!(
+        Arc::strong_count(&source),
+        owners,
+        "preview cache owns no source"
+    );
+    for (matrix, samples) in [
+        (
+            layer_core::Affine([-0.25, 0., 0., 0.25, 0., 0.]),
+            [(8, 12, 1), (24, 12, 0), (8, 20, 3), (24, 20, 2)],
+        ),
+        (
+            layer_core::Affine([0.5, 0., 0., 0.25, 0., 0.]),
+            [(8, 14, 0), (24, 14, 1), (8, 18, 2), (24, 18, 3)],
+        ),
+        (
+            layer_core::Affine([0.25, 0.25, -0.25, 0.25, 0., 0.]),
+            [(13, 8, 0), (24, 18, 1), (8, 13, 2), (18, 24, 3)],
+        ),
+    ] {
+        let mut transformed = layer.clone();
+        transformed.properties.placement = matrix;
+        r.ensure_document([128, 64], &[transformed, sibling.clone()])
+            .unwrap();
+        let image = thumbnail(&mut r, layer.id);
+        for (x, y, color) in samples {
+            assert_eq!(
+                pixel(&image, x, y),
+                colors[color],
+                "flipped/asymmetric/45-degree content at {x},{y}"
+            );
+        }
+    }
+    r.ensure_document([128, 64], &[layer.clone(), sibling.clone()])
+        .unwrap();
+
+    // An edited tile beyond the canvas belongs to the local source and rotates with it.
+    let mut page = r.create_page([3, 1], "off-canvas thumbnail paint");
+    page.primary_needs_clear = false;
+    r.queue.write_texture(
+        page.primary.texture.as_image_copy(),
+        &[0u8, 255, 255, 255].repeat((PAGE_SIZE * PAGE_SIZE) as usize),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(PAGE_SIZE * 4),
+            rows_per_image: None,
+        },
+        page.primary.texture.size(),
+    );
+    r.paint_layers
+        .iter_mut()
+        .find(|p| p.id == layer.id)
+        .unwrap()
+        .pages
+        .push(page);
+    let painted = thumbnail(&mut r, layer.id);
+    assert_eq!(pixel(&painted, 12, 28), [0, 255, 255, 255]);
+    assert_eq!(pixel(&painted, 20, 8), colors[0]);
+    assert_eq!(
+        thumbnail(&mut r, sibling.id),
+        fitted,
+        "paint does not modify the shared original"
+    );
+    r.paint_layers
+        .iter_mut()
+        .find(|p| p.id == layer.id)
+        .unwrap()
+        .pages
+        .clear();
+    assert_eq!(
+        thumbnail(&mut r, layer.id),
+        rotated,
+        "undo restores the original contribution"
+    );
+    assert_eq!(r.thumbnails.sources.as_ref().unwrap().builds, 1);
+}
+
+#[test]
+fn tiny_portrait_photo_thumbnail_has_color_and_checkered_letterbox() {
+    let source = photo([24, 48]);
+    let mut layer = Layer::paint(LayerId(1), "tiny photo");
+    layer.source = Some(source);
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    r.ensure_document([24, 48], &[layer]).unwrap();
+    let bytes = thumbnail(&mut r, LayerId(1));
+    assert!(bytes.chunks_exact(4).all(|p| p[3] == 255));
+    assert!(
+        bytes
+            .chunks_exact(4)
+            .filter(|p| p[0].abs_diff(p[2]) > 20)
+            .count()
+            > 100
+    );
+    assert_ne!(bytes[0], bytes[16], "letterbox checker survives");
+}
 fn reference(
     extent: [u32; 2],
     source: [u32; 2],
@@ -220,7 +393,7 @@ fn photo_overview_matches_float64_area_integrals_and_reuses_unchanged_originals(
     );
     assert!(
         r.thumbnails.storage_bytes()
-            <= ROW_BYTES + 48 + OVERVIEW_BYTES + 8 * (OVERVIEW_BYTES + CONTRIBUTION_LIMIT)
+            <= ROW_BYTES + 48 + 16 + OVERVIEW_BYTES + 8 * (OVERVIEW_BYTES + CONTRIBUTION_LIMIT)
     );
     let builds = r.thumbnails.sources.as_ref().unwrap().builds;
     r.document_extent = [31, 29];

@@ -61,7 +61,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         if let Some(native) = &self.native_edit {
             let paint = self.paint_layers.iter().find(|l| l.id == target);
-            data.validate_index(self.document_extent, paint.is_none(), self.document_color())
+            data.validate_index(self.target_extent(target), paint.is_none(), self.document_color())
                 .map_err(GpuRasterError::Effect)?;
             let resident: BTreeSet<_> = paint
                 .into_iter()
@@ -117,7 +117,7 @@ impl WgpuRasterizer {
     /// This cache target is not a hard active-stroke/transform allocation limit;
     /// those workloads need separate scheduling. No backing wait or readback
     /// happens here.
-    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch], extent: [u32; 2]) {
+    pub(crate) fn trim_native_color_cache(&mut self, batches: &[DabBatch]) {
         if let Some(native) = &self.native_edit {
             if self.transform_preview.is_some()
                 || self.transforms.as_ref().is_some_and(|t| t.has_preview())
@@ -133,7 +133,7 @@ impl WgpuRasterizer {
             if bytes <= native.color_cache_bytes {
                 return;
             }
-            let destinations = self.destination_pages(batches, extent);
+            let destinations = self.destination_pages(batches);
             // An inactive blend surface is cheaper to recreate than a canonical
             // page is to decompress. Retire scratch first, even on changed pages:
             // their active surface stays pinned until capture completes. Keep

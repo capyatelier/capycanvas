@@ -6,7 +6,9 @@ pub use layer_core::color::ProfileChannels;
 pub use layer_core::color::source::MAX_PROFILE_BYTES as MAX_ICC_BYTES;
 
 mod profiles;
-pub(crate) use profiles::matrix_profile;
+pub(crate) use profiles::{matrix_profile, calibrated_rgb_profile};
+#[cfg(all(feature = "heif", target_os = "linux"))]
+pub(crate) use profiles::nclx_profile;
 use profiles::*;
 mod description;
 mod output;

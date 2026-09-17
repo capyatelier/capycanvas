@@ -13,10 +13,11 @@ fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 3 {
         return Err(
-            "photo_sources generate WIDTH HEIGHT OUTPUT | roundtrip INPUT OUTPUT | inspect INPUT"
+            "photo_sources generate WIDTH HEIGHT OUTPUT | roundtrip INPUT OUTPUT | inspect INPUT | cancel INPUT DELAY_MS"
                 .into(),
         );
     }
+    if args[1] == "cancel" { return cancel(&args); }
     let start = Instant::now();
     let source = match args[1].as_str() {
         "generate" | "generate_noise" if args.len() == 5 => {
@@ -92,6 +93,7 @@ fn main() -> Result<(), String> {
     );
     memory();
     if args[1] == "inspect" {
+        println!("source profile assumed: {}; density: {:?}", source.interpretation.profile_assumed, source.resolution);
         return Ok(());
     }
     let source = Arc::new(source);
@@ -154,6 +156,41 @@ fn main() -> Result<(), String> {
         "reopen + exact source comparison {:.2} ms",
         start.elapsed().as_secs_f64() * 1000.
     );
+    memory();
+    Ok(())
+}
+
+// A real file load with cancellation requested while its worker is active.
+// This reports acknowledgement latency, not the internal codec phase.
+fn cancel(args: &[String]) -> Result<(), String> {
+    use std::sync::{atomic::{AtomicBool, Ordering}, mpsc};
+    use std::time::Duration;
+    if args.len() != 4 { return Err("cancel requires INPUT DELAY_MS".into()); }
+    let delay: u64 = args[3].parse().map_err(|_| "Invalid cancellation delay")?;
+    if delay > 60_000 { return Err("Cancellation delay exceeds 60 seconds".into()); }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancel = cancelled.clone();
+    let (done, wait) = mpsc::channel();
+    let start = Instant::now();
+    let request = std::thread::spawn(move || {
+        if wait.recv_timeout(Duration::from_millis(delay)).is_err() {
+            let at = Instant::now();
+            worker_cancel.store(true, Ordering::Release);
+            Some(at)
+        } else { None }
+    });
+    let result = layer_color::photo::read_photo_detailed_with_cancel(
+        BufReader::new(File::open(&args[2]).map_err(err)?), Default::default(), &cancelled);
+    let finished = Instant::now();
+    let _ = done.send(());
+    let requested = request.join().map_err(|_| "Cancellation worker failed")?;
+    let message = result.err().ok_or("Image completed before cancellation; increase input size or shorten delay")?;
+    if !message.contains("cancelled") { return Err(message); }
+    let requested = requested.ok_or("Image failed before cancellation")?;
+    println!("cancel requested {:.2} ms; acknowledged {:.2} ms later; total {:.2} ms; {message}",
+        requested.duration_since(start).as_secs_f64() * 1000.,
+        finished.saturating_duration_since(requested).as_secs_f64() * 1000.,
+        finished.duration_since(start).as_secs_f64() * 1000.);
     memory();
     Ok(())
 }

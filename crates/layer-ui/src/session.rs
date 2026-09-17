@@ -21,7 +21,7 @@ mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 pub use art_layers::{
-    LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+    ImageLayerDestination, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
 };
 #[path = "application_menu.rs"]
 mod application_menu;
@@ -112,6 +112,7 @@ pub struct UiSession<R: CanvasRenderer> {
     cursor: cursor::Cursor,
     next_request: u32,
     layer_interaction: art_layers::LayerInteraction,
+    source_preview_revisions: source_edit::PreviewRevisions,
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::ToolMemory,
@@ -176,6 +177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             cursor: cursor::Cursor::default(),
             next_request: 1,
             layer_interaction: Default::default(),
+            source_preview_revisions: Default::default(),
             tools: tools::ToolMemory::default(),
             files: document_files::DocumentFiles::default(),
             state: UiState {
@@ -1768,6 +1770,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::CloseDocument => self.require_document_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
+            CommandId::PlacementOriginalSize => idle && self.operation.placing(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
                 idle && self.operation.active()
             }
@@ -1779,7 +1782,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
-            CommandId::Undo => idle && self.engine.can_undo(),
+            CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
@@ -1860,6 +1863,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.operation.placing() && matches!(&action,
+            UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
+            | UiAction::SetLayerOpacity { .. } | UiAction::MoveLayer { .. }
+            | UiAction::Effect { .. } | UiAction::FilterPicker { .. })
+        {
+            return Err("Apply or cancel the photo placement first".into());
+        }
         // An interrupted property contact still needs to restore its preview.
         // The gesture handler cancels it when editing is no longer available.
         let continuing_effect_gesture = matches!(&action, UiAction::Effect {
@@ -3000,23 +3010,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .input_transform()
                     .map(event.surface_position);
                 let doc = self.engine.document();
-                let source = if self.eyedropper.layer {
-                    let offset = doc.layer_offset(doc.active_layer);
-                    point.x -= offset.x;
-                    point.y -= offset.y;
-                    layer_render::ColorSampleSource::Layer(doc.active_layer)
-                } else {
-                    layer_render::ColorSampleSource::Composite
-                };
-                if point.x.is_finite()
-                    && point.y.is_finite()
-                    && point.x >= 0.0
-                    && point.y >= 0.0
-                    && point.x < doc.width as f32
-                    && point.y < doc.height as f32
-                {
-                    self.eyedropper
-                        .queue(source, [point.x as u32, point.y as u32]);
+                let (source, extent) = if self.eyedropper.layer {
+                    let Some(inverse) = doc.layer_transform(doc.active_layer).inverse() else { return Ok(()); };
+                    point = inverse.map(point);
+                    (layer_render::ColorSampleSource::Layer(doc.active_layer), doc.target_extent(doc.active_layer))
+                } else { (layer_render::ColorSampleSource::Composite, [doc.width, doc.height]) };
+                if point.x.is_finite() && point.y.is_finite() && point.x >= 0. && point.y >= 0.
+                    && point.x < extent[0] as f32 && point.y < extent[1] as f32 {
+                    self.eyedropper.queue(source, [point.x as u32, point.y as u32]);
                 }
                 if event.phase == PenPhase::Up {
                     self.eyedropper.contact = false;
@@ -3457,6 +3458,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refresh_tools();
                 Ok((BRUSH, false))
             }
+            CommandId::PlacementOriginalSize => {
+                self.placement_original_size()?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::Ruler => {
                 self.layer_action(LayerAction::Tool {
                     tool: LayerCanvasTool::Ruler {
@@ -3530,6 +3535,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((BRUSH, false))
             }
             CommandId::Undo => {
+                if self.operation.placing() {
+                    self.finish_transform(false)?;
+                    return Ok((BRUSH | DOCUMENT, true));
+                }
                 if self.engine.history_color(false) != self.engine.document().color {
                     self.request_document(DocumentRequest::ColorHistory { redo: false })?;
                     return Ok((DOCUMENT | HOST, false));
@@ -3538,6 +3547,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((0, true))
             }
             CommandId::Redo => {
+                if self.operation.placing() { return Err("Apply or cancel the photo placement first".into()); }
                 if self.engine.history_color(true) != self.engine.document().color {
                     self.request_document(DocumentRequest::ColorHistory { redo: true })?;
                     return Ok((DOCUMENT | HOST, false));
@@ -3846,6 +3856,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CommandId::CancelTransform,
             ]
             .into_iter()
+            .chain(self.operation.placing().then_some(CommandId::PlacementOriginalSize))
             .map(|command| ToolSettingAction {
                 command,
                 checkable: command.is_toggle(),
@@ -4067,6 +4078,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_document(&mut self) {
         self.refresh_file_state();
         self.reconcile_transform();
+        self.source_preview_revisions.update(&self.engine.document().layers);
         if self
             .rulers
             .selected
@@ -4130,11 +4142,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .wrapping_mul(4099)
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))
+                .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
                 .wrapping_add(if l.kind == LayerKind::Background {
                     u64::from(l.opacity.to_bits())
                 } else {
                     0
-                }),
+                })
+                // Photo previews frame local content, so position has no effect,
+                // but rotation/aspect changes must invalidate the host's image.
+                .wrapping_add(l.source.as_ref().map_or(0, |_| {
+                    l.properties.placement.0[..4].iter().fold(0u64, |hash, value| {
+                        hash.wrapping_mul(1099511628211).wrapping_add(u64::from(value.to_bits()))
+                    })
+                })),
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)

@@ -233,6 +233,13 @@ pub enum LayerDropPosition {
     Below,
     Into,
 }
+/// Captured destination for an external image insertion. Resolve and validate
+/// again against the same document revision when prepared sources arrive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageLayerDestination {
+    pub target: LayerId,
+    pub position: LayerDropPosition,
+}
 #[derive(Default)]
 pub(super) struct LayerInteraction {
     pub tool: LayerCanvasTool,
@@ -398,6 +405,63 @@ impl<R: CanvasRenderer> UiSession<R> {
             .flatten()
             .map(|(_, position)| position)
     }
+    /// Shared external-image feedback, independent of a dragged internal layer.
+    pub fn image_layer_drop_hint(&self, target: u64, fraction: f32) -> Option<LayerDropPosition> {
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction)
+            || self.operation.active() || !self.engine.backend().supports_tiled_sources()
+        { return None; }
+        let row = self.engine.document().layer(LayerId(target))?;
+        let position = if row.kind == LayerKind::Background {
+            LayerDropPosition::Above
+        } else if row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction) {
+            LayerDropPosition::Into
+        } else if fraction < 0.5 { LayerDropPosition::Above } else { LayerDropPosition::Below };
+        self.image_layer_destination(Some(ImageLayerDestination { target: row.id, position })).ok()?;
+        Some(position)
+    }
+    fn image_layer_destination(&self, destination: Option<ImageLayerDestination>) -> Result<(usize, Option<LayerId>), String> {
+        let doc = self.engine.document();
+        let (row, position) = if let Some(destination) = destination {
+            (doc.layer(destination.target).ok_or("The destination layer was removed")?, destination.position)
+        } else {
+            let row = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
+            (row, if row.kind == LayerKind::Group { LayerDropPosition::Into } else { LayerDropPosition::Above })
+        };
+        let row_index = doc.layers.iter().position(|l| l.id == row.id).unwrap();
+        let (mut index, parent) = match position {
+            LayerDropPosition::Into if row.kind == LayerKind::Group => (row_index + 1, Some(row.id)),
+            LayerDropPosition::Into => return Err("Images can be inserted into a group".into()),
+            LayerDropPosition::Above => (row_index, row.properties.parent),
+            LayerDropPosition::Below if row.kind == LayerKind::Background => return Err("Place images above the paper layer".into()),
+            LayerDropPosition::Below => {
+                let subtree = doc.layer_subtrees(&[row.id]);
+                let end = doc.layers.iter().rposition(|l| subtree.contains(&l.id)).unwrap() + 1;
+                (end, row.properties.parent)
+            }
+        };
+        if parent.is_some_and(|id| doc.is_locked(id)) {
+            return Err("The destination group is locked".into());
+        }
+        if destination.is_none() && position == LayerDropPosition::Above {
+            // Menu Import has no explicit insertion boundary. Put it above the
+            // complete clipped stack containing the active layer so existing
+            // clipped siblings keep their base. Explicit row drops still reject
+            // a boundary inside that stack instead of moving the user's target.
+            while let Some(previous) = doc.layers[..index].iter()
+                .rposition(|l| l.properties.parent == parent) {
+                if !doc.layers[previous].properties.clipped { break; }
+                index = previous;
+            }
+        }
+        // Inserting an unclipped image between a clipped layer and its base
+        // would silently change that existing layer's clipping target.
+        if position != LayerDropPosition::Into && doc.layers[..index].iter().rev()
+            .find(|l| l.properties.parent == parent).is_some_and(|l| l.properties.clipped)
+        {
+            return Err("Place images above the clipped stack or below its base".into());
+        }
+        Ok((index, parent))
+    }
     pub(super) fn reference_action_removes(&self) -> bool {
         let doc = self.engine.document();
         self.layer_interaction.selected.len() == 1
@@ -495,40 +559,101 @@ impl<R: CanvasRenderer> UiSession<R> {
         source: layer_core::color::source::SourceImage,
         limits: layer_core::ProjectLimits,
     ) -> Result<(), String> {
+        self.import_sources(vec![(name.into(), source)], limits, false, None, None)
+    }
+    /// Prepared photo placement. The supplied center is captured in document
+    /// pixels at drop time; menu/clipboard imports default to the canvas center.
+    pub fn place_layer_source(
+        &mut self,
+        name: &str,
+        source: layer_core::color::source::SourceImage,
+        center: Option<Point>,
+    ) -> Result<(), String> {
+        self.place_layer_sources(vec![(name.into(), source)], center, None)
+    }
+    pub fn place_layer_sources(
+        &mut self,
+        sources: Vec<(String, layer_core::color::source::SourceImage)>,
+        center: Option<Point>,
+        destination: Option<ImageLayerDestination>,
+    ) -> Result<(), String> {
+        self.import_sources(sources, Default::default(), true, center, destination)
+    }
+    fn import_sources(
+        &mut self,
+        sources: Vec<(String, layer_core::color::source::SourceImage)>,
+        limits: layer_core::ProjectLimits,
+        interactive: bool,
+        center: Option<Point>,
+        destination: Option<ImageLayerDestination>,
+    ) -> Result<(), String> {
         self.require_document_idle()?;
         if !self.engine.backend().supports_tiled_sources() {
             return Err("This renderer does not support tiled photo layers".into());
         }
-        source.validate()?;
-        let name = name.trim();
-        if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
-            return Err("Use an image name with 1 to 128 characters".into());
-        }
+        if sources.is_empty() { return Err("Choose at least one image".into()); }
+        let (index, parent) = self.image_layer_destination(destination)?;
         let doc = self.engine.document();
-        let current = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
-        let parent = current.properties.parent;
-        if parent.is_some_and(|id| doc.is_locked(id)) {
-            return Err("This group is locked".into());
+        let center = center.unwrap_or(Point { x: doc.width as f32 * 0.5, y: doc.height as f32 * 0.5 });
+        if !center.x.is_finite() || !center.y.is_finite() { return Err("Invalid drop position".into()); }
+        let parent_offset = parent.map_or(Point::default(), |id| doc.layer_offset(id));
+        let mut probe = doc.clone();
+        let mut edits = Vec::with_capacity(sources.len() + 1);
+        let mut ids = Vec::with_capacity(sources.len());
+        for (offset, (name, source)) in sources.into_iter().enumerate() {
+            source.validate()?;
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+                return Err("Use an image name with 1 to 128 characters".into());
+            }
+            let id = probe.allocate_layer_id();
+            let mut layer = Layer::paint(id, name);
+            layer.properties.parent = parent;
+            if interactive {
+                let [w, h] = source.extent.map(|v| v as f32);
+                let scale = 1_f32.min(doc.width as f32 / w).min(doc.height as f32 / h);
+                layer.properties.placement = layer_core::Affine([
+                    scale, 0., 0., scale,
+                    center.x - parent_offset.x - w * scale * 0.5,
+                    center.y - parent_offset.y - h * scale * 0.5,
+                ]);
+            }
+            layer.source = Some(std::sync::Arc::new(source));
+            edits.push(Edit::InsertLayer { index: index + offset, layer });
+            ids.push(id);
         }
-        let index = doc.layers.iter().position(|l| l.id == current.id).unwrap();
-        let id = doc.next_layer_id();
-        let mut layer = Layer::paint(id, name);
-        layer.properties.parent = parent;
-        layer.source = Some(std::sync::Arc::new(source));
-        let edit = Edit::Batch(vec![
-            Edit::InsertLayer { index, layer },
-            Edit::SetActiveLayer { id },
-        ]);
-        self.source_edit_candidate(&edit, Some(id), limits)?;
-        let allocated = self.engine.allocate_layer_id();
-        debug_assert_eq!(allocated, id);
-        self.layer_edit(edit)?;
+        edits.push(Edit::SetActiveLayer { id: ids[0] });
+        let edit = Edit::Batch(edits);
+        self.source_edit_candidates(&edit, &ids, limits)?;
+        for id in &ids {
+            let allocated = self.engine.allocate_layer_id();
+            debug_assert_eq!(allocated, *id);
+        }
+        if interactive {
+            let rollback = self.engine.document().clone().apply(edit.clone()).map_err(error)?;
+            let selected = self.layer_interaction.selected.clone();
+            self.engine.preview_edit(edit).map_err(error)?;
+            if let Err(error) = self.begin_layer_placement(Some(super::operation::PlacementInsertion {
+                index, rollback: rollback.clone(), ids, selected,
+            })) {
+                self.engine.preview_edit(rollback).map_err(super::error)?;
+                self.refresh_document();
+                self.refresh_tools();
+                self.refresh_commands();
+                return Err(error);
+            }
+        } else {
+            self.layer_edit(edit)?;
+        }
         self.refresh_document();
         self.refresh_commands();
         self.layer_interaction.changed = true;
         Ok(())
     }
     pub(super) fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
+        if self.operation.placing() {
+            return Err("Apply or cancel the photo placement first".into());
+        }
         self.engine.apply_edit(edit).map_err(error)
     }
     /// Layer headers and generic Properties fields share the same edit policy.
@@ -568,6 +693,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(layer.clone())
     }
     pub(super) fn layer_action(&mut self, action: LayerAction) -> Result<(), String> {
+        if self.operation.placing() && !matches!(action, LayerAction::Tool { .. }) {
+            return Err("Apply or cancel the photo placement first".into());
+        }
         let hide_selection = matches!(action, LayerAction::MaskSelection { hide: true, .. });
         let action = if let LayerAction::MaskSelection { id, .. } = action {
             if self.engine.document().selection.is_none() {
@@ -1058,11 +1186,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                             if let Some(selection) = &self.engine.document().selection {
                                 let mut selection = selection.clone();
                                 selection.inverted ^= hide_selection;
-                                let parent_offset = self.engine.document().layer_offset(layer.id);
-                                mask.initial = Some(selection.translated(Point {
-                                    x: -(parent_offset.x - layer.properties.offset.x + offset.x),
-                                    y: -(parent_offset.y - layer.properties.offset.y + offset.y),
+                                let world = self.engine.document().layer_offset(layer.id);
+                                let geometry = mask.transform_in_parent(&layer.properties).then(layer_core::Affine::translation(Point {
+                                    x: world.x - layer.properties.offset.x, y: world.y - layer.properties.offset.y,
                                 }));
+                                mask.initial = Some(selection.transformed(geometry.inverse().ok_or("Invalid mask placement")?).map_err(error)?);
                                 mask.default_coverage = f32::from(selection.inverted);
                             }
                             layer.mask = Some(mask);
@@ -1090,9 +1218,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                             return Err("Enable the mask before applying it".into());
                         }
                         mask.show_area = false;
-                        mask.offset.x -= layer.properties.offset.x;
-                        mask.offset.y -= layer.properties.offset.y;
+                        mask.placement = mask.transform_in_parent(&layer.properties).then(
+                            layer.properties.placement.then(layer_core::Affine::translation(layer.properties.offset))
+                                .inverse().ok_or("Invalid layer placement")?);
+                        mask.offset = Point::default();
+                        mask.linked = false;
                         layer.pending_operations.push(layer_core::LayerOperation {
+                            placement: layer_core::Affine::IDENTITY,
                             coverage: mask,
                             kind: layer_core::LayerOperationKind::ApplyMask,
                         });
@@ -1101,7 +1233,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer.mask.as_mut().ok_or("No mask")?.enabled = value
                     }
                     LayerAction::LinkMask { value, .. } => {
-                        layer.mask.as_mut().ok_or("No mask")?.linked = value
+                        layer.mask.as_mut().ok_or("No mask")?.set_linked(value, &layer.properties).map_err(error)?
                     }
                     LayerAction::ShowMask { value, .. } => {
                         layer.mask.as_mut().ok_or("No mask")?.show_area = value;
@@ -1722,17 +1854,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Select a paint layer's content to fill".into());
         }
         let offset = self.engine.document().layer_offset(id);
+        let inverse = self.engine.document().layer_transform(id).inverse().ok_or("Invalid layer placement")?;
+        let placement = layer_core::Affine::translation(offset).then(inverse);
         let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
         if let Some(selection) = selection {
             coverage.default_coverage = f32::from(selection.inverted);
-            coverage.initial = Some(selection.translated(Point {
-                x: -offset.x,
-                y: -offset.y,
-            }));
+            coverage.initial = Some(selection.transformed(inverse).map_err(error)?);
         }
-        self.engine
-            .append_layer_operation(id, layer_core::LayerOperation { coverage, kind })
-            .map_err(error)?;
+        self.engine.append_layer_operation(id, layer_core::LayerOperation { placement, coverage, kind }).map_err(error)?;
         self.layer_interaction.changed = true;
         Ok(())
     }

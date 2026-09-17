@@ -381,6 +381,10 @@ impl RenderWorker {
     pub(super) fn worker_is_joined(&self) -> bool {
         self.thread.is_none()
     }
+    #[cfg(test)]
+    pub(super) fn frames_idle(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire) == 0
+    }
     pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
         if self.thread.as_ref().is_none_or(|thread| thread.is_finished()) {
             return Err("Canvas renderer stopped".into());
@@ -1148,6 +1152,8 @@ impl Worker {
             self.paper_submitted = true;
         } else {
             self.renderer.submit(frame.packet()).map_err(error)?;
+            #[cfg(test)]
+            timing.photo_frame(&frame.layers);
         }
         #[cfg(test)]
         timing.mark(0);

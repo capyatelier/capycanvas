@@ -16,6 +16,7 @@ fn figure(shape: FigureShape, paint: FigurePaint, width: f32) -> Figure {
 }
 fn operation(f: Figure, mask: LayerMask) -> LayerOperation {
     LayerOperation {
+        placement: layer_core::Affine::IDENTITY,
         coverage: mask,
         kind: LayerOperationKind::Figure(f),
     }

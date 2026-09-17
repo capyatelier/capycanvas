@@ -452,6 +452,11 @@ impl Input {
             button: PointerButton::Primary,
             position: [event.surface_position.x, event.surface_position.y],
         });
+        #[cfg(test)]
+        if let Some(gpu) = workspace.gpu.borrow().as_ref() {
+            gpu.session.engine().backend().stats.lock().unwrap().pen_routes.push((
+                timestamp_ns, format!("{phase:?}"), if reply.paint { "paint" } else { "interaction" }));
+        }
         if !reply.paint {
             return;
         }
@@ -499,6 +504,8 @@ impl Input {
         self.send(workspace, event);
     }
     pub(crate) fn send(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
+        #[cfg(test)]
+        let delivered_ns = glib::monotonic_time() as u64 * 1000;
         if !workspace.workspaces.accepts_input(workspace)
             && !matches!(event.phase, PenPhase::Up | PenPhase::Cancel)
         {
@@ -523,6 +530,11 @@ impl Input {
             deferred.remove(&event.device_id);
         }
         drop(deferred);
+        #[cfg(test)]
+        if let Some(gpu) = workspace.gpu.borrow().as_ref() {
+            gpu.session.engine().backend().stats.lock().unwrap().pen_routes.push((
+                event.timestamp_ns, format!("{:?}", event.phase), if blocked { "deferred" } else { "send" }));
+        }
         if blocked {
             return;
         }
@@ -545,6 +557,19 @@ impl Input {
                 }
             } else {
                 self.pending.borrow_mut().push_back(event);
+            }
+            #[cfg(test)]
+            if event.flags.contains(SampleFlags::PRIMARY)
+                && event.phase == PenPhase::Move
+                && gpu.session.state().layer_tools.tool == layer_ui::LayerCanvasTool::Transform
+            {
+                let doc = gpu.session.engine().document();
+                if let Some(layer) = doc.layer(doc.active_layer).filter(|layer| layer.source.is_some()) {
+                    gpu.session.engine().backend().stats.lock().unwrap().photo_inputs.push((
+                        delivered_ns, layer.id.0,
+                        [event.surface_position.x, event.surface_position.y], layer.properties.placement.0,
+                    ));
+                }
             }
         }
         if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {

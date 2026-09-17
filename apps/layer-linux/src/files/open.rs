@@ -7,12 +7,39 @@ use layer_ui::DocumentLocation;
 use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    rc::Rc,
     sync::{Arc, atomic::{AtomicBool, Ordering}},
 };
 
-pub(super) async fn run(
-    w: &Rc<crate::workspace::Workspace>,
+/// Shared preparation for menu Open and application file launches. The latter
+/// has a native dialog parent before it has a document or rendering device.
+pub(super) async fn prepare(
+    window: &adw::ApplicationWindow,
+    file: gio::File,
+    policy: layer_ui::PhotoOpenPolicy,
+    working: layer_core::color::RgbSpace,
+) -> Result<Option<(Project, Option<DocumentLocation>)>, String> {
+    let path = file.path().ok_or("Choose a file on this device")?;
+    let location = DocumentLocation {
+        uri: file.uri().into(),
+        name: path.file_name().ok_or("Choose a filename")?.to_string_lossy().into_owned(),
+    };
+    let Some((mut project, location)) = run(window, path, location, policy).await? else {
+        return Ok(None);
+    };
+    if !window.is_visible() { return Ok(None); }
+    if location.is_none() {
+        let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
+        let Some(source) = interpret_window(window, source, policy, working).await? else { return Ok(None); };
+        let profile = source.interpretation.profile.clone();
+        project.document.color.space = gio::spawn_blocking(move || layer_color::suggested_working_space(&profile))
+            .await.map_err(|_| "Profile reader failed")??.unwrap_or(layer_core::color::RgbSpace::ProPhoto);
+        project.document.layers[0].source = Some(Arc::new(source));
+    }
+    Ok(window.is_visible().then_some((project, location)))
+}
+
+async fn run(
+    window: &adw::ApplicationWindow,
     path: PathBuf,
     location: DocumentLocation,
     policy: layer_ui::PhotoOpenPolicy,
@@ -29,7 +56,7 @@ pub(super) async fn run(
         let cancelled = cancelled.clone();
         move |_, _| cancelled.store(true, Ordering::Release)
     });
-    dialog.present(Some(&w.window));
+    dialog.present(Some(window));
     let control = cancelled.clone();
     // Await acknowledgement even after Cancel. A successor cannot overlap a
     // detached decoder, and a cancelled candidate never reaches a new window.
@@ -49,8 +76,19 @@ pub(super) async fn run(
 /// samples; cancellation occurs before publishing any candidate into a window.
 pub(super) async fn interpret(
     w: &std::rc::Rc<crate::workspace::Workspace>,
+    source: layer_core::color::source::SourceImage,
+    policy: layer_ui::PhotoOpenPolicy,
+) -> Result<Option<layer_core::color::source::SourceImage>, String> {
+    let working = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?
+        .session.engine().document().color.space;
+    interpret_window(&w.window, source, policy, working).await
+}
+
+async fn interpret_window(
+    window: &adw::ApplicationWindow,
     mut source: layer_core::color::source::SourceImage,
     policy: layer_ui::PhotoOpenPolicy,
+    working: layer_core::color::RgbSpace,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
     if !source.interpretation.profile_assumed
         || policy.missing_profile == layer_ui::MissingProfilePolicy::AssumeSrgb
@@ -74,18 +112,8 @@ pub(super) async fn interpret(
         "Custom ICC",
     ])));
     space.set_widget_name("untagged-profile-space");
-    let working = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .ok_or("Canvas unavailable")?
-        .session
-        .engine()
-        .document()
-        .color
-        .space;
     let chooser = super::profile::ProfileChooser::new(
-        &w.window,
+        window,
         &space,
         working,
         super::profile::ProfilePurpose::Source(source.interpretation.clone()),
@@ -111,7 +139,7 @@ pub(super) async fn interpret(
             dialog.set_response_enabled("use", select(space.selected()).is_ok());
         }
     ));
-    if crate::alert::choose(dialog, &w.window).await != "use" {
+    if crate::alert::choose(dialog, window).await != "use" {
         return Ok(None);
     }
     source.interpretation.profile = (chooser.selected)(space.selected())?.profile;
@@ -132,7 +160,7 @@ pub(crate) fn read(
     policy: layer_ui::PhotoOpenPolicy,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(Project, Option<DocumentLocation>), String> {
-    let file = super::reader::CancelRead::new(path, cancelled)
+    let file = super::reader::CancelRead::new(path, cancelled.clone())
         .map_err(|e| format!("Cannot open file: {e}"))?;
     let mut reader = BufReader::new(file);
     if reader
@@ -142,10 +170,10 @@ pub(crate) fn read(
     {
         return Project::read(reader, ProjectLimits::default()).map(|p| (p, Some(location)));
     }
-    let source = layer_color::photo::read_photo(reader, Default::default())?;
-    let depth = policy.editing_depth(source.interpretation.depth);
-    let name = path.file_stem().unwrap_or_default().to_string_lossy();
-    let project = layer_color::photo_project(source, &name, depth)?;
+    let photo = layer_color::photo::read_photo_detailed_with_cancel(reader, Default::default(), &cancelled)?;
+    let depth = policy.editing_depth(photo.source.interpretation.depth);
+    let name = photo.display_name(&path.file_stem().unwrap_or_default().to_string_lossy());
+    let project = layer_color::photo_project(photo.source, &name, depth)?;
     Ok((project, None))
 }
 

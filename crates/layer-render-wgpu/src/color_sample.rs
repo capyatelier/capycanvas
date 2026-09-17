@@ -49,7 +49,8 @@ impl WgpuRasterizer {
         }
         let request_id = request.request_id;
         let [x, y] = request.position;
-        let inside = x < self.document_extent[0] && y < self.document_extent[1];
+        let extent = match request.source { ColorSampleSource::Layer(id) => self.target_extent(id), _ => self.document_extent };
+        let inside = x < extent[0] && y < extent[1];
         let paper = match request.source {
             ColorSampleSource::Layer(id) => self
                 .thumbnails
@@ -73,8 +74,8 @@ impl WgpuRasterizer {
         let radius = request.area.width() / 2;
         let left = x.saturating_sub(radius);
         let top = y.saturating_sub(radius);
-        let right = x.saturating_add(radius + 1).min(self.document_extent[0]);
-        let bottom = y.saturating_add(radius + 1).min(self.document_extent[1]);
+        let right = x.saturating_add(radius + 1).min(extent[0]);
+        let bottom = y.saturating_add(radius + 1).min(extent[1]);
         let width = right - left;
         let count = width * (bottom - top);
         let stride = if matches!(request.source, ColorSampleSource::Layer(id) if self.tiled_sources.contains_key(&id))

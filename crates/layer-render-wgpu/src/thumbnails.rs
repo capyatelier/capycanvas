@@ -9,6 +9,7 @@ pub(super) struct Thumbnails {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) sources: Option<crate::source_thumbnails::SourceThumbnails>,
     pub paper: Option<(LayerId, [f32; 4])>,
+    pub source_placements: std::collections::BTreeMap<LayerId, layer_core::Affine>,
 }
 impl Thumbnails {
     pub fn new() -> Self {
@@ -21,6 +22,7 @@ impl Thumbnails {
             #[cfg(not(target_arch = "wasm32"))]
             sources: None,
             paper: None,
+            source_placements: Default::default(),
         }
     }
     pub fn take(&mut self) -> Option<Result<ReadbackImage, GpuRasterError>> {

@@ -4,6 +4,8 @@ use layer_core::raster::{RasterRevision, RasterTile, RasterWatercolor, TileBlob,
 use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, SelectionPixels};
 use std::io::Cursor;
 
+mod placement;
+
 fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
     let mut document = Document::new("snapshot fixture", extent[0], extent[1]);
     document.color = color;

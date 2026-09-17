@@ -125,6 +125,10 @@ pub enum DabMode {
 /// instance record; color and texture identity are submitted only once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DabStyle {
+    /// Maps generated brush contacts into the editable layer's pixel grid.
+    /// Dynamics and texture geometry stay in brush coordinates; placement never
+    /// changes the user's nominal brush footprint in document space.
+    pub brush_to_layer: layer_core::Affine,
     pub alpha_locked: bool,
     pub selection: Option<std::sync::Arc<layer_core::Selection>>,
     pub tip: BrushTip,
@@ -372,20 +376,12 @@ impl TransformPreview {
         } else {
             owner.id
         };
-        let a = layer_core::target_offset(layers, self.layer);
-        let b = layer_core::target_offset(layers, target);
-        let delta = layer_core::Point {
-            x: a.x - b.x,
-            y: a.y - b.y,
-        };
-        let to = layer_core::Affine::translation(delta);
-        let from = layer_core::Affine::translation(layer_core::Point {
-            x: -delta.x,
-            y: -delta.y,
-        });
+        let to = layer_core::target_transform(layers, self.layer)
+            .then(layer_core::target_transform(layers, target).inverse()?);
+        let from = to.inverse()?;
         Some(Self {
             layer: target,
-            selection: self.selection.as_ref().map(|s| s.translated(delta)),
+            selection: self.selection.as_ref().map(|s| s.transformed(to)).transpose().ok()?,
             transform: layer_core::ImageTransform {
                 affine: from.then(self.transform.affine).then(to),
                 ..self.transform

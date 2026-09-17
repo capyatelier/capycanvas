@@ -84,7 +84,7 @@ impl ImageComposition {
                 },
             ],
         });
-        let mut data = [0f32; 24];
+        let mut data = [0f32; 32];
         let [w, h] = [bounds.width(), bounds.height()].map(|v| v as f32);
         data[..6].copy_from_slice(&[0., 0., w, h, w, h]);
         data[8] = 4.;
@@ -464,7 +464,7 @@ impl Scene {
                 unreachable!()
             };
             let region = page_rect(tile).window_local(bounds);
-            let mut fill = [0.; 24];
+            let mut fill = [0.; 32];
             fill[..6].copy_from_slice(&[
                 region.min_x() as f32,
                 region.min_y() as f32,
@@ -888,7 +888,7 @@ impl Scene {
                         .unwrap_or(bounds)
                         .intersect(bounds);
                     let local = region.window_local(bounds);
-                    let mut data = [0.; 24];
+                    let mut data = [0.; 32];
                     data[..6].copy_from_slice(&[
                         local.min_x() as f32,
                         local.min_y() as f32,

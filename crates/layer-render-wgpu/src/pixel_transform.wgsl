@@ -33,6 +33,7 @@ fn transformed(local:vec2<f32>)->vec4<f32> {
     // Test before float->integer conversion; arbitrarily distant transforms
     // never create out-of-range integer coordinates or repeat edge texels.
     if any(local<vec2<f32>(source_info.bounds.xy)-vec2(.5)) || any(local>vec2<f32>(source_info.bounds.xy+source_info.bounds.zw)+vec2(.5)) {
+        if (u32(transform.target_flags.z)&4u)!=0u {return vec4(transform.target_flags.w);}
         if visibility {return vec4(vec3(transform.target_flags.w),1.)*brush_selection_at(local+transform.translation_source_origin.zw);}
         return vec4(0.);
     }
@@ -46,11 +47,12 @@ fn transformed(local:vec2<f32>)->vec4<f32> {
     let local=world-transform.translation_source_origin.zw;
     let base=original(vec2<i32>(floor(local)));
     // Exact no-op must not cut and recomposite fractional selection coverage.
-    if transform.target_flags.z>=2. {return base;}
+    if (u32(transform.target_flags.z)&2u)!=0u {return base;}
     let m=transform.linear;
     let source_position=vec2(m.x*world.x+m.z*world.y,m.y*world.x+m.w*world.y)
         +transform.translation_source_origin.xy-transform.translation_source_origin.zw;
     let moved=transformed(source_position);
+    if (u32(transform.target_flags.z)&4u)!=0u {return moved;}
     if visibility {
         let remainder=mix(base.r,transform.target_flags.w,brush_selection_at(world));
         return vec4(moved.r+remainder*(1.-moved.a));

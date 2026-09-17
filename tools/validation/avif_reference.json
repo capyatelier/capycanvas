@@ -1,0 +1,86 @@
+[
+  {
+    "file": "colors_sdr_srgb.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/colors_sdr_srgb.avif",
+    "sha256": "24463b9b79e4624d06e247079efddf624f9062c516d43ddf6fe5e150343629d6",
+    "bytes": 18845
+  },
+  {
+    "file": "colors_text_wcg_sdr_rec2020.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/colors_text_wcg_sdr_rec2020.avif",
+    "sha256": "1fba1a2ce322c7e1d5966517f110dfcf134005644c1e6207acf0dd7bb4e60708",
+    "bytes": 25007
+  },
+  {
+    "file": "paris_icc_exif_xmp.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/paris_icc_exif_xmp.avif",
+    "sha256": "961bc38b61e60b7651fa20efa24269ae2f35e4958822a81c908c9bbf9b3f66e1",
+    "bytes": 21132
+  },
+  {
+    "file": "seine_sdr_gainmap_srgb.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/seine_sdr_gainmap_srgb.avif",
+    "sha256": "e0ebdb2f1f44c7d901e6b5f817eb2520eace344624cab0d57aaa929d05d6d971",
+    "bytes": 129773
+  },
+  {
+    "file": "seine_hdr_rec2020.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/seine_hdr_rec2020.avif",
+    "sha256": "fd002bd4d51152b1cac533046ebfbc710aca7aaa519c0e7dc59d668aa12313ac",
+    "bytes": 87071
+  },
+  {
+    "file": "colors-animated-12bpc-keyframes-0-2-3.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/colors-animated-12bpc-keyframes-0-2-3.avif",
+    "sha256": "3bf9f91da471749e7df639ba7945d4d94c1c3e3968c26f3619fbbcfc92790576",
+    "bytes": 2267
+  },
+  {
+    "file": "cosmos1650_yuv444_10bpc_p3pq.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/io/cosmos1650_yuv444_10bpc_p3pq.avif",
+    "sha256": "1c3db1867051ae23ba61ed217f6b7372a4248e6322d76a239feab14bc4c55ab5",
+    "bytes": 37451
+  },
+  {
+    "file": "abc.png",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/abc.png",
+    "sha256": "5561862fbd409a3f86b02db73ebb8572d0e2a307eb45ecf9017a1b2137b9f729",
+    "bytes": 8274
+  },
+  {
+    "file": "abc_color_irot_alpha_irot.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/abc_color_irot_alpha_irot.avif",
+    "sha256": "b371cc88244a873131e4d10ff9363d71ce4f41cf333bd4a491b38d970d9abd3b",
+    "bytes": 10597
+  },
+  {
+    "file": "abc_color_irot_alpha_NOirot.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/d98b4bcb67e9b2e5056d1f9ae18a088779d7945f/tests/data/abc_color_irot_alpha_NOirot.avif",
+    "sha256": "f2c8cd6ded641c68d13b3363417a62288a5eb335870de8d0b9da5093865ffb9a",
+    "bytes": 10596
+  },
+  {
+    "file": "colors-animated-8bpc-alpha-exif-xmp.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors-animated-8bpc-alpha-exif-xmp.avif",
+    "sha256": "c2e38681057c15009c4b76ea08cea68cdde80806abd41d42a646f697bf5aabb2",
+    "bytes": 7506
+  },
+  {
+    "file": "clap_irot_imir_non_essential.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/clap_irot_imir_non_essential.avif",
+    "sha256": "33f869fcf2a879913eb394982b8fc03e9a60c25831aa37622ddefa656fd39fc1",
+    "bytes": 653
+  },
+  {
+    "file": "color_grid_alpha_nogrid.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/color_grid_alpha_nogrid.avif",
+    "sha256": "bae56368b348b1d847e2bfb662522599f0c63dfe62fb68826c9e42a300ff405d",
+    "bytes": 2373
+  },
+  {
+    "file": "sofa_grid1x5_420.avif",
+    "url": "https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/sofa_grid1x5_420.avif",
+    "sha256": "c9e04ff9d90d7093454750fa33b7543ee5479e0cfb151e2c3d2ce6a16c1651c1",
+    "bytes": 25409
+  }
+]

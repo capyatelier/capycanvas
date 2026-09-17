@@ -48,6 +48,10 @@ pub(super) struct SourceIndex {
     profiles: Vec<ProfileRecord>,
 }
 impl SourceIndex {
+    pub(super) fn extent(&self, target: LayerId) -> Option<[u32; 2]> {
+        let record = self.layers.iter().find(|l| l.target == target)?;
+        self.images.get(record.image).map(|image| image.extent)
+    }
     pub(super) fn collect(
         document: &Document,
         blobs: &mut Vec<Arc<TileBlob>>,

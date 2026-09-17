@@ -207,7 +207,7 @@ fn operation(engine: &mut Engine, kind: LayerOperationKind, selection: Option<Se
     coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
     coverage.initial = selection;
     engine
-        .append_layer_operation(LayerId(1), LayerOperation { coverage, kind })
+        .append_layer_operation(LayerId(1), LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind })
         .unwrap();
     engine.render_frame_at(1_000_000_000).unwrap();
     while !engine.backend().raster_ready() {
@@ -344,6 +344,7 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             let mut layer = live.document().layer(LayerId(1)).unwrap().clone();
             let applied = layer.mask.take().unwrap();
             layer.pending_operations.push(LayerOperation {
+                placement: layer_core::Affine::IDENTITY,
                 coverage: applied,
                 kind: LayerOperationKind::ApplyMask,
             });
@@ -557,6 +558,7 @@ fn selected_fill_reuses_unaffected_raster_tiles_and_undo_restores_pixels() {
     live.append_layer_operation(
         LayerId(1),
         LayerOperation {
+            placement: layer_core::Affine::IDENTITY,
             coverage,
             kind: LayerOperationKind::Fill {
                 color: [0.7, 0.1, 0.2, 0.6],

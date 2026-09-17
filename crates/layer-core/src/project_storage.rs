@@ -11,6 +11,9 @@ use sources::SourceIndex;
 mod native_color;
 
 const MAGIC: &[u8; 12] = b"CAPYRASTER\x04\0";
+// Older readers must reject placed artwork instead of silently ignoring its
+// geometry. Continue writing v4 for documents needing no placement semantics.
+const PLACEMENT_MAGIC: &[u8; 12] = b"CAPYRASTER\x05\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,7 +76,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         {
             let data = raster.wait_data()?;
             data.validate(
-                [project.document.width, project.document.height],
+                layer.local_extent([project.document.width, project.document.height]),
                 mask,
                 project.document.color,
             )?;
@@ -155,7 +158,12 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
         tiled_sources,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
-    output.write_all(MAGIC).map_err(io_error)?;
+    let canvas = [project.document.width, project.document.height];
+    let placed = project.document.layers.iter().any(|l| l.properties.placement != Affine::IDENTITY || l.masks().any(|m| m.placement != Affine::IDENTITY))
+        || manifest.rasters.iter().any(|r| r.tiles.iter().any(|t| {
+            (0..2).any(|i| t.key.coordinate[i] >= canvas[i].div_ceil(TILE_SIZE))
+        }));
+    output.write_all(if placed { PLACEMENT_MAGIC } else { MAGIC }).map_err(io_error)?;
     output
         .write_all(&(json.len() as u64).to_le_bytes())
         .map_err(io_error)?;
@@ -176,7 +184,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
 pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Project, String> {
     let mut magic = [0; 12];
     input.read_exact(&mut magic).map_err(io_error)?;
-    if &magic != MAGIC {
+    if &magic != MAGIC && &magic != PLACEMENT_MAGIC {
         return Err(
             "Unsupported Capy Canvas project version; this app opens raster projects only".into(),
         );
@@ -256,14 +264,19 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         if !target_ids.insert(raster.target) {
             return Err("Duplicate raster target".into());
         }
+        let owner = manifest.document.target_owner(raster.target).ok_or("Missing raster owner")?;
+        let canvas = [manifest.document.width, manifest.document.height];
+        let extent = manifest.tiled_sources.extent(owner.id).map_or(canvas, |source| {
+            std::array::from_fn(|i| canvas[i].max(source[i]))
+        });
         let mut keys = BTreeSet::new();
         for tile in &raster.tiles {
             let blob = manifest.blobs.get(tile.blob).ok_or("Missing raster blob")?;
             if !keys.insert(tile.key)
                 || !tile.key.plane.accepts_descriptor(manifest.document.color, blob.descriptor)
                 || mask != (tile.key.plane == RasterPlane::Mask)
-                || tile.key.coordinate[0] >= manifest.document.width.div_ceil(TILE_SIZE)
-                || tile.key.coordinate[1] >= manifest.document.height.div_ceil(TILE_SIZE)
+                || tile.key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)
+                || tile.key.coordinate[1] >= extent[1].div_ceil(TILE_SIZE)
             {
                 return Err("Invalid raster tile reference".into());
             }
@@ -308,7 +321,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
             watercolor: raster.watercolor,
         };
         data.validate(
-            [manifest.document.width, manifest.document.height],
+            manifest.document.target_extent(raster.target),
             mask,
             manifest.document.color,
         )?;
@@ -394,6 +407,53 @@ mod tests {
         duplicate.id = project.document.allocate_layer_id();
         project.document.layers.insert(0, duplicate);
         project
+    }
+
+    #[test]
+    fn persistent_placement_preserves_sources_overrides_and_independent_history() {
+        let mut project = source_fixture();
+        for layer in &mut project.document.layers {
+            layer.raster = Default::default();
+            if let Some(mask) = &mut layer.mask { mask.raster = Default::default(); }
+        }
+        project.document.width = 32;
+        project.document.height = 32;
+        let id = project.document.layers[0].id;
+        let original = project.document.layers[0].clone();
+        let mut editor = Editor::new(project.document);
+        let mut placed = original.clone();
+        placed.properties.placement = Affine::around(
+            Point::default(), [1. / 3.; 2], 0.3, Point { x: -45., y: 8. },
+        );
+        editor.perform(Edit::ReplaceLayer(Box::new(placed.clone()))).unwrap();
+        assert!(editor.document().layer(id).unwrap().raster.is_empty());
+        assert!(Arc::ptr_eq(editor.document().layer(id).unwrap().source.as_ref().unwrap(), original.source.as_ref().unwrap()));
+        assert!(editor.undo().unwrap());
+        assert_eq!(editor.document().layer(id).unwrap().properties.placement, Affine::IDENTITY);
+        assert!(editor.redo().unwrap());
+        project.document = editor.document().clone();
+        let mut bytes = Vec::new();
+        project.write(&mut bytes).unwrap();
+        assert_eq!(&bytes[..12], PLACEMENT_MAGIC);
+        let mut loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(loaded.document.layer(id).unwrap().properties, placed.properties);
+        assert_eq!(loaded.document.layers[1].properties.placement, Affine::IDENTITY);
+        assert_eq!(loaded.document.layer(id).unwrap().source, original.source);
+        // A subsequent 100% placement still reads the original samples.
+        loaded.document.layers[0].properties.placement = Affine::IDENTITY;
+        assert_eq!(loaded.document.layers[0].source, original.source);
+        // Editable source-local backing beyond the 32px canvas survives saving.
+        let key = TileKey { plane: RasterPlane::Color, coordinate: [1, 0] };
+        let descriptor = key.plane.descriptor(loaded.document.color);
+        let blob = TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
+        let digest = blob.digest;
+        loaded.document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: BTreeMap::from([(key, RasterTile::backed(blob))]), watercolor: None,
+        });
+        bytes.clear();
+        loaded.write(&mut bytes).unwrap();
+        let reopened = Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(reopened.document.layers[0].raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().digest, digest);
     }
 
     #[test]

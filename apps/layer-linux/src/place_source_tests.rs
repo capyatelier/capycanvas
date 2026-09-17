@@ -53,6 +53,154 @@ fn source_is(w: &Rc<Workspace>, expected: &SourceImage) {
     );
 }
 
+pub(super) fn wait_layer_thumbnail(w: &Rc<Workspace>, id: u64) -> gtk::gdk::Texture {
+    // A second window can own Sketch while Paint is leased by the first. Its
+    // Layers panel is intentionally hidden until the user opens the drawer.
+    if !w.layer_panel.root.is_mapped()
+        && !w.drawers().iter().filter_map(|d| d.layers()).any(|v| v.root.is_mapped())
+    {
+        let layout = state(w).workspace.layout;
+        let control = ToolbarControl::Panel { panel: Panel::Layers };
+        let button = if let Some(entry) = layout.header.zones.iter().flatten()
+            .find(|entry| entry.item == (layer_ui::HeaderItem::Tool { control }))
+        {
+            find_named(w.header.root.upcast_ref(), &format!("header-item-{}", entry.id))
+                .and_then(|root| root.first_child()).unwrap().downcast::<gtk::Button>().unwrap()
+        } else {
+            let tile = layout.panels.iter().flat_map(|p| p.tiles())
+                .find(|tile| tile.control == control).expect("Layers control in the test workspace");
+            find_named(w.surface.upcast_ref(), &format!("tile-{}", tile.id))
+                .unwrap().downcast::<gtk::Button>().unwrap()
+        };
+        click(&button);
+    }
+    let started = Instant::now();
+    loop {
+        pump(10);
+        let state = state(w);
+        let revision = state.layers.iter().find(|l| l.id == id).unwrap().paint_revision;
+        let extra: Vec<_> = w.drawers().iter().filter_map(|d| d.layers()).collect();
+        if let Some(texture) = w.layer_panel.preview_texture(id, revision, &extra) {
+            assert_eq!([texture.width(), texture.height()], [32, 32]);
+            return texture;
+        }
+        assert!(state.host_error.is_none(), "{:?}", state.host_error);
+        if started.elapsed() >= Duration::from_secs(10) {
+            if let Some(output) = std::env::var_os("LAYER_RASTER_UI_OUTPUT") {
+                let output = std::path::PathBuf::from(output);
+                std::fs::create_dir_all(&output).unwrap();
+                super::new_photo::capture_ui(w, &output, &format!("thumbnail-timeout-{id}.png"));
+            }
+            panic!("visible layer {id} thumbnail revision {revision} timed out: {}", w.layer_panel.preview_debug(&extra));
+        }
+    }
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and LAYER_RASTER_FIXTURES"]
+#[allow(deprecated)]
+fn native_common_raster_open_import_and_paste() {
+    native_raster_open_import_and_paste(&[("Profiled.bmp", "image/bmp"), ("Animation.gif", "image/gif"), ("Profiled.webp", "image/webp")]);
+}
+
+#[test]
+#[ignore = "private Wayland display, codec bundle and LAYER_RASTER_FIXTURES"]
+fn native_heif_avif_open_import_and_paste() {
+    native_raster_open_import_and_paste(&[("Photo.heic", "image/heic"), ("P3.avif", "image/avif"), ("ICC.avif", "image/avif")]);
+}
+
+#[test]
+#[ignore = "private Wayland display, codec bundle and LAYER_RASTER_FIXTURES"]
+fn native_avif_sequence_and_geometry_open_import_and_paste() {
+    native_raster_open_import_and_paste(&[
+        ("sequence-different-poster.avif", "image/avif"),
+        ("colors-animated-8bpc-alpha-exif-xmp.avif", "image/avif"),
+        ("p3-12bit-crop-r1-m1.avif", "image/avif"),
+    ]);
+}
+
+#[allow(deprecated)]
+fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
+    glib::set_prgname(Some("capy-canvas-test"));
+    let directory = std::path::PathBuf::from(std::env::var_os("LAYER_RASTER_FIXTURES").expect("codec fixtures"));
+    let app = native_test_app("art.capycanvas.CommonRaster");
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 128).unwrap(), None)));
+    let opened = Rc::new(RefCell::new(None));
+    let result = opened.clone();
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+        result.replace(Some((project, location)));
+    }));
+    w.window.present();
+    ready(&w);
+    for &(name, mime) in cases {
+        let path = directory.join(name);
+        let bytes = std::fs::read(&path).unwrap();
+        let photo = layer_color::photo::read_photo_detailed(std::io::Cursor::new(&bytes), Default::default()).unwrap();
+        invoke(&w, CommandId::ImportImage);
+        let file = chooser();
+        file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+        pump(100);
+        file.response(gtk::ResponseType::Accept);
+        finish(&w);
+        ready(&w);
+        source_is(&w, &photo.source);
+        {
+            let gpu = w.gpu.borrow();
+            let document = gpu.as_ref().unwrap().session.engine().document();
+            assert_eq!(document.layer(document.active_layer).unwrap().name.contains("first frame"), photo.first_frame);
+            assert_eq!(document.layer(document.active_layer).unwrap().name.contains("primary image"), photo.primary_image);
+        }
+        invoke(&w, CommandId::ApplyTransform);
+        ready(&w);
+        let active = w.gpu.borrow().as_ref().unwrap().session.engine().document().active_layer.0;
+        wait_layer_thumbnail(&w, active);
+        let saved = snapshot(&w);
+        let reopened = layer_core::Project::read(std::io::Cursor::new(saved), Default::default()).unwrap();
+        assert_eq!(reopened.document.layers[0].source.as_deref(), Some(&photo.source));
+        invoke(&w, CommandId::Undo);
+        ready(&w);
+        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.len(), 2);
+
+        let provider = gtk::gdk::ContentProvider::for_bytes(mime, &glib::Bytes::from_owned(bytes));
+        w.window.clipboard().set_content(Some(&provider)).unwrap();
+        invoke(&w, CommandId::PasteImage);
+        finish(&w);
+        ready(&w);
+        source_is(&w, &photo.source);
+        invoke(&w, CommandId::CancelTransform);
+        ready(&w);
+        assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers.len(), 2);
+
+        invoke(&w, CommandId::OpenDocument);
+        let file = chooser();
+        file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+        pump(100);
+        file.response(gtk::ResponseType::Accept);
+        finish(&w);
+        let (project, location) = opened.borrow_mut().take().expect("photo Open publishes a document");
+        assert!(location.is_none(), "Open must not make the original image the master target");
+        assert_eq!([project.document.width, project.document.height], photo.source.extent);
+        assert_eq!(project.document.layers[0].source.as_deref(), Some(&photo.source));
+        assert_eq!(project.document.layers[0].name.contains("first frame"), photo.first_frame);
+        assert_eq!(project.document.layers[0].name.contains("primary image"), photo.primary_image);
+        let photo_id = project.document.layers[0].id.0;
+        let photo_window = Workspace::with_project(&app, Some((project, location)));
+        let shown = Instant::now();
+        photo_window.window.present();
+        ready(&photo_window);
+        wait_layer_thumbnail(&photo_window, photo_id);
+        println!("{name}: source-sized Open canvas and visible layer thumbnail ready in {:.2} ms", shown.elapsed().as_secs_f64() * 1000.);
+        if let Some(output) = std::env::var_os("LAYER_RASTER_UI_OUTPUT") {
+            let output = std::path::PathBuf::from(output);
+            std::fs::create_dir_all(&output).unwrap();
+            super::new_photo::capture_ui(&photo_window, &output, &format!("{name}.png"));
+        }
+        photo_window.window.destroy();
+        println!("{name}: native Open/Import/Paste and retained save/history passed");
+    }
+    w.window.destroy();
+}
+
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 #[allow(deprecated)]
@@ -77,6 +225,9 @@ fn native_profiled_place_paste_and_source_history() {
     finish(&w);
     ready(&w);
     source_is(&w, &source);
+    assert!(state(&w).commands.iter().any(|c| c.id == CommandId::ApplyTransform && c.enabled));
+    invoke(&w, CommandId::ApplyTransform);
+    ready(&w);
     let placed = snapshot(&w);
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 9891))
@@ -165,6 +316,8 @@ fn native_profiled_place_paste_and_source_history() {
     finish(&w);
     ready(&w);
     source_is(&w, &source);
+    invoke(&w, CommandId::ApplyTransform);
+    ready(&w);
     assert_eq!(
         w.gpu
             .borrow()
@@ -235,7 +388,7 @@ fn native_profiled_place_paste_and_source_history() {
         state(&w)
             .host_error
             .as_deref()
-            .is_some_and(|e| e.contains("Copy a PNG, TIFF or JPEG"))
+            .is_some_and(|e| e.contains("Copy a supported image"))
     );
     assert_eq!(snapshot(&w), saved);
     w.window.destroy();

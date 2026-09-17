@@ -395,7 +395,7 @@ impl FilterPreviews {
             r.empty_view.clone()
         } else {
             fallback = create_color_target(&r.device, extent, "empty document filter sample");
-            let mut data = [0.; 24];
+            let mut data = [0.; 32];
             data[..6].copy_from_slice(&[
                 0.,
                 0.,
@@ -509,7 +509,7 @@ impl FilterPreviews {
             let mut previous = source.clone();
             for stage in 0..count {
                 let target = self.scratch[stage % 2].1.clone();
-                let mut data = [0.; 24];
+                let mut data = [0.; 32];
                 data[..8].copy_from_slice(&[
                     0.,
                     0.,
@@ -558,7 +558,7 @@ impl FilterPreviews {
                 });
                 previous = target;
             }
-            let mut data = [0.; 24];
+            let mut data = [0.; 32];
             data[..6].copy_from_slice(&[
                 0.,
                 (row as u32 * height) as f32,

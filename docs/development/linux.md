@@ -60,11 +60,22 @@ between the native surface, pen coordinates and document camera.
 project and photo transport. New offers sRGB8, P3 8-bit and ProPhoto 16-bit presets,
 independent color/depth controls, white or transparent backgrounds, saved presets
 and remembered defaults. New windows use those same defaults. Open recognizes
-native projects and PNG/JPEG/TIFF by signature; photos retain their integer depth,
+native projects and JPEG/PNG/TIFF/BMP/GIF/WebP by signature. The Linux HEIF/HEIC
+and AVIF readers are enabled when the packaged codec bundle is available;
+picker and encoded-clipboard formats reflect actual decoder availability.
+Photos retain their supported integer depth,
 original samples, profile bytes and transparency. Ordinary untagged RGB assumes
 sRGB; unfamiliar supported ICC gamuts use ProPhoto working RGB while preserving
 the original source interpretation. Familiar matrix gamuts select the corresponding
 built-in working space from colorimetry, never a profile name.
+
+GIF/WebP/AVIF animation imports the first displayed frame with a name suffix.
+AVIF selects the sequence track even when the file also has a different poster.
+HEIF collections import the primary image with the same disclosure. HEIF sequences,
+AVIF track-level display transformations/scaling, and PQ/HLG HDR currently require
+a still-image SDR export; APNG is also explicitly unsupported. Supported HEIF/AVIF high-depth samples use U16
+storage, and container rotation/mirroring is applied without repeating EXIF
+orientation. See the [format matrix and remaining qualification](../ui/image-open-import-proposal.md#3-deliver-common-format-parity-through-the-shared-decoder).
 
 Preferences → Color edits future drawing defaults and reuses the New form for
 dimensions and saved presets. Photo opening defaults to source depth; optional
@@ -231,20 +242,78 @@ creation presets, cancellation, native source editing, master save/reopen and
 profiled delivery. The existing `native_document_files` check covers file-operation
 failure, cancellation, recovery and additional profiled output routes.
 
+Application file launches use GTK's `HANDLES_OPEN`/`open` delivery, including
+arguments forwarded from another process. A file list is prepared in order with
+the same signature-based Open worker and missing-profile prompt as the menu.
+Each file opens its own document window. At cold startup, a temporary progress
+window owns the read before any canvas is constructed; it does not create an
+extra blank drawing. Cancel discards the pending list and waits for the current
+reader to finish. Existing drawings and their unsaved-close flow remain intact.
+Remote files without a local path are explicitly rejected.
+
+The ignored `native_application_file_launch` test uses a separate process and
+private session bus to exercise argument forwarding into the production
+application setup, alongside native document creation and cancellation. Run it
+with the `tools/performance/gtk-raster.sh` runner after building the GTK tests.
+
 ## Stage a native bundle
 
-In addition to the build prerequisites, install Node.js, `strip` and
-`desktop-file-validate`, then run:
+In addition to the application build prerequisites, install Node.js, `strip`
+and `desktop-file-validate`. The native photo bundle also needs Python 3,
+C/C++ compilers, CMake, Ninja, Meson, `pkg-config`, `patch`, and NASM on x86.
+Build its pinned sources explicitly, then stage the app:
 
 ```bash
+python3 tools/build/photo-codecs.py --fetch
 node apps/layer-linux/package.mjs
 dist/capycanvas-linux/bin/capycanvas
 ```
 
-The staging directory includes the executable, desktop launcher, icon, runtime
-filters and project notices. GTK/libadwaita remain system dependencies. The script
+The codec recipe verifies source hashes and builds libheif 1.23.4 with
+libde265 1.1.3 for HEIF, and libavif 1.4.2 with dav1d 1.5.3 for AVIF. Bridge ABI 2
+supports AVIF sequences and applies clean aperture/rotation/mirroring while
+packing source rows. It enables HEVC and AV1 decoding without dynamic plugin
+discovery. Rebuild the app with its matching bundle after a bridge ABI change.
+Omit `--fetch` to rebuild from the cached archives;
+ordinary Cargo builds do not download or build these native dependencies.
+The default bundle is `target/photo-codecs/prefix`. Set
+`CAPY_PHOTO_CODEC_PREFIX` when packaging a bundle built at a different prefix.
+Package validation rejects stale recipe/bridge/patch hashes, missing source
+archives, incompatible libraries and absent decoding backends.
+
+The staging directory includes the executable, desktop launcher, `.capy` MIME
+definition, icon, runtime filters, codec libraries and project notices. Shared
+photo libraries live in `lib/capycanvas/photo`, with licenses, pinned source
+archives and the rebuild recipe under `share/doc/capycanvas-photo-codecs`.
+The app discovers them relative to its executable, so the staged directory can
+be moved as a unit. Development executables also look under
+`target/photo-codecs/prefix`; `CAPY_PHOTO_CODEC_DIR` explicitly selects a trusted
+library directory for developer qualification.
+
+The launcher accepts local
+file lists (`%F`) and declares the currently decoded image formats. An installer
+must register the staged desktop entry and refresh its desktop/MIME databases;
+staging does not change a user's default file associations.
+GTK/libadwaita remain system dependencies. The script
 does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
+
+The [GTK photo progress report](image-placement-gtk-progress.md#heifavif-implementation-and-open-qualification)
+records codec reference checks, native Open/Import/Paste and relocated-package
+launch evidence. To reproduce the package launch check with an empty evidence
+directory and an actual staged binary:
+
+```bash
+python3 tools/validation/gtk_package_photo.py \
+  --binary /path/to/relocated/capycanvas-linux/bin/capycanvas \
+  --photo /path/to/photo.heic --photo /path/to/photo.avif \
+  --output artifacts/package-photo-check
+```
+
+This uses a private compositor, isolated settings and the existing
+`LAYER_UI_CAPTURE` diagnostic, which now also captures documents opened by file
+launch. It verifies loaded codec paths and records captures/build hashes. Its
+four-second capture delay is not a decode-performance measurement.
 
 ## Validate
 
