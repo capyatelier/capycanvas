@@ -643,9 +643,24 @@ impl Scene {
         blend: layer_core::LayerBlend,
         clip: bool,
     ) -> usize {
+        let n = self.jobs.len();
+        // Watercolor already outputs premultiplied source-over. A complete,
+        // unmasked layer at full opacity can draw straight onto its backdrop.
+        if !clip && opacity == 1. && blend == layer_core::LayerBlend::Normal && n >= 2 {
+            let clear = matches!(&self.jobs[n - 2], Job::Clear(view, color)
+                if *view == self.pool[front].view && *color == wgpu::Color::TRANSPARENT);
+            if clear
+                && let Job::Watercolor { target, .. } = &mut self.jobs[n - 1]
+                && *target == self.pool[front].view
+            {
+                *target = self.pool[back].view.clone();
+                self.jobs.remove(n - 2);
+                self.free(front);
+                return back;
+            }
+        }
         // An isolated clipping stack over a constant backdrop needs no color
         // intermediate after its last adjustment. Fold that final composite.
-        let n = self.jobs.len();
         if !clip && n >= 2 {
             let bg = if let Job::Clear(view, color) = &self.jobs[n - 2] {
                 (*view == self.pool[back].view).then_some(*color)
@@ -787,23 +802,31 @@ impl Scene {
                             }));
                     if wet_nearby {
                         let binding = self.watercolor_binding(r, layer, stored.unwrap(), c, preview)?;
-                        let page = self.alloc(r, wgpu::Color::TRANSPARENT);
+                        // Aligned pages already cover the layer tile. Only a
+                        // translated page needs an intermediate and placement.
+                        let page = if rect == [0., 0., 256., 256.] {
+                            out
+                        } else {
+                            self.alloc(r, wgpu::Color::TRANSPARENT)
+                        };
                         self.jobs.push(Job::Watercolor {
                             target: self.pool[page].view.clone(),
                             binding,
                             record: *r.layer_style_records.get(&layer.id).ok_or(GpuRasterError::MissingPaintLayer(layer.id))?,
                             coordinate: c,
                         });
-                        self.draw(
-                            r,
-                            out,
-                            self.pool[page].view.clone(),
-                            None,
-                            rect,
-                            [1., 1., 0., 0.],
-                            true,
-                        );
-                        self.free(page);
+                        if page != out {
+                            self.draw(
+                                r,
+                                out,
+                                self.pool[page].view.clone(),
+                                None,
+                                rect,
+                                [1., 1., 0., 0.],
+                                true,
+                            );
+                            self.free(page);
+                        }
                     } else {
                         let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
                         let predicted = if preview {

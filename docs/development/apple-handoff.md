@@ -634,8 +634,9 @@ processes identified. Nine iPad recovery drawings and four Mac recovery manifest
 are preserved; iPad files are byte-identical across installation and Mac recovery
 archives remain unchanged after fresh startup. The separate Mac artist app is
 untouched. Disposable ProPhoto/U16 documents open through ordinary warm OS URL
-delivery on both devices. Physical drawing, background/return and local
-Save As/reopen confirmation is pending. Evidence is
+delivery on both devices. The user confirms the requested drawing, Undo/Redo, background/return and local
+Save As/reopen workflow on iPad and Mac on 2026-09-16, with intact artwork and
+smooth continued drawing and no reported save/open error. Evidence is
 `artifacts/apple-sdr-lifecycle-v1/`; local recovery checks do not establish actual
 iPad background expiration, file-provider delivery or sustained performance.
 
@@ -647,7 +648,13 @@ the data-container URL; the fixture is restaged with identical bytes before warm
 delivery. The original Mac review and separate artist process remain unchanged.
 Current hardware performance checks use the separate Mac workload identity and
 isolated per-launch storage on both hosts. Evidence is
-`artifacts/apple-sdr-device-v1/`; grouped physical SDR interaction remains pending.
+`artifacts/apple-sdr-device-v1/`. The later user confirmation closes this grouped
+drawing/background/local-save interaction on both devices; profile/color-form,
+provider, display-change and interruption cases remain separately scoped. The
+[watercolor composition milestone](../../apps/layer-apple/PERFORMANCE.md#watercolor-composition-passes--2026-09-16)
+subsequently preserves the new Pencil test drawing as a tenth iPad recovery and
+restores ordinary review. The requested Mac review is brought forward without
+restarting its process. Evidence is `artifacts/apple-watercolor-gpu-v1/`.
 
 ## SDR form fit and feature inventory
 
@@ -1942,6 +1949,13 @@ These component checks exercise local native mouse/tablet events; the later
 editor workflows above cover the root observer. Neither establishes physical
 Pencil acceptance. The row cleanup removes 57 net production lines.
 Evidence and source hashes are under `artifacts/apple-row-cleanup-v1/`.
+
+On 2026-09-16 the user completes the remaining focused physical Pencil layer-row
+check in a disposable drawing with at least three layers. Dragging the bottom
+layer upward by its grab handle works, and Undo restores the original order.
+Holding the row body and dragging upward also works, with correct Undo. This
+closes that reported upward-reorder case; hierarchy/interruption and other drag
+surfaces retain their separately listed scope in the drag inventory.
 
 The batch also fixes focused Settings text fields retaining an obsolete
 draft after Reset to Default. The shared reset already publishes the default;

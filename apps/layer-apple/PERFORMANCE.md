@@ -68,6 +68,53 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Watercolor composition passes — 2026-09-16
+
+The shared compositor unnecessarily rendered aligned watercolor into a temporary
+page, copied that page into the layer, then blended the layer into its backdrop.
+It now writes aligned pages into the layer target directly. A full-opacity normal
+watercolor layer with no intervening mask can use its existing source-over
+pipeline on the backdrop, eliminating the second intermediate. Translated,
+masked, clipped and partial-opacity composition retains the required operations.
+No brush algorithm, cache limit, source samples or native scheduling changes.
+
+The existing `layered-strokes` example now accepts optional `gpu` timing and an
+RGBA capture path. A 512-frame replay has identical per-frame damage, uploads
+and paint-page counts, with an exact match across the 4096-square RGBA capture.
+For the 360 active frames after the first stroke, median encoded GPU span falls
+from 7.217 to 5.540 ms and median preparation-plus-completion from 11.096 to
+8.841 ms. These synchronous renderer observations exclude native UI/presentation;
+encoded spans can include gaps between GPU commands and are not GPU busy time.
+A short Metal profile identified watercolor transport and composition work among
+444 small command buffers. Its retained 46.923 ms window has incomplete encoder
+coverage; it is diagnostic evidence, not complete per-frame attribution.
+Shader sampling changes and a general normal-blend experiment were discarded
+because they showed no material improvement.
+
+Both final Release apps complete 45 measured seconds of `wet-watercolor-4k`
+with ordinary warm-up/postlude, the full workspace and optional queue timing:
+
+| Host | Long active intervals | Presentation p99, ms | Preparation p99 / max, ms |
+| --- | ---: | ---: | ---: |
+| Mac, 90 Hz | 136 / 3,688 (**3.688%**) | 22.222 | 7.142 / 9.027 |
+| iPad, 120 Hz | 774 / 4,317 (**17.929%**) | 16.667 | 4.517 / 5.616 |
+
+The preceding runtime measured 12.803%/28.347%. Both final runs have nominal
+thermals, no rejected input, renderer errors, dropped records or missing/zero
+measured callbacks. Two Mac and one iPad zero callbacks occur outside measurement.
+Reviewed captures retain artwork, Navigator and layer previews. This improves
+heavy-watercolor cadence but does not close its remaining performance gap,
+particularly on iPad; no ten-minute failing workload is repeated.
+
+All 13 existing watercolor Metal regressions and both Release builds pass. The
+checks include masks, prediction, pigment/wetness independence and extended native
+color. Before iPad benchmarking, the user's new Pencil test is preserved as a
+tenth recovery: all 53 pre-existing files match after the workload, with only its
+new trace added. Ordinary review is restored with recording disabled. The first
+iPad preflight stopped before launch because the user had reopened the review;
+that drawing was backed up before the authorized workload. Evidence and exact
+source/build identities remain in ignored `artifacts/apple-watercolor-gpu-v1/`.
+
 ## Native tile reuse and final display batches — 2026-09-16
 
 The current SDR follow-up reproduces two further sources of drawing stalls.
