@@ -51,6 +51,7 @@ val rustBuild by tasks.registering(Exec::class) {
     commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
         listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android"))
     inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
+    inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
     inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
     inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"))
     inputs.property("abi", capyAbis)

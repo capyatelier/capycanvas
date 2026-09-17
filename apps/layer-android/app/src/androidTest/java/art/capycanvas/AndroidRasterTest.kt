@@ -39,6 +39,15 @@ class AndroidRasterTest {
         for (command in listOf("input keyevent KEYCODE_WAKEUP", "wm dismiss-keyguard")) {
             android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
         }
+        // A driver crash can strand the previous run's synthetic contact in
+        // InputDispatcher. Cancel that injected device before opening a picker.
+        for (source in listOf(android.view.InputDevice.SOURCE_STYLUS, android.view.InputDevice.SOURCE_TOUCHSCREEN, android.view.InputDevice.SOURCE_MOUSE)) {
+            val properties = arrayOf(android.view.MotionEvent.PointerProperties().apply { id = 7; toolType = android.view.MotionEvent.TOOL_TYPE_STYLUS })
+            val coords = arrayOf(android.view.MotionEvent.PointerCoords())
+            val now = SystemClock.uptimeMillis()
+            val event = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_CANCEL, 1, properties, coords, 0, 0, 1f, 1f, 0, 0, source, 0)
+            try { automation.injectInputEvent(event, true) } finally { event.recycle() }
+        }
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "raster-test-${System.nanoTime()}")
         ColorPreferencesStore.directoryForTest=File(root,"color-preferences")
         recoveryDirectory = File(root, "recovery")
@@ -160,11 +169,417 @@ class AndroidRasterTest {
         } finally {Native.projectFree(task)}
     }
     private fun manifest(bytes: ByteArray): JSONObject {
-        assertArrayEquals("CAPYRASTER\u0004\u0000".toByteArray(),bytes.copyOfRange(0,12))
+        assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
+        assertTrue("Native archive version", bytes[10].toInt() in 4..5 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+
+    @Test fun imagePlacementBatchHistoryAndStaleRequests() {
+        fun invoke(command: String) { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
+        native { Native.dispatch(it,obj("type" to "preferences","action" to obj("type" to "edit","id" to "missing_profile","value" to 0)).toString()) }
+        val newTask = native { h -> val (id, f) = request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+        try { Native.projectWork(newTask,-1,2000,1500); native { Native.projectAdopt(it,newTask,"null") } } finally { Native.projectFree(newTask) }
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        val configured = InstrumentationRegistry.getArguments().getString("imagePlacementPhotos")
+        val photos = configured?.split(',')?.map { File(activity.filesDir,it) } ?: listOf(3000 to 2400,800 to 600).mapIndexed { i,(w,h) ->
+            File(files,"placement-$i.png").also { file ->
+                val bitmap = android.graphics.Bitmap.createBitmap(w,h,android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                val paint = android.graphics.Paint().apply { shader = android.graphics.LinearGradient(0f,0f,w.toFloat(),h.toFloat(),android.graphics.Color.RED,android.graphics.Color.BLUE,android.graphics.Shader.TileMode.CLAMP) }
+                canvas.drawRect(0f,0f,w.toFloat(),h.toFloat(),paint)
+                file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }; bitmap.recycle()
+            }
+        }
+        fun count() = native { state(it).array("layers").length() }
+        fun sourceIdentity(manifest: JSONObject): String {
+            val sources = JSONObject(manifest.getJSONObject("tiled_sources").toString())
+            for (image in sources.getJSONArray("images").objects()) for (tile in image.getJSONArray("tiles").objects()) {
+                val blob=JSONObject(manifest.getJSONArray("blobs").getJSONObject(tile.getInt("blob")).toString());blob.remove("offset");tile.put("blob",blob)
+            }
+            return sources.getJSONArray("images").toString()
+        }
+        fun batch(inputs: List<File>, afterRead: ((Long,Int,Long)->Unit)? = null) {
+            val control = Native.captureControl()
+            val (task,id) = native { h ->
+                val (id,_) = request(h,"import_image")
+                Native.imageImportTask(h,id,Native.imageImportContext(h,"null","null"),control) to id
+            }
+            try {
+                for (file in inputs) Native.imageImportRead(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),file.name)
+                if (afterRead == null) native { Native.imageImportAdopt(it,task) } else afterRead(task,id,control)
+            } catch (e: Exception) { native { Native.documentComplete(it,id,false,"null") }; throw e }
+            finally { Native.imageImportFree(task); Native.captureFree(control) }
+            tick(); scenario.onActivity { host.documentChanged() }
+        }
+        fun press(command: String) {
+            compose.waitUntil(20_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == command && it.getBoolean("enabled") } == true }
+            compose.onNodeWithTag(command).assertIsDisplayed().performClick()
+            compose.waitForIdle(); tick()
+        }
+        fun memoryStage(label: String) {
+            val stats = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
+            android.util.Log.i("CapyPlacementTest", "$label: pss=${android.os.Debug.getPss()} KiB; mappings=${File("/proc/self/maps").useLines { it.count() }}; canvas=${stats.getLong("resident_bytes")} bytes; status=${File("/proc/self/status").readLines().filter { it.startsWith("Vm") }}")
+        }
+        memoryStage("before batch")
+        val baseCount=count()
+        batch(photos);assertEquals(baseCount+photos.size,count());memoryStage("provisional batch")
+        assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.projectRecoveryTask(it, false) })
+        press("cancel_transform");assertEquals(baseCount,count())
+        val loadingStart=SystemClock.uptimeMillis()
+        batch(photos);press("apply_transform");val loadingMs=SystemClock.uptimeMillis()-loadingStart;memoryStage("applied batch")
+        val fitted=manifest(save("batch-placement.capy"));val identity=sourceIdentity(fitted)
+        val images=fitted.getJSONObject("tiled_sources").getJSONArray("images")
+        for(i in photos.indices) {
+            val extent=images.getJSONObject(i).getJSONArray("extent");val w=extent.getDouble(0);val h=extent.getDouble(1);val scale=minOf(1.0,2000/w,1500/h)
+            val pose=fitted.getJSONObject("document").getJSONArray("layers").getJSONObject(i).getJSONObject("properties").getJSONArray("placement")
+            assertEquals(scale,pose.getDouble(0),1e-6);assertEquals(scale,pose.getDouble(3),1e-6)
+            assertEquals((2000-w*scale)/2,pose.getDouble(4),.01);assertEquals((1500-h*scale)/2,pose.getDouble(5),.01)
+        }
+        invoke("undo");assertEquals(baseCount,count());invoke("redo");assertEquals(baseCount+photos.size,count())
+        memoryStage("before reopen")
+        open(File(files,"batch-placement.capy"));memoryStage("after reopen");assertEquals(identity,sourceIdentity(manifest(save("batch-reopened.capy"))))
+        invoke("scale_rotate");press("placement_original_size");press("apply_transform")
+        val originalSize=manifest(save("batch-original-size.capy"))
+        assertEquals(1.0,originalSize.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").getJSONArray("placement").getDouble(0),1e-6)
+        assertEquals(identity,sourceIdentity(originalSize))
+        val before=count();val malformed=File(files,"batch-malformed.png").apply { writeText("not a photo") }
+        try { batch(listOf(photos.first(),malformed)); fail("Malformed second file was accepted") } catch (_: Exception) { assertEquals(before,count()) }
+        batch(listOf(photos.first())) { task,id,control ->
+            Native.captureCancel(control)
+            try { native { Native.imageImportAdopt(it,task) }; fail("Cancelled batch adopted") } catch (_: Exception) { assertEquals(before,count()) }
+            native { Native.documentComplete(it,id,false,"null") }
+        }
+        batch(listOf(photos.first())) { task,id,_ ->
+            native { h -> val last=state(h).array("layers").objects().last().getLong("id"); Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "select","id" to last,"mask" to false)).toString()) }
+            try { native { Native.imageImportAdopt(it,task) }; fail("Stale target adopted") } catch (_: Exception) { assertEquals(before,count()) }
+            native { Native.documentComplete(it,id,false,"null") }
+        }
+        assertEquals(identity,sourceIdentity(manifest(save("batch-after-errors.capy"))))
+        if (InstrumentationRegistry.getArguments().getString("imagePlacementMotion") == "true") {
+            val movingOnly = InstrumentationRegistry.getArguments().getString("imagePlacementMovingOnly") == "true"
+            val report = obj("device" to android.os.Build.MODEL, "hardware" to android.os.Build.HARDWARE, "soc" to android.os.Build.SOC_MODEL, "loading_ms" to loadingMs,
+                "runs" to org.json.JSONArray(), "pss_before_bytes" to android.os.Debug.getPss().toLong()*1024)
+            val output=File(activity.getExternalFilesDir(null),"image-placement-motion.json")
+            val layerIds=fitted.getJSONObject("document").getJSONArray("layers").objects().take(photos.size).map { it.getLong("id") }
+            fun rasterIdentity(manifest: JSONObject): String {
+                val rasters=org.json.JSONArray(manifest.getJSONArray("rasters").toString())
+                for(raster in rasters.objects())for(tile in raster.getJSONArray("tiles").objects())tile.put("blob",manifest.getJSONArray("blobs").getJSONObject(tile.getInt("blob")).getJSONArray("digest"))
+                return rasters.toString()
+            }
+            fun action(value: JSONObject) { native { Native.dispatch(it,value.toString()) }; scenario.onActivity {host.documentChanged()};tick() }
+            fun stats(): JSONObject = native { JSONObject(Native.query(it,obj("type" to "renderer_stats").toString())) }
+            fun summary(values: org.json.JSONArray): JSONObject? {
+                if(values.length()==0)return null
+                val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()
+                return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"max" to sorted.last())
+            }
+            fun motion(tool: Int, steps: Int): JSONObject {
+                fun measurements(reset: Boolean): JSONObject {
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    var result: JSONObject? = null
+                    host.measurements(reset) { result = it; done.countDown() }
+                    assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    return result!!
+                }
+                fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(
+                    InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+                ).use { it.readBytes().decodeToString() }
+                // Read the published state; Native.snapshot would consume the
+                // publication before Compose can receive it.
+                compose.waitForIdle()
+                val camera=host.snapshot!!.getJSONObject("state").getJSONObject("camera");val zoom=camera.getDouble("zoom");val translation=camera.getJSONArray("translation")
+                var origin=androidx.compose.ui.geometry.Offset.Zero
+                scenario.onActivity { origin=host.surfaceOrigin }
+                val cx=(1000*zoom+translation.getDouble(0)+origin.x).toFloat();val cy=(750*zoom+translation.getDouble(1)+origin.y).toFloat()
+                val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
+                measurements(true)
+                val duration = if (steps >= 180) 5_000L else 1_000L
+                var i = 0
+                while (true) {
+                    val elapsed = SystemClock.uptimeMillis() - start
+                    val phase=when {i==0->android.view.MotionEvent.ACTION_DOWN;elapsed>=duration->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
+                    val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply {id=7;toolType=tool})
+                    val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
+                    val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
+                    val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
+                    try {assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
+                    if (phase == android.view.MotionEvent.ACTION_UP) break
+                    i++; SystemClock.sleep(4)
+                }
+                // The host's Choreographer is the only frame producer during
+                // motion. Capture its timeline independently of GPU timings.
+                SystemClock.sleep(100)
+                native { Unit } // Drain delivered input, without creating a frame.
+                val timeline = measurements(false)
+                assertNull(host.failure)
+                if (timeline.getJSONArray("inputs").length() == 0) {
+                    InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
+                        try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                        finally { screenshot.recycle() }
+                    }
+                }
+                assertTrue("The canvas received input at ($cx,$cy), camera=$camera; state=${host.snapshot?.getJSONObject("state")?.getJSONObject("layer_tools")}", timeline.getJSONArray("inputs").length() > 0)
+                val layer = shell("dumpsys SurfaceFlinger --list").lineSequence()
+                    .firstOrNull { it.contains("SurfaceView[${activity.packageName}/") && it.contains("(BLAST)") }
+                    ?.removePrefix("RequestedLayerState{")?.substringBefore(" parentId=")
+                // UiAutomation executes an argument vector; shell quote marks
+                // would become part of this layer name (which has no spaces).
+                val latency = layer?.let { shell("dumpsys SurfaceFlinger --latency $it") }
+                val stats=stats()
+                if(steps>=180)assertTrue("Warm native diagnostics contain 120 rendered updates",stats.getJSONArray("samples").length()>=120)
+                return obj("tool" to tool,"cpu_ms" to summary(stats.getJSONArray("samples")),"gpu_ms" to summary(stats.getJSONArray("gpu_samples")),
+                    "camera" to camera, "input_origin" to org.json.JSONArray(listOf(cx,cy)),
+                    "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency,
+                    "tracked_canvas_bytes" to stats.getLong("resident_bytes"),"process_pss_bytes" to android.os.Debug.getPss().toLong()*1024)
+            }
+            try {
+                action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "stats","visible" to true)))
+                val statsGroup=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
+                action(obj("type" to "customize","action" to obj("type" to "set_column_collapsed","group" to statsGroup,"collapsed" to false)))
+                action(obj("type" to "select_panel_tab","group" to statsGroup,"panel" to "stats"))
+                invoke("fit_canvas")
+                for(index in photos.indices)for(factor in listOf(1.1,1.2,2.0)) {
+                    for(i in layerIds.indices)action(obj("type" to "set_layer_visibility","id" to layerIds[i],"visible" to (i==index)))
+                    action(obj("type" to "layer","action" to obj("op" to "select","id" to layerIds[index],"mask" to false)))
+                    invoke("scale_rotate")
+                    val extent=images.getJSONObject(index).getJSONArray("extent");val scale=minOf(1.0,2000/extent.getDouble(0),1500/extent.getDouble(1))*factor
+                    action(obj("type" to "set_tool_setting","id" to "transform_width","value" to scale))
+                    val entry=obj("extent" to extent,"factor" to factor,"translation" to org.json.JSONArray())
+                    for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_FINGER,android.view.MotionEvent.TOOL_TYPE_STYLUS))
+                        entry.getJSONArray("translation").put(motion(tool,if(tool==android.view.MotionEvent.TOOL_TYPE_STYLUS)180 else 20))
+                    if (movingOnly) {
+                        report.getJSONArray("runs").put(entry);output.writeText(report.toString(2))
+                        println("Photo moving: extent=$extent factor=$factor")
+                        invoke("apply_transform")
+                        continue
+                    }
+                    invoke("apply_transform");invoke("pen");action(obj("type" to "select_brush","id" to 1))
+                    action(obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1.0,0.0,.7,.5))))
+                    entry.put("drawing",motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,180))
+                    val painted=manifest(save("motion-painted.capy"));assertEquals(identity,sourceIdentity(painted))
+                    assertTrue("The stylus paints source-local tiles",painted.getJSONArray("blobs").length()>fitted.getJSONArray("blobs").length())
+                    invoke("undo");val undone=manifest(save("motion-undone.capy"));invoke("redo");val redone=manifest(save("motion-redone.capy"))
+                    assertNotEquals(rasterIdentity(undone),rasterIdentity(redone))
+                    assertEquals(rasterIdentity(painted),rasterIdentity(redone))
+                    report.getJSONArray("runs").put(entry);output.writeText(report.toString(2));println("Photo motion: $entry")
+                    memoryStage("completed photo $index at $factor")
+                }
+                memoryStage("before both visible")
+                for(id in layerIds)action(obj("type" to "set_layer_visibility","id" to id,"visible" to true))
+                memoryStage("both visible")
+                action(obj("type" to "layer","action" to obj("op" to "select","id" to layerIds.first(),"mask" to false)));invoke(if(movingOnly) "scale_rotate" else "pen")
+                report.put("two_layers",motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,180))
+                InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
+                    try { File(activity.getExternalFilesDir(null), "image-placement-two-photos.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                    finally { screenshot.recycle() }
+                }
+            } finally {output.writeText(report.toString(2))}
+        }
+        assertNull(host.failure)
+        println("Android image placement: batch Apply/Cancel, fit, exact source retention, one-step history, reopen, Original Size, malformed/cancelled/stale requests passed")
+    }
+
+    @Test fun imagePlacementSystemPickerAndExternalDrag() {
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }; tick()
+            scenario.onActivity { host.documentChanged() }
+            compose.waitForIdle()
+        }
+        fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+        fun count() = native { state(it).array("layers").length() }
+        fun press(command: String) {
+            compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == command && it.getBoolean("enabled") } == true }
+            compose.onNodeWithTag(command).assertIsDisplayed().performClick(); compose.waitForIdle(); tick()
+        }
+        fun systemNode(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
+                node ?: return null
+                if (predicate(node)) return node
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+        }
+        fun systemClick(name: String, long: Boolean = false) {
+            InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(300, 5_000)
+            val deadline = SystemClock.uptimeMillis() + 15_000
+            var node: android.view.accessibility.AccessibilityNodeInfo? = null
+            while (node == null && SystemClock.uptimeMillis() < deadline) {
+                node = systemNode {
+                    val matches = it.text?.toString()?.contains(name, ignoreCase = true) == true || it.contentDescription?.toString()?.contains(name, ignoreCase = true) == true ||
+                        (name == "Open" && it.text?.toString()?.equals("Select", ignoreCase = true) == true)
+                    matches && (name.startsWith("capy-placement-") || it.isClickable || it.parent?.isClickable == true || it.parent?.parent?.isClickable == true)
+                }
+                if (node == null) SystemClock.sleep(100)
+            }
+            assertNotNull("DocumentsUI item $name", node)
+            var target = node!!
+            if (long || name.startsWith("capy-placement-")) {
+                val bounds = android.graphics.Rect(); target.getBoundsInScreen(bounds)
+                assertFalse("DocumentsUI file has bounds", bounds.isEmpty)
+                android.util.Log.i("CapyPlacementTest", "Picker contact $name long=$long bounds=$bounds description=${target.contentDescription}")
+                val x = bounds.centerX(); val y = bounds.centerY()
+                val command = if (long) "input touchscreen swipe $x $y $x $y ${android.view.ViewConfiguration.getLongPressTimeout() + 200}" else "input touchscreen tap $x $y"
+                ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).use { it.readBytes() }
+            } else {
+                while (!target.isClickable && target.parent != null) target = target.parent
+                assertTrue("DocumentsUI action $name", target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+            }
+            SystemClock.sleep(200)
+        }
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)))
+        val newTask = native { h -> val (id, file) = request(h, "new_document"); Native.projectTask(h, id, "null", file.getLong("epoch"), file.getLong("revision")) }
+        try { Native.projectWork(newTask, -1, 2000, 1500); native { Native.projectAdopt(it, newTask, "null") } } finally { Native.projectFree(newTask) }
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        invoke("fit_canvas")
+        val resolver = activity.contentResolver
+        val prefix = "capy-placement-${System.currentTimeMillis()}"
+        val configured = InstrumentationRegistry.getArguments().getString("imagePlacementPhotos")?.split(',')?.map { File(activity.filesDir, it) }
+        val suffix = if (configured == null) "png" else "jpg"
+        val uris = mutableListOf<android.net.Uri>()
+        try {
+            for (i in 0..1) {
+                val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "$prefix-$i.$suffix")
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, if (suffix == "jpg") "image/jpeg" else "image/png")
+                })!!
+                uris.add(uri)
+                if (configured != null) resolver.openOutputStream(uri)!!.use { output -> configured[i].inputStream().use { it.copyTo(output) } }
+                else {
+                    val bitmap = android.graphics.Bitmap.createBitmap(80 + i * 20, 60, android.graphics.Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(if (i == 0) android.graphics.Color.RED else android.graphics.Color.BLUE)
+                    try { resolver.openOutputStream(uri)!!.use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+                }
+            }
+            val before = count()
+            DocumentController.nativeFileJobsForTest = false
+            invoke("import_image")
+            compose.waitUntil(15_000) { host.documents.images.choosing || host.actionError != null }
+            compose.waitForIdle()
+            assertNull(host.actionError)
+            systemClick("Show roots")
+            systemClick("Recent")
+            systemClick("$prefix-0.$suffix", long = true)
+            systemClick("$prefix-1.$suffix")
+            systemClick("Open")
+            compose.waitUntil(30_000) { count() == before + 2 && !host.documents.images.working }
+            press("cancel_transform"); assertEquals(before, count())
+            println("Android DocumentsUI: real multiple selection, URI result, batch Cancel passed")
+
+            fun dragTo(destination: androidx.compose.ui.geometry.Offset) {
+                lateinit var source: android.view.View
+                lateinit var root: android.widget.FrameLayout
+                var start = androidx.compose.ui.geometry.Offset.Zero
+                var started = false
+                scenario.onActivity { owner ->
+                    root = owner.findViewById(android.R.id.content)
+                    source = android.view.View(owner).apply {
+                        setBackgroundColor(android.graphics.Color.MAGENTA)
+                        setOnTouchListener { view, event ->
+                            if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                                val clip = android.content.ClipData.newUri(resolver, "Placement test", uris.first())
+                                started = view.startDragAndDrop(clip, android.view.View.DragShadowBuilder(view), null,
+                                    android.view.View.DRAG_FLAG_GLOBAL or android.view.View.DRAG_FLAG_GLOBAL_URI_READ)
+                            }
+                            true
+                        }
+                    }
+                    root.addView(source, android.widget.FrameLayout.LayoutParams(64, 64).apply { leftMargin = 100; topMargin = 100 })
+                }
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                scenario.onActivity {
+                    val location = IntArray(2); source.getLocationOnScreen(location)
+                    start = androidx.compose.ui.geometry.Offset(location[0] + 32f, location[1] + 32f)
+                }
+                val down = SystemClock.uptimeMillis()
+                try {
+                    for (i in 0..13) {
+                        val fraction = (i / 12f).coerceAtMost(1f)
+                        val point = start + (destination - start) * fraction
+                        val phase = when (i) { 0 -> android.view.MotionEvent.ACTION_DOWN; 13 -> android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
+                        val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, point.x, point.y, 0).apply { setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN) }
+                        try { assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+                        SystemClock.sleep(50)
+                    }
+                    assertTrue("Android framework started global URI drag", started)
+                } finally { scenario.onActivity { root.removeView(source) } }
+            }
+            val camera = native { state(it).getJSONObject("camera") }
+            val translation = camera.getJSONArray("translation"); val zoom = camera.getDouble("zoom")
+            val point = androidx.compose.ui.geometry.Offset((400 * zoom + translation.getDouble(0)).toFloat(), (300 * zoom + translation.getDouble(1)).toFloat())
+            dragTo(point + host.surfaceOrigin)
+            compose.waitUntil(30_000) { count() == before + 1 && !host.documents.images.working }
+            press("apply_transform")
+            DocumentController.nativeFileJobsForTest = true
+            val dropped = manifest(save("external-drop.capy"))
+            val pose = dropped.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").getJSONArray("placement")
+            val extent = dropped.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("extent")
+            assertEquals(400.0 - extent.getDouble(0) * pose.getDouble(0) / 2, pose.getDouble(4), 2.0)
+            assertEquals(300.0 - extent.getDouble(1) * pose.getDouble(3) / 2, pose.getDouble(5), 2.0)
+            invoke("undo"); assertEquals(before, count())
+            DocumentController.nativeFileJobsForTest = false
+            action(obj("type" to "layer", "action" to obj("op" to "new", "group" to true, "clipped" to false)))
+            val group = native { state(it).array("layers").objects().first().getLong("id") }
+            val row = compose.onNodeWithTag("layer-row-$group").fetchSemanticsNode().boundsInWindow
+            val windowOrigin = IntArray(2); scenario.onActivity { it.window.decorView.getLocationOnScreen(windowOrigin) }
+            dragTo(row.center + androidx.compose.ui.geometry.Offset(windowOrigin[0].toFloat(), windowOrigin[1].toFloat()))
+            compose.waitUntil(30_000) { count() == before + 2 && !host.documents.images.working }
+            press("apply_transform")
+            DocumentController.nativeFileJobsForTest = true
+            val nested = manifest(save("external-group-drop.capy"))
+            assertTrue(nested.getJSONObject("document").getJSONArray("layers").objects().any { it.getJSONObject("properties").optLong("parent", -1) == group })
+            println("Android global URI drag: canvas captured point, group center insertion, Apply and one-step Undo passed")
+
+            val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+            var previous: android.content.ClipData? = null
+            val beforePaste = count()
+            try {
+                DocumentController.nativeFileJobsForTest = false
+                compose.runOnUiThread {
+                    previous = clipboard.primaryClip
+                    clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver, "Placement clipboard test", uris[0]).apply { addItem(android.content.ClipData.Item(uris[1])) })
+                    host.invoke("paste_image")
+                }
+                compose.waitUntil(60_000) { count() == beforePaste + 2 && !host.documents.images.working }
+                press("cancel_transform"); assertEquals(beforePaste, count())
+            } finally {
+                DocumentController.nativeFileJobsForTest = true
+                compose.runOnUiThread { previous?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip() }
+            }
+
+            val retained = nested.getJSONObject("tiled_sources").toString()
+            scenario.recreate(); scenario.onActivity { activity = it }
+            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+            assertEquals(retained, manifest(save("placement-recreated.capy")).getJSONObject("tiled_sources").toString())
+            val control = Native.captureControl()
+            val (task, requestId) = native { h -> val (id, _) = request(h, "import_image"); Native.imageImportTask(h, id, Native.imageImportContext(h, "null", "null"), control) to id }
+            try {
+                Native.imageImportRead(task, resolver.openFileDescriptor(uris.first(), "r")!!.detachFd(), "late.png")
+                native { Native.destroyGpuForTest(it) }; scenario.onActivity { host.documentChanged() }
+                compose.waitUntil(10_000) { host.failure != null }
+                scenario.onActivity { host.restartCanvas() }
+                compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+                try { native { Native.imageImportAdopt(it, task) }; fail("Prepared batch survived a GPU generation change") } catch (_: IllegalStateException) { }
+                native { Native.documentComplete(it, requestId, false, "null") }
+                assertEquals(retained, manifest(save("placement-gpu-recreated.capy")).getJSONObject("tiled_sources").toString())
+            } finally { Native.imageImportFree(task); Native.captureFree(control) }
+            assertNull(host.failure)
+            println("Android placed source survived activity/GPU replacement; retired GPU batch rejected")
+            if (configured != null) for ((file, expected) in configured.zip(listOf(9504 to 6336, 4000 to 6000))) {
+                open(file); invoke("fit_canvas")
+                val opened = manifest(save("opened-${file.name}.capy"))
+                assertEquals(expected.first, opened.getJSONObject("document").getInt("width"))
+                assertEquals(expected.second, opened.getJSONObject("document").getInt("height"))
+            }
+        } finally {
+            DocumentController.nativeFileJobsForTest = true
+            for (uri in uris) resolver.delete(uri, null, null)
+        }
+    }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("photoWorkflow") == "true")
@@ -416,7 +831,8 @@ class AndroidRasterTest {
         val fileAfter=native {state(it).getJSONObject("document_file")}
         assertEquals(fileBefore.getLong("epoch"),fileAfter.getLong("epoch"))
         assertEquals(fileBefore.getJSONObject("location").toString(),fileAfter.getJSONObject("location").toString())
-        assertTrue(fileAfter.getBoolean("modified"))
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "apply_transform").toString()) };tick()
+        assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         val placed=manifest(save("placement-result.capy"))
         assertEquals(before.getJSONObject("document").getJSONObject("color").toString(),placed.getJSONObject("document").getJSONObject("color").toString())
         assertEquals(source.getJSONArray("images").toString(),placed.getJSONObject("tiled_sources").getJSONArray("images").toString())
@@ -446,10 +862,16 @@ class AndroidRasterTest {
         var previous:android.content.ClipData?=null
         try {
             resolver.openOutputStream(uri)!!.use {it.write(pixels)}
-            compose.runOnUiThread {previous=clipboard.primaryClip;clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver,"Capy test image",uri));host.invoke("paste_image")}
-            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.getJSONObject("document").getJSONArray("layers").length()+1}
+            compose.runOnUiThread {
+                previous=clipboard.primaryClip
+                clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver,"Capy test images",uri).apply { addItem(android.content.ClipData.Item(uri)) })
+                host.invoke("paste_image")
+            }
+            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.getJSONObject("document").getJSONArray("layers").length()+2}
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
             assertNull(host.actionError)
+            compose.onNodeWithTag("apply_transform").assertIsDisplayed().performClick()
+            compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.first { it.getString("id")=="placement_original_size" }?.getBoolean("enabled")==false }
             DocumentController.nativeFileJobsForTest=true
             val pasted=manifest(save("placement-pasted.capy"))
             assertEquals("U8",pasted.getJSONObject("document").getJSONObject("color").getString("depth"))
@@ -505,7 +927,10 @@ class AndroidRasterTest {
         assertEquals("Rasterized",image.getString("kind"));assertEquals("U8",image.getString("depth"));assertEquals("DisplayP3",image.getJSONObject("profile").getString("Builtin"))
         assertEquals(activeSource(repaired).getJSONArray("extent").toString(),image.getJSONArray("extent").toString())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(repaired,manifest(save("source-rasterize-undo.capy")))
-        native {Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())};tick();stroke(0.0)
+        native {
+            Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())
+            Native.dispatch(it,obj("type" to "invoke","command" to "pen").toString())
+        };tick();stroke(0.0)
         val painted=manifest(save("source-painted.capy"));val oldId=painted.getJSONObject("document").getLong("active_layer")
         assertTrue(change("repair_source_profile",obj("Builtin" to "ProPhoto"))!!.getBoolean("adds_layer"))
         val added=manifest(save("source-corrected-layer.capy"))

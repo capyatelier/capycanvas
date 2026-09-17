@@ -65,12 +65,14 @@ impl NativeHost {
             .map(|()| bytes))
     }
 
-    fn take_snapshot_with<S: Serializer>(
+    pub(super) fn take_snapshot_with<S: Serializer>(
         &mut self,
         serializer: S,
         incremental: bool,
         incremental_layout: bool,
     ) -> Result<Option<S::Ok>, S::Error> {
+        // Switching publication consumers must reestablish the model baseline.
+        self.last_model_snapshot = None;
         let key = SnapshotKey {
             revision: self.session.state().revision,
             logical: self.logical,

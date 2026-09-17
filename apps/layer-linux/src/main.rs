@@ -172,7 +172,7 @@ fn open_workspace(
         }
     }));
     workspace.recovery.recovered.set(recovered.is_some());
-    workspace.recovery.origin.replace(recovered);
+    if let Err(error) = workspace.recovery.set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
     active.borrow_mut().push(workspace.clone());
     workspace.window.present();
     if let Some(settings) = settings {

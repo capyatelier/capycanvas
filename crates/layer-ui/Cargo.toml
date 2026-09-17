@@ -6,6 +6,8 @@ license.workspace = true
 description = "Portable workspace layout, UI state, actions, and canvas interaction"
 
 [dependencies]
+sha2 = "0.10"
+layer-color = { path = "../layer-color" }
 layer-core = { path = "../layer-core" }
 layer-engine = { path = "../layer-engine" }
 layer-render = { path = "../layer-render" }

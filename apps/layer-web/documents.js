@@ -1,11 +1,14 @@
 import {chooseDocumentColor} from './document-color.js';
 import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
+import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
+export function createDocuments({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,rasterWorker}) {
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
   let nextHandle=0,closing=false;
+  const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,message,gpuOperation,
+    interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const current=app.state().document_file.location?.uri;for(const key of handles.keys())if(key!==current)handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const dialog=(title,build)=>new Promise(resolve=>{
@@ -36,10 +39,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
       const error=element("p","error-message");form.append(error);
       const footer=element("footer");cancel(footer,finish);
       const create=button("Create",()=>{if(!form.reportValidity())return;const options=read();try{
-        if(name.value.trim()||remember.checked){const settings=structuredClone(app.state().settings.new_document);
-          if(name.value.trim())settings.presets.push({name:name.value.trim(),options});if(remember.checked)settings.defaults=options;
-          applyChange(app.dispatch({type:"new_document_settings",settings}));
-        }
+        applyChange(app.dispatch({type:"new_document_preferences",action:{type:"remember",options,name:name.value,defaults:remember.checked}}));
         finish(options);
       }catch(e){error.textContent=String(e);}},"suggested-action");
       footer.append(create);form.append(footer);form.onsubmit=e=>{e.preventDefault();create.click();};
@@ -48,22 +48,27 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
   async function clipboardImage() {
     if(!navigator.clipboard?.read)throw new Error("Image paste is unavailable in this browser. Use Import Image as Layer.");
     const items=await navigator.clipboard.read();
-    const preferred=["web image/tiff","image/tiff","web image/png","web image/jpeg","image/png","image/jpeg"];
-    for(const type of preferred)for(const item of items)if(item.types.includes(type)) {
+    const formats=app.photo_formats(),preferred=formats.flatMap(f=>f.mime_types.flatMap(m=>[`web ${m}`,m]));
+    const files=[];
+    for(const item of items) {
+      const type=preferred.find(type=>item.types.includes(type));if(!type)throw new Error(`Copy a supported image (${formats.map(f=>f.name).join(', ')}) to paste.`);
       const blob=await item.getType(type),mime=type.replace(/^web /,"");
       if(blob.size>512*1024*1024)throw new Error("Clipboard image exceeds 512 MiB");
-      const extension={"image/tiff":"tif","image/png":"png","image/jpeg":"jpg"}[mime];
-      return {file:new File([blob],`Pasted image.${extension}`,{type:mime})};
+      const extension=formats.find(f=>f.mime_types.includes(mime)).extensions[0];
+      files.push(new File([blob],`Pasted image.${extension}`,{type:mime}));
     }
-    throw new Error("Copy a PNG, TIFF or JPEG image to paste, or import the original file.");
+    if(!files.length)throw new Error("Copy an image to paste, or import the original file.");
+    return files;
   }
   function chooseFile(placing=false) {
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:false,types:[{description:"Drawing or photo",accept:{...(placing?{}:{"application/octet-stream":[".capy"]}),"image/jpeg":[".jpg",".jpeg"],"image/png":[".png"],"image/tiff":[".tif",".tiff"]}}]})
-      .then(async([handle])=>({file:await handle.getFile(),handle}));
+    const formats=app.photo_formats(),accept=Object.fromEntries(formats.flatMap(f=>f.mime_types.map(m=>[m,f.extensions.map(e=>'.'+e)])));
+    if(!placing)accept['application/octet-stream']=['.capy'];
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:placing,types:[{description:placing?"Images":"Drawing or photo",accept}]})
+      .then(async handles=>Promise.all(handles.map(async handle=>({file:await handle.getFile(),handle}))));
     return new Promise(resolve=>{
-      const input=element("input");input.type="file";input.accept=(placing?"":".capy,")+".jpg,.jpeg,.png,.tif,.tiff";input.hidden=true;document.body.append(input);
+      const input=element("input");input.type="file";input.multiple=placing;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
       const done=value=>{input.remove();resolve(value);};
-      input.onchange=()=>done(input.files[0]?{file:input.files[0]}:null);input.oncancel=()=>done(null);input.click();
+      input.onchange=()=>done([...input.files].map(file=>({file})));input.oncancel=()=>done(null);input.click();
     });
   }
   async function download(bytes,name,mime) {
@@ -133,11 +138,12 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
           finally{progress.remove();}
         } else if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
-      } else if(["new","open","place","paste"].includes(r.type)) {
+      } else if(["place","paste"].includes(r.type)) {
+        await images.run(id,async()=>r.type==="paste"?clipboardImage():(await chooseFile(true))?.map(c=>c.file));
+      } else if(["new","open"].includes(r.type)) {
         const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;
         if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
-        else {const chosen=r.type==="paste"?await clipboardImage():await chooseFile(r.type==="place");if(!chosen){applyChange(app.finish_document(id,false));return;}
-          if(["place","paste"].includes(r.type)&&chosen.file.size>512*1024*1024)throw new Error("Image or project file exceeds 512 MiB");
+        else {const chosen=(await chooseFile())?.[0];if(!chosen){applyChange(app.finish_document(id,false));return;}
           bytes=new Uint8Array(await chosen.file.arrayBuffer());target=location(chosen.file.name,chosen.handle);}
         message("Preparing drawing…");
         candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button})));
@@ -191,54 +197,79 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
   // Each live tab owns its recovery record through a Web Lock. Abandoned
   // records can be offered in another tab without racing a live drawing.
   const recoveryKey=crypto.randomUUID(),lockName=key=>`capy-raster:${key}`;
-  let recoveryBusy=false,recoveryStarted=false,recoveryVersion=null;
+  let recoveryBusy=false,recoveryStarted=false,recoveryPolicy="",recoveryJobs=Promise.resolve();
+  const heldOrigins=new Set();
   const recoveryCall=(operation,key="")=>rasterWorker({operation:`recover-${operation}`,metadata:key,buffers:[]});
+  const recoveryEvent=event=>{
+    const result=app.recovery_update(recoveryPolicy,event);recoveryPolicy=result.state;return result.update;
+  };
+  const observeRecovery=()=>recoveryEvent({type:"observe",document:app.recovery_document(),owned:recoveryStarted});
+  function executeRecovery(first) {
+    if(!first)return recoveryJobs;
+    const run=async()=>{
+      let work=first;
+      while(work){
+        let success=false;
+        try{
+          switch(work.kind.type){
+            case "capture":await app.save_recovery(recoveryKey);success=true;break;
+            case "retire":await recoveryCall("delete",recoveryKey);success=true;break;
+            case "retire_origin":{
+              const key=work.kind.key;
+              const remove=async()=>{await recoveryCall("delete",key);success=true;};
+              if(heldOrigins.has(key))await remove();
+              else await navigator.locks.request(lockName(key),{ifAvailable:true},async lock=>{if(lock)await remove();});
+              break;
+            }
+            case "restore":{
+              let candidate;
+              try{
+                const state=app.state().document_file,bytes=await recoveryCall("get",work.kind.key);
+                candidate=await gpuOperation(()=>app.prepare_document(0,bytes,0,0,state.epoch,state.revision,true));
+                applyChange(app.adopt_document(candidate,null));candidate=null;wake();
+                observeRecovery();success=true;
+              }finally{candidate?.free();}
+              break;
+            }
+          }
+        }catch(error){message(`Recovery operation failed: ${error}`);}
+        work=recoveryEvent({type:"complete",token:work.token,success}).work;
+      }
+    };
+    recoveryJobs=recoveryJobs.then(run,run);return recoveryJobs;
+  }
   async function retireRecovery() {
-    try {await recoveryCall("delete",recoveryKey);recoveryVersion=null;}
-    catch(error){message(`Previous recovery copy could not be removed: ${error}`);}
+    await executeRecovery(recoveryEvent({type:"retire",discard_origin:true}).work);
   }
   async function autosave() {
-    if(!recoveryStarted||recoveryBusy)return;
-    const state=app.state().document_file;
-    if(state.busy)return;
-    const version=`${state.epoch}:${state.revision}:${state.modified}`;
-    if(version===recoveryVersion)return;
-    recoveryBusy=true;
-    try {
-      if(state.modified)await app.save_recovery(recoveryKey);
-      else await recoveryCall("delete",recoveryKey);
-      recoveryVersion=version;
-    } catch(error) {message(`Recovery copy could not be saved: ${error}`);}
-    finally {recoveryBusy=false;}
+    if(!recoveryStarted)return;
+    await executeRecovery(observeRecovery().work);
   }
   let recoveryInitialization;
   function startRecovery() { return recoveryInitialization ||= initializeRecovery(); }
   async function initializeRecovery() {
     if(!navigator.locks)throw new Error("Recovery storage requires Web Locks");
     await new Promise(resolve=>navigator.locks.request(lockName(recoveryKey),()=>{resolve();return new Promise(()=>{});}));
+    recoveryStarted=true;
+    await executeRecovery(observeRecovery().work);
     for(const key of await recoveryCall("list")) {
       await navigator.locks.request(lockName(key),{ifAvailable:true},async lock=>{
         if(!lock||key===recoveryKey)return;
-        const decision=await dialog("Recover drawing?",(form,finish)=>{
-          form.append(element("p","","An unsaved drawing from a closed tab is available."));
-          const footer=element("footer");
-          footer.append(button("Keep for Later",()=>finish(null)),button("Discard",()=>finish("discard")),button("Recover",()=>finish("recover"),"suggested-action"));form.append(footer);
-        });
-        if(decision==="discard")await recoveryCall("delete",key);
-        if(decision==="recover") {
-          let candidate;
-          try {
-            const state=app.state().document_file,bytes=await recoveryCall("get",key);
-            candidate=await gpuOperation(()=>app.prepare_document(0,bytes,0,0,state.epoch,state.revision,true));
-            applyChange(app.adopt_document(candidate,null));candidate=null;wake();
-            // Establish the replacement before removing the abandoned record.
-            await app.save_recovery(recoveryKey);await recoveryCall("delete",key);
-          } finally {candidate?.free();}
-        }
+        heldOrigins.add(key);
+        try {
+          const offered=recoveryEvent({type:"offer",key,owned:true});
+          if(offered.offer!==key)return;
+          const decision=await dialog("Recover drawing?",(form,finish)=>{
+            form.append(element("p","","An unsaved drawing from a closed tab is available."));
+            const footer=element("footer");
+            footer.append(button("Keep for Later",()=>finish(null)),button("Discard",()=>finish("discard")),button("Recover",()=>finish("recover"),"suggested-action"));form.append(footer);
+          });
+          const event=decision==="recover"?{type:"restore"}:{type:"dismiss",discard:decision==="discard"};
+          await executeRecovery(recoveryEvent(event).work);
+        } finally {heldOrigins.delete(key);}
       });
       if(app.state().document_file.modified)break;
     }
-    recoveryStarted=true;
   }
   setInterval(()=>{
     if(!recoveryStarted && !recoveryBusy && app.gpu_ready() && app.brush_ready()) {
@@ -249,6 +280,7 @@ export function createDocuments({app,dispatch,applyChange,wake,element,button,me
   // Exposed on the existing host controller for deterministic lifecycle tests.
   window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
   return {handle,autosave,startRecovery,refresh(){
+    images.refresh();
     if(closing || !app.state().document_file.close_ready)return;
     closing=true;
     const current=app.state().document_file,extent=app.editor_models(innerWidth,innerHeight).document_options.extent;

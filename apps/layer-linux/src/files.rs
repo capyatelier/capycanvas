@@ -185,19 +185,19 @@ async fn document_request(
     request: &DocumentRequest,
 ) -> Result<bool, String> {
     if let DocumentRequest::ChangeColor { operation } = request {
-        return color::run(w, *operation).await;
+        return color::run(w, id, *operation).await;
     }
-    if let DocumentRequest::ColorHistory { redo } = request {
-        return color::history(w, *redo).await;
+    if let DocumentRequest::ColorHistory { .. } = request {
+        return color::history(w, id).await;
     }
     if matches!(request, DocumentRequest::Place | DocumentRequest::Paste) {
         return place::run(w, matches!(request, DocumentRequest::Paste)).await;
     }
-    if let DocumentRequest::RasterizeSource { layer } = request {
-        return rasterize::run(w, *layer).await;
+    if let DocumentRequest::RasterizeSource { .. } = request {
+        return rasterize::run(w, id).await;
     }
-    if let DocumentRequest::RepairSourceProfile { layer } = request {
-        return source::repair(w, *layer).await;
+    if let DocumentRequest::RepairSourceProfile { .. } = request {
+        return source::repair(w, id).await;
     }
     if matches!(request, DocumentRequest::Properties) {
         return properties::show(w).await;

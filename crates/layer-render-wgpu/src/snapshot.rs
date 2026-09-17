@@ -66,6 +66,10 @@ impl CaptureControl {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
+    /// Share cancellation with a source decoder without borrowing its worker job.
+    pub fn cancellation_flag(&self) -> &AtomicBool {
+        &self.cancelled
+    }
     pub fn output_rows(&self) -> u32 {
         self.output_rows.load(Ordering::Relaxed)
     }
@@ -105,6 +109,12 @@ impl WgpuRasterizer {
     }
 }
 impl SnapshotGpu {
+    /// A host observation for stale asynchronous candidates; policy lives in
+    /// the shared workflow, while surface/device lifetime remains host-owned.
+    pub fn same_device(&self, other: &Self) -> bool {
+        *self.device == *other.device
+    }
+
     /// Run on the file/inspection worker. Cloned handles keep the device alive
     /// through this job even if its canvas closes; loss still fails the job.
     pub fn capture(
@@ -275,6 +285,21 @@ impl SnapshotRenderer {
             limits,
             control,
         })
+    }
+
+    /// One source/composite decision for native streaming writers and browser
+    /// worker transport. Exact delivery preserves hidden straight RGB too.
+    pub fn output_source(
+        &self,
+        extent: [u32; 2],
+        target: &SourceInterpretation,
+        options: layer_core::color::OutputEncoding,
+        matte: Option<[f32; 3]>,
+    ) -> Option<Arc<layer_core::color::source::SourceImage>> {
+        if extent != self.extent || options.conversion != Default::default() || matte.is_some() {
+            return None;
+        }
+        self.identity_source(target)
     }
 
     pub fn identity_source(

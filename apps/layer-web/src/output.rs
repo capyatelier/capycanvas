@@ -159,15 +159,9 @@ pub(super) async fn render_output(
         None
     };
     let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
-    let original = if flatten.is_none()
-        && extent == metadata.extent
-        && metadata.recipe.encoding.conversion == Default::default()
-        && metadata.recipe.background.matte().is_none()
-    {
-        capture.identity_source(&metadata.recipe.interpretation())
-    } else {
-        None
-    };
+    let original = flatten.is_none().then(|| capture.output_source(
+        extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
+    )).flatten();
     let buffers = if let Some(original) = original {
         let project =
             layer_color::photo_project((*original).clone(), "Original", metadata.color.depth)

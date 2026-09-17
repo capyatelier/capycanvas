@@ -43,19 +43,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target = prepared.document().color;
         // Tool colors and the canvas background keep their color appearance;
         // the document operation only changes artwork interpretation/backing.
-        let matrix = old.space.linear_transform(target.space);
-        let convert = |color: &mut [f32; 4]| {
-            let rgb = layer_core::color::rgb::apply(
-                matrix,
-                [color[0], color[1], color[2]].map(f64::from),
-            );
-            color[..3].copy_from_slice(&rgb.map(|v| v as f32));
-        };
         let mut brush = self.brush.clone();
         let mut view = self.view;
-        convert(&mut brush.color_rgba_linear);
-        convert(&mut brush.color_dynamics.secondary_color_rgba_linear);
-        convert(&mut view.background_rgba_linear);
+        layer_render::remap_document_colors(old.space, target.space, &mut brush, &mut view);
         brush.validate().map_err(DocumentError::InvalidBrush)?;
         if !view.background_rgba_linear.iter().all(|v| v.is_finite()) {
             return Err(DocumentError::InvalidLayerOperation(

@@ -117,8 +117,12 @@ export async function checkColorEdits({call,evaluate,settle}) {
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');};
   const backing=value=>({blobs:value.blobs,sources:value.tiled_sources,color:value.document.color});
+  await invoke('fit_canvas');
+  await evaluate("layerApp.dispatch({type:'select_brush',id:1})");
+  await settle();
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   await evaluate(`layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'DisplayP3',rgba:[.8,.2,.1,1]}}})`);
+  await settle();
   for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',45,1],['mouseReleased',45,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   await wait('layerApp.state().document_file.modified');const original=await save();
   async function change(command,label,value,apply=true){
@@ -165,6 +169,7 @@ export async function checkSourceImports({call,evaluate}) {
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),await evaluate('JSON.parse(sdrPlaceFile).epoch'));
   assert.deepEqual(await evaluate('layerApp.state().document_file.location'),await evaluate('JSON.parse(sdrPlaceFile).location'));
+  await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
   const placed=await save();assert.deepEqual(placed.document.color,{space:'DisplayP3',depth:'U8'});assert.deepEqual(placed.tiled_sources.images,original.images);assert.deepEqual(placed.tiled_sources.profiles,original.profiles);
   await invoke('undo');await idle();assert.deepEqual((await save()).tiled_sources,before.tiled_sources);
   await invoke('redo');await idle();assert.deepEqual((await save()).tiled_sources,placed.tiled_sources);
@@ -177,10 +182,12 @@ export async function checkSourceImports({call,evaluate}) {
   const focus=await evaluate('({x:innerWidth/2,y:3})');
   for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...focus,button:'left',clickCount:1});
   await wait('document.hasFocus()');
+  await call('Browser.grantPermissions',{origin:await evaluate('location.origin'),permissions:['clipboardReadWrite','clipboardSanitizedWrite']},null);
   const pasted=await call('Runtime.evaluate',{expression:`(async()=>{await navigator.clipboard.write([new ClipboardItem({'web image/png':new Blob([sdrPhotoBytes],{type:'image/png'})})]);return true})()`,awaitPromise:true,returnByValue:true,userGesture:true});
   if(pasted.exceptionDetails)throw Error(JSON.stringify(pasted.exceptionDetails));
   await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});
   await idle();assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+  await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
   const copy=await save();assert.equal(copy.document.layers.length,placed.document.layers.length+1);
   assert.deepEqual(copy.document.color,placed.document.color);assert.deepEqual(copy.tiled_sources.profiles,original.profiles);
   for(const image of copy.tiled_sources.images){assert.equal(image.depth,'U16');assert.deepEqual(image.tiles,original.images[0].tiles);}
@@ -211,7 +218,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   await change('rasterize_source',null);const rasterized=await save();
   assert.equal(source(rasterized).kind,'Rasterized');assert.equal(source(rasterized).depth,'U8');assert.deepEqual(source(rasterized).profile,{Builtin:'DisplayP3'});assert.deepEqual(source(rasterized).extent,source(repaired).extent);
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
-  await invoke('fit_canvas');await settle();
+  await invoke('fit_canvas');await invoke('pen');await settle();
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons]of[['mousePressed',0,1],['mouseMoved',40,1],['mouseReleased',40,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   const painted=await save(),old=painted.document.layers.find(l=>l.id===painted.document.active_layer);
@@ -293,6 +300,7 @@ export async function checkProfileLibrary({evaluate}) {
   await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
   await wait(`![...document.querySelectorAll('.profile-library .profile-entry')].some(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   await evaluate(`[...document.querySelectorAll('.profile-library button')].find(b=>b.textContent==='Done').click();layerApp.dispatch({type:'close_settings'});`);
+  await invoke('save_document_as');await idle();
   console.log('ICC library exact bytes/dedup, corruption rejection/repair, independent embedded preset ownership, saved-profile export picker and Preferences management passed');
 }
 

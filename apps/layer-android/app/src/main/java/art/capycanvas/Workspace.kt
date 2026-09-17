@@ -212,6 +212,9 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").headerGestures(header).workspaceGestures(dock)
+        .imageCanvasDropTarget(host) { point ->
+            dock.chromeRegions.values.any { it.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
+        }
         .workspaceDragCursor(dock.dragCursor)
         .drawWithContent { drawContent(); host.recordUiDraw() }
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {

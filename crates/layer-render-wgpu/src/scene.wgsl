@@ -36,6 +36,21 @@ fn scene_read(image:texture_2d<f32>,v:Vertex)->vec4<f32> {
     }
     return textureSampleLevel(image,sampling,v.uv,0.);
 }
+fn scene_image_texel(p:vec2<i32>)->vec4<f32> {
+    if any(p<vec2(0)) || any(p>=vec2<i32>(textureDimensions(front))) {return vec4(0.);}
+    return textureLoad(front,p,0);
+}
+// The same transparent-edge bilinear kernel as pixel_transform.wgsl, fused
+// with ordinary source-over composition when the source occupies one image.
+fn scene_image(v:Vertex)->vec4<f32> {
+    let world=(v.position.xy-settings.rect.xy)+settings.color.xy;
+    let m=settings.operation_linear;
+    let local=vec2(m.x*world.x+m.z*world.y,m.y*world.x+m.w*world.y)+settings.operation_offset.xy;
+    if any(local<vec2(-.5)) || any(local>vec2<f32>(textureDimensions(front))+vec2(.5)) {return vec4(0.);}
+    let p=local-vec2(.5);let base=vec2<i32>(floor(p));let t=fract(p);
+    return mix(mix(scene_image_texel(base),scene_image_texel(base+vec2(1,0)),t.x),
+        mix(scene_image_texel(base+vec2(0,1)),scene_image_texel(base+vec2(1,1)),t.x),t.y);
+}
 fn luminance(c: vec3<f32>) -> f32 { return dot(c,vec3<f32>(.3,.59,.11)); }
 fn set_luminance(c: vec3<f32>, l: f32) -> vec3<f32> {
     var r = c + l - luminance(c);
@@ -117,6 +132,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     return foreground*outline+background*interior;
 }
 @fragment fn fragment_main(v: Vertex) -> @location(0) vec4<f32> {
+    if settings.options.x==12. {return scene_image(v)*settings.options.y;}
     if any(v.uv<vec2<f32>(0.)) || any(v.uv>vec2<f32>(1.)) { discard; }
     let op = u32(settings.options.x);
     if op == 0u { return settings.color; }

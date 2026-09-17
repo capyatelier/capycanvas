@@ -365,9 +365,11 @@ pub(super) struct OpenOptions {
     pub dimension: u32,
     pub photo_policy: layer_ui::PhotoOpenPolicy,
     pub name: String,
-    pub recovered: bool,
+    pub intent: layer_ui::ImportIntent,
+    #[serde(default)]
+    pub source_bytes: Option<usize>,
 }
-pub(super) async fn open(bytes: js_sys::Uint8Array, options: OpenOptions) -> Result<Project, JsValue> {
+pub(super) async fn open(bytes: js_sys::Uint8Array, options: OpenOptions) -> Result<layer_ui::ImportedDocument, JsValue> {
     let buffers = js_sys::Array::new();
     buffers.push(&bytes);
     let wire = JsFuture::from(raster_worker::call(
@@ -376,23 +378,21 @@ pub(super) async fn open(bytes: js_sys::Uint8Array, options: OpenOptions) -> Res
     let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
         .as_string().ok_or_else(|| js("Missing project worker metadata"))?;
     let buffers = js_sys::Reflect::get(&wire, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
-    unpack(&metadata, buffers, true).await
+    let source = serde_wasm_bindgen::from_value(js_sys::Reflect::get(&wire, &js("source"))?).map_err(js)?;
+    Ok(layer_ui::ImportedDocument { project: unpack(&metadata, buffers, true).await?, source })
 }
 
 #[wasm_bindgen]
 pub async fn raster_worker_read(options: &str, bytes: Vec<u8>) -> Result<JsValue, JsValue> {
     let options: OpenOptions = serde_json::from_str(options).map_err(js)?;
-    let project = if bytes.starts_with(b"CAPY") {
-        Project::read(bytes.as_slice(), limits(options.dimension)).map_err(js)?
-    } else {
-        if options.recovered { return Err(js("Recovery file is not a native drawing")); }
-        let source = layer_color::photo::read_photo(std::io::Cursor::new(&bytes), layer_color::photo::DecodeLimits::from_memory_budget(photo_memory_budget())).map_err(js)?;
-        let depth = options.photo_policy.editing_depth(source.interpretation.depth);
-        let name = options.name.rsplit_once('.').map_or(options.name.as_str(), |(stem, _)| stem);
-        layer_color::photo_project(source, name, depth).map_err(js)?
-    };
+    let mut photo_limits = layer_color::photo::DecodeLimits::from_memory_budget(photo_memory_budget());
+    if let Some(remaining) = options.source_bytes { photo_limits.source_bytes = photo_limits.source_bytes.min(remaining); }
+    let imported = layer_ui::read_import(std::io::Cursor::new(&bytes), options.intent, options.photo_policy,
+        &options.name, limits(options.dimension), photo_limits, &Default::default()).map_err(js)?;
     drop(bytes);
-    pack(project).await
+    let wire = pack(imported.project).await?;
+    js_sys::Reflect::set(&wire, &js("source"), &serialize(&imported.source)?)?;
+    Ok(wire)
 }
 
 #[wasm_bindgen]

@@ -505,6 +505,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(())
     }
+    /// A contact on active photo handles/body directly manipulates placement.
+    /// Touch outside them keeps the existing two-finger camera gesture route.
+    pub(super) fn placement_touch_hit(&self, position: [f32; 2]) -> bool {
+        let Some(t) = self.operation.current.as_ref().filter(|t| t.placement.is_some()) else { return false; };
+        let Some(inverse) = t.basis.inverse() else { return false; };
+        let p = self.state.camera.input_transform().map(Point { x: position[0], y: position[1] });
+        t.hit(inverse.map(p), self.ruler_reach()).is_some()
+    }
     pub(super) fn update_transform_drag(&mut self) -> Result<bool, String> {
         let Some(t) = &mut self.operation.current else {
             return Ok(false);

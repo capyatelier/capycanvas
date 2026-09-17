@@ -204,6 +204,8 @@ impl Scene {
                 }
                 self.jobs.clear();
                 self.used.fill(false);
+                #[cfg(target_os = "android")]
+                let mut recorded_tiles = 0;
                 for coordinate in changed {
                     if page_rect(coordinate)
                         .intersect(PixelRect::full(plan.extent))
@@ -223,6 +225,19 @@ impl Scene {
                     )?;
                     self.free(page);
                     mip.updates += 1;
+                    // A cold photo preview can replay thousands of source and
+                    // paint passes even when all source pixels are cached.
+                    // Bound Adreno command storage at the existing upload/queue
+                    // boundary, before recording the next tile batch. The
+                    // finished preview is still published only after success.
+                    #[cfg(target_os = "android")]
+                    {
+                        recorded_tiles += 1;
+                        if recorded_tiles == 64 {
+                            Self::submit_chunk(r, encoder, "bounded placed photo preview")?;
+                            recorded_tiles = 0;
+                        }
+                    }
                 }
                 mip.preview = preview;
                 mip.watercolor = watercolor;

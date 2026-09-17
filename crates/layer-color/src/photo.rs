@@ -34,6 +34,7 @@ pub use tiff_io::{read_tiff, write_tiff, write_tiff_rows};
 
 /// Decoder capabilities, also used by file pickers, clipboard and file drops.
 /// These describe implemented readers, not formats merely known to a host OS.
+#[derive(serde::Serialize)]
 pub struct PhotoFormat {
     pub name: &'static str,
     pub extensions: &'static [&'static str],
@@ -51,7 +52,7 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
     #[cfg(all(feature = "heif", target_os = "linux"))]
     PhotoFormat { name: "AVIF", extensions: &["avif"], mime_types: &["image/avif"] },
 ];
-fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
+pub fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
     PHOTO_FORMATS.iter().filter(|_format| {
         #[cfg(all(feature = "heif", target_os = "linux"))]
         if matches!(_format.name, "HEIF" | "AVIF") { return heif_io::available(); }

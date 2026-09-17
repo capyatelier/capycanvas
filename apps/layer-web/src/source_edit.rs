@@ -1,33 +1,26 @@
 //! Retained-source operations keep original tiles shared until explicit Apply.
 use super::*;
 use layer_core::{
-    LayerId, Project,
+    Project,
     color::{
         ColorProfile, DocumentColor,
         source::{SourceImage, SourceInterpretation},
     },
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu, SnapshotPreview};
-use layer_ui::{DocumentRequest, HostRequestKind};
+use layer_ui::SourceWorkflow;
 use std::sync::Arc;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 #[wasm_bindgen]
 pub struct WebSourceCandidate {
-    original: Arc<SourceImage>,
+    workflow: SourceWorkflow,
     converted: Arc<SourceImage>,
-    project: Project,
     gpu: SnapshotGpu,
     control: CaptureControl,
     lost: Arc<std::sync::Mutex<Option<String>>>,
     background: [f32; 4],
     time: f32,
-    epoch: u64,
-    revision: u64,
-    request: u32,
-    layer: LayerId,
-    rasterize: bool,
-    baked: bool,
     clipped: u64,
     profile: String,
     previews: Vec<SnapshotPreview>,
@@ -52,7 +45,7 @@ impl WebSourceCandidate {
         self.clipped as f64
     }
     pub fn adds_layer(&self) -> bool {
-        self.baked && !self.rasterize
+        self.workflow.adds_layer()
     }
     pub fn source_profile(&self) -> String {
         self.profile.clone()
@@ -67,18 +60,7 @@ impl WebApp {
             .0
             .as_ref()
             .ok_or_else(|| js("Canvas unavailable"))?;
-        if c.control.is_cancelled()
-            || !Arc::ptr_eq(&live.lost, &c.lost)
-            || live.lost.lock().unwrap().is_some()
-            || s.state().document_file.epoch != c.epoch
-            || s.engine().document().revision != c.revision
-            || !s.state().requests.iter().any(|r| r.id == c.request)
-        {
-            return Err(js(
-                "The document or canvas changed; prepare the source change again",
-            ));
-        }
-        Ok(())
+        c.workflow.identity.validate(s, c.control.is_cancelled(), Arc::ptr_eq(&live.lost, &c.lost) && live.lost.lock().unwrap().is_none()).map_err(js)
     }
 }
 #[wasm_bindgen]
@@ -90,35 +72,11 @@ impl WebApp {
         control: &output::WebCaptureControl,
     ) -> Result<js_sys::Promise, JsValue> {
         let s = &self.session;
-        s.require_document_idle().map_err(js)?;
         let profile: Option<ColorProfile> = serde_wasm_bindgen::from_value(profile).map_err(js)?;
-        let (layer, rasterize) = s
-            .state()
-            .requests
-            .iter()
-            .find_map(|r| {
-                if r.id == id {
-                    match &r.kind {
-                        HostRequestKind::Document {
-                            request: DocumentRequest::RepairSourceProfile { layer },
-                        } => Some((LayerId(*layer), false)),
-                        HostRequestKind::Document {
-                            request: DocumentRequest::RasterizeSource { layer },
-                        } => Some((LayerId(*layer), true)),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| js("Source request is no longer active"))?;
-        let project = s.capture_project_recovery().map_err(js)?;
-        let l = project
-            .document
-            .layer(layer)
-            .ok_or_else(|| js("Source layer no longer exists"))?;
-        let original = l.source.clone().ok_or_else(|| js("No retained source"))?;
-        let baked = !l.raster.is_empty() || !l.pending_operations.is_empty() || l.asset.is_some();
+        let workflow = SourceWorkflow::begin(s, id).map_err(js)?;
+        workflow.validate_choice(&profile).map_err(js)?;
+        let project = workflow.project.clone();
+        let original = workflow.original.clone();
         let live = s
             .engine()
             .backend()
@@ -130,14 +88,9 @@ impl WebApp {
         let control = control.inner.clone();
         let background = s.engine().view().background_rgba_linear;
         let time = s.engine().animation_time();
-        let epoch = s.state().document_file.epoch;
-        let revision = project.document.revision;
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
-            let (converted, clipped, name) = if rasterize {
-                if profile.is_some() {
-                    return Err(js("Rasterization uses the document profile"));
-                }
+            let (converted, clipped, name) = if workflow.rasterize() {
                 // Only the selected source enters the conversion worker, never
                 // the rest of the master or its painted raster backing.
                 let mut document =
@@ -182,7 +135,7 @@ impl WebApp {
                     .ok_or_else(|| js("Missing converted source"))?;
                 (converted, clipped, name)
             } else {
-                let metadata=serde_json::to_string(&serde_json::json!({"interpretation":original.interpretation,"color":project.document.color,"profile":profile.ok_or_else(||js("Choose a source profile"))?})).map_err(js)?;
+                let metadata=serde_json::to_string(&serde_json::json!({"interpretation":original.interpretation,"color":project.document.color,"profile":profile.unwrap()})).map_err(js)?;
                 let result = JsFuture::from(raster_worker::call(
                     "source-profile",
                     &metadata,
@@ -204,20 +157,13 @@ impl WebApp {
             };
             output::cancelled(&control)?;
             Ok(WebSourceCandidate {
-                original,
+                workflow,
                 converted,
-                project,
                 gpu,
                 control,
                 lost,
                 background,
                 time,
-                epoch,
-                revision,
-                request: id,
-                layer,
-                rasterize,
-                baked,
                 clipped,
                 profile: name,
                 previews: Vec::new(),
@@ -230,16 +176,9 @@ impl WebApp {
         mut c: WebSourceCandidate,
     ) -> Result<js_sys::Promise, JsValue> {
         self.validate_source_candidate(&c)?;
-        let candidate = if c.rasterize {
-            self.session
-                .preview_rasterized_source(c.layer, &c.original, c.converted.clone())
-        } else {
-            self.session
-                .preview_layer_source(c.layer, &c.original, (*c.converted).clone())
-        }
-        .map_err(js)?;
+        let candidate = c.workflow.preview(&self.session, c.converted.clone(), c.control.is_cancelled(), true).map_err(js)?;
         Ok(future_to_promise(async move {
-            for project in [&c.project, &candidate] {
+            for project in [&c.workflow.project, &candidate] {
                 let mut snapshot = c
                     .gpu
                     .capture(
@@ -258,26 +197,16 @@ impl WebApp {
                 );
             }
             output::cancelled(&c.control)?;
+            c.workflow.comparison_completed().map_err(js)?;
             Ok(c.into())
         }))
     }
-    pub fn adopt_source(&mut self, c: WebSourceCandidate) -> Result<JsValue, JsValue> {
+    pub fn adopt_source(&mut self, mut c: WebSourceCandidate) -> Result<JsValue, JsValue> {
         self.validate_source_candidate(&c)?;
-        if c.previews.len() != 2 {
-            return Err(js("Preview the complete source result first"));
-        }
-        if c.rasterize {
-            self.session
-                .apply_rasterized_source(c.layer, &c.original, c.converted)
-                .map_err(js)?
-        } else {
-            self.session
-                .repair_layer_source(c.layer, &c.original, (*c.converted).clone())
-                .map_err(js)?;
-        }
+        c.workflow.commit(&mut self.session, c.control.is_cancelled(), true).map_err(js)?;
         let mut change = self
             .session
-            .complete_document_request(c.request, Ok(true))
+            .complete_document_request(c.workflow.identity.request(), Ok(true))
             .map_err(js)?;
         change.canvas_wake = true;
         serialize(&change)
@@ -293,14 +222,7 @@ pub fn raster_worker_source_profile(metadata: &str) -> Result<JsValue, JsValue> 
     }
     let mut request: Request = serde_json::from_str(metadata).map_err(js)?;
     let name = layer_color::profile_description(&request.interpretation.profile).map_err(js)?;
-    request.interpretation.profile = request.profile;
-    request.interpretation.profile_assumed = false;
-    layer_color::WorkingDecoder::new(
-        &request.interpretation,
-        request.color.space,
-        Default::default(),
-    )
-    .map_err(js)?;
+    request.interpretation = layer_color::repair_source_interpretation(request.interpretation, request.color.space, request.profile).map_err(js)?;
     serialize(&serde_json::json!({"interpretation":request.interpretation,"source_profile":name}))
 }
 #[wasm_bindgen]

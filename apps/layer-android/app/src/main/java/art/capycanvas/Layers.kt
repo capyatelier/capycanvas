@@ -164,7 +164,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     val id=layer.getLong("id")
                     val target=drag?.takeIf { it.target==id }
                     val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
-                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                    LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
                         held={contactHeld=it},
                         cancelContext={menuGeneration++; menu=null},

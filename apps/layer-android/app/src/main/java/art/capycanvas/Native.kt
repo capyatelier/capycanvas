@@ -23,6 +23,7 @@ internal object Native {
     @JvmStatic external fun surfaceReady(handle: Long): Boolean
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
+    @JvmStatic external fun modelUpdate(handle: Long): String?
     @JvmStatic external fun query(handle: Long, query: String): String
     /** Stateless shared color forms/previews; safe without a session handle. */
     @JvmStatic external fun colorUi(request: String): String
@@ -34,8 +35,18 @@ internal object Native {
     /** File worker only: atomic publication of a captured recovery snapshot. */
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
+    @JvmStatic external fun photoFormats(): String
+    @JvmStatic external fun imageImportContext(handle: Long, screen: String, destination: String): String
+    @JvmStatic external fun imageImportTask(handle: Long, request: Int, context: String, cancel: Long): Long
+    @JvmStatic external fun imageImportRead(task: Long, fd: Int, name: String)
+    @JvmStatic external fun imageImportProfilePrompt(task: Long): String
+    @JvmStatic external fun imageImportAssumeProfile(task: Long, profile: String)
+    @JvmStatic external fun imageImportAdopt(handle: Long, task: Long)
+    @JvmStatic external fun imageImportFree(task: Long)
     /** File worker only; consumes the detached descriptor, retains the task. */
     @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
+    @JvmStatic external fun recoveryUpdate(state: String, event: String): String
+    @JvmStatic external fun profileLibrary(request: String, bytes: ByteArray): String
     @JvmStatic external fun inspectProfileSummary(bytes: ByteArray): String
     @JvmStatic external fun inspectProfile(bytes: ByteArray): String
     @JvmStatic external fun projectProfilePrompt(task: Long): String

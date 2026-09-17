@@ -440,6 +440,63 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
 }
 
 #[test]
+fn placed_photo_live_composition_matches_tiled_with_alpha_and_affine_edges() {
+    let size = [1024, 768];
+    let mut builder = SourceBuilder::new(size, SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 8 * 1024 * 1024).unwrap();
+    for y in 0..size[1] {
+        let row: Vec<_> = (0..size[0]).flat_map(|x| [
+            (x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8,
+            ((x / 7 + y / 11) % 256) as u8,
+        ]).collect();
+        builder.push_row(&row).unwrap();
+    }
+    let mut photo = Layer::paint(LayerId(1), "moving alpha photo");
+    photo.source = Some(Arc::new(builder.finish().unwrap()));
+    photo.opacity = 0.63;
+    let mut behind = photo.clone();
+    behind.id = LayerId(2);
+    behind.opacity = 0.78;
+    behind.properties.placement = Affine([0.3, 0., 0., 0.3, 140.25, 87.5]);
+    let canvas = [519, 337]; // Both partial edge tiles and full interior tiles.
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cached = None;
+    for (step, transform) in [
+        Affine([0.4, 0., 0., 0.4, 10.25, 19.75]),
+        Affine([0.4, 0., 0., 0.4, -71.25, -45.75]),
+        Affine([0.35, 0.15, -0.15, 0.35, 100.25, -38.5]),
+        Affine([-0.4, 0., 0., 0.4, 403.25, 33.75]),
+    ].into_iter().enumerate() {
+        photo.properties.placement = transform;
+        let layers = [photo.clone(), behind.clone()];
+        let mut images = Vec::new();
+        for tiled in [false, true] {
+            if let Some(scene) = r.scene.as_mut() { scene.set_tiled_composition(tiled); }
+            r.submit(FramePacket {
+                view: ViewState { width_px: canvas[0], height_px: canvas[1],
+                    background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                document_extent: canvas, layers: &layers, dabs: &[], dab_batches: &[],
+                restore_rasters: &[], reset_layers: step == 0 && !tiled,
+                composite_all: true, time_seconds: 0.,
+            }).unwrap();
+            // Export intentionally uses exact source tiles. Inspect the live
+            // composite instead, so this covers the cached display draw.
+            images.push(page_bytes(&r, r.composite_texture.as_ref().unwrap()));
+        }
+        let cache = r.scene.as_ref().unwrap().placement_cache(photo.id).unwrap();
+        let work = (cache.0, cache.1, cache.2, r.metrics().source_tile_misses);
+        if let Some(before) = &cached { assert_eq!(&work, before, "moving reuses source pixels"); }
+        else { cached = Some(work); }
+        let maximum = images[0].chunks_exact(4).zip(images[1].chunks_exact(4))
+            .map(|(a, b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+            .fold(0.0f32, f32::max);
+        assert!(maximum < 0.0001, "pose {step}: live pixel error {maximum}");
+    }
+}
+
+#[test]
 fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
     let size = [2048; 2];
     let mut builder = SourceBuilder::new(

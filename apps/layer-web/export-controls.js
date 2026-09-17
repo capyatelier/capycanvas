@@ -22,24 +22,36 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
     const visible=()=>{quality.closest("label").hidden=format.value!=="Jpeg";for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
     const load=()=>{
-      if(!model.profiles.some(p=>JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
-      format.value=recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
+      if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
+      format.value=recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
       intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
       if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;visible();
     };
     destination.onchange=()=>preference({type:"get",index:Number(destination.value)});
-    format.onchange=()=>{if(format.value==="Jpeg"){depth.value="U8";if(background.value==="Preserve")background.value="White";}visible();};
+    const updateDraft=action=>{
+      const draft=app.export_draft(readRecipe(),action);recipe=draft.recipe;
+      for(const[node,allowed]of[[format,draft.formats],[depth,draft.depths],[background,draft.backgrounds],[dither,draft.dithers]]) {
+        for(const option of node.options)option.disabled=!allowed.includes(option.value);
+      }
+      load();
+    };
+    format.onchange=()=>updateDraft({type:"format",value:format.value});
+    profile.onchange=()=>updateDraft({type:"profile",value:model.profiles[Number(profile.value)]});
+    depth.onchange=()=>updateDraft({type:"depth",value:depth.value});
+    background.onchange=()=>updateDraft({type:"background",value:background.value});
     size.onchange=resolution.onchange=visible;load();
     const error=element("p","error-message");form.append(error);
     form.append(button("Import ICC Profile…",async()=>{
-      try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;error.textContent="";}
+      try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});error.textContent="";}
       catch(e){error.textContent=String(e);}
     }));
-    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;invalidate();}catch(e){error.textContent=String(e);}}));
-    const selected=()=>app.export_validate({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
+    form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
+    const readRecipe=()=>({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
       size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
       resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
+    const selected=()=>app.export_validate(readRecipe());
+    updateDraft({type:"refresh"});
     const presetName=field("Preset name",element("input"));presetName.maxLength=80;
     const presetButtons=element("div","document-size");
     const presetAction=type=>{try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){error.textContent=String(e);}};
@@ -52,7 +64,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     let preferenceBusy=false;
     async function preference(action){
       if(preferenceBusy||running)return;preferenceBusy=true;const inputs=[...form.querySelectorAll('input,select,button')];inputs.forEach(n=>n.disabled=true);
-      try{library=await app.export_presets(action);destination.replaceChildren();library.names.forEach((name,i)=>{const option=element("option","",name);option.value=i;destination.append(option);});currentPreset=library.index??0;destination.value=String(currentPreset);if(library.recipe){recipe=library.recipe;load();}invalidate();error.textContent="";}
+      try{library=await app.export_presets(action);destination.replaceChildren();library.names.forEach((name,i)=>{const option=element("option","",name);option.value=i;destination.append(option);});currentPreset=library.index??0;destination.value=String(currentPreset);if(library.recipe){recipe=library.recipe;load();updateDraft({type:"refresh"});}invalidate();error.textContent="";}
       catch(e){destination.value=String(currentPreset);error.textContent=String(e);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
     }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");

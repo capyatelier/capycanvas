@@ -73,11 +73,7 @@ impl SnapshotRenderer {
         self.control.output_rows.store(0, Ordering::Relaxed);
         let encoder = layer_color::WorkingEncoder::new(self.color().space, target, options)?;
         let extent = self.output_extent;
-        if extent == self.extent
-            && options.conversion == Default::default()
-            && matte.is_none()
-            && let Some(source) = self.identity_source(target)
-        {
+        if let Some(source) = self.output_source(extent, target, options, matte) {
             // Preserve exact integer samples, including hidden straight RGB,
             // when delivery does not require compositing or color conversion.
             let mut rows = source.rows();

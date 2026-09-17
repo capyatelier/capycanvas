@@ -6,12 +6,21 @@
 
 mod camera;
 mod document_creation;
-pub use document_creation::{DocumentBackground, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
+pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
+mod document_workflow;
+pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow};
+
+pub mod profile_library;
+
+mod import_policy;
+pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import};
+
+pub mod recovery;
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
 mod export;
-pub use export::{ExportForm, ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportResolution, ExportSize};
+pub use export::{ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportProfile, ExportRecipe, ExportResolution, ExportSize};
 mod export_presets;
 pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
@@ -54,7 +63,7 @@ mod shortcuts;
 mod theme;
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{ImageLayerDestination, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
+pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{
@@ -1154,6 +1163,9 @@ pub enum UiAction {
     },
     NewDocumentSettings {
         settings: NewDocumentSettings,
+    },
+    NewDocumentPreferences {
+        action: NewDocumentAction,
     },
     EditSettings {
         settings: Settings,

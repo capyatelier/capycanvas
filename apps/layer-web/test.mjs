@@ -1,3 +1,4 @@
+import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
@@ -32,6 +33,7 @@ import assert from "node:assert/strict";
 import { benchRaster } from "./raster-bench.test.mjs";
 import { checkRaster } from "./raster.test.mjs";
 import { checkPhotoPaint } from "./photo-paint.test.mjs";
+import { checkImagePlacement } from "./image-placement.test.mjs";
 import { checkEditor } from "./editor.test.mjs";
 import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
@@ -100,6 +102,7 @@ chrome.stdio[4].on("data", (data) => {
     } else if (event.method === "Runtime.exceptionThrown")
       errors.push(
         event.params.exceptionDetails.exception?.description ||
+          event.params.exceptionDetails.exception?.value ||
           event.params.exceptionDetails.text,
       );
     else if (
@@ -135,7 +138,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, 30000);
+    }, process.argv.includes("--shared-workflows") ? 150000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -148,6 +151,7 @@ function call(method, params = {}, sessionId = session) {
   });
 }
 async function evaluate(expression) {
+  if(process.env.LAYER_TEST_VERBOSE)process.stderr.write(`Evaluate: ${expression.slice(0,300)}\n`);
   const result = await call("Runtime.evaluate", {
     expression,
     returnByValue: true,
@@ -222,8 +226,21 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--photo-paint")) {
+  if (process.argv.includes("--image-placement")) {
+    await checkImagePlacement({call,evaluate,settle});
+    checkRasterErrors();
+  } else if (process.argv.includes("--photo-paint")) {
     await checkPhotoPaint({call,evaluate,settle});
+    checkRasterErrors();
+  } else if (process.argv.includes("--shared-workflows")) {
+    await checkSdrColor({call,evaluate,settle});
+    await checkColorEdits({call,evaluate,settle});
+    await checkSourceImports({call,evaluate,settle});
+    await checkSourceEdits({call,evaluate,settle});
+    await checkExportPresets({evaluate});
+    await checkProfileLibrary({evaluate});
+    await checkPhotoCorrections({evaluate,settle});
+    await checkFlattenedCopy({evaluate});
     checkRasterErrors();
   } else if (process.argv.includes("--raster-bench")) {
     await benchRaster({evaluate,settle});

@@ -27,6 +27,7 @@ internal data class DocumentPicker(val request: JSONObject, val epoch: Long, val
 
 /** SAF owns locations; the shared session owns dirty checkpoints and close policy. */
 internal class DocumentController(private val host: CanvasHost, private val application: Application) {
+    val images = ImageImportController(host, application)
     companion object {
         // JNI integration tests own private file descriptors. SAF UI has a
         // separate end-to-end test and must not race those native job owners.
@@ -65,12 +66,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (request == null) return
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
-            "open", "place" -> picker = DocumentPicker(request, approval.first, approval.second)
-            "paste" -> try {
-                val clipboard = application.getSystemService(android.content.ClipboardManager::class.java)
-                val uri = clipboard.primaryClip?.let { clip -> (0 until clip.itemCount).firstNotNullOfOrNull { clip.getItemAt(it).uri } }
-                if (uri == null) complete(id!!, false, "Copy a PNG, TIFF or JPEG image to paste.") else transfer(request, uri, approval)
-            } catch(e:Exception) { complete(id!!,false,e.message ?: "Clipboard image is unavailable") }
+            "open" -> picker = DocumentPicker(request, approval.first, approval.second)
+            "place", "paste" -> images.start(request, document.getString("type") == "paste")
             "export" -> { exportRecipe = null; exportRequest = request }
             "save" -> document.objectOrNull("location")?.let { transfer(request, Uri.parse(it.getString("uri")), approval) }
                 ?: run { picker = DocumentPicker(request, approval.first, approval.second) }
@@ -238,7 +235,23 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     val activity = LocalActivity.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        controller.picked(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, result.data?.flags ?: 0)
+        if (controller.images.choosing) {
+            try {
+                val uris = if (result.resultCode == Activity.RESULT_OK) result.data?.clipData?.imageUris() ?: result.data?.data?.let(::listOf) else null
+                controller.images.picked(uris, result.data?.flags ?: 0)
+            } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: "Cannot read the selected images") }
+        } else controller.picked(if (result.resultCode == Activity.RESULT_OK) result.data?.data else null, result.data?.flags ?: 0)
+    }
+    LaunchedEffect(controller.images.choosing) {
+        if (controller.images.choosing && !controller.images.pickerLaunched) {
+            controller.images.pickerLaunched = true
+            try { launcher.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }) } catch (e: Exception) { controller.images.cancel(); host.reportActionError(e.message ?: "Could not open the image picker") }
+        }
     }
     LaunchedEffect(request?.getInt("id"), file.optLong("epoch")) { controller.observe(request, file) }
     val link = state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "open_link" }
@@ -261,6 +274,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/octet-stream"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                if (opening) putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes + "application/octet-stream")
                 if (!opening) putExtra(Intent.EXTRA_TITLE, document.getString("name"))
             }
             try { launcher.launch(intent) } catch (e: Exception) { controller.pickerFailed(e) }
@@ -269,6 +283,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     LaunchedEffect(file.optBoolean("close_ready")) { if (file.optBoolean("close_ready")) { host.recovery.retire(); activity?.finish() } }
     // Registered before workspace/popup handlers, which get first refusal.
     BackHandler { host.invoke("close_document") }
+    ImagePlacementControls(host, state)
     state.optString("host_error").takeIf { it.isNotEmpty() && it != "null" }?.let { message ->
         var dismissed by remember(message) { mutableStateOf(false) }
         if (!dismissed) AlertDialog(onDismissRequest = { dismissed = true }, title = { Text("Could not complete action") }, text = { Text(message) },

@@ -17,6 +17,7 @@ import org.json.JSONObject
 /** Delivery edits an explicit copy; the shared recipe validates every choice. */
 @Composable internal fun ExportDialog(host: CanvasHost, onDismiss: () -> Unit, onChoose: (JSONObject, Int) -> Unit) {
     var form by remember { mutableStateOf<JSONObject?>(null) }
+    var draft by remember { mutableStateOf<JSONObject?>(null) }
     var recipe by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var destination by remember { mutableStateOf("0") }
@@ -51,7 +52,9 @@ import org.json.JSONObject
             result.objectOrNull("recipe")?.let {selected->
                 val model=JSONObject(form!!.toString())
                 if(model.getJSONArray("profiles").objects().none{it.getJSONObject("profile").toString()==selected.getJSONObject("profile").getJSONObject("profile").toString()})model.getJSONArray("profiles").put(selected.getJSONObject("profile"))
-                form=model;recipe=selected;quality=selected.getInt("jpeg_quality").toString()
+                form=model
+                draft=JSONObject(host.withNative{Native.query(it,obj("type" to "export_draft","recipe" to selected,"action" to obj("type" to "refresh")).toString())})
+                recipe=draft!!.getJSONObject("recipe");quality=selected.getInt("jpeg_quality").toString()
                 val bounds=selected.optJSONObject("size")?.optJSONObject("Fit");fit=bounds!=null;enlarge=bounds?.optBoolean("enlarge")?:false
                 bounds?.getJSONArray("bounds")?.let{width=it.getInt(0).toString();height=it.getInt(1).toString()}
                 val dpi=selected.optJSONObject("resolution")?.optInt("Ppi")
@@ -68,7 +71,17 @@ import org.json.JSONObject
             preference(obj("type" to "get","index" to 0))
         }catch(e:Exception){error=e.message}
     }
-    fun change(key: String, value: Any) { recipe = JSONObject(recipe!!.toString()).put(key, value) }
+    fun change(key: String, value: Any) {
+        if(preferenceBusy)return
+        preferenceBusy=true
+        scope.launch {
+            try {
+                val result=JSONObject(host.withNative{Native.query(it,obj("type" to "export_draft","recipe" to recipe!!,"action" to obj("type" to key,"value" to value)).toString())})
+                draft=result;recipe=result.getJSONObject("recipe");error=null
+            }catch(e:Exception){error=e.message}finally{preferenceBusy=false}
+        }
+    }
+    fun choices(key:String, labels:List<Pair<String,String>>) = labels.filter { pair -> draft?.getJSONArray(key)?.values()?.contains(pair.first) != false }
     AlertDialog(onDismissRequest = ::dismiss, title = { Text("Export image") },
         dismissButton = { TextButton(::dismiss) { Text("Cancel") } },
         confirmButton = { TextButton(enabled = recipe != null && !preview.busy && !preferenceBusy, modifier = Modifier.testTag("export-choose-file"), onClick = {
@@ -86,11 +99,7 @@ import org.json.JSONObject
                 val value = recipe; val model = form
                 if (value != null && model != null && !preview.busy && !preferenceBusy) {
                     ColorChoice("Destination",presetNames.mapIndexed{i,name->i.toString() to name},destination){scope.launch{preference(obj("type" to "get","index" to it.toInt()))}}
-                    ColorChoice("Format", listOf("Png" to "PNG", "Tiff" to "TIFF", "Jpeg" to "JPEG"), value.getString("format")) {
-                        recipe = JSONObject(value.toString()).put("format", it).apply {
-                            if (it == "Jpeg") { put("depth", "U8"); if (getString("background") == "Preserve") put("background", "White") }
-                        }
-                    }
+                    ColorChoice("Format", choices("formats",listOf("Png" to "PNG", "Tiff" to "TIFF", "Jpeg" to "JPEG")), value.getString("format")) { change("format",it) }
                     val profiles = model.getJSONArray("profiles").objects()
                     val profile = profiles.indexOfFirst { it.toString() == value.getJSONObject("profile").toString() }.coerceAtLeast(0)
                     ColorChoice("Output profile", profiles.mapIndexed { i, p -> i.toString() to p.getString("name") }, profile.toString()) { change("profile", profiles[it.toInt()]) }
@@ -98,14 +107,14 @@ import org.json.JSONObject
                         form = JSONObject(model.toString()).apply { getJSONArray("profiles").put(imported) }
                         change("profile", imported)
                     }
-                    ColorChoice("Bit depth", listOf("U8" to "8-bit", "U16" to "16-bit"), value.getString("depth")) { change("depth", it) }
-                    ColorChoice("Transparency", listOf("Preserve" to "Preserve", "White" to "White background", "Black" to "Black background"), value.getString("background")) { change("background", it) }
+                    ColorChoice("Bit depth", choices("depths",listOf("U8" to "8-bit", "U16" to "16-bit")), value.getString("depth")) { change("depth", it) }
+                    ColorChoice("Transparency", choices("backgrounds",listOf("Preserve" to "Preserve", "White" to "White background", "Black" to "Black background")), value.getString("background")) { change("background", it) }
                     val encoding = value.getJSONObject("encoding")
                     val conversion = encoding.getJSONObject("conversion")
                     ColorChoice("Rendering intent", listOf("RelativeColorimetric" to "Relative colorimetric", "Perceptual" to "Perceptual", "Saturation" to "Saturation", "AbsoluteColorimetric" to "Absolute colorimetric"), conversion.getString("intent")) {
                         change("encoding", JSONObject(encoding.toString()).put("conversion", JSONObject(conversion.toString()).put("intent", it)))
                     }
-                    ColorChoice("Dither", listOf("None" to "None", "Stochastic8" to "Stochastic (8-bit output)"), encoding.getString("dither")) { change("encoding", JSONObject(encoding.toString()).put("dither", it)) }
+                    ColorChoice("Dither", choices("dithers",listOf("None" to "None", "Stochastic8" to "Stochastic (8-bit output)")), encoding.getString("dither")) { change("encoding", JSONObject(encoding.toString()).put("dither", it)) }
                     if (value.getString("format") == "Jpeg") OutlinedTextField(quality, { quality = it }, label = { Text("JPEG quality (1–100)") }, singleLine = true)
                     Row { Checkbox(fit, { fit = it }); Text("Fit within pixel size") }
                     if (fit) { OutlinedTextField(width, { width = it }, label = { Text("Maximum width") }, singleLine = true); OutlinedTextField(height, { height = it }, label = { Text("Maximum height") }, singleLine = true) }

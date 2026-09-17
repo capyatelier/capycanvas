@@ -3,6 +3,7 @@
 mod renderer;
 mod header;
 mod snapshot;
+mod model_update;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;
@@ -49,6 +50,7 @@ pub struct NativeHost {
     deferred_contacts: std::collections::BTreeSet<u64>,
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
+    last_model_snapshot: Option<Vec<u8>>,
     last_workspace_model_revision: Option<u64>,
     last_workspace_content_revision: Option<u64>,
     last_camera_revision: Option<u64>,
@@ -81,6 +83,7 @@ impl NativeHost {
             deferred_contacts: Default::default(),
             last_pen: None,
             last_snapshot: None,
+            last_model_snapshot: None,
             last_workspace_model_revision: None,
             last_workspace_content_revision: None,
             last_camera_revision: None,
@@ -582,9 +585,12 @@ impl NativeHost {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
+            RecoveryDocument,
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
+            ExportDraft { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction },
             Header { request: header::HeaderRequest },
             FilterPackageModules {
                 manifest: String,
@@ -702,7 +708,9 @@ impl NativeHost {
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
             Query::DocumentColor => json!(self.session.engine().document().color),
+            Query::RecoveryDocument => json!(self.session.recovery_document()),
             Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),
+            Query::ExportDraft { recipe, action } => json!(recipe.draft(action)),
             Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
@@ -727,6 +735,7 @@ impl NativeHost {
                         .action_tooltip(&label, &action, state.platform)
                 )
             }
+            Query::ImageLayerDrop { target, fraction } => json!({"position": self.session.image_layer_drop_hint(target, fraction)}),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerDrop {
                 epoch,

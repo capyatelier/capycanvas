@@ -1,24 +1,18 @@
 //! Worker conversion + private GPU preparation; only publication borrows the
 //! live session. Retained original photographs are never copied to the worker.
 use super::*;
-use layer_core::{ColorTransition, PreparedColorTransition, Project};
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotPreview};
-use layer_ui::{DocumentColorOperation, DocumentRequest, HostRequestKind};
+use layer_ui::{ColorWorkflow, ColorPreparation};
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 #[wasm_bindgen]
 pub struct WebColorCandidate {
-    project: Project,
-    transition: Option<PreparedColorTransition>,
+    workflow: ColorWorkflow,
     renderer: Option<WgpuRasterizer>,
-    request: u32,
-    epoch: u64,
-    revision: u64,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     control: CaptureControl,
     previews: Vec<SnapshotPreview>,
     clipped: u64,
-    copy: bool,
 }
 #[wasm_bindgen]
 impl WebColorCandidate {
@@ -40,7 +34,7 @@ impl WebColorCandidate {
         self.control.cancel();
     }
     pub fn is_copy(&self) -> bool {
-        self.copy
+        self.workflow.is_copy()
     }
     pub fn clipped_channels(&self) -> f64 {
         self.clipped as f64
@@ -57,62 +51,10 @@ impl WebApp {
     ) -> Result<js_sys::Promise, JsValue> {
         let copy = copy.unwrap_or(false);
         let s = &self.session;
-        s.require_document_idle().map_err(js)?;
-        let request = s
-            .state()
-            .requests
-            .iter()
-            .find(|r| r.id == id)
-            .ok_or_else(|| js("Color request is no longer active"))?;
-        let change: Option<layer_color::DocumentColorChange> =
-            serde_wasm_bindgen::from_value(choice).map_err(js)?;
-        let (transition, candidate) = match &request.kind {
-            HostRequestKind::Document {
-                request: DocumentRequest::ColorHistory { redo },
-            } => {
-                let (prepared, project) = s
-                    .prepare_document_color_transition(if *redo {
-                        ColorTransition::Redo
-                    } else {
-                        ColorTransition::Undo
-                    })
-                    .map_err(js)?;
-                (Some(prepared), Some(project))
-            }
-            HostRequestKind::Document {
-                request: DocumentRequest::ChangeColor { operation },
-            } => {
-                if !matches!(
-                    (operation, change),
-                    (
-                        DocumentColorOperation::Assign,
-                        Some(layer_color::DocumentColorChange::Assign(_))
-                    ) | (
-                        DocumentColorOperation::Convert,
-                        Some(layer_color::DocumentColorChange::Convert { .. })
-                    ) | (
-                        DocumentColorOperation::Depth,
-                        Some(layer_color::DocumentColorChange::Depth { .. })
-                    )
-                ) {
-                    return Err(js("Color choice does not match the request"));
-                }
-                (None, None)
-            }
-            _ => return Err(js("Not a document color request")),
-        };
-        if copy
-            && !matches!(
-                change,
-                Some(layer_color::DocumentColorChange::Convert { .. })
-            )
-        {
-            return Err(js("Only color conversion can create a flattened copy"));
-        }
-        if copy && transition.is_some() {
-            return Err(js("A history operation cannot create a copy"));
-        }
-        let original = s.capture_project_recovery().map_err(js)?;
+        let mut workflow = ColorWorkflow::begin(s, id).map_err(js)?;
+        let change: Option<layer_color::DocumentColorChange> = serde_wasm_bindgen::from_value(choice).map_err(js)?;
+        let plan = workflow.select(change, copy).map_err(js)?;
+        let original = workflow.original.clone();
         let live = s
             .engine()
             .backend()
@@ -121,8 +63,6 @@ impl WebApp {
             .ok_or_else(|| js("Canvas unavailable"))?;
         let gpu = live.renderer.snapshot_gpu();
         let lost = live.lost.clone();
-        let epoch = s.state().document_file.epoch;
-        let revision = original.document.revision;
         let mut brush = s.engine().configured_brush().clone();
         let mut view = s.engine().view();
         let time = s.engine().animation_time();
@@ -130,18 +70,11 @@ impl WebApp {
         Ok(future_to_promise(async move {
             raster_project::wait_backing(&original).await?;
             output::cancelled(&control)?;
-            let history = transition.is_some();
-            let (project, clipped) = if let Some(project) = candidate {
+            let history = workflow.is_history();
+            let (project, clipped) = if let Some(project) = workflow.candidate.take() {
                 (project, 0)
             } else if copy {
-                let Some(layer_color::DocumentColorChange::Convert { space, options }) = change
-                else {
-                    unreachable!()
-                };
-                let color = layer_core::color::DocumentColor {
-                    space,
-                    depth: original.document.color.depth,
-                };
+                let ColorPreparation::Flatten { color, options } = plan else { unreachable!() };
                 let mut recipe = layer_ui::ExportRecipe::further_editing(color);
                 recipe.depth = color.depth;
                 recipe.encoding.conversion = options;
@@ -214,21 +147,7 @@ impl WebApp {
                 (project, clipped)
             };
             let old_background = view.background_rgba_linear;
-            let matrix = original
-                .document
-                .color
-                .space
-                .linear_transform(project.document.color.space);
-            let transform = |color: &mut [f32; 4]| {
-                let rgb = layer_core::color::rgb::apply(
-                    matrix,
-                    [color[0], color[1], color[2]].map(f64::from),
-                );
-                color[..3].copy_from_slice(&rgb.map(|v| v as f32));
-            };
-            transform(&mut brush.color_rgba_linear);
-            transform(&mut brush.color_dynamics.secondary_color_rgba_linear);
-            transform(&mut view.background_rgba_linear);
+            layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush, &mut view);
             let mut previews = Vec::new();
             if !history {
                 for (source, background) in [
@@ -273,18 +192,15 @@ impl WebApp {
                 raster_worker::install(&mut renderer);
                 Some(renderer)
             };
+            workflow.candidate = Some(project);
+            if !history { workflow.comparison_completed().map_err(js)?; }
             Ok(WebColorCandidate {
-                project,
-                transition,
+                workflow,
                 renderer,
-                request: id,
-                epoch,
-                revision,
                 lost,
                 control,
                 previews,
                 clipped,
-                copy,
             }
             .into())
         }))
@@ -293,11 +209,7 @@ impl WebApp {
         &self,
         candidate: &WebColorCandidate,
     ) -> Result<js_sys::Promise, JsValue> {
-        if !candidate.copy || candidate.previews.len() != 2 {
-            return Err(js("Preview a flattened copy before saving"));
-        }
-        output::cancelled(&candidate.control)?;
-        let project = candidate.project.clone();
+        let project = candidate.workflow.copy_project(candidate.control.is_cancelled()).map_err(js)?.clone();
         let control = candidate.control.clone();
         Ok(future_to_promise(async move {
             let bytes = raster_project::save(project).await?;
@@ -306,50 +218,24 @@ impl WebApp {
         }))
     }
     pub fn adopt_color(&mut self, mut candidate: WebColorCandidate) -> Result<JsValue, JsValue> {
-        if candidate.copy {
-            return Err(js("Save the converted copy as a separate document"));
-        }
         let s = &mut self.session;
-        output::cancelled(&candidate.control)?;
-        s.require_document_idle().map_err(js)?;
         let live = s
             .engine()
             .backend()
             .0
             .as_ref()
             .ok_or_else(|| js("Canvas unavailable"))?;
-        if !std::sync::Arc::ptr_eq(&live.lost, &candidate.lost)
-            || live.lost.lock().unwrap().is_some()
-            || s.state().document_file.epoch != candidate.epoch
-            || s.engine().document().revision != candidate.revision
-            || !s.state().requests.iter().any(|r| r.id == candidate.request)
-        {
-            return Err(js(
-                "The document or canvas changed; prepare the color change again",
-            ));
-        }
-        let prepared = if let Some(prepared) = candidate.transition.take() {
-            prepared
-        } else {
-            s.prepare_document_color_transition(ColorTransition::Apply {
-                color: candidate.project.document.color,
-                layers: candidate.project.document.layers,
-            })
-            .map_err(js)?
-            .0
-        };
+        let device_current = std::sync::Arc::ptr_eq(&live.lost, &candidate.lost) && live.lost.lock().unwrap().is_none();
+        let prepared = candidate.workflow.prepare_commit(s, candidate.control.is_cancelled(), device_current).map_err(js)?;
         let mut renderer = candidate
             .renderer
             .take()
             .ok_or_else(|| js("Color canvas is not ready"))?;
         let [width, height] = s.state().camera.viewport;
         renderer.resize_surface(width, height).map_err(js)?;
-        let live = s.renderer_mut().0.as_mut().unwrap();
-        let retired = std::mem::replace(&mut live.renderer, renderer);
-        if let Err(error) = s.commit_document_color_transition(prepared) {
-            s.renderer_mut().0.as_mut().unwrap().renderer = retired;
-            return Err(js(error));
-        }
+        s.commit_document_color_candidate(prepared, |live| {
+            std::mem::swap(&mut live.0.as_mut().unwrap().renderer, &mut renderer);
+        }).map_err(js)?;
         let live = s.renderer_mut().0.as_mut().unwrap();
         live.presenter = ViewportPresenter::for_renderer(&live.renderer, live.config.format);
         self.deferred_contacts.clear();
@@ -357,7 +243,7 @@ impl WebApp {
         serialize(
             &self
                 .session
-                .complete_document_request(candidate.request, Ok(true))
+                .complete_document_request(candidate.workflow.identity.request(), Ok(true))
                 .map_err(js)?,
         )
     }

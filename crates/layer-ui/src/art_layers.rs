@@ -226,7 +226,7 @@ pub enum LayerAction {
         fraction: f32,
     },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerDropPosition {
     Above,
@@ -235,10 +235,20 @@ pub enum LayerDropPosition {
 }
 /// Captured destination for an external image insertion. Resolve and validate
 /// again against the same document revision when prepared sources arrive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageLayerDestination {
     pub target: LayerId,
     pub position: LayerDropPosition,
+}
+/// Identity and document-space destination captured before a host yields to a
+/// picker, provider or decoder. Camera changes never retarget an accepted drop.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ImagePlacementContext {
+    pub epoch: u64,
+    pub revision: u64,
+    pub target: LayerId,
+    pub center: Option<Point>,
+    pub destination: Option<ImageLayerDestination>,
 }
 #[derive(Default)]
 pub(super) struct LayerInteraction {
@@ -406,6 +416,32 @@ impl<R: CanvasRenderer> UiSession<R> {
             .map(|(_, position)| position)
     }
     /// Shared external-image feedback, independent of a dragged internal layer.
+    pub fn image_placement_context(
+        &self,
+        screen: Option<Point>,
+        destination: Option<ImageLayerDestination>,
+    ) -> Result<ImagePlacementContext, String> {
+        self.require_document_idle()?;
+        self.image_layer_destination(destination)?;
+        Ok(ImagePlacementContext {
+            epoch: self.state.document_file.epoch,
+            revision: self.engine.document().revision,
+            target: self.engine.document().active_target(),
+            center: screen.map(|p| self.state.camera.input_transform().map(p)),
+            destination,
+        })
+    }
+    pub fn validate_image_placement(&self, context: &ImagePlacementContext) -> Result<(), String> {
+        self.require_document_idle()?;
+        if self.state.document_file.epoch != context.epoch
+            || self.engine.document().revision != context.revision
+            || self.engine.document().active_target() != context.target
+        {
+            return Err("The document or selected layer changed while importing; try again".into());
+        }
+        self.image_layer_destination(context.destination)?;
+        Ok(())
+    }
     pub fn image_layer_drop_hint(&self, target: u64, fraction: f32) -> Option<LayerDropPosition> {
         if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction)
             || self.operation.active() || !self.engine.backend().supports_tiled_sources()

@@ -663,6 +663,18 @@ pub extern "system" fn Java_art_capycanvas_Native_snapshot(
     }
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_modelUpdate(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jstring {
+    match unsafe { app(handle) }.host.take_model_update_bytes() {
+        Ok(Some(bytes)) => string(&mut env, String::from_utf8(bytes).map_err(error)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(e) => string(&mut env, Err(error(e))),
+    }
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_query(
     mut env: JNIEnv,
     _: JClass,

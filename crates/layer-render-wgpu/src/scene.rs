@@ -1096,14 +1096,38 @@ impl Scene {
     ) -> Result<bool, GpuRasterError> {
         let layer = &packet.layers[index];
         if layer.kind != LayerKind::Paint
-            || layer.properties.placement != layer_core::Affine::IDENTITY
             || layer.properties.blend != layer_core::LayerBlend::Normal
-            || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
             || (r.preview_layer_id == Some(layer.id) && !r.preview_requires_base)
         {
             return Ok(false);
         }
         let mask = layer.mask.as_ref().filter(|m| m.enabled);
+        // A completed local image is already one texture. Sample its affine
+        // directly in the ordinary source-over draw instead of materializing
+        // a transformed scratch tile and then blending that tile.
+        if mask.is_none() && r.preview_layer_id != Some(layer.id)
+            && self.placement_display && self.cached_composition()
+            && let Some(mip) = self.placement_mips.get(&layer.id).filter(|m| m.usable)
+        {
+            let scale = (1 << mip.image.plan.level) as f32;
+            let transform = layer_core::Affine([scale, 0., 0., scale, 0., 0.])
+                .then(layer_core::target_transform(packet.layers, layer.id));
+            let inverse = transform.inverse().ok_or(GpuRasterError::InvalidTransform(
+                "Transform must be finite and invertible"))?.0;
+            let view = mip.image.view.clone();
+            self.draw(r, target, view, None, [0., 0., 256., 256.],
+                [12., layer.opacity, 0., 0.], true);
+            let Some(Job::Draw { data, .. }) = self.jobs.last_mut() else { unreachable!() };
+            data[12..14].copy_from_slice(&tile.map(|n| (n * PAGE_SIZE) as f32));
+            data[24..28].copy_from_slice(&inverse[..4]);
+            data[28..30].copy_from_slice(&inverse[4..]);
+            return Ok(true);
+        }
+        if layer.properties.placement != layer_core::Affine::IDENTITY
+            || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
+        {
+            return Ok(false);
+        }
         if mask.is_some_and(|m| layer_core::target_transform(packet.layers, m.id) != layer_core::Affine::IDENTITY)
         {
             return Ok(false);
@@ -1453,6 +1477,15 @@ impl Scene {
             r.metrics.composited_pixels += dirty.area();
             return Ok(());
         }
+        let clear_composite = self.cached_composition() && r.live_display.is_none()
+            && tiles.is_none() && dirty == PixelRect::full(packet.document_extent);
+        if clear_composite {
+            let c = packet.view.background_rgba_linear;
+            self.jobs.push(Job::Clear(r.composite_view.as_ref().unwrap().clone(), wgpu::Color {
+                r: f64::from(c[0] * c[3]), g: f64::from(c[1] * c[3]),
+                b: f64::from(c[2] * c[3]), a: f64::from(c[3]),
+            }));
+        }
         let mut composited = 0;
         let mut display_tiles = 0;
         let mut submitted = None;
@@ -1472,6 +1505,7 @@ impl Scene {
                 display_tiles = 0;
             }
             composited += page_rect(tile).intersect(dirty).area();
+            let first_job = self.jobs.len();
             let mut output = self.group(r, packet, None, tile)?;
             if overlay {
                 for layer in packet.layers {
@@ -1511,6 +1545,16 @@ impl Scene {
                 display_tiles += 1;
                 continue;
             }
+            // Source-over draws only write their destination. When a tile has
+            // no intermediate reads, target the composite directly. Adjacent
+            // tiles then share one render pass in encode_jobs, including their
+            // background clears, rather than opening a pass and copying each.
+            if self.cached_composition()
+                && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, clear_composite)
+            {
+                self.free(output);
+                continue;
+            }
             // The last effect already writes every pixel. Write directly into
             // the composite region instead of copying its scratch result.
             if let Some(Job::Effect { target, data, .. }) = self.jobs.last_mut()
@@ -1543,6 +1587,48 @@ impl Scene {
         // it fits the original tile ceiling; no terminal CPU wait is needed.
         r.metrics.composited_pixels += composited;
         Ok(())
+    }
+
+    fn compose_tile_direct(
+        &mut self, r: &WgpuRasterizer, first: usize, output: usize,
+        tile: [u32; 2], extent: [u32; 2], cleared: bool,
+    ) -> bool {
+        let target = &self.pool[output].view;
+        let Some(Job::Clear(clear, color)) = self.jobs.get(first) else { return false; };
+        if clear != target || !self.jobs[first + 1..].iter().all(|job| {
+            matches!(job, Job::Draw { target: next, sources, clip: None, .. }
+                if next == target && sources.iter().all(|source| source != target))
+        }) { return false; }
+        let color = *color;
+        let origin = tile.map(|n| (n * PAGE_SIZE) as f32);
+        let clip = page_rect(tile).intersect(PixelRect::full(extent));
+        let composite = r.composite_view.as_ref().unwrap();
+        let mut background = [0.; 32];
+        background[..6].copy_from_slice(&[
+            origin[0], origin[1], PAGE_SIZE as f32, PAGE_SIZE as f32,
+            extent[0] as f32, extent[1] as f32,
+        ]);
+        background[12..16].copy_from_slice(&[color.r as f32, color.g as f32, color.b as f32, color.a as f32]);
+        if cleared {
+            // A complete rebuild clears once through the attachment load op.
+            // Avoid switching from clear to source-over pipelines in every tile.
+            self.jobs.remove(first);
+        } else {
+            self.jobs[first] = Job::Draw {
+                target: composite.clone(), sources: [r.empty_view.clone(), r.empty_view.clone()],
+                data: background, over: false, clip: Some(clip),
+            };
+        }
+        for job in &mut self.jobs[first + usize::from(!cleared)..] {
+            let Job::Draw { target, data, clip: scissor, .. } = job else { unreachable!() };
+            *target = composite.clone();
+            data[0] += origin[0];
+            data[1] += origin[1];
+            data[4] = extent[0] as f32;
+            data[5] = extent[1] as f32;
+            *scissor = Some(clip);
+        }
+        true
     }
 
     // wgpu handles hash by stable resource identity, not mutable GPU contents.

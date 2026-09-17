@@ -185,10 +185,24 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for (_, framebuffer) in self.framebuffers.drain() {
             unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
         }
+        // Adreno can accumulate host mappings across pool resets until command
+        // recording fails, even with ample RAM. Free the completed buffers as
+        // well as releasing pool storage: reset alone and periodic reclamation
+        // still failed during sustained large-photo editing. This is wgpu's
+        // existing all-completed boundary, before the pool is reused.
+        let reset_flags = if cfg!(target_os = "android") {
+            if !self.free.is_empty() {
+                unsafe { self.device.raw.free_command_buffers(self.raw, &self.free) };
+                self.free.clear();
+            }
+            vk::CommandPoolResetFlags::RELEASE_RESOURCES
+        } else {
+            vk::CommandPoolResetFlags::default()
+        };
         let _ = unsafe {
             self.device
                 .raw
-                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
+                .reset_command_pool(self.raw, reset_flags)
         };
     }
 

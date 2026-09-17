@@ -13,7 +13,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufWriter, Write},
     os::fd::FromRawFd,
     time::{Duration, Instant},
 };
@@ -56,7 +56,7 @@ struct Task {
     revision: u64,
     request: u32,
     recovered: bool,
-    photo: bool,
+    source: layer_ui::ImportSource,
     place: Option<layer_core::LayerId>,
     gpu_generation: u64,
     payload: Payload,
@@ -140,7 +140,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             revision: session.engine().document().revision,
             request: id as u32,
             recovered: false,
-            photo: false,
+            source: layer_ui::ImportSource::Master,
             place,
             gpu_generation: a.gpu_generation,
             payload,
@@ -174,44 +174,25 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     };
     let project = match input {
         Some(file) => {
-            let mut input = BufReader::new(file);
-            if input.fill_buf().map_err(error)?.starts_with(b"CAPY") {
-                if t.place.is_some() {
-                    return Err("Choose a PNG, TIFF or JPEG image to place".into());
-                }
-                Project::read(input, limits)?
-            } else {
-                if t.recovered {
-                    return Err("Recovery file is not a native drawing".into());
-                }
-                let source = layer_color::photo::read_photo(input, Default::default())?;
-                t.photo = true;
-                if source.interpretation.profile_assumed
-                    && e.photo_policy.missing_profile == layer_ui::MissingProfilePolicy::Ask
-                {
-                    e.pending_photo = Some(source);
-                    *environment = Some(e);
-                    return Ok(());
-                }
-                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
-                let name = e
-                    .source_name
-                    .rsplit_once('.')
-                    .map_or(e.source_name.as_str(), |(stem, _)| stem);
-                layer_color::photo_project(source, name, depth)?
+            let imported = layer_ui::read_import(file,
+                if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
+                e.photo_policy, &e.source_name, limits, Default::default(), &Default::default())?;
+            t.source = imported.source;
+            if let Some(source) = imported.interpretation_required(e.photo_policy) {
+                e.source_name = imported.project.document.layers[0].name.to_string();
+                e.pending_photo = Some(source.clone());
+                *environment = Some(e);
+                return Ok(());
             }
+            if imported.source == layer_ui::ImportSource::Photo { e.source_name = imported.project.document.layers[0].name.to_string(); }
+            imported.project
         }
         None => {
             if let Some(source) = e.pending_photo.take() {
-                if source.interpretation.profile_assumed {
+                if e.photo_policy.needs_interpretation(&source) {
                     return Err("Choose an image interpretation before opening".into());
                 }
-                let depth = e.photo_policy.editing_depth(source.interpretation.depth);
-                let name = e
-                    .source_name
-                    .rsplit_once('.')
-                    .map_or(e.source_name.as_str(), |(stem, _)| stem);
-                layer_color::photo_project(source, name, depth)?
+                e.photo_policy.photo_project(source, &e.source_name)?
             } else {
                 layer_ui::NewDocumentOptions {
                     extent: [width, height],
@@ -235,8 +216,6 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         )?;
         let name = e
             .source_name
-            .rsplit_once('.')
-            .map_or(e.source_name.as_str(), |(stem, _)| stem)
             .chars()
             .filter(|c| !c.is_control())
             .take(128)
@@ -493,15 +472,20 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
                 return Err("Image is not prepared".into());
             };
             let previous = s.state().revision;
-            s.import_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone())?;
+            if !s.state().requests.iter().any(|r| r.id == t.request && matches!(r.kind,
+                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste })) {
+                return Err("Image import is no longer active".into());
+            }
+            s.place_layer_source(name, source.as_ref().ok_or("Image already placed")?.clone(), None)?;
             source.take();
             let mut change = s.complete_document_request(t.request, Ok(true))?;
             change.canvas_wake = true;
+            change.regions |= 255;
             a.host.apply_change(previous, change);
             return Ok(());
         }
         // Importing a photo never grants Save permission to overwrite it.
-        let location = if t.photo { None } else { location };
+        let location = t.source.adoption_location(location);
         let Payload::Open { candidate, .. } = &mut t.payload else {
             return Err("Not an open request".into());
         };
@@ -627,7 +611,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             revision,
             request: id as u32,
             recovered: false,
-            photo: false,
+            source: layer_ui::ImportSource::Master,
             place: None,
             gpu_generation: a.gpu_generation,
             payload: Payload::Export {
@@ -690,6 +674,12 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
     let result = (|| {
         let a = unsafe { app(handle) };
         let session = &a.host.session;
+        // Background recovery waits for a committed snapshot boundary. Active
+        // placements and region operations are normal deferrals, not failures
+        // that should put a modal dialog over an in-progress canvas gesture.
+        if opening == 0 && session.recovery_document().busy {
+            return Ok(0);
+        }
         let payload = if opening != 0 {
             session.require_document_idle()?;
             if session.state().document_file.modified || session.state().document_file.busy {
@@ -725,7 +715,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             revision: session.engine().document().revision,
             request: 0,
             recovered: true,
-            photo: false,
+            source: layer_ui::ImportSource::Master,
             place: None,
             gpu_generation: a.gpu_generation,
             payload,

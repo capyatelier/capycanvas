@@ -4,6 +4,7 @@ import {checkIcons} from "./icons.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
+import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
 // browser flags or device settings are changed by this harness.
 import {checkDrawerDragging,checkDrawerStyling,checkToolbarDrawerSwitching} from "./drawers.test.mjs";
@@ -69,7 +70,10 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--title-bar-feedback")) {
+  if (process.argv.includes("--image-placement")) {
+    await checkDeviceImagePlacement({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--title-bar-feedback")) {
     await checkTitleBarFeedback({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--icons")) {

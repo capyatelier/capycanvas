@@ -11,6 +11,9 @@ mod workspaces;
 mod documents;
 
 #[cfg(target_os = "android")]
+mod image_import;
+
+#[cfg(target_os = "android")]
 mod inspection;
 
 #[cfg(target_os = "android")]

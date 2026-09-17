@@ -1,7 +1,7 @@
 //! Complete-stack color comparison, worker cancellation and atomic GTK adoption.
 use super::*;
 use layer_color::DocumentColorChange;
-use layer_core::{ColorTransition, PreparedColorTransition, color::*};
+use layer_core::color::*;
 use layer_render_wgpu::snapshot::CaptureControl;
 use std::{
     cell::{Cell, RefCell},
@@ -16,15 +16,11 @@ struct Choice {
     change: DocumentColorChange,
     flattened: bool,
 }
-enum Candidate {
-    Edit(PreparedColorTransition, Project),
-    Copy(Project),
-}
 struct Conversion {
     workspace: std::rc::Weak<Workspace>,
     gpu: layer_render_wgpu::snapshot::SnapshotGpu,
     original: Project,
-    epoch: u64,
+    workflow: RefCell<ColorWorkflow>,
     background: [f32; 4],
     time: f32,
     comparison: Rc<super::preview::Comparison>,
@@ -33,11 +29,10 @@ struct Conversion {
     active: RefCell<Option<CaptureControl>>,
     running: Cell<bool>,
     closed: Cell<bool>,
-    candidate: RefCell<Option<Candidate>>,
 }
 impl Conversion {
     fn request(self: &Rc<Self>, choice: Choice) {
-        self.candidate.borrow_mut().take();
+        self.workflow.borrow_mut().candidate = None;
         self.comparison
             .invalidate("Preparing the complete comparison…");
         self.pending.set(Some(choice));
@@ -54,6 +49,10 @@ impl Conversion {
                     state.comparison.invalidate("Choose a different profile or bit depth to compare.");
                     continue;
                 }
+                let plan = match state.workflow.borrow_mut().select(Some(choice.change), choice.flattened) {
+                    Ok(plan) => plan,
+                    Err(error) => { state.comparison.invalidate(&error); continue; }
+                };
                 let control = CaptureControl::default();
                 *state.active.borrow_mut() = Some(control.clone());
                 let source = state.original.clone();
@@ -62,11 +61,11 @@ impl Conversion {
                 let worker_control = control.clone();
                 let gpu = state.gpu.clone();
                 let result = gio::spawn_blocking(move || {
-                    if choice.flattened {
-                        let DocumentColorChange::Convert { space, options } = choice.change else { return Err("Only color conversion can create a flattened copy".into()); };
-                        let color = DocumentColor { space, ..source.document.color };
-                        flatten::prepare(gpu, source, color, options, background, time, worker_control)
-                    } else { layer_color::prepare_document_color(&source, choice.change, LIMIT, || worker_control.is_cancelled()) }
+                    match plan {
+                        ColorPreparation::Flatten { color, options } => flatten::prepare(gpu, source, color, options, background, time, worker_control),
+                        ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, LIMIT, || worker_control.is_cancelled()),
+                        ColorPreparation::History => unreachable!(),
+                    }
                 }).await.map_err(|_| "Color conversion worker failed".to_string()).and_then(|r| r);
                 state.active.borrow_mut().take();
                 if control.is_cancelled() || state.closed.get() { continue; }
@@ -74,23 +73,17 @@ impl Conversion {
                     let w = state.workspace.upgrade().ok_or("Canvas closed")?;
                     let gpu = w.gpu.borrow();
                     let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-                    if session.state().document_file.epoch != state.epoch || session.engine().document().revision != state.original.document.revision {
-                        return Err("The document changed during color conversion; try again".into());
-                    }
-                    let (candidate, project) = if choice.flattened {
-                        (Candidate::Copy(prepared.project.clone()), prepared.project)
-                    } else {
-                        let (transition, project) = session.prepare_document_color_transition(ColorTransition::Apply {
-                            color: prepared.project.document.color, layers: prepared.project.document.layers,
-                        })?;
-                        (Candidate::Edit(transition, project.clone()), project)
-                    };
+                    state.workflow.borrow().identity.validate(session, control.is_cancelled(), state.gpu.same_device(&w.snapshot_gpu()?))?;
+                    let project = prepared.project;
                     state.detail.set_label(if prepared.statistics.clipped_channels > 0 {
                         "Some colors exceed the destination gamut and will be clipped. Compare the complete result before applying."
                     } else if choice.flattened { "The layered original will stay open." }
                     else { "Compare the complete result before applying." });
-                    *state.candidate.borrow_mut() = Some(candidate);
-                    state.comparison.request(project, state.background, state.time);
+                    let mut brush = session.engine().configured_brush().clone();
+                    let mut view = session.engine().view();
+                    layer_render::remap_document_colors(state.original.document.color.space, project.document.color.space, &mut brush, &mut view);
+                    state.workflow.borrow_mut().candidate = Some(project.clone());
+                    state.comparison.request(project, view.background_rgba_linear, state.time);
                     Ok(())
                 });
                 if let Err(error) = result { state.comparison.invalidate(&error); }
@@ -129,18 +122,19 @@ fn choice(title: &str, name: &str, labels: &[&str], subtitle: bool) -> adw::Comb
 
 pub(super) async fn run(
     w: &Rc<Workspace>,
+    id: u32,
     operation: DocumentColorOperation,
 ) -> Result<bool, String> {
-    let (project, epoch, background, time) = {
+    let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
         (
-            session.capture_project_recovery()?,
-            session.state().document_file.epoch,
+            ColorWorkflow::begin(session, id)?,
             session.engine().view().background_rgba_linear,
             session.engine().animation_time(),
         )
     };
+    let project = workflow.original.clone();
     let color = project.document.color;
     let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color());
     let detail = gtk::Label::builder()
@@ -235,7 +229,7 @@ pub(super) async fn run(
         gpu: w.snapshot_gpu()?,
         workspace: Rc::downgrade(w),
         original: project,
-        epoch,
+        workflow: RefCell::new(workflow),
         background,
         time,
         comparison,
@@ -244,7 +238,6 @@ pub(super) async fn run(
         active: RefCell::new(None),
         running: Cell::new(false),
         closed: Cell::new(false),
-        candidate: RefCell::new(None),
     });
     let refresh: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[strong]
@@ -318,55 +311,44 @@ pub(super) async fn run(
     }
     refresh();
     let response = crate::alert::choose(dialog, &w.window).await;
+    let compared = state.comparison.ready.get();
     state.finish().await;
     if response != "apply" {
         return Ok(false);
     }
-    let candidate = state
-        .candidate
-        .borrow_mut()
-        .take()
-        .ok_or("No completed color comparison")?;
-    match candidate {
-        Candidate::Edit(transition, project) => adopt(w, epoch, transition, project).await,
-        Candidate::Copy(project) => {
-            w.open_document
-                .borrow()
-                .as_ref()
-                .ok_or("New drawing window is unavailable")?(project, None, None);
-            Ok(true)
-        }
+    if !compared { return Err("No completed color comparison".into()); }
+    state.workflow.borrow_mut().comparison_completed()?;
+    if state.workflow.borrow().is_copy() {
+        let project = state.workflow.borrow().copy_project(false)?.clone();
+        w.open_document.borrow().as_ref().ok_or("New drawing window is unavailable")?(project, None, None);
+        Ok(true)
+    } else {
+        adopt(w, &mut state.workflow.borrow_mut(), &state.gpu).await
     }
 }
 
-pub(super) async fn history(w: &Rc<Workspace>, redo: bool) -> Result<bool, String> {
-    let (epoch, transition, project) = {
+pub(super) async fn history(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+    let mut workflow = {
         let gpu = w.gpu.borrow();
-        let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        let (transition, project) = session.prepare_document_color_transition(if redo {
-            ColorTransition::Redo
-        } else {
-            ColorTransition::Undo
-        })?;
-        (session.state().document_file.epoch, transition, project)
+        ColorWorkflow::begin(&gpu.as_ref().ok_or("Canvas unavailable")?.session, id)?
     };
-    adopt(w, epoch, transition, project).await
+    workflow.select(None, false)?;
+    adopt(w, &mut workflow, &w.snapshot_gpu()?).await
 }
 
 async fn adopt(
     w: &Rc<Workspace>,
-    epoch: u64,
-    transition: PreparedColorTransition,
-    project: Project,
+    workflow: &mut ColorWorkflow,
+    original_gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
 ) -> Result<bool, String> {
     {
         let mut gpu = w.gpu.borrow_mut();
         let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-        if session.state().document_file.epoch != epoch {
-            return Err("The document changed during color conversion".into());
-        }
-        let brush = session.engine().configured_brush().clone();
-        let view = session.engine().view();
+        workflow.identity.validate(session, false, original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))?;
+        let project = workflow.candidate.as_ref().ok_or("Color candidate is missing")?.clone();
+        let mut brush = session.engine().configured_brush().clone();
+        let mut view = session.engine().view();
+        layer_render::remap_document_colors(workflow.original.document.color.space, project.document.color.space, &mut brush, &mut view);
         let time = session.engine().animation_time();
         session
             .renderer_mut()
@@ -411,18 +393,12 @@ async fn adopt(
     let result = if should_commit {
         let mut gpu = w.gpu.borrow_mut();
         let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-        if session.state().document_file.epoch != epoch {
-            Err("The document changed during color conversion".into())
-        } else {
-            let change = session.commit_document_color_transition(transition);
-            drop(gpu);
-            match change {
-                Ok(change) => {
-                    w.changed(Ok(change));
-                    Ok(true)
-                }
-                Err(error) => Err(error),
-            }
+        let prepared = workflow.prepare_commit(session, false, original_gpu.same_device(&session.engine().backend().snapshot_gpu()?));
+        let change = prepared.and_then(|p| session.commit_document_color_candidate(p, |_| {}));
+        drop(gpu);
+        match change {
+            Ok(change) => { w.changed(Ok(change)); Ok(true) }
+            Err(error) => Err(error),
         }
     } else {
         result

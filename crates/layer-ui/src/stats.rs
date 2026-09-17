@@ -11,6 +11,9 @@ pub struct StatRow {
 pub struct StatsView {
     pub rows: Vec<StatRow>,
     pub samples: Vec<f32>,
+    /// Raw execution timings for host qualification; keep presentation separate.
+    pub gpu_samples: Vec<f32>,
+    pub resident_bytes: u64,
     pub budget_ms: f32,
     pub chart_label: &'static str,
     /// Insert the chart after this many metric rows on every frontend.
@@ -71,6 +74,8 @@ pub(super) fn view(t: RendererTelemetry) -> StatsView {
     StatsView {
         rows,
         samples,
+        gpu_samples: if t.gpu_timestamps { t.gpu.ordered() } else { Vec::new() },
+        resident_bytes: t.resident_bytes,
         budget_ms: 1000. / 120.,
         chart_label: "CPU render · last 120 updates",
         chart_after_rows: 2,

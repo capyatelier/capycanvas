@@ -29,7 +29,7 @@ impl PreviewRevisions {
     }
 }
 
-fn baked(layer: &Layer) -> bool {
+pub(crate) fn baked(layer: &Layer) -> bool {
     !layer.raster.is_empty() || !layer.pending_operations.is_empty() || layer.asset.is_some()
 }
 fn repair_edit(

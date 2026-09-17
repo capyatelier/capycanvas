@@ -2,10 +2,9 @@
 //! grants authority to overwrite that path with a native master.
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::{Project, ProjectLimits};
+use layer_core::Project;
 use layer_ui::DocumentLocation;
 use std::{
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{Arc, atomic::{AtomicBool, Ordering}},
 };
@@ -30,10 +29,9 @@ pub(super) async fn prepare(
     if location.is_none() {
         let source = Arc::unwrap_or_clone(project.document.layers[0].source.take().ok_or("Photo source unavailable")?);
         let Some(source) = interpret_window(window, source, policy, working).await? else { return Ok(None); };
-        let profile = source.interpretation.profile.clone();
-        project.document.color.space = gio::spawn_blocking(move || layer_color::suggested_working_space(&profile))
-            .await.map_err(|_| "Profile reader failed")??.unwrap_or(layer_core::color::RgbSpace::ProPhoto);
-        project.document.layers[0].source = Some(Arc::new(source));
+        let name = project.document.layers[0].name.to_string();
+        project = gio::spawn_blocking(move || policy.photo_project(source, &name))
+            .await.map_err(|_| "Profile reader failed")??;
     }
     Ok(window.is_visible().then_some((project, location)))
 }
@@ -90,8 +88,7 @@ async fn interpret_window(
     policy: layer_ui::PhotoOpenPolicy,
     working: layer_core::color::RgbSpace,
 ) -> Result<Option<layer_core::color::source::SourceImage>, String> {
-    if !source.interpretation.profile_assumed
-        || policy.missing_profile == layer_ui::MissingProfilePolicy::AssumeSrgb
+    if !policy.needs_interpretation(&source)
     {
         return Ok(Some(source));
     }
@@ -147,19 +144,9 @@ pub(crate) fn read(
 ) -> Result<(Project, Option<DocumentLocation>), String> {
     let file = super::reader::CancelRead::new(path, cancelled.clone())
         .map_err(|e| format!("Cannot open file: {e}"))?;
-    let mut reader = BufReader::new(file);
-    if reader
-        .fill_buf()
-        .map_err(|e| e.to_string())?
-        .starts_with(b"CAPY")
-    {
-        return Project::read(reader, ProjectLimits::default()).map(|p| (p, Some(location)));
-    }
-    let photo = layer_color::photo::read_photo_detailed_with_cancel(reader, Default::default(), &cancelled)?;
-    let depth = policy.editing_depth(photo.source.interpretation.depth);
-    let name = photo.display_name(&path.file_stem().unwrap_or_default().to_string_lossy());
-    let project = layer_color::photo_project(photo.source, &name, depth)?;
-    Ok((project, None))
+    let imported = layer_ui::read_import(file, layer_ui::ImportIntent::Open, policy,
+        &path.file_name().unwrap_or_default().to_string_lossy(), Default::default(), Default::default(), &cancelled)?;
+    Ok((imported.project, imported.source.adoption_location(Some(location))))
 }
 
 #[cfg(test)]

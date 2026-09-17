@@ -1,27 +1,18 @@
 //! Explicit source commitment with complete-stack comparison and cancellation.
 use super::*;
-use layer_core::LayerId;
 use layer_render_wgpu::snapshot::CaptureControl;
-use std::{cell::RefCell, sync::Arc};
+use std::cell::RefCell;
 
-pub(super) async fn run(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
-    let (epoch, revision, original, color, project, background, time) = {
+pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+    let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        let document = session.engine().document();
-        (
-            session.state().document_file.epoch,
-            document.revision,
-            document
-                .layer(LayerId(id))
-                .and_then(|l| l.source.clone())
-                .ok_or("No retained image")?,
-            document.color,
-            session.capture_project_recovery()?,
-            session.state().camera.view().background_rgba_linear,
-            session.engine().animation_time(),
-        )
+        (SourceWorkflow::begin(session, id)?, session.engine().view().background_rgba_linear, session.engine().animation_time())
     };
+    let color = workflow.project.document.color;
+    let project = workflow.project.clone();
+    let original_gpu = w.snapshot_gpu()?;
+    let workflow = Rc::new(RefCell::new(workflow));
     let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
     comparison.invalidate("Converting the retained original…");
     let explanation = gtk::Label::builder()
@@ -50,32 +41,26 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
         }
     )));
     let control = CaptureControl::default();
-    let converted = Rc::new(RefCell::new(None));
-    let worker_original = original.clone();
+    let worker_workflow = workflow.borrow().clone();
     let task = glib::MainContext::default().spawn_local(glib::clone!(
         #[weak] w,
         #[weak] explanation,
         #[strong] comparison,
         #[strong] control,
-        #[strong] converted,
+        #[strong] workflow,
+        #[strong] original_gpu,
         async move {
             let token = control.clone();
-            let result = gio::spawn_blocking(move || layer_color::rasterize_source(&worker_original, color, 512 * 1024 * 1024, || token.is_cancelled()))
+            let result = gio::spawn_blocking(move || worker_workflow.prepare(None, || token.is_cancelled()))
                 .await.map_err(|_| "Rasterization worker failed".to_string()).and_then(|r| r);
             if control.is_cancelled() { return; }
-            let result = result.and_then(|(image, statistics)| {
+            let result = result.and_then(|(image, clipped)| {
                 let gpu = w.gpu.borrow();
                 let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-                if session.state().document_file.epoch != epoch || session.engine().document().revision != revision {
-                    return Err("The document changed while rasterizing; try again".into());
-                }
-                let original = session.engine().document().layer(LayerId(id)).and_then(|l| l.source.as_ref()).ok_or("Source no longer exists")?;
-                let image = Arc::new(image);
-                let preview = session.preview_rasterized_source(LayerId(id), original, image.clone())?;
-                explanation.set_label(if statistics.clipped_channels > 0 {
+                let preview = workflow.borrow_mut().preview(session, image, control.is_cancelled(), original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))?;
+                explanation.set_label(if clipped > 0 {
                     "Some source colors are outside the document color space and will be clipped. Compare the complete result before applying."
                 } else { "Compare the complete result before applying. Rasterized images use the document’s editing precision." });
-                *converted.borrow_mut() = Some(image);
                 comparison.request(preview, background, time);
                 Ok(())
             });
@@ -84,24 +69,19 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
     ));
     let response = crate::alert::choose(dialog, &w.window).await;
     control.cancel();
+    let compared = comparison.ready.get();
     comparison.close();
     let _ = task.await;
     comparison.finish().await;
     if response != "apply" {
         return Ok(false);
     }
-    let converted = converted
-        .borrow_mut()
-        .take()
-        .ok_or("No rasterized image to apply")?;
+    if !compared { return Err("No completed source comparison".into()); }
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-    if session.state().document_file.epoch != epoch
-        || session.engine().document().revision != revision
-    {
-        return Err("The document changed while rasterizing; try again".into());
-    }
-    session.apply_rasterized_source(LayerId(id), &original, converted)?;
+    let current = original_gpu.same_device(&session.engine().backend().snapshot_gpu()?);
+    workflow.borrow_mut().comparison_completed()?;
+    workflow.borrow_mut().commit(session, false, current)?;
     drop(gpu);
     w.wake();
     Ok(true)

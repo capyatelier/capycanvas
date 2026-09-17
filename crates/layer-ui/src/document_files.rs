@@ -490,7 +490,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
     }
 
-    pub(super) fn require_raster_snapshot(&self) -> Result<(), String> {
+    pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
         if self.operation.active()
             || self.region_tools.busy()
             || !self.layer_interaction.path.is_empty()

@@ -124,37 +124,38 @@ async function colorPreferences(mode,operation,storeName="values") {
   });}finally{database.close();}
 }
 
-const profileDigest=async bytes=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(b=>b.toString(16).padStart(2,"0")).join("");
 async function profileLibrary({operation,id},bytes) {
   const store=(mode,op)=>colorPreferences(mode,op,"profiles");
+  const policy=(action,data=new Uint8Array())=>wasm.raster_worker_profile_library(JSON.stringify(action),data);
+  const profile=({name,channels,profile})=>({name,channels,profile});
+  const inventory=async()=>{
+    const entries=[];
+    for(const id of await store("readonly",s=>s.getAllKeys())) {
+      const data=await store("readonly",s=>s.get(id));entries.push({id,bytes:data?.length??0});
+    }
+    return policy({type:"inventory",entries});
+  };
   const read=async id=>{
-    if(!/^[a-f0-9]{64}$/.test(id??""))throw new Error("Select an imported profile");
-    const data=await store("readonly",s=>s.get(id));
+    const key=policy({type:"remove",id}).id;
+    const data=await store("readonly",s=>s.get(key));
     if(!data)throw new Error("Profile is no longer in the library");
-    if(data.length>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");
-    if(await profileDigest(data)!==id)throw new Error("Profile changed in storage; remove or reimport it");
     return data;
   };
-  if(operation==="get")return wasm.raster_worker_inspect_profile(await read(id),true);
+  if(operation==="get")return profile(policy({type:"get",id},await read(id)));
   if(operation==="remove"){
-    if(!/^[a-f0-9]{64}$/.test(id??""))throw new Error("Select an imported profile");
-    await store("readwrite",s=>s.delete(id));return true;
+    const key=policy({type:"remove",id}).id;
+    await store("readwrite",s=>s.delete(key));return true;
   }
   if(operation==="import"){
-    if(!bytes||bytes.length>16*1024*1024)throw new Error("ICC profile exceeds 16 MiB");
-    wasm.raster_worker_inspect_profile(bytes,false);const id=await profileDigest(bytes);
-    const keys=await store("readonly",s=>s.getAllKeys());let total=bytes.length;
-    const other=keys.filter(key=>key!==id);
-    for(const key of other)total+=(await store("readonly",s=>s.get(key))).length;
-    if(other.length>=128||total>64*1024*1024)throw new Error("The profile library limit is 128 profiles and 64 MiB");
-    await store("readwrite",s=>s.put(bytes,id));return wasm.raster_worker_inspect_profile(bytes,true);
+    const entry=policy({type:"import",entries:await inventory()},bytes);
+    await store("readwrite",s=>s.put(bytes,entry.id));return profile(entry);
   }
   if(operation!=="list")throw new Error("Unknown profile library action");
-  const keys=await store("readonly",s=>s.getAllKeys()),entries=[];let total=0;
-  for(const id of keys.slice(0,128)){
-    let bytes=0;
-    try{const data=await read(id);bytes=data.length;total+=bytes;if(total>64*1024*1024)throw new Error("Library exceeds 64 MiB; remove unused profiles");entries.push({...wasm.raster_worker_inspect_profile(data,false),id,bytes});}
-    catch(error){entries.push({id,bytes,name:`Unavailable profile ${id.slice(0,12)}`,issue:String(error)});}
+  const entries=[];
+  for(const entry of await inventory()){
+    let data=new Uint8Array(),error=null;
+    try{if(!entry.issue)data=await read(entry.id);}catch(e){error=String(e);}
+    entries.push(policy({type:"inspect",entry,error},data));
   }
   return entries.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
 }

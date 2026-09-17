@@ -9,7 +9,7 @@ use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
 #[path = "source_edit.rs"]
-mod source_edit;
+pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
 mod document_color_edit;
 #[path = "figures.rs"]
@@ -21,7 +21,7 @@ mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 pub use art_layers::{
-    ImageLayerDestination, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+    ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
 };
 #[path = "application_menu.rs"]
 mod application_menu;
@@ -967,7 +967,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !position.into_iter().all(f32::is_finite) {
                     return Err("Invalid pointer position".into());
                 }
-                if kind == PointerKind::Touch {
+                let placement_contact = kind == PointerKind::Touch
+                    && (self.interaction.pointer.is_some_and(|contact| contact.id == id)
+                        || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
+                            && !self.touch.is_active() && self.placement_touch_hit(position)));
+                if kind == PointerKind::Touch && !placement_contact {
                     if self.interaction.pointer.is_none() && !self.state.settings_open {
                         reply.change = self.touch(id, pen_phase(phase), position);
                         reply.handled = true;
@@ -2718,6 +2722,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     (0, false)
                 }
+            }
+            UiAction::NewDocumentPreferences { action } => {
+                let mut settings = self.state.settings.new_document.clone();
+                settings.apply(action)?;
+                save_settings = settings != self.state.settings.new_document;
+                self.state.settings.new_document = settings;
+                (SETTINGS | COMMANDS, save_settings)
             }
             UiAction::NewDocumentSettings { settings } => {
                 settings.validate()?;

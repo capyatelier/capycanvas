@@ -20,3 +20,15 @@ pub use document_info::DocumentInfo;
 
 mod flatten;
 pub use flatten::flattened_document;
+
+/// Validate a new interpretation without changing retained sample ownership.
+pub fn repair_source_interpretation(
+    mut interpretation: layer_core::color::source::SourceInterpretation,
+    working: layer_core::color::RgbSpace,
+    profile: layer_core::color::ColorProfile,
+) -> Result<layer_core::color::source::SourceInterpretation, String> {
+    interpretation.profile = profile;
+    interpretation.profile_assumed = false;
+    WorkingDecoder::new(&interpretation, working, Default::default())?;
+    Ok(interpretation)
+}

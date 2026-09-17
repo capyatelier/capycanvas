@@ -391,6 +391,26 @@ impl TransformPreview {
     }
 }
 
+/// Preserve tool and background appearance when the document RGB coordinates
+/// change. Candidate preparation and the eventual history commit use this same
+/// mapping; alpha and retained image interpretations are unchanged.
+pub fn remap_document_colors(
+    source: layer_core::color::RgbSpace,
+    destination: layer_core::color::RgbSpace,
+    brush: &mut layer_core::BrushSnapshot,
+    view: &mut ViewState,
+) {
+    let matrix = source.linear_transform(destination);
+    for color in [
+        &mut brush.color_rgba_linear,
+        &mut brush.color_dynamics.secondary_color_rgba_linear,
+        &mut view.background_rgba_linear,
+    ] {
+        let rgb = layer_core::color::rgb::apply(matrix, [color[0], color[1], color[2]].map(f64::from));
+        color[..3].copy_from_slice(&rgb.map(|v| v as f32));
+    }
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU

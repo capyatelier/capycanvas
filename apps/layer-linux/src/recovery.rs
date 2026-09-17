@@ -3,6 +3,7 @@ use crate::{files::atomic_write, workspace::Workspace};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use layer_core::{Project, ProjectLimits};
+use layer_ui::recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWorkKind};
 use std::{
     cell::{Cell, RefCell},
     io::BufReader,
@@ -19,8 +20,8 @@ pub(crate) struct Recovery {
     pub recovered: Cell<bool>,
     pub origin: RefCell<Option<PathBuf>>,
     path: PathBuf,
-    pending: Cell<bool>,
-    checkpoint: Cell<Option<(u64, u64)>>,
+    origin_lock: RefCell<Option<Arc<std::fs::File>>>,
+    policy: RefCell<RecoveryState>,
     discarded: Arc<AtomicBool>,
 }
 fn directory() -> PathBuf {
@@ -48,81 +49,103 @@ impl Default for Recovery {
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             )),
-            pending: Cell::new(false),
-            checkpoint: Cell::new(None),
+            origin_lock: RefCell::new(None),
+            policy: RefCell::new({
+                let mut policy = RecoveryState::default();
+                policy.event(RecoveryEvent::Ownership { owned: true }).unwrap();
+                policy
+            }),
             discarded: Arc::new(AtomicBool::new(false)),
         }
     }
 }
-impl Recovery {
-    pub fn discard(&self) {
-        self.discarded.store(true, Ordering::Release);
-        let paths = std::iter::once(self.path.clone())
-            .chain(self.origin.take())
-            .collect();
-        gio::spawn_blocking(move || remove_copies(paths));
+// File locks are the GTK storage adapter's ownership observation. A restored
+// drawing explicitly takes over the dialog's lease before that dialog releases it.
+fn claim_origin(path: &std::path::Path, transfer: bool) -> Result<Option<Arc<std::fs::File>>, String> {
+    static CLAIMS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<std::fs::File>>>> = std::sync::OnceLock::new();
+    let mut claims = CLAIMS.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+    claims.retain(|_, lease| lease.strong_count() > 0);
+    if let Some(lease) = claims.get(path).and_then(std::sync::Weak::upgrade) {
+        return Ok(transfer.then_some(lease));
     }
-    fn clean(self: &Rc<Self>) {
-        let paths = std::iter::once(self.path.clone())
-            .chain(self.origin.take())
-            .collect();
-        self.pending.set(true);
-        let recovery = self.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let _ = gio::spawn_blocking(move || remove_copies(paths)).await;
-            recovery.checkpoint.set(None);
-            recovery.pending.set(false);
-        });
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true)
+        .open(path.with_extension("capy.lock")).map_err(|e| e.to_string())?;
+    if lock.try_lock().is_err() { return Ok(None); }
+    let lock = Arc::new(lock);
+    claims.insert(path.to_path_buf(), Arc::downgrade(&lock));
+    Ok(Some(lock))
+}
+
+impl Recovery {
+    pub fn set_origin(&self, path: Option<PathBuf>) -> Result<(), String> {
+        if let Some(path) = &path {
+            *self.origin_lock.borrow_mut() = Some(claim_origin(path, true)?.ok_or("Recovery copy is owned by another window")?);
+        }
+        self.origin.replace(path);
+        Ok(())
+    }
+    fn adopt_origin(&self) -> Result<(), String> {
+        if let Some(path) = self.origin.take() {
+            self.policy.borrow_mut().event(RecoveryEvent::Adopted { key: path.to_string_lossy().into_owned() })?;
+        }
+        Ok(())
+    }
+    pub fn discard(self: &Rc<Self>) {
+        self.discarded.store(true, Ordering::Release);
+        let _ = self.adopt_origin();
+        let work = self.policy.borrow_mut().event(RecoveryEvent::Retire { discard_origin: true }).unwrap().work;
+        self.policy.borrow_mut().event(RecoveryEvent::Close).unwrap();
+        self.execute(None, work);
     }
     pub fn capture(self: &Rc<Self>, w: &Rc<Workspace>) {
-        if self.pending.get() || self.discarded.load(Ordering::Acquire) {
-            return;
-        }
-        let snapshot = {
+        if self.discarded.load(Ordering::Acquire) { return; }
+        if let Err(error) = self.adopt_origin() { eprintln!("Recovery origin unavailable: {error}"); return; }
+        let document = {
             let gpu = w.gpu.borrow();
-            let Some(gpu) = gpu.as_ref() else {
-                return;
-            };
-            let state = &gpu.session.state().document_file;
-            if !state.modified {
-                self.clean();
-                return;
-            }
-            let checkpoint = (state.epoch, gpu.session.engine().checkpoint());
-            if self.checkpoint.get() == Some(checkpoint) {
-                return;
-            }
-            let Ok(project) = gpu.session.capture_project_recovery() else {
-                return;
-            };
-            (checkpoint, project)
+            let Some(gpu) = gpu.as_ref() else { return; };
+            gpu.session.recovery_document()
         };
-        self.pending.set(true);
+        let work = self.policy.borrow_mut().event(RecoveryEvent::Observe { document, owned: true }).unwrap().work;
+        self.execute(Some(w.clone()), work);
+    }
+    fn execute(self: &Rc<Self>, workspace: Option<Rc<Workspace>>, first: Option<RecoveryWork>) {
+        if first.is_none() { return; }
         let recovery = self.clone();
-        let path = self.path.clone();
-        let discarded = self.discarded.clone();
         glib::MainContext::default().spawn_local(async move {
-            let (checkpoint, project) = snapshot;
-            let result = gio::spawn_blocking(move || publish(&path, project, &discarded)).await;
-            recovery.pending.set(false);
-            match result {
-                Ok(Ok(())) => recovery.checkpoint.set(Some(checkpoint)),
-                Ok(Err(error)) => {
-                    eprintln!("Recovery checkpoint failed; previous copy retained: {error}")
-                }
-                Err(error) => {
-                    eprintln!("Recovery worker failed; previous copy retained: {error:?}")
-                }
+            let mut next = first;
+            while let Some(work) = next {
+                let result = match work.kind {
+                    RecoveryWorkKind::Capture => {
+                        let project = workspace.as_ref().ok_or_else(|| "Canvas closed".to_string()).and_then(|w| {
+                            let gpu = w.gpu.borrow();
+                            gpu.as_ref().ok_or("Canvas unavailable").map_err(String::from)?.session.capture_project_recovery()
+                        });
+                        match project {
+                            Ok(project) => {
+                                let path = recovery.path.clone();
+                                let discarded = recovery.discarded.clone();
+                                gio::spawn_blocking(move || publish(&path, project, &discarded)).await.map_err(|e| format!("Recovery writer failed: {e:?}")).and_then(|r| r)
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    RecoveryWorkKind::Retire | RecoveryWorkKind::RetireOrigin { .. } => {
+                        let path = match work.kind { RecoveryWorkKind::RetireOrigin { key } => PathBuf::from(key), _ => recovery.path.clone() };
+                        gio::spawn_blocking(move || match std::fs::remove_file(path) {
+                            Ok(()) => Ok(()), Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()), Err(e) => Err(e.to_string()),
+                        }).await.map_err(|e| format!("Recovery cleanup failed: {e:?}")).and_then(|r| r)
+                    }
+                    RecoveryWorkKind::Restore { .. } => Err("GTK restores into a separate drawing window".into()),
+                };
+                if let Err(error) = &result { eprintln!("Recovery operation failed; previous copy retained: {error}"); }
+                let update = recovery.policy.borrow_mut().event(RecoveryEvent::Complete { token: work.token, success: result.is_ok() }).unwrap();
+                if !update.release.is_empty() { recovery.origin_lock.borrow_mut().take(); }
+                next = update.work;
             }
         });
     }
 }
 
-fn remove_copies(paths: Vec<PathBuf>) {
-    for path in paths {
-        let _ = std::fs::remove_file(path);
-    }
-}
 
 fn publish(path: &std::path::Path, project: Project, discarded: &AtomicBool) -> Result<(), String> {
     if discarded.load(Ordering::Acquire) {
@@ -169,6 +192,11 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
         }).await.unwrap_or_default();
         for path in candidates {
             let Some(w) = weak.upgrade() else { break; };
+            let claim_path = path.clone();
+            let Ok(Ok(Some(_lease))) = gio::spawn_blocking(move || claim_origin(&claim_path, false)).await else { continue; };
+            let mut policy = RecoveryState::default();
+            policy.event(RecoveryEvent::Ownership { owned: true }).unwrap();
+            policy.event(RecoveryEvent::Offer { key: path.to_string_lossy().into_owned(), owned: true }).unwrap();
             let dialog = adw::AlertDialog::builder().heading("Recover an unsaved drawing?")
                 .body("A recovery copy contains completed edits from a previous session. Samples that had not reached a checkpoint may be missing.").build();
             dialog.add_responses(&[("later", "Later"), ("discard", "Discard Copy"), ("recover", "Recover")]);
@@ -176,6 +204,7 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
             dialog.set_default_response(Some("recover"));
             match crate::alert::choose(dialog, &w.window).await.as_str() {
                 "recover" => {
+                    let restore = policy.event(RecoveryEvent::Restore).unwrap().work.unwrap();
                     let source = path.clone();
                     let result = gio::spawn_blocking(move || {
                         let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
@@ -184,6 +213,9 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
                     match result {
                         Ok(Ok(project)) => {
                             if let Some(open) = w.open_document.borrow().as_ref() { open(project, None, Some(path.clone())); }
+                            // Ownership of durable replacement moves to that window.
+                            policy.event(RecoveryEvent::Close).unwrap();
+                            policy.event(RecoveryEvent::Complete { token: restore.token, success: true }).unwrap();
                             // Keep the original until the recovered document is
                             // explicitly saved/discarded; a failed GPU startup
                             // must not destroy its only durable checkpoint.
@@ -191,8 +223,15 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
                         _ => { let error = adw::AlertDialog::builder().heading("Cannot read recovery copy").body("The copy was kept on disk. Other open drawings are unchanged.").build(); error.add_response("ok", "OK"); error.present(Some(&w.window)); }
                     }
                 }
-                "discard" => { let _ = gio::spawn_blocking(move || std::fs::remove_file(path)).await; }
-                _ => (),
+                "discard" => {
+                    if let Some(work) = policy.event(RecoveryEvent::Dismiss { discard: true }).unwrap().work {
+                        if let RecoveryWorkKind::RetireOrigin { key } = work.kind {
+                            let success = gio::spawn_blocking(move || std::fs::remove_file(key)).await.is_ok_and(|r| r.is_ok());
+                            policy.event(RecoveryEvent::Complete { token: work.token, success }).unwrap();
+                        }
+                    }
+                }
+                _ => { policy.event(RecoveryEvent::Dismiss { discard: false }).unwrap(); },
             }
         }
     });

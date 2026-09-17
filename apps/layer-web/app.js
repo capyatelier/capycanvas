@@ -665,6 +665,7 @@ function update(regions) {
     effectPanels.refresh();
   }
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) header?.refresh();
+  if (regions & (4 | 8)) documents?.refresh();
   if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 128)) persistWorkspace();
@@ -1430,7 +1431,7 @@ try {
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
-  documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
+  documents = createDocuments({app,canvas,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);

@@ -24,7 +24,7 @@ pub struct WebProject {
     revision: u64,
     closing: bool,
     recovered: bool,
-    photo: bool,
+    source: layer_ui::ImportSource,
     placed: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
     source_name: String,
     target: layer_core::LayerId,
@@ -47,6 +47,11 @@ impl WebApp {
     }
     pub fn export_form(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::ExportForm::new(self.session.engine().document()))
+    }
+    pub fn export_draft(&self, recipe: JsValue, action: JsValue) -> Result<JsValue, JsValue> {
+        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
+        let action: layer_ui::ExportDraftAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
+        serialize(&recipe.draft(action))
     }
     pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
@@ -89,6 +94,13 @@ impl WebApp {
         Ok(future_to_promise(async move {
             raster_project::save(project).await
         }))
+    }
+    pub fn recovery_document(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.recovery_document())
+    }
+    pub fn recovery_update(&self, state: &str, event: JsValue) -> Result<JsValue, JsValue> {
+        let event = serde_wasm_bindgen::from_value(event).map_err(js)?;
+        serialize(&layer_ui::recovery::recovery_update(state, event).map_err(js)?)
     }
     pub fn save_recovery(&self, key: String) -> Result<js_sys::Promise, JsValue> {
         let project = self.session.capture_project_recovery().map_err(js)?;
@@ -193,14 +205,8 @@ impl WebApp {
                     .min(ProjectLimits::default().dimension),
                 ..Default::default()
             };
-            let photo = bytes
-                .as_ref()
-                .is_some_and(|bytes| bytes.subarray(0, 4).to_vec() != b"CAPY");
-            if placing && !photo {
-                return Err(js("Choose a PNG, TIFF or JPEG image to place"));
-            }
             let source_name = source_name.unwrap_or_else(|| "Photo".into());
-            let mut project = match bytes {
+            let mut imported = match bytes {
                 Some(bytes) => {
                     raster_project::open(
                         bytes,
@@ -208,21 +214,15 @@ impl WebApp {
                             dimension: limits.dimension,
                             photo_policy,
                             name: source_name.clone(),
-                            recovered,
+                            intent: if recovered { layer_ui::ImportIntent::Recovery } else if placing { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
+                            source_bytes: None,
                         },
                     )
                     .await?
                 }
-                None => new_options.project().map_err(js)?,
+                None => layer_ui::ImportedDocument { project: new_options.project().map_err(js)?, source: layer_ui::ImportSource::Master },
             };
-            if photo && photo_policy.missing_profile == layer_ui::MissingProfilePolicy::Ask {
-                if let Some(source) = project
-                    .document
-                    .layers
-                    .iter()
-                    .find_map(|l| l.source.as_ref())
-                    .filter(|s| s.interpretation.profile_assumed)
-                {
+            if let Some(source) = imported.interpretation_required(photo_policy) {
                     let callback = interpret
                         .as_ref()
                         .ok_or_else(|| js("Choose how to interpret this untagged image"))?;
@@ -235,14 +235,10 @@ impl WebApp {
                         return Err(error.into());
                     }
                     let profile = serde_wasm_bindgen::from_value(choice).map_err(js)?;
-                    let source = layer_color::assume_source_profile((**source).clone(), profile)
-                        .map_err(js)?;
-                    let name = project.document.layers[0].name.to_string();
-                    project =
-                        layer_color::photo_project(source, &name, project.document.color.depth)
-                            .map_err(js)?;
-                }
+                    imported.interpret(profile).map_err(js)?;
             }
+            let source_kind = imported.source;
+            let project = imported.project;
             if placing {
                 let source = project
                     .document
@@ -257,9 +253,9 @@ impl WebApp {
                     revision,
                     closing: false,
                     recovered: false,
-                    photo: true,
+                    source: source_kind,
                     placed: Some(source),
-                    source_name,
+                    source_name: project.document.layers[0].name.to_string(),
                     target,
                     lost,
                 }
@@ -337,7 +333,7 @@ impl WebApp {
                 revision,
                 closing,
                 recovered,
-                photo,
+                source: source_kind,
                 placed: None,
                 source_name,
                 target,
@@ -367,6 +363,10 @@ impl WebApp {
             ));
         }
         if let Some(source) = project.placed.take() {
+            if !self.session.state().requests.iter().any(|r| r.id == project.request && matches!(r.kind,
+                HostRequestKind::Document { request: DocumentRequest::Place | DocumentRequest::Paste })) {
+                return Err(js("Image import is no longer active"));
+            }
             if self.session.state().document_file.epoch != project.epoch
                 || self.session.engine().document().revision != project.revision
                 || self.session.engine().document().active_target() != project.target
@@ -377,16 +377,15 @@ impl WebApp {
             }
             let name = project
                 .source_name
-                .rsplit_once('.')
-                .map_or(project.source_name.as_str(), |(stem, _)| stem)
                 .chars()
                 .filter(|c| !c.is_control())
                 .take(128)
                 .collect::<String>();
             self.session
-                .import_layer_source(
+                .place_layer_source(
                     if name.is_empty() { "Image" } else { &name },
                     (*source).clone(),
+                    None,
                 )
                 .map_err(js)?;
             let mut change = self
@@ -394,9 +393,10 @@ impl WebApp {
                 .complete_document_request(project.request, Ok(true))
                 .map_err(js)?;
             change.canvas_wake = true;
+            change.regions |= 255;
             return serialize(&change);
         }
-        let location = if project.photo { None } else { location };
+        let location = project.source.adoption_location(location);
         if project.closing && !self.session.state().document_file.close_ready {
             return Err(js("Document close was cancelled"));
         }

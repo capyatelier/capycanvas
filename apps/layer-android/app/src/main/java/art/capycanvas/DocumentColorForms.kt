@@ -51,10 +51,7 @@ import org.json.JSONObject
                 saving = true
                 try {
                     if (name.isNotBlank() || defaults) {
-                        val settings = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").getJSONObject("new_document").toString())
-                        if (name.isNotBlank()) settings.getJSONArray("presets").put(obj("name" to name.trim(), "options" to selected))
-                        if (defaults) settings.put("defaults", selected)
-                        host.withNative { Native.dispatch(it, obj("type" to "new_document_settings", "settings" to settings).toString()) }
+                        host.withNative { Native.dispatch(it, obj("type" to "new_document_preferences", "action" to obj("type" to "remember", "options" to selected, "name" to name, "defaults" to defaults)).toString()) }
                         host.documentChanged()
                     }
                     onCreate(selected)

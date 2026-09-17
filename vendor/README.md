@@ -63,8 +63,24 @@ the `supports32BitFloatFiltering` qualification for older iPad GPU families.
 Devices without that capability still report it unavailable. No texture
 precision, publication, rendering or presentation algorithm is changed.
 
+`wgpu-android-command-memory.patch` frees completed buffers and requests
+`RELEASE_RESOURCES` on every Android Vulkan command-pool reset, at wgpu's existing
+all-completed boundary. Large photo preparation followed
+by save/reopen and editing exhausted host mappings in Adreno command recording on
+the Wacom DTHA140: one failing process reached 64,039 mappings despite available
+RAM. Resetting pools alone and periodic buffer reclamation still failed during
+the long workload; freeing completed buffers on every reset passed.
+The renderer also submits cold placement previews in batches of 64 tiles;
+resetting pools alone did not bound command storage while recording a new preview.
+The [Vulkan reset flag](https://docs.vulkan.org/refpages/latest/refpages/source/VkCommandPoolResetFlagBits.html)
+returns the pool's resources to the system; submission ownership and completion
+synchronization remain unchanged. This workaround trades pool reuse for bounded
+retention on Android, with a substantial CPU cost on this tablet. Other targets
+keep their existing reset flags. See the
+[host qualification](../docs/development/image-placement-web-android-progress.md).
+
 Remove each patch when an upstream release supplies its equivalent fix, and
-remove these snapshots when neither patch remains necessary.
+remove these snapshots when no patch remains necessary.
 ## HEIF/AVIF source color preservation
 
 `libheif-source-profile.patch` applies to upstream libheif **1.23.4**. With

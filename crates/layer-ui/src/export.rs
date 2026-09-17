@@ -245,6 +245,52 @@ impl ExportRecipe {
     }
 }
 
+/// Product-dependent draft transitions, shared by all native/browser forms.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ExportDraftAction {
+    Refresh,
+    Format(ExportFormat),
+    Profile(ExportProfile),
+    Depth(IntegerDepth),
+    Background(ExportBackground),
+    Encoding(OutputEncoding),
+}
+#[derive(Serialize)]
+pub struct ExportDraft {
+    pub recipe: ExportRecipe,
+    pub formats: Vec<ExportFormat>,
+    pub depths: Vec<IntegerDepth>,
+    pub backgrounds: Vec<ExportBackground>,
+    pub dithers: Vec<layer_core::color::OutputDither>,
+}
+impl ExportRecipe {
+    pub fn draft(mut self, action: ExportDraftAction) -> ExportDraft {
+        use layer_core::color::OutputDither;
+        match action {
+            ExportDraftAction::Refresh => (),
+            ExportDraftAction::Format(v) => self.format = v,
+            ExportDraftAction::Profile(v) => self.profile = v,
+            ExportDraftAction::Depth(v) => self.depth = v,
+            ExportDraftAction::Background(v) => self.background = v,
+            ExportDraftAction::Encoding(v) => self.encoding = v,
+        }
+        let cmyk = self.profile.channels == ProfileChannels::Cmyk;
+        if cmyk && self.format == ExportFormat::Png { self.format = ExportFormat::Tiff; }
+        let jpeg = self.format == ExportFormat::Jpeg;
+        if jpeg { self.depth = IntegerDepth::U8; }
+        if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
+        if self.depth != IntegerDepth::U8 { self.encoding.dither = OutputDither::None; }
+        ExportDraft {
+            formats: if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
+            depths: if jpeg { vec![IntegerDepth::U8] } else { vec![IntegerDepth::U8, IntegerDepth::U16] },
+            backgrounds: if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
+            dithers: if self.depth == IntegerDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
+            recipe: self,
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct ExportForm {
     pub profiles: Vec<ExportProfile>,
@@ -293,6 +339,28 @@ impl ExportForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn draft_transitions_keep_supported_depth_alpha_and_dither_choices() {
+        let mut recipe = ExportRecipe::further_editing(DocumentColor::default());
+        recipe.encoding.dither = layer_core::color::OutputDither::Stochastic8;
+        let jpeg = recipe.draft(ExportDraftAction::Format(ExportFormat::Jpeg));
+        assert_eq!(jpeg.depths, [IntegerDepth::U8]);
+        assert_eq!(jpeg.recipe.depth, IntegerDepth::U8);
+        assert_eq!(jpeg.recipe.background, ExportBackground::White);
+        jpeg.recipe.validate().unwrap();
+        let png = jpeg.recipe.draft(ExportDraftAction::Format(ExportFormat::Png));
+        let deep = png.recipe.draft(ExportDraftAction::Depth(IntegerDepth::U16));
+        assert_eq!(deep.recipe.encoding.dither, layer_core::color::OutputDither::None);
+        deep.recipe.validate().unwrap();
+        let cmyk = deep.recipe.draft(ExportDraftAction::Profile(ExportProfile { profile: ColorProfile::Icc(vec![1].into()), channels: ProfileChannels::Cmyk, name: "CMYK".into() }));
+        assert_eq!(cmyk.formats, [ExportFormat::Tiff, ExportFormat::Jpeg]);
+        assert_eq!(cmyk.recipe.format, ExportFormat::Tiff);
+        assert!(!cmyk.backgrounds.contains(&ExportBackground::Preserve));
+        cmyk.recipe.validate().unwrap();
+        let mut invalid = cmyk.recipe;invalid.jpeg_quality = 0;
+        assert!(invalid.draft(ExportDraftAction::Refresh).recipe.validate().is_err());
+    }
+
     #[test]
     fn export_size_fits_orientation_without_distorting_or_changing_the_master() {
         for (source, bounds, enlarge, expected) in [

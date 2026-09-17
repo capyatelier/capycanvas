@@ -86,7 +86,8 @@ function runtimeFixture(t, changes = {}) {
     "header.js": "import {switcher} from './workspace-switcher.js'; export const header = true;",
     "editor-panels.js": "import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
     "workspace-chrome.js": "export function createWorkspaceChrome() {}",
-    "documents.js": "import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
+    "image-import.js": "export function createImageImport() {}",
+    "documents.js": "import {createImageImport} from './image-import.js'; import {chooseDocumentColor} from './document-color.js'; import {createHistogram} from './histogram.js'; import {chooseExport} from './export-controls.js'; export function createDocuments() {}",
     "document-color.js": "import {importProfile} from './export-controls.js'; export function chooseDocumentColor() {}",
     "histogram.js": "export function createHistogram() {}",
     "export-controls.js": "export function chooseExport() {}",
@@ -147,7 +148,7 @@ test("production runtime module imports resolve to packaged files", (t) => {
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
+  for (const path of ["image-import.js", "app.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "workspace-worker.js", "system-status.js","header.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);

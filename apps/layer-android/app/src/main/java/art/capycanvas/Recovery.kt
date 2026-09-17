@@ -14,6 +14,7 @@ import java.nio.channels.FileLock
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.StandardOpenOption
 import java.util.UUID
+import org.json.JSONObject
 
 /** One immutable capture in flight per window. File locks exclude live windows;
  * complete sibling-file publication is shared with GTK in Rust. */
@@ -29,9 +30,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
     private var offered: Held? = null
     private var started = false
     private var closed = false
-    private var serial = 0L
-    private var checkpoint: String? = null
-    private var pending = false
+    private var policy = ""
     var candidate by mutableStateOf<File?>(null)
         private set
     var working by mutableStateOf(false)
@@ -58,79 +57,78 @@ internal class RecoveryController(private val host: CanvasHost, application: App
                     offered = directory.listFiles().orEmpty().filter { it.extension == "capy" && it != path }
                         .sortedByDescending { it.lastModified() }.firstNotNullOfOrNull(::claim)
                 } }
-                candidate = offered?.path
+                offered?.let { update(obj("type" to "offer","key" to it.path.absolutePath,"owned" to true)) }
+                capture()
                 while (!closed) { delay(15_000); capture() }
             } catch (e: Exception) { host.reportActionError("Recovery unavailable: ${e.message}") }
         }
     }
-    /** Safe to request during a contact: capture_project_recovery excludes live ink. */
-    fun capture(): Job? {
-        if (!started || owner == null || closed || pending || working || candidate != null) return null
-        val file = host.snapshot?.objectOrNull("state")?.objectOrNull("document_file") ?: return null
-        if (file.optBoolean("busy")) return null
-        val version = "${file.optLong("epoch")}:${file.optLong("revision")}:${file.optBoolean("modified")}"
-        if (checkpoint == version) return null
-        pending = true
-        val generation = serial
+    private fun update(event:JSONObject):JSONObject? {
+        val result=JSONObject(Native.recoveryUpdate(policy,event.toString()))
+        policy=result.getString("state")
+        val view=result.getJSONObject("update")
+        val key=view.optString("offer").takeUnless{it.isEmpty()||it=="null"}
+        candidate=offered?.path?.takeIf{it.absolutePath==key}
+        working=view.getBoolean("busy")
+        for(release in view.getJSONArray("release").values()) {
+            offered?.takeIf{it.path.absolutePath==release}?.let{held->held.close();offered=null}
+        }
+        return view.objectOrNull("work")
+    }
+    private suspend fun observation():JSONObject = JSONObject(host.withNative{Native.query(it,obj("type" to "recovery_document").toString())})
+    private fun execute(first:JSONObject?):Job? {
+        if(first==null)return null
+        return scope.launch { storage.withLock {
+            var next:JSONObject?=first
+            while(next!=null) {
+                val work=next;var success=false
+                try {
+                    when(work.getJSONObject("kind").getString("type")) {
+                        "capture" -> success=writeSnapshot()
+                        "retire" -> {withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(path.toPath())};success=true}
+                        "retire_origin" -> {
+                            val key=work.getJSONObject("kind").getString("key")
+                            val held=checkNotNull(offered?.takeIf{it.path.absolutePath==key})
+                            withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(held.path.toPath())};success=true
+                        }
+                        "restore" -> {
+                            val key=work.getJSONObject("kind").getString("key")
+                            val held=checkNotNull(offered?.takeIf{it.path.absolutePath==key})
+                            val task=host.withNative{Native.projectRecoveryTask(it,true)}
+                            try {
+                                withContext(Dispatchers.IO){Native.projectWork(task,ParcelFileDescriptor.open(held.path,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)}
+                                host.withNative{Native.projectAdopt(it,task,"null")};host.documentChanged()
+                                update(obj("type" to "observe","document" to observation(),"owned" to (owner!=null)))
+                                success=true
+                            }finally{withContext(NonCancellable+Dispatchers.IO){Native.projectFree(task)}}
+                        }
+                    }
+                }catch(e:Exception){host.reportActionError("Recovery operation failed: ${e.message}")}
+                next=update(obj("type" to "complete","token" to work.getLong("token"),"success" to success))
+            }
+        } }
+    }
+    /** The shared observation excludes provisional operations, but allows committed ink capture. */
+    fun capture():Job? {
+        if(!started||owner==null||closed)return null
         return scope.launch {
-            try {
-                storage.withLock {
-                    if (generation != serial) return@withLock
-                    if (file.optBoolean("modified")) writeSnapshot()
-                    else withContext(Dispatchers.IO) { java.nio.file.Files.deleteIfExists(path.toPath()) }
-                    checkpoint = version
-                }
-            } catch (e: Exception) { host.reportActionError("Recovery copy could not be saved: ${e.message}") }
-            finally { pending = false }
+            try{execute(update(obj("type" to "observe","document" to observation(),"owned" to true)))?.join()}
+            catch(e:Exception){host.reportActionError("Recovery copy could not be saved: ${e.message}")}
         }
     }
-    private suspend fun writeSnapshot() {
+    private suspend fun writeSnapshot(): Boolean {
         val task = host.withNative { Native.projectRecoveryTask(it, false) }
+        if (task == 0L) return false
         try { withContext(Dispatchers.IO) { Native.projectPublish(task, path.absolutePath) } }
         finally { withContext(NonCancellable + Dispatchers.IO) { Native.projectFree(task) } }
+        return true
     }
-    fun retire() {
-        serial++; checkpoint = null
-        scope.launch { storage.withLock {
-            try { withContext(Dispatchers.IO) { java.nio.file.Files.deleteIfExists(path.toPath()) } }
-            catch (e: Exception) { host.reportActionError("Previous recovery copy could not be removed: ${e.message}") }
-        } }
-    }
-    fun dismiss(discard: Boolean) {
-        if (working) return
-        val held = offered ?: return
-        offered = null; candidate = null
-        scope.launch { withContext(Dispatchers.IO) {
-            try { if (discard) java.nio.file.Files.deleteIfExists(held.path.toPath()) }
-            finally { held.close() }
-        } }
-    }
-    fun recover() {
-        val held = offered ?: return
-        if (working) return
-        working = true
-        scope.launch {
-            var task = 0L
-            try {
-                task = host.withNative { Native.projectRecoveryTask(it, true) }
-                withContext(Dispatchers.IO) {
-                    Native.projectWork(task, ParcelFileDescriptor.open(held.path, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
-                }
-                host.withNative { Native.projectAdopt(it, task, "null") }
-                host.documentChanged()
-                // Establish this window's complete copy before retiring the origin.
-                storage.withLock { writeSnapshot() }
-                withContext(Dispatchers.IO) { java.nio.file.Files.deleteIfExists(held.path.toPath()); held.close() }
-                offered = null; candidate = null
-            } catch (e: Exception) { host.reportActionError("Drawing could not be recovered: ${e.message}") }
-            finally {
-                if (task != 0L) withContext(NonCancellable + Dispatchers.IO) { Native.projectFree(task) }
-                working = false
-            }
-        }
-    }
+    fun retire() { execute(update(obj("type" to "retire","discard_origin" to true))) }
+    fun dismiss(discard:Boolean) { execute(update(obj("type" to "dismiss","discard" to discard))) }
+    fun recover() { execute(update(obj("type" to "restore"))) }
     fun close() {
         closed = true
+        execute(update(obj("type" to "close")))
         scope.launch { storage.withLock {
             withContext(Dispatchers.IO) { offered?.close(); offered = null; owner?.close(); owner = null }
             scope.cancel()

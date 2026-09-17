@@ -6,8 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_ENTRIES: usize = 128;
-const MAX_BYTES: u64 = 64 * 1024 * 1024;
+use layer_ui::profile_library as policy;
 static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug)]
@@ -17,7 +16,6 @@ pub(super) struct Entry {
     pub(super) channels: Option<ProfileChannels>,
     pub(super) issue: Option<String>,
     pub(super) visible: bool,
-    bytes: u64,
 }
 impl Entry {
     fn description(&self) -> String {
@@ -47,11 +45,6 @@ pub(super) fn directory() -> PathBuf {
         return std::env::temp_dir().join(format!("capy-color-profiles-{}", std::process::id()));
     }
     glib::user_data_dir().join("capycanvas/color-profiles")
-}
-fn digest(bytes: &[u8]) -> String {
-    glib::compute_checksum_for_data(glib::ChecksumType::Sha256, bytes)
-        .unwrap()
-        .into()
 }
 // Display metadata only: the ICC bytes and digest remain authoritative.
 fn saved_name(path: &Path, description: String) -> String {
@@ -87,61 +80,31 @@ fn read_profile(path: &Path) -> Result<(Vec<u8>, String, ProfileChannels), Strin
     let name = layer_color::profile_description(&profile)?;
     Ok((bytes, name, channels))
 }
-pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
+fn inventory(directory: &Path) -> Result<Vec<policy::ProfileRecord>, String> {
     let reader = match std::fs::read_dir(directory) {
         Ok(reader) => reader,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(e.to_string()),
     };
-    let mut result = Vec::new();
-    let mut total = 0u64;
+    let mut records = Vec::new();
     for entry in reader {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        let valid_name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.len() == 64 && s.bytes().all(|v| v.is_ascii_hexdigit()));
-        if !entry.file_type().map_err(|e| e.to_string())?.is_file()
-            || path.extension().is_none_or(|v| v != "icc")
-            || !valid_name
-        {
-            continue;
-        }
-        let size = entry.metadata().map_err(|e| e.to_string())?.len();
-        total = total.saturating_add(size);
-        if result.len() >= MAX_ENTRIES {
-            break;
-        }
-        let value = if total > MAX_BYTES {
-            Err("Library exceeds 64 MiB; remove unused profiles".into())
-        } else {
-            read_profile(&path).and_then(|(bytes, name, channels)| {
-                if path.file_stem().unwrap().to_str() != Some(&digest(&bytes)) {
-                    return Err("Profile changed on disk; remove or reimport it".into());
-                }
-                Ok((saved_name(&path, name), channels))
-            })
-        };
-        let (name, channels, issue) = match value {
-            Ok((name, channels)) => (name, Some(channels), None),
-            Err(error) => (
-                format!(
-                    "Unavailable profile {}",
-                    &path.file_stem().unwrap().to_str().unwrap()[..12]
-                ),
-                None,
-                Some(error),
-            ),
-        };
-        result.push(Entry {
-            visible: !path.with_extension("hidden").exists(),
-            path,
-            name,
-            channels,
-            issue,
-            bytes: size,
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() || path.extension().is_none_or(|v| v != "icc") { continue; }
+        records.push(policy::ProfileRecord {
+            id: path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+            bytes: entry.metadata().map_err(|e| e.to_string())?.len(), issue: None,
         });
+    }
+    Ok(policy::profile_inventory(records))
+}
+pub(super) fn list(directory: &Path) -> Result<Vec<Entry>, String> {
+    let mut result = Vec::new();
+    for record in inventory(directory)? {
+        let path = directory.join(format!("{}.icc", record.id));
+        let bytes = if record.issue.is_some() { Ok(vec![]) } else { read_profile(&path).map(|(bytes, _, _)| bytes) };
+        let entry = policy::inspect_library_entry(&record, bytes.as_deref().map_err(Clone::clone));
+        result.push(Entry { visible: !path.with_extension("hidden").exists(), name: saved_name(&path, entry.name), path, channels: entry.channels, issue: entry.issue });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
     Ok(result)
@@ -161,40 +124,23 @@ fn import(directory: &Path, source: &Path) -> Result<Vec<Entry>, String> {
 // Store exactly the bytes the picker validated, without reopening the source.
 pub(super) fn store(directory: &Path, bytes: &[u8], name: &str) -> Result<Vec<Entry>, String> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    let mut entries = list(directory)?;
-    let target = directory.join(format!("{}.icc", digest(&bytes)));
-    if entries
-        .iter()
-        .any(|e| e.path == target && e.issue.is_none())
-    {
-        return Ok(entries);
-    }
-    let others: Vec<_> = entries.iter().filter(|e| e.path != target).collect();
-    if others.len() >= MAX_ENTRIES
-        || others
-            .iter()
-            .map(|e| e.bytes)
-            .fold(bytes.len() as u64, u64::saturating_add)
-            > MAX_BYTES
-    {
-        return Err("The profile library limit is 128 profiles and 64 MiB".into());
-    }
+    let entry = policy::prepare_profile_import(inventory(directory)?, bytes)?;
+    let target = directory.join(format!("{}.icc", entry.id));
+    let entries = list(directory)?;
+    if entries.iter().any(|e| e.path == target && e.issue.is_none()) { return Ok(entries); }
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let name: String = name.chars().filter(|c| !c.is_control()).take(128).collect();
     layer_core::atomic_write(&target.with_extension("name"), |file| {
         file.write_all(name.as_bytes()).map_err(|e| e.to_string())
     })?;
-    layer_core::atomic_write(&target, |file| {
-        file.write_all(&bytes).map_err(|e| e.to_string())
-    })?;
-    entries = list(directory)?;
-    Ok(entries)
+    layer_core::atomic_write(&target, |file| file.write_all(bytes).map_err(|e| e.to_string()))?;
+    list(directory)
 }
 fn remove(directory: &Path, path: &Path) -> Result<Vec<Entry>, String> {
     let _lock = STORE_LOCK.lock().map_err(|e| e.to_string())?;
-    if !list(directory)?.iter().any(|e| e.path == path) {
-        return Err("Select an imported profile".into());
-    }
+    let id = path.file_stem().and_then(|s| s.to_str()).ok_or("Select an imported profile")?;
+    policy::ProfileLibraryAction::Remove { id: id.into() }.execute(&[])?;
+    if path != directory.join(format!("{id}.icc")) { return Err("Select an imported profile".into()); }
     for extension in ["name", "hidden"] {
         match std::fs::remove_file(path.with_extension(extension)) {
             Ok(()) => (),
@@ -232,9 +178,8 @@ pub(super) fn read_entry(
     let ColorProfile::Icc(bytes) = &profile.profile else {
         unreachable!()
     };
-    if path.file_stem().and_then(|s| s.to_str()) != Some(&digest(bytes)) {
-        return Err("The imported profile changed on disk; reimport it before use".into());
-    }
+    let id = path.file_stem().and_then(|s| s.to_str()).ok_or("Select an imported profile")?;
+    policy::read_library_profile(id, bytes, false)?;
     profile.name = saved_name(path, layer_color::profile_description(&profile.profile)?);
     Ok(profile)
 }

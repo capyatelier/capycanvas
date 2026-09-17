@@ -234,3 +234,92 @@ Windows follow-up and does not block completion of the shared extractions.
 - Update this handoff with completed items, API locations, migration notes and
   actual validation. The Windows follow-up should be able to enumerate its native
   adapters without copying a color/source/export/recovery business state machine.
+
+
+## Implementation update — 2026-09-17
+
+The extraction now includes GTK as requested, in addition to Web and Android.
+The adapters call these shared services:
+
+| Item | Shared contract | Host responsibilities retained |
+| --- | --- | --- |
+| C1 | `layer-ui::ColorWorkflow`, `CandidateIdentity`, and `UiSession::commit_document_color_candidate`; `layer-render::remap_document_colors` | Worker execution, GPU/device lifetime observation, comparison widgets, destination selection, displaced GPU-resource disposal. |
+| C2 | `layer-ui::SourceWorkflow`; `layer-color::repair_source_interpretation` | Worker byte transport, completion of GPU comparisons, native controls. Baked-edit detection, candidate validity, original preservation and commit eligibility are shared. |
+| C3 | `layer-ui::{read_import, ImportedDocument, ImportSource, ImportIntent, ImageImportBatch}` and the existing shared placement context/transaction | Picker/clipboard/URI transport, worker decoding and GPU adoption. Source kind controls master save location; interpretation, editing depth and whole-batch source budgets are shared. File filters consume `layer-color::photo::formats`. |
+| C4 | `ExportRecipe::draft(ExportDraftAction)` and `SnapshotRenderer::output_source` | Native controls, streaming row acquisition and destination publication. Recipes, CMM, resampling, encoding and identity eligibility remain shared; browser workers still stream output. |
+| C5 | `layer-ui::profile_library::{ProfileLibraryAction, ProfileRecord, ProfileEntry}` | App-owned storage enumeration, bounded reads, native locks and atomic writes. Rust owns SHA-256 identity, integrity, deduplication, quotas and unavailable-entry reporting. |
+| C6 | `layer-ui::recovery::{RecoveryState, RecoveryEvent, RecoveryWork}` and `UiSession::recovery_document` | Timer/lifecycle observations, storage ownership locks and execution/completion of work tickets. JNI/Wasm carry opaque state; they do not recreate recovery policy. |
+
+`NewDocumentAction` also owns atomic preset/default changes in all three hosts.
+The old whole-settings action remains compatible with other clients. Profile
+library filenames/IndexedDB keys and recovery file formats are unchanged. Entries
+beyond a library quota remain visible and removable, rather than disappearing
+from accounting. Recovery only releases an abandoned origin after replacement
+publication succeeds (or the user explicitly discards it); failed work remains
+retryable. GTK origin leases transfer to the restored drawing window.
+
+Shared boundary tests cover invalid operation choices, cancellation, stale
+revision/request/device observations, renderer rollback, exact Undo/Redo, original
+source tiles, import budgets and interpretation, draft option dependencies,
+profile integrity/limits, and recovery capture/retirement ordering. Host journeys
+are being qualified before publication; final evidence belongs below.
+
+### Remaining host integrations and boundaries
+
+Windows and Apple can consume the contracts above without copying Android jobs.
+They still need native executors, picker/storage adapters and device-lifetime
+observations; this work does not claim their new workflow acceptance. Existing
+lower-level renderer, session, recipe and settings APIs remain available.
+C7 stays a Windows task: consume tagged color values, converted swatches and the
+shared gradient samples from `layer-ui::color::form`. No additional core model is
+needed. Optional histogram/sample-inspection presentation state is deferred;
+computation and averaging already run in shared Rust. No workspace drag behavior
+or deferred dirty-rendering architecture is changed by this extraction.
+
+
+### Qualification and upstream integration
+
+The first qualification pass used `d3292309`: 446 shared UI tests, 28 native-host
+tests (one hardware benchmark ignored), 282 renderer unit tests (29 opt-in
+hardware cases ignored), four contact tests, and six native-tile integration
+tests passed. Android debug/test APKs and lint passed. The attached MovinkPad
+passed exact profile ownership, export presets, retained Place/Paste, color/source
+edits, 16-bit save/GPU replacement, batch stale-target rejection, and the opt-in
+61 MP JPEG G-Pen/history/save/reopen/GPU-replacement journey. GTK's five targeted
+color/profile/files/source/rasterization journeys passed on the real Vulkan GPU
+under isolated Wayland. Browser raster save/reopen, exact exported pixels, GPU
+replacement and IndexedDB recovery after reload passed in headed Chrome.
+
+Before publication, main advanced to `3fbb937b` with GTK proofing and shared brush
+preparation/display submission changes. Those changes are integrated, including
+GTK's new profile picker and profile display metadata. Shared library policy
+continues to own identity/integrity/quotas; native name/visibility sidecars remain
+UI storage metadata. The moving-photo shortcut excludes an active preview;
+ordinary complete prediction tiles retain upstream's direct composition behavior.
+The merged build passes 448 shared UI tests, 28 native-host tests, the GTK
+library/recovery unit tests, all five original GTK journeys, and the new profile
+picker plus print-proof history/save/reopen/RGB-export journeys. Android builds
+and lint pass. The complete headed-browser workflow suite passes creation,
+color/source changes, custom-format clipboard placement, export presets, profile
+corruption/repair, all six retained photo adjustments and flattened copies. The
+previously disconnected browser
+color/source test module is now runnable as `--shared-workflows`; its import and
+paste tests explicitly Apply placement and grant isolated clipboard permissions.
+
+
+Merged Android hardware qualification also passes document color/history,
+retained batch placement/stale-target rejection, and 61 MP JPEG G-Pen drawing
+with exact Undo/Redo, save/reopen and GPU replacement (three tests, 69.082 s).
+The earlier profile-library/export/recovery host tests remain applicable to their
+unchanged adapters. No 120 Hz performance claim follows from these correctness
+journeys; sustained motion and drawing latency are measured separately.
+
+
+The merged full renderer suite passes 285 unit tests (30 opt-in cases ignored),
+four contact tests and six native-tile integration tests. Browser restart
+recovery was repeated on the merged project format and passes, including exact
+exported pixels and retaining the unsaved checkpoint. A final shared regression
+also rejects consuming an Undo/Redo candidate twice, preventing a second prepare
+from accidentally becoming a new edit. All required C1–C6 extractions are now
+qualified for Web, Android and GTK; the optional inspection presentation model
+and Windows/Apple host migrations remain the explicit follow-ups above.

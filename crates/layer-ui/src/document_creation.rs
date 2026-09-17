@@ -98,7 +98,32 @@ pub struct NewDocumentSettings {
     pub defaults: NewDocumentOptions,
     pub presets: Vec<NewDocumentPreset>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NewDocumentAction {
+    Remember { options: NewDocumentOptions, name: String, defaults: bool },
+    Remove { index: usize },
+}
 impl NewDocumentSettings {
+    pub fn apply(&mut self, action: NewDocumentAction) -> Result<(), String> {
+        let mut next = self.clone();
+        match action {
+            NewDocumentAction::Remember { options, name, defaults } => {
+                options.validate()?;
+                if !name.trim().is_empty() {
+                    next.presets.push(NewDocumentPreset { name: name.trim().into(), options });
+                }
+                if defaults { next.defaults = options; }
+            }
+            NewDocumentAction::Remove { index } => {
+                if index >= next.presets.len() { return Err("Drawing preset is unavailable".into()); }
+                next.presets.remove(index);
+            }
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
     pub fn validate(&self) -> Result<(), String> {
         self.defaults.validate()?;
         if self.presets.len() > 64 {
@@ -157,6 +182,20 @@ impl NewDocumentSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preference_actions_validate_before_changing_defaults_or_presets() {
+        let mut settings = NewDocumentSettings::default();
+        let options = NewDocumentOptions { extent: [513, 257], ..Default::default() };
+        settings.apply(NewDocumentAction::Remember { options, name: " Photo ".into(), defaults: true }).unwrap();
+        let saved = settings.clone();
+        assert!(settings.apply(NewDocumentAction::Remember { options: Default::default(), name: "photo".into(), defaults: true }).is_err());
+        assert_eq!(settings, saved);
+        assert!(settings.apply(NewDocumentAction::Remove { index: 1 }).is_err());
+        assert_eq!(settings, saved);
+        settings.apply(NewDocumentAction::Remove { index: 0 }).unwrap();
+        assert!(settings.presets.is_empty());
+        assert_eq!(settings.defaults, options);
+    }
     #[test]
     fn creation_preserves_independent_depth_space_and_background() {
         for space in RgbSpace::ALL {

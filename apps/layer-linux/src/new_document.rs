@@ -329,8 +329,8 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                             .clone();
                         if settings.save(&name.text(), options).is_ok() {
                             let selected = settings.presets.len() as u32 + 3;
-                            w.dispatch(UiAction::NewDocumentSettings {
-                                settings: settings.clone(),
+                            w.dispatch(UiAction::NewDocumentPreferences {
+                                action: NewDocumentAction::Remember { options, name: name.text().into(), defaults: false },
                             });
                             form.presets(&settings, selected);
                         }
@@ -369,9 +369,9 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                         .map(|v| v as usize)
                         .filter(|i| *i < settings.presets.len())
                     {
-                        settings.presets.remove(index);
-                        w.dispatch(UiAction::NewDocumentSettings {
-                            settings: settings.clone(),
+                        settings.apply(NewDocumentAction::Remove { index }).unwrap();
+                        w.dispatch(UiAction::NewDocumentPreferences {
+                            action: NewDocumentAction::Remove { index },
                         });
                         form.presets(&settings, 0);
                     }
@@ -385,18 +385,9 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     let options = form.options();
     let project = options.project()?;
     if remember.is_active() {
-        let mut settings = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .ok_or("Canvas unavailable")?
-            .session
-            .state()
-            .settings
-            .new_document
-            .clone();
-        settings.defaults = options;
-        w.dispatch(UiAction::NewDocumentSettings { settings });
+        w.dispatch(UiAction::NewDocumentPreferences {
+            action: NewDocumentAction::Remember { options, name: String::new(), defaults: true },
+        });
     }
     Ok(Some(project))
 }

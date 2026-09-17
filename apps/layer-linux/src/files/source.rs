@@ -1,32 +1,20 @@
 //! Correct retained source interpretation without changing its original samples.
 use super::profile::{ProfileChooser, ProfilePurpose};
 use super::*;
-use layer_core::LayerId;
+use std::cell::RefCell;
 
-pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
-    let (epoch, revision, layer, working, project, background, time) = {
+pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
+    let (workflow, background, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        let document = session.engine().document();
-        (
-            session.state().document_file.epoch,
-            document.revision,
-            document
-                .layer(LayerId(id))
-                .ok_or("Unknown source layer")?
-                .clone(),
-            document.color.space,
-            session.capture_project_recovery()?,
-            session.state().camera.view().background_rgba_linear,
-            session.engine().animation_time(),
-        )
+        (SourceWorkflow::begin(session, id)?, session.engine().view().background_rgba_linear, session.engine().animation_time())
     };
-    let original = layer
-        .source
-        .clone()
-        .ok_or("This layer has no retained source")?;
-    let baked =
-        !layer.raster.is_empty() || !layer.pending_operations.is_empty() || layer.asset.is_some();
+    let original = workflow.original.clone();
+    let project = workflow.project.clone();
+    let working = project.document.color.space;
+    let baked = workflow.adds_layer();
+    let workflow = Rc::new(RefCell::new(workflow));
+    let original_gpu = w.snapshot_gpu()?;
     let current = original.interpretation.profile.clone();
     let description = gio::spawn_blocking(move || layer_color::profile_description(&current))
         .await
@@ -93,7 +81,6 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
         }
     )));
     let selected = chooser.selected.clone();
-    let source_for_preview = original.clone();
     space.connect_subtitle_notify(glib::clone!(
         #[weak]
         w,
@@ -101,19 +88,16 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
         comparison,
         #[weak]
         hint,
+        #[strong]
+        workflow,
+        #[strong]
+        original_gpu,
         move |_| {
             let result = selected().and_then(|profile| {
-                let mut corrected = (*source_for_preview).clone();
-                corrected.interpretation.profile = profile.profile;
-                corrected.interpretation.profile_assumed = false;
+                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), || false)?;
                 let gpu = w.gpu.borrow();
                 let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-                if session.state().document_file.epoch != epoch
-                    || session.engine().document().revision != revision
-                {
-                    return Err("The document changed; reopen source repair".into());
-                }
-                session.preview_layer_source(LayerId(id), &source_for_preview, corrected)
+                workflow.borrow_mut().preview(session, corrected, false, original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))
             });
             match result {
                 Ok(project) => {
@@ -133,31 +117,18 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u64) -> Result<bool, String> {
         .map_err(|_| "Profile reader failed")??;
     (chooser.restore)(profile);
     let response = crate::alert::choose(dialog, &w.window).await;
+    let compared = comparison.ready.get();
     comparison.close();
     comparison.finish().await;
     if response != "apply" {
         return Ok(false);
     }
-    let profile = (chooser.selected)()?;
-    let mut corrected = (*original).clone();
-    corrected.interpretation.profile = profile.profile;
-    corrected.interpretation.profile_assumed = false;
-    // Also validate builtins on the worker. ICC selections were already tested
-    // against these exact source channels, rather than an output-profile role.
-    let corrected = gio::spawn_blocking(move || {
-        layer_color::WorkingDecoder::new(&corrected.interpretation, working, Default::default())?;
-        Ok::<_, String>(corrected)
-    })
-    .await
-    .map_err(|_| "Source profile validation failed")??;
+    if !compared { return Err("No completed source comparison".into()); }
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-    if session.state().document_file.epoch != epoch
-        || session.engine().document().revision != revision
-    {
-        return Err("The document changed while choosing the source profile; try again".into());
-    }
-    session.repair_layer_source(layer.id, &original, corrected)?;
+    let current = original_gpu.same_device(&session.engine().backend().snapshot_gpu()?);
+    workflow.borrow_mut().comparison_completed()?;
+    workflow.borrow_mut().commit(session, false, current)?;
     drop(gpu);
     w.wake();
     Ok(true)

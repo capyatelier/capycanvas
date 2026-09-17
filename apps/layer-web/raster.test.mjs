@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import {writeFile} from "node:fs/promises";
+import {mkdir,writeFile} from "node:fs/promises";
 
 export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>30000)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status').textContent));else setTimeout(check,20);}check();})`).catch(error=>{throw new Error(`Raster wait failed: ${condition}`,{cause:error});});
   await wait('layerApp.startupTimes.complete!==null');
   console.log('Raster startup',await evaluate('JSON.parse(JSON.stringify({startup:layerApp.startupTimes,stats:layerApp.app.renderer_stats(),camera:layerApp.app.camera(),file:layerApp.state().document_file,status:document.querySelector("#status").textContent},(key,value)=>typeof value==="bigint"?Number(value):value))'));
   console.log('Presented pixels',await canvasPixels());
+  await mkdir('artifacts/color-m1',{recursive:true});
   const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile('artifacts/color-m1/web-raster.png',Buffer.from(shot.data,'base64'));
   await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
   const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();if(command==='export_document'){

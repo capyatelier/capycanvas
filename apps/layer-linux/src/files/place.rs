@@ -76,17 +76,14 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
 
 pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> {
     let incoming = if paste { None } else { w.image_drop.borrow_mut().take() };
-    let (epoch, revision, target) = {
+    let (context, policy, working) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        incoming.as_ref().map_or_else(|| (
-            session.state().document_file.epoch,
-            session.engine().document().revision,
-            session.engine().document().active_target(),
-        ), |d| (d.epoch, d.revision, d.target))
+        let context = if let Some(d) = &incoming {
+            layer_ui::ImagePlacementContext { epoch: d.epoch, revision: d.revision, target: d.target, center: d.center, destination: d.destination }
+        } else { session.image_placement_context(None, None)? };
+        (context, session.state().settings.photo_open, session.engine().document().color.space)
     };
-    let center = incoming.as_ref().and_then(|d| d.center);
-    let destination = incoming.as_ref().and_then(|d| d.destination);
     let paths = if paste {
         Vec::new()
     } else if let Some(incoming) = incoming {
@@ -174,24 +171,15 @@ pub(super) async fn run(w: &Rc<Workspace>, paste: bool) -> Result<bool, String> 
     }
     dialog.close();
     let sources = result?;
-    let policy = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.state().settings.photo_open;
-    let mut interpreted = Vec::with_capacity(sources.len());
+    let mut interpreted = layer_ui::ImageImportBatch::new(policy, working, Default::default());
     for (name, source) in sources {
         let Some(source) = super::open::interpret(w, source, policy).await? else { return Ok(false); };
-        interpreted.push((name, source));
+        interpreted.append(name, source, false)?;
     }
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-    let document = session.engine().document();
-    if session.state().document_file.epoch != epoch
-        || document.revision != revision
-        || document.active_target() != target
-    {
-        return Err(
-            "The document or target layer changed while importing; import the image again".into(),
-        );
-    }
-    session.place_layer_sources(interpreted, center, destination)?;
+    session.validate_image_placement(&context)?;
+    session.place_layer_sources(interpreted.take_sources(false)?, context.center, context.destination)?;
     drop(gpu);
     w.wake();
     Ok(true)
@@ -203,21 +191,16 @@ fn read_sources(
     paths: Vec<PathBuf>, paste: bool, cancelled: Arc<AtomicBool>,
 ) -> Result<Vec<(String, layer_core::color::source::SourceImage)>, String> {
     if paths.is_empty() { return Err("No images to import".into()); }
-    let mut limits = layer_color::photo::DecodeLimits::default();
-    let mut sources = Vec::with_capacity(paths.len());
+    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, Default::default());
     for path in paths {
         if cancelled.load(Ordering::Acquire) { return Err("Image import cancelled".into()); }
         let name = if paste { "Clipboard image".into() } else {
             path.file_stem().unwrap_or_default().to_string_lossy().into_owned()
         };
-        let photo = (|| {
-            let reader = CancelRead::new(&path, cancelled.clone()).map_err(|e| e.to_string())?;
-            layer_color::photo::read_photo_detailed_with_cancel(BufReader::new(reader), limits, &cancelled)
-        })().map_err(|e| format!("{name}: {e}. No images were imported."))?;
-        limits.source_bytes = limits.source_bytes.checked_sub(photo.source.resident_bytes())
-            .ok_or("The image batch exceeds the source memory budget. No images were imported.")?;
-        sources.push((photo.display_name(&name), photo.source));
+        let reader = CancelRead::new(&path, cancelled.clone()).map_err(|e| e.to_string())?;
+        images.read(BufReader::new(reader), &name, &cancelled)
+            .map_err(|e| format!("{name}: {e}. No images were imported."))?;
     }
     if cancelled.load(Ordering::Acquire) { return Err("Image import cancelled".into()); }
-    Ok(sources)
+    images.take_sources(cancelled.load(Ordering::Acquire))
 }

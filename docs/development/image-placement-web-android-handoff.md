@@ -1,5 +1,8 @@
 # Web and Android photo placement handoff
 
+Implementation and device measurements are recorded in the
+[Web/Android qualification](image-placement-web-android-progress.md).
+
 ## Prompt for the next agent
 
 Implement the user-approved GTK photo Open/Import/Paste/Drop workflow on Web and

@@ -1,4 +1,51 @@
 #[test]
+fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outside() {
+    use layer_core::color::{IntegerDepth, source::*};
+    let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: IntegerDepth::U8,
+        profile: Default::default(), profile_assumed: false,
+    }, 1024).unwrap();
+    for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
+    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("touch placement", 200, 150), [800, 600]).unwrap();
+    session.place_layer_source("Photo", builder.finish().unwrap(), None).unwrap();
+    let input = |id, phase, position| UiInput::Pointer { id, phase, position,
+        kind: PointerKind::Touch, button: PointerButton::Primary };
+    assert!(!session.input(input(1, ContactPhase::Down, [10., 10.])).unwrap().paint);
+    assert!(!session.input(input(2, ContactPhase::Down, [400., 300.])).unwrap().paint,
+        "second contact joins camera navigation even over the photo");
+    session.input(input(1, ContactPhase::Up, [10., 10.])).unwrap();
+    session.input(input(2, ContactPhase::Up, [400., 300.])).unwrap();
+    assert!(session.input(input(3, ContactPhase::Down, [400., 300.])).unwrap().paint);
+    assert!(session.input(input(3, ContactPhase::Move, [410., 300.])).unwrap().paint);
+    assert!(session.input(input(3, ContactPhase::Up, [410., 300.])).unwrap().paint);
+    assert!(session.interaction.pointer.is_none());
+    invoke(&mut session, CommandId::CancelTransform);
+    assert!(!session.input(input(4, ContactPhase::Down, [400., 300.])).unwrap().paint,
+        "ordinary single-finger contact still does not paint");
+}
+
+#[test]
+fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
+    let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
+        Document::new("drop", 2000, 1500), [800, 600]).unwrap();
+    let point = Point { x: 410., y: 280. };
+    let expected = session.state.camera.input_transform().map(point);
+    let context = session.image_placement_context(Some(point), None).unwrap();
+    session.state.camera.zoom *= 2.;
+    session.validate_image_placement(&context).unwrap();
+    assert_eq!(context.center, Some(expected), "camera changes cannot retarget a queued drop");
+    session.engine.apply_edit(layer_core::Edit::SetActiveLayer { id: LayerId(2) }).unwrap();
+    assert!(session.validate_image_placement(&context).is_err());
+    let context = session.image_placement_context(None, None).unwrap();
+    session.engine.apply_edit(layer_core::Edit::SetLayerOpacity { id: LayerId(1), opacity: 0.5 }).unwrap();
+    assert!(session.validate_image_placement(&context).is_err());
+    let context = session.image_placement_context(None, None).unwrap();
+    session.state.document_file.epoch += 1;
+    assert!(session.validate_image_placement(&context).is_err());
+}
+
+#[test]
 fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_together() {
     use layer_core::{Affine, color::{IntegerDepth, source::*}};
     let source = |extent: [u32; 2]| {
@@ -644,4 +691,55 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     let error = session.source_edit_candidate(&Edit::ReplaceLayer(Box::new(repaired)), None, limits).unwrap_err();
     assert!(error.contains("memory limit"), "{error}");
     assert_eq!(session.engine.document(), &before);
+}
+
+#[test]
+fn source_workflow_requires_current_complete_comparison_and_preserves_original_samples() {
+    use crate::SourceWorkflow;
+    use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
+            channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::ProPhoto), profile_assumed: true,
+        }, 1024).unwrap();
+        builder.push_row(&[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]).unwrap();
+        let source = std::sync::Arc::new(builder.finish().unwrap());
+        let mut document = Document::new("retained", 20, 20);
+        document.layers[0].source = Some(source.clone());
+        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600]).unwrap();
+        s.set_platform(platform);
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::RepairSourceProfile);
+        let id = s.state.requests.first().unwrap().id;
+        let mut workflow = SourceWorkflow::begin(&s, id).unwrap();
+        assert!(!workflow.adds_layer());
+        assert!(workflow.prepare(None, || false).is_err());
+        assert!(workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), || true).is_err());
+        let (corrected, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), || false).unwrap();
+        assert!(corrected.tiles.iter().zip(&source.tiles).all(|((_, a), (_, b))| std::sync::Arc::ptr_eq(a, b)));
+        assert_eq!(corrected.interpretation.depth, IntegerDepth::U16);
+        assert!(workflow.preview(&s, corrected.clone(), false, false).is_err());
+        workflow.preview(&s, corrected, false, true).unwrap();
+        assert!(workflow.commit(&mut s, false, true).is_err());
+        workflow.comparison_completed().unwrap();
+        assert!(workflow.commit(&mut s, true, true).is_err());
+        assert!(workflow.commit(&mut s, false, false).is_err());
+        workflow.commit(&mut s, false, true).unwrap();
+        assert!(workflow.commit(&mut s, false, true).is_err());
+        s.complete_document_request(id, Ok(true)).unwrap();
+        let repaired = s.engine.document().layers[0].source.clone().unwrap();
+        assert!(!repaired.interpretation.profile_assumed);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layers[0].source.as_ref().unwrap(), &source);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers[0].source.as_ref().unwrap(), &repaired);
+        s.frame(2, 2).unwrap();
+        invoke(&mut s, CommandId::RasterizeSource);
+        let id = s.state.requests.first().unwrap().id;
+        let workflow = SourceWorkflow::begin(&s, id).unwrap();
+        assert!(workflow.validate_choice(&Some(ColorProfile::Builtin(RgbSpace::Srgb))).is_err());
+        assert!(workflow.validate_choice(&None).is_ok());
+        s.complete_document_request(id, Ok(false)).unwrap();
+        assert!(workflow.identity.validate(&s, false, true).is_err());
+    }
 }

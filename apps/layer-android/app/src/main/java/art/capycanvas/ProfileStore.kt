@@ -4,46 +4,47 @@ import android.content.Context
 import android.util.AtomicFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.security.MessageDigest
 
-/** Imported ICCs are exact app-owned copies. Deletion never touches source files. */
+/** Storage and locking only. Shared Rust owns ICC identity, quotas and listing policy. */
 internal object ProfileStore {
-    private const val MAX_PROFILE=16L*1024*1024
-    private const val MAX_TOTAL=64L*1024*1024
     private val lock=Any()
-    private val idPattern=Regex("[a-f0-9]{64}")
+    private val readLimit by lazy { JSONObject(Native.profileLibrary(obj("type" to "limits").toString(),byteArrayOf())).getInt("read_bytes") }
     private fun root(context:Context)=File(ColorPreferencesStore.directoryForTest?:context.filesDir,"color-profiles")
-    private fun files(context:Context)=root(context).listFiles()?.filter{it.isFile&&it.extension=="icc"&&idPattern.matches(it.nameWithoutExtension)}?:emptyList()
-    private fun digest(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it)}
-    private fun read(file:File):ByteArray {
-        check(file.length()<=MAX_PROFILE){"ICC profile exceeds 16 MiB"}
-        val bytes=file.readBytes();check(digest(bytes)==file.nameWithoutExtension){"Profile changed on disk; remove or reimport it"};return bytes
+    private fun call(action:JSONObject,bytes:ByteArray=byteArrayOf())=Native.profileLibrary(action.toString(),bytes)
+    private fun inventory(context:Context):JSONArray {
+        val entries=JSONArray()
+        root(context).listFiles()?.filter{it.isFile&&it.extension=="icc"}?.forEach{entries.put(obj("id" to it.nameWithoutExtension,"bytes" to it.length()))}
+        return JSONArray(call(obj("type" to "inventory","entries" to entries)))
     }
+    private fun key(id:String)=JSONObject(call(obj("type" to "remove","id" to id))).getString("id")
+    private fun read(file:File)=file.inputStream().use{input->
+        val output=java.io.ByteArrayOutputStream();val block=ByteArray(64*1024);var remaining=readLimit+1
+        while(remaining>0){val count=input.read(block,0,minOf(block.size,remaining));if(count<0)break;output.write(block,0,count);remaining-=count}
+        output.toByteArray()
+    }
+    private fun profile(entry:JSONObject)=obj("name" to entry.getString("name"),"channels" to entry.getString("channels"),"profile" to entry.getJSONObject("profile"))
     suspend fun list(context:Context):List<JSONObject> = withContext(Dispatchers.IO){synchronized(lock){
-        var total=0L
-        files(context).sortedBy{it.name}.take(128).map{file->
-            total+=file.length()
-            val entry=try{check(total<=MAX_TOTAL){"Library exceeds 64 MiB; remove unused profiles"};JSONObject(Native.inspectProfileSummary(read(file)))}
-                catch(e:Exception){obj("name" to "Unavailable profile ${file.nameWithoutExtension.take(12)}","issue" to (e.message?:"Invalid ICC profile"))}
-            entry.put("id",file.nameWithoutExtension).put("bytes",file.length())
-        }.sortedBy{it.getString("name")}
+        inventory(context).objects().map{entry->
+            var failure:String?=null
+            val bytes=try{if(entry.has("issue"))byteArrayOf() else read(File(root(context),"${entry.getString("id")}.icc"))}catch(e:Exception){failure=e.message?:"Profile is unavailable";byteArrayOf()}
+            JSONObject(call(obj("type" to "inspect","entry" to entry,"error" to failure),bytes))
+        }.sortedWith(compareBy({it.getString("name")},{it.getString("id")}))
     }}
     suspend fun import(context:Context,bytes:ByteArray):JSONObject=withContext(Dispatchers.IO){synchronized(lock){
-        check(bytes.size<=MAX_PROFILE){"ICC profile exceeds 16 MiB"}
-        Native.inspectProfileSummary(bytes)
-        val id=digest(bytes);val other=files(context).filter{it.nameWithoutExtension!=id}
-        check(other.size<128&&other.sumOf{it.length()}+bytes.size<=MAX_TOTAL){"The profile library limit is 128 profiles and 64 MiB"}
-        val file=AtomicFile(File(root(context),"$id.icc"));val output=file.startWrite()
+        val entry=JSONObject(call(obj("type" to "import","entries" to inventory(context)),bytes))
+        val file=AtomicFile(File(root(context),"${entry.getString("id")}.icc"));val output=file.startWrite()
         try{output.write(bytes);file.finishWrite(output)}catch(e:Exception){file.failWrite(output);throw e}
-        JSONObject(Native.inspectProfile(bytes))
+        profile(entry)
     }}
     suspend fun get(context:Context,id:String):JSONObject=withContext(Dispatchers.IO){synchronized(lock){
-        check(idPattern.matches(id)){"Select an imported profile"};JSONObject(Native.inspectProfile(read(File(root(context),"$id.icc"))))
+        val name=key(id)
+        profile(JSONObject(call(obj("type" to "get","id" to name),read(File(root(context),"$name.icc")))))
     }}
     suspend fun remove(context:Context,id:String)=withContext(Dispatchers.IO){synchronized(lock){
-        check(idPattern.matches(id)){"Select an imported profile"};val file=File(root(context),"$id.icc")
+        val file=File(root(context),"${key(id)}.icc")
         check(file.exists()&&file.delete()){ "Could not remove the imported profile" }
     }}
 }

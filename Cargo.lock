@@ -1182,11 +1182,13 @@ name = "layer-ui"
 version = "0.1.0"
 dependencies = [
  "fasteval",
+ "layer-color",
  "layer-core",
  "layer-engine",
  "layer-render",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

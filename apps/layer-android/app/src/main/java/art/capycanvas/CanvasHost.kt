@@ -93,7 +93,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     // revision. Retain their model identity when only placement changes.
     internal var panelContent by mutableStateOf<JSONObject?>(null)
         private set
-    private var panelContentKey: String? = null // Native owner only.
+    private var modelSnapshot: JSONObject? = null // Native owner only.
     var surfaceReady by mutableStateOf(false)
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
@@ -512,9 +512,20 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         snapshotAt = now
         if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) snapshotAttempts++
         val publicationStart = if (measuredPublications != null) System.nanoTime() else 0L
-        val serialized = Native.snapshot(handle) ?: return
+        val serialized = Native.modelUpdate(handle) ?: return
         val nativeEnd = if (measuredPublications != null) System.nanoTime() else 0L
-        val next = JSONObject(serialized)
+        val packet = JSONObject(serialized)
+        val updates = packet.optJSONArray("model_update")
+        fun contentPath(path: JSONArray): Boolean = when (path.optString(0)) {
+            "state" -> path.optString(1) !in listOf("workspace", "revision")
+            "panels", "color_panel" -> true
+            else -> false
+        }
+        val removed = packet.optJSONArray("removed") ?: JSONArray()
+        val changedContent = updates == null || (0 until updates.length()).any { contentPath(updates.getJSONArray(it).getJSONArray(0)) } ||
+            (0 until removed.length()).any { contentPath(removed.getJSONArray(it)) }
+        val next = if (updates == null) packet else applyModelUpdate(checkNotNull(modelSnapshot), packet)
+        if (next.has("state")) modelSnapshot = next
         val parsedEnd = if (measuredPublications != null) System.nanoTime() else 0L
         fun recordPublication() {
             if (measuredPublications != null && publicationCount < 8192) {
@@ -613,9 +624,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             state.keys().forEach { key -> if (key != "workspace" && key != "revision") put(key, state.get(key)) }
         }
         val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"))
-        val contentKey = content.toString()
-        val changedContent = contentKey != panelContentKey
-        panelContentKey = contentKey
         if (changedContent && measuredPublications != null) panelContentChanges++
         recordPublication()
         main.post {
@@ -632,12 +640,40 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         workspaceGeometry = next
         if (next.group != null && next.bounds != null) lastWorkspaceGroup = next.group to next.bounds
     }
+    /** Copy only changed object ancestors; null and removed fields are distinct.
+     * The packet is produced by the shared native host for any model change. */
+    private fun applyModelUpdate(previous: JSONObject, packet: JSONObject): JSONObject {
+        fun copy(source: JSONObject) = JSONObject().apply { source.keys().forEach { put(it, source.get(it)) } }
+        val result = copy(previous)
+        fun parent(path: JSONArray): JSONObject {
+            var target = result
+            for (i in 0 until path.length() - 1) {
+                val key = path.getString(i)
+                val child = copy(target.getJSONObject(key))
+                target.put(key, child)
+                target = child
+            }
+            return target
+        }
+        val changes = packet.getJSONArray("model_update")
+        for (i in 0 until changes.length()) {
+            val change = changes.getJSONArray(i); val path = change.getJSONArray(0)
+            parent(path).put(path.getString(path.length() - 1), change.get(1))
+        }
+        val removed = packet.getJSONArray("removed")
+        for (i in 0 until removed.length()) {
+            val path = removed.getJSONArray(i)
+            parent(path).remove(path.getString(path.length() - 1))
+        }
+        return result
+    }
     private fun updateCameraReadout(camera: JSONObject) {
         cameraState = camera
         cameraReadout = CameraReadout((camera.number("zoom", 1.0) * 100).roundToInt(),
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {
+        documents.images.cancel()
         recovery.close()
         worker.post {
             disposed = true

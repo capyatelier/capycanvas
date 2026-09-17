@@ -1,7 +1,7 @@
 //! GTK output choices and a cancellable, immutable document worker.
 use super::*;
 use layer_core::color::{
-    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, ProfileChannels, RenderingIntent,
+    ConversionOptions, IntegerDepth, OutputDither, OutputEncoding, RenderingIntent,
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::sync::{Arc, Mutex};
@@ -396,16 +396,17 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[weak]
         jpeg_hint,
         move |format| {
-            let jpeg = format.selected() == 2;
-            quality.set_visible(jpeg);
-            jpeg_hint.set_visible(jpeg);
-            depth.set_sensitive(!jpeg);
-            if jpeg {
-                depth.set_selected(0);
-                if background.selected() == 0 {
-                    background.set_selected(1);
-                }
-            }
+            let recipe = ExportRecipe {
+                depth: if depth.selected() == 0 { IntegerDepth::U8 } else { IntegerDepth::U16 },
+                background: [ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black][background.selected() as usize],
+                ..ExportRecipe::web_share()
+            };
+            let draft = recipe.draft(ExportDraftAction::Format([ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg][format.selected() as usize]));
+            quality.set_visible(draft.recipe.format == ExportFormat::Jpeg);
+            jpeg_hint.set_visible(draft.recipe.format == ExportFormat::Jpeg);
+            depth.set_sensitive(draft.depths.len() > 1);
+            depth.set_selected(u32::from(draft.recipe.depth == IntegerDepth::U16));
+            background.set_selected(match draft.recipe.background { ExportBackground::Preserve => 0, ExportBackground::White => 1, ExportBackground::Black => 2 });
         }
     ));
     let validation = gtk::Label::builder()
@@ -423,14 +424,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[strong]
         selected_profile,
         move |_| {
-            if selected_profile().is_ok_and(|p| p.channels == ProfileChannels::Cmyk)
-            {
-                if format.selected() == 0 {
-                    format.set_selected(1);
-                }
-                if background.selected() == 0 {
-                    background.set_selected(1);
-                }
+            if let Ok(profile) = selected_profile() {
+                let recipe = ExportRecipe {
+                    format: [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg][format.selected() as usize],
+                    background: [ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black][background.selected() as usize],
+                    ..ExportRecipe::web_share()
+                };
+                let draft = recipe.draft(ExportDraftAction::Profile(profile));
+                format.set_selected(match draft.recipe.format { ExportFormat::Png => 0, ExportFormat::Tiff => 1, ExportFormat::Jpeg => 2 });
+                background.set_selected(match draft.recipe.background { ExportBackground::Preserve => 0, ExportBackground::White => 1, ExportBackground::Black => 2 });
             }
             background.notify("selected");
         }

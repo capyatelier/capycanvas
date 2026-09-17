@@ -1,6 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod documents;
+mod image_import;
 mod color_edit;
 mod source_edit;
 mod color_preferences;
