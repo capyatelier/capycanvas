@@ -1,104 +1,71 @@
 //! Retained-source conversion on the worker; shared candidate/edit on the owner.
 use super::*;
-use layer_core::{LayerId, color::{ColorProfile, source::SourceImage}};
+use layer_core::color::{ColorProfile, source::SourceImage};
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
+use layer_ui::SourceWorkflow;
 use std::sync::Arc;
 use serde_json::Value;
 
 pub(super) struct Task {
-    project: Project,
+    workflow: SourceWorkflow,
     candidate: Option<Project>,
-    original: Arc<SourceImage>,
     converted: Option<Arc<SourceImage>>,
     gpu: SnapshotGpu,
     device: wgpu::Device,
     background: [f32; 4],
     time: f32,
-    request: u32,
-    layer: LayerId,
-    rasterize: bool,
-    baked: bool,
     clipped: u64,
     pub previews: Vec<color::Preview>,
 }
 impl Task {
     pub(super) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
-        session.require_document_idle()?;
-        let (request, layer, rasterize) = session.state().requests.iter().find_map(|r| match r.kind {
-            HostRequestKind::Document { request: DocumentRequest::RepairSourceProfile { layer } } => Some((r.id, LayerId(layer), false)),
-            HostRequestKind::Document { request: DocumentRequest::RasterizeSource { layer } } => Some((r.id, LayerId(layer), true)),
+        let request = session.state().requests.iter().find_map(|r| match r.kind {
+            HostRequestKind::Document { request: DocumentRequest::RepairSourceProfile { .. } | DocumentRequest::RasterizeSource { .. } } => Some(r.id),
             _ => None,
         }).ok_or("No source edit is pending")?;
-        let project = session.capture_project_recovery()?;
-        let target = project.document.layer(layer).ok_or("Source layer no longer exists")?;
-        let original = target.source.clone().ok_or("No retained source")?;
-        let baked = !target.raster.is_empty() || !target.pending_operations.is_empty() || target.asset.is_some();
+        let workflow = SourceWorkflow::begin(session, request)?;
         let gpu = session.engine().backend().0.as_ref().ok_or("Canvas unavailable")?;
-        Ok(Self { project, candidate: None, original, converted: None, gpu: gpu.snapshot_gpu(), device: gpu.device().clone(),
+        Ok(Self { workflow, candidate: None, converted: None, gpu: gpu.snapshot_gpu(), device: gpu.device().clone(),
             background: session.engine().view().background_rgba_linear, time: session.engine().animation_time(),
-            request, layer, rasterize, baked, clipped: 0, previews: Vec::new() })
+            clipped: 0, previews: Vec::new() })
     }
     pub(super) fn work(&mut self, profile: Option<ColorProfile>, control: CaptureControl) -> Result<(), String> {
         if self.converted.is_some() { return Err("Source result was already prepared".into()); }
-        let source = if self.rasterize {
-            if profile.is_some() { return Err("Rasterization uses the document profile".into()); }
-            let (source, statistics) = layer_color::rasterize_source(&self.original, self.project.document.color,
-                layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || control.is_cancelled())?;
-            self.clipped = statistics.clipped_channels;
-            source
-        } else {
-            let mut source = (*self.original).clone();
-            source.interpretation.profile = profile.ok_or("Choose a source profile")?;
-            source.interpretation.profile_assumed = false;
-            layer_color::WorkingDecoder::new(&source.interpretation, self.project.document.color.space, Default::default())?;
-            source.validate()?;
-            source
-        };
-        if control.is_cancelled() { return Err("Source edit cancelled".into()); }
-        self.converted = Some(Arc::new(source));
-        Ok(())
-    }
-    fn current(&self, app: &CapyApple, task: &CapyProjectTask) -> Result<(), String> {
-        task.check_cancelled()?;
-        let session = &app.host.session;
-        if session.state().document_file.epoch != task.epoch || session.engine().document().revision != task.revision
-            || session.engine().backend().0.as_ref().map(|r| r.device()) != Some(&self.device)
-            || !session.state().requests.iter().any(|r| r.id == self.request) {
-            return Err("The drawing or canvas changed; prepare the source edit again".into());
-        }
+        let (source, clipped) = self.workflow.prepare(profile,
+            layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || control.is_cancelled())?;
+        self.clipped = clipped;
+        self.converted = Some(source);
         Ok(())
     }
     pub(super) fn prepare(&mut self, app: &CapyApple, task: &CapyProjectTask) -> Result<(), String> {
-        self.current(app, task)?;
         let source = self.converted.clone().ok_or("Source conversion is not ready")?;
         let session = &app.host.session;
-        self.candidate = Some(if self.rasterize { session.preview_rasterized_source(self.layer, &self.original, source)? }
-            else { session.preview_layer_source(self.layer, &self.original, (*source).clone())? });
+        let device_current = session.engine().backend().0.as_ref().map(|r| r.device()) == Some(&self.device);
+        self.candidate = Some(self.workflow.preview(session, source, task.control.is_cancelled(), device_current)?);
         Ok(())
     }
     pub(super) fn compare(&mut self, control: CaptureControl) -> Result<(), String> {
         let candidate = self.candidate.as_ref().ok_or("Source candidate is not ready")?;
-        self.previews = color::compare(&self.gpu, [(&self.project, self.background), (candidate, self.background)], self.time, control)?;
+        self.previews = color::compare(&self.gpu, [(&self.workflow.project, self.background), (candidate, self.background)], self.time, control)?;
+        self.workflow.comparison_completed()?;
         Ok(())
     }
     pub(super) fn details(&self) -> Result<Value, String> {
-        let builtin = match self.original.interpretation.profile { ColorProfile::Builtin(space) => Some(space), _ => None };
-        Ok(serde_json::json!({ "color": self.project.document.color, "profile_builtin": builtin,
-            "channels": self.original.interpretation.channels, "depth": self.original.interpretation.depth,
-            "source_profile": layer_color::profile_description(&self.original.interpretation.profile)?,
-            "adds_layer": self.baked && !self.rasterize && self.converted.as_ref().is_none_or(|s| **s != *self.original),
+        let original = &self.workflow.original;
+        let builtin = match original.interpretation.profile { ColorProfile::Builtin(space) => Some(space), _ => None };
+        Ok(serde_json::json!({ "color": self.workflow.project.document.color, "profile_builtin": builtin,
+            "channels": original.interpretation.channels, "depth": original.interpretation.depth,
+            "source_profile": layer_color::profile_description(&original.interpretation.profile)?,
+            "adds_layer": self.workflow.adds_layer(),
             "clipped_channels": self.clipped }))
     }
     pub(super) fn adopt(&mut self, app: &mut CapyApple, task: &CapyProjectTask) -> Result<(), String> {
-        self.current(app, task)?;
-        if self.previews.len() != 2 { return Err("Preview the complete source result first".into()); }
-        let source = self.converted.clone().ok_or("Source candidate is missing")?;
         if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Source edit cancelled".into()); }
         let session = &mut app.host.session;
         let previous = session.state().revision;
-        if self.rasterize { session.apply_rasterized_source(self.layer, &self.original, source)?; }
-        else { session.repair_layer_source(self.layer, &self.original, (*source).clone())?; }
-        let mut change = session.complete_document_request(self.request, Ok(true))?;
+        let device_current = session.engine().backend().0.as_ref().map(|r| r.device()) == Some(&self.device);
+        self.workflow.commit(session, task.control.is_cancelled(), device_current)?;
+        let mut change = session.complete_document_request(self.workflow.identity.request(), Ok(true))?;
         change.canvas_wake = true;
         app.host.apply_change(previous, change);
         self.converted = None;

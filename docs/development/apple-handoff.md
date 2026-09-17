@@ -120,13 +120,11 @@ device timing is inferred from upstream Android results.
 The current physical review apps are retained; this is not device acceptance of
 the new controls or a new performance qualification.
 
-Apple's remaining shared-service migrations are color/source transactions and
-recovery (C1/C2/C6 in the
-[centralization handoff](shared-workflow-centralization-handoff.md)). The next
-photo milestone below replaces immediate insertion with shared batch placement.
-External canvas/layer drops remain a concrete parity gap. Keep provider/device
-acceptance and the pending iPad performance/save retest separate from local
-integration.
+The subsequent milestones below migrate photo batches/drops and color/source
+transactions to the shared services. Artwork recovery (C6 in the
+[centralization handoff](shared-workflow-centralization-handoff.md)) remains the
+shared-service migration still to implement. Keep provider/device acceptance and
+the pending iPad performance/save retest separate from local integration.
 
 ## Interactive photo batches — 2026-09-17
 
@@ -213,6 +211,70 @@ the owner fixture separately checks supplied names. The temporary metadata
 probe is removed, and final runtime hashes match both Release builds.
 Physical UIKit provider/placement acceptance remains open, with artist apps and
 drawings preserved. This milestone adds no device performance claim.
+
+## Shared color/source transactions — 2026-09-17
+
+Apple now uses `ColorWorkflow`, `SourceWorkflow` and the shared color remapping
+and renderer-commit/rollback operation already used by the other ports. The
+adapters retain native scheduling, completed Metal comparisons, device identity,
+atomic cancellation/publication and off-owner GPU disposal. Duplicated operation
+choice, source interpretation, baked-edit, candidate-validity and history policy
+is removed, reducing production Apple adapter code by about 70 lines.
+
+Source preparation takes the executor's allocation budget: Apple preserves its
+measured process-headroom allowance; Android and GTK retain their preceding
+512 MiB cap. No compatibility wrapper or second conversion path is added. The
+shared source warning now correctly reports that retaining an unchanged profile
+on a painted layer adds no corrected layer. Its committed-tile regression fails
+before the fix and passes afterward on all five supported policies, with exact
+unchanged document content. Both shared transaction boundary tests now also
+exercise Mac and iPad policies, including failed-renderer rollback and explicit
+zero-budget rejection. Physical UIKit forms/providers remain separate gates.
+The full Apple bridge suite passes 70 tests (one unrelated large-photo stress
+case remains ignored); the five affected color/source cases pass again after
+the final budget adjustment. Both-policy Swift/Metal owner fixtures pass real
+worker handoffs, complete comparisons, Cancel/Apply, stale/cancelled results,
+ICC import/retry, exact history and copy/save protection. The first source owner
+run timed out while preparing its canvas; diagnostic and final reruns pass
+without a runtime workaround, and the exact timing cause remains unproven.
+Both final Release builds pass without compiler warnings, and Web compilation
+passes. Evidence is under `artifacts/apple-shared-transactions-v1/`.
+
+The combined iPad review is installed in place and open at Recovered Drawings,
+with recording disabled. Backups before stopping, after stopping and after
+installation retain all eleven recovery records and identical saved files;
+recovery/settings files also remain byte-identical across installation. The Mac
+artist app is unchanged. The user is asked for one grouped large-photo 570 px
+G-Pen/Diagnostics and local Save As/reopen check. That physical result is pending;
+local Mac timing improvements do not establish the new iPad p99.
+
+## Large-photo composition review — 2026-09-17
+
+The [first-principles review](apple-drawing-performance-review.md#composition-attribution-and-finalization-overlap)
+does not establish the user's roughly 50 ms iPad p99 as a hardware floor.
+Temporary nested replay timings attribute 24–28% of composition wall time to
+native command finalization and 55–62% to explicit GPU waits. Finalizing the
+next eight-tile batch before waiting for the preceding batch removes unnecessary
+serialization while retaining the same 16-tile bound and queue order. The
+production change only reorders this existing submission; profiling code is
+removed, with its patches and evidence retained privately.
+
+Two paired Mac offscreen runs show approximately 9% lower median completion for
+small zigzags, 15–18% for a wide brush and 20–23% for heavily coalesced input.
+Ordinary-input median is essentially unchanged, with better p95 in both pairs.
+Pixels/history and rendering-work counts match. These results justify the small
+shared change; they do not establish a new iPad percentile or input latency.
+All 31 focused display, mip, raster/history/recovery and masked-preview checks
+pass, as do Web and iOS-target renderer compilation. This correction is grouped
+with the shared color/source transaction milestone. Evidence is under
+`artifacts/apple-composition-review-v1/`.
+
+Keep the sparse tile architecture and memory ceilings. Further shader, cache or
+storage redesign is not justified by these measurements. Qualify the combined
+result once on iPad: the shared transaction milestone above now installs the
+combined review build with all drawings preserved. Neither artist app was changed
+or restarted during the preceding attribution investigation. Continue the remaining parity gates rather
+than extending this into open-ended performance tuning.
 
 ## Prediction policy during document adoption
 

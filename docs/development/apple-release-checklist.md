@@ -12,8 +12,10 @@ changes now use those shared services; see the
 Photo Open and batch Place/Paste now also consume shared preparation/adoption
 policy and interactive Apply/Cancel; see the
 [photo batch record](apple-handoff.md#interactive-photo-batches--2026-09-17).
-Color/source transactions and recovery still need their remaining shared-service
-migrations. External canvas/layer drops now use the same shared placement path;
+Color/source transactions now use the shared services, including comparison,
+candidate validity and renderer rollback; see the
+[transaction record](apple-handoff.md#shared-colorsource-transactions--2026-09-17).
+Artwork recovery remains the shared-service migration to finish. External canvas/layer drops now use the same shared placement path;
 see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
 Native Mac drag delivery passes; physical UIKit placement/provider acceptance remains open. The
 [Apple integration handoff](color-management-m2-apple-handoff.md) is the immediate
@@ -61,7 +63,13 @@ preview/paint-region changes improve fast-circle drawing further, with roughly
 50 ms p99 reported. The [algorithm review](apple-drawing-performance-review.md)
 identifies remaining preparation/submission opportunities; performance closure
 remains open, with no established hardware lower bound. Its
-large-photo local save/reopen remains unconfirmed.
+large-photo local save/reopen remains unconfirmed. The following bounded
+composition review identifies and corrects unnecessary finalization/wait
+serialization, with repeatable shared replay improvements and exact artwork.
+That correction and shared color/source transactions now pass local qualification
+and both Release builds. The combined iPad review is installed with all eleven
+recoveries preserved; the grouped drawing/Diagnostics and local save/reopen result
+is pending in `artifacts/apple-shared-transactions-v1/`.
 Next are remaining provider/background workflows and physical SDR acceptance. Earlier
 passes remain scoped to their recorded sources; they do not qualify the entire
 new feature scope. See the [foundation record](apple-handoff.md#native-sdr-foundation).

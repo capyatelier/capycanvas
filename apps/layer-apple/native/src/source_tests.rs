@@ -73,6 +73,10 @@ fn source_repair_and_rasterization_keep_exact_originals_paint_masks_extent_and_h
         document_color::stroke_inside(&app);app.draw_until_idle();
         let painted=document(&app);let painted_pixels=app.pixels();
         assert!(!painted.layer(id).unwrap().raster.is_empty(),"Fixture must contain committed paint");
+        let unchanged=job(&app,"repair_source_profile");prepare(&app,&unchanged,json!({"Builtin":"DisplayP3"}));
+        assert_eq!(details(&unchanged)["adds_layer"],false,"Keeping the same profile adds no corrected layer");
+        assert_eq!(adopt(&app,&unchanged),0);app.draw_until_idle();
+        assert_project_document(&document(&app),&painted);assert_eq!(app.pixels(),painted_pixels);
         let icc=layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::ProPhoto)).unwrap();
         let task=job(&app,"repair_source_profile");prepare(&app,&task,json!({"Icc":icc}));
         assert_eq!(details(&task)["adds_layer"],true);assert_eq!(adopt(&app,&task),0);app.draw_until_idle();

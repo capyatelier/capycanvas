@@ -69,9 +69,13 @@ import UniformTypeIdentifiers
             store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([imageURL])},save:{_,_,done in done(saved)},create:{_,done in
                 done(JSON(["extent":[64,48],"color":["space":"Srgb","depth":"U8"],"background":"White"]))
             },paste:{$0(.success([PhotoItem { $0(.success(.image(photo))) }]))}))
-            func invoke(_ command:String) async throws {try await edit(store,["type":"invoke","command":command])}
+            var lastCommand = "startup"
+            func invoke(_ command:String) async throws {
+                lastCommand = command
+                try await edit(store,["type":"invoke","command":command])
+            }
             func idle() async throws {
-                try await wait("Document completion",store:store) {!store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"}}
+                try await wait("Document completion after \(lastCommand)",store:store) {!store.projectFiles.busy && !store.state["requests"].array.contains {$0["kind"]["type"].string=="document"}}
                 try require(store.projectFiles.error == nil,store.projectFiles.error ?? "")
             }
             func dialog(_ command:String) async throws -> DocumentColorController {

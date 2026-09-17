@@ -10,8 +10,6 @@ use layer_core::{
 use layer_render::CanvasRenderer;
 use std::sync::Arc;
 
-pub const PREPARED_DOCUMENT_LIMIT: usize = 512 * 1024 * 1024;
-
 #[derive(Clone, Debug)]
 pub struct CandidateIdentity {
     epoch: u64,
@@ -261,7 +259,7 @@ impl SourceWorkflow {
         self.rasterize
     }
     pub fn adds_layer(&self) -> bool {
-        self.adds_layer
+        self.adds_layer && self.converted.as_ref().is_none_or(|source| **source != *self.original)
     }
     pub fn validate_choice(&self, profile: &Option<ColorProfile>) -> Result<(), String> {
         match (self.rasterize, profile.is_some()) {
@@ -270,9 +268,12 @@ impl SourceWorkflow {
             _ => Ok(()),
         }
     }
+    /// Executors supply their allocation budget; conversion and source policy
+    /// remain shared, including failure before publishing over-budget results.
     pub fn prepare(
         &self,
         profile: Option<ColorProfile>,
+        budget: usize,
         mut cancelled: impl FnMut() -> bool,
     ) -> Result<(Arc<SourceImage>, u64), String> {
         self.validate_choice(&profile)?;
@@ -283,7 +284,7 @@ impl SourceWorkflow {
             let (source, statistics) = layer_color::rasterize_source(
                 &self.original,
                 self.project.document.color,
-                PREPARED_DOCUMENT_LIMIT,
+                budget,
                 &mut cancelled,
             )?;
             (source, statistics.clipped_channels)

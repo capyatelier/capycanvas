@@ -32,6 +32,15 @@ decoder capabilities; clipboard loading is sequential. External canvas/layer
 drops now share that transport and placement policy, with captured targets and
 delayed-provider cancellation; see the [drop record](apple-handoff.md#external-photo-drops--2026-09-17).
 Native Mac cross-application canvas/row drops pass; physical UIKit placement/provider acceptance remains open.
+Color and retained-source transactions now also consume shared workflow state,
+choice/identity validation, comparison readiness and renderer rollback; the
+[transaction record](apple-handoff.md#shared-colorsource-transactions--2026-09-17)
+records the native integration and qualification scope. Both final Release builds,
+shared/native/Swift owner checks and Web compilation pass. The combined iPad
+review includes the subsequent composition scheduling correction, with all eleven
+recovery records and saved files preserved; physical drawing/Diagnostics and
+large-photo local save/reopen are pending. Artwork recovery remains the next
+shared-service migration.
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 now use the same worker, with complete before/after previews, source-safe flattened
 copies and exact shared history; see the

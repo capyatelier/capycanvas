@@ -294,7 +294,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
     use crate::{ColorWorkflow, ColorPreparation};
     use layer_color::DocumentColorChange as C;
     use layer_core::color::{RgbSpace, IntegerDepth};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut s = session();
         s.set_platform(platform);
         s.frame(1, 1).unwrap();

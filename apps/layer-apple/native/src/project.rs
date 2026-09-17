@@ -365,7 +365,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                     .ok_or("Missing project snapshot")?
                     .write(stream)
             }
-            Payload::Color(color) => color.write_copy(stream),
+            Payload::Color(color) => color.write_copy(stream, task.control.is_cancelled()),
             Payload::Export(export) => export.write(stream, task.control.clone()),
             _ => Err("Not a write task".into()),
         }

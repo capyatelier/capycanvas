@@ -1496,13 +1496,13 @@ impl Scene {
                 continue;
             }
             if display_tiles == SOURCE_SLOTS / 2 {
-                // Keep the same total tile bound: one half executing while
-                // the CPU prepares the other. Wait before submitting another
-                // half, rather than immediately stalling after every submit.
-                if let Some(previous) = submitted.take() {
+                // Keep at most two halves live. Finish and submit this half
+                // while the previous half can execute, then wait before
+                // preparing a third. Native command finalization is costly.
+                let current = Self::submit_commands(r, encoder, "bounded display composition");
+                if let Some(previous) = submitted.replace(current) {
                     Self::wait_submission(r, previous)?;
                 }
-                submitted = Some(Self::submit_commands(r, encoder, "bounded display composition"));
                 r.metrics.display_composition_submissions += 1;
                 display_tiles = 0;
             }

@@ -94,7 +94,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         original_gpu,
         move |_| {
             let result = selected().and_then(|profile| {
-                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), || false)?;
+                let (corrected, _) = workflow.borrow().prepare(Some(profile.profile), 512 * 1024 * 1024, || false)?;
                 let gpu = w.gpu.borrow();
                 let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
                 workflow.borrow_mut().preview(session, corrected, false, original_gpu.same_device(&session.engine().backend().snapshot_gpu()?))

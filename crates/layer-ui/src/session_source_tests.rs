@@ -697,7 +697,7 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
 fn source_workflow_requires_current_complete_comparison_and_preserves_original_samples() {
     use crate::SourceWorkflow;
     use layer_core::color::{ColorProfile, IntegerDepth, RgbSpace, source::*};
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
             channels: SourceChannels::Rgba, depth: IntegerDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto), profile_assumed: true,
@@ -713,9 +713,9 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
         let id = s.state.requests.first().unwrap().id;
         let mut workflow = SourceWorkflow::begin(&s, id).unwrap();
         assert!(!workflow.adds_layer());
-        assert!(workflow.prepare(None, || false).is_err());
-        assert!(workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), || true).is_err());
-        let (corrected, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), || false).unwrap();
+        assert!(workflow.prepare(None, 1024 * 1024, || false).is_err());
+        assert!(workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || true).is_err());
+        let (corrected, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || false).unwrap();
         assert!(corrected.tiles.iter().zip(&source.tiles).all(|((_, a), (_, b))| std::sync::Arc::ptr_eq(a, b)));
         assert_eq!(corrected.interpretation.depth, IntegerDepth::U16);
         assert!(workflow.preview(&s, corrected.clone(), false, false).is_err());
@@ -739,7 +739,44 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
         let workflow = SourceWorkflow::begin(&s, id).unwrap();
         assert!(workflow.validate_choice(&Some(ColorProfile::Builtin(RgbSpace::Srgb))).is_err());
         assert!(workflow.validate_choice(&None).is_ok());
+        assert!(workflow.prepare(None, 0, || false).is_err(), "executor memory budget must be enforced");
+        assert!(workflow.prepare(None, 1024 * 1024, || false).is_ok());
         s.complete_document_request(id, Ok(false)).unwrap();
         assert!(workflow.identity.validate(&s, false, true).is_err());
+    }
+}
+
+
+#[test]
+fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
+    use layer_core::{color::{ColorProfile, RgbSpace, source::*}, raster::*};
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        let mut builder = SourceBuilder::new([1, 1], SourceInterpretation {
+            channels: SourceChannels::Rgba, depth: Default::default(),
+            profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
+        }, 1024).unwrap();
+        builder.push_row(&[32, 64, 96, 255]).unwrap();
+        let mut document = Document::new("painted source", 20, 20);
+        document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+        let descriptor = document.color.paint_descriptor();
+        let tile = RasterTile::backed(TileBlob::encode(descriptor,
+            &vec![55; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());
+        document.layers[0].raster = RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile)].into(), watercolor: None,
+        });
+        let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600]).unwrap();
+        s.set_platform(platform);
+        s.frame(1, 1).unwrap();
+        invoke(&mut s, CommandId::RepairSourceProfile);
+        let id = s.state.requests.first().unwrap().id;
+        let mut workflow = crate::SourceWorkflow::begin(&s, id).unwrap();
+        assert!(workflow.adds_layer(), "fixture contains committed paint before the choice");
+        let (source, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::Srgb)), 1024 * 1024, || false).unwrap();
+        let before = s.engine.document().clone();
+        workflow.preview(&s, source, false, true).unwrap();
+        workflow.comparison_completed().unwrap();
+        assert!(!workflow.adds_layer(), "unchanged interpretation adds no corrected layer");
+        workflow.commit(&mut s, false, true).unwrap();
+        assert_eq!(s.engine.document(), &before);
     }
 }

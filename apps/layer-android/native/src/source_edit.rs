@@ -78,7 +78,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sourceWork(
         let profile: Option<ColorProfile> =
             serde_json::from_str(&read(&mut env, &profile)?).map_err(error)?;
         let t = unsafe { task(handle) };
-        let (source, clipped) = t.workflow.prepare(profile, || t.control.is_cancelled())?;
+        let (source, clipped) = t.workflow.prepare(profile, 512 * 1024 * 1024, || t.control.is_cancelled())?;
         t.clipped = clipped;
         t.converted = Some(source);
         Ok(())

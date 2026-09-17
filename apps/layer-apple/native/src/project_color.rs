@@ -1,25 +1,19 @@
 //! Worker preparation and atomic owner publication of shared color/history edits.
 use super::*;
-use layer_core::{ColorTransition, PreparedColorTransition};
 use layer_render::ViewState;
 use layer_render_wgpu::snapshot::{SnapshotGpu, CaptureControl};
-use layer_ui::DocumentColorOperation;
+use layer_ui::{ColorPreparation, ColorWorkflow};
 
 pub(super) struct Task {
-    original: Project,
-    candidate: Option<Project>,
-    transition: Option<PreparedColorTransition>,
-    operation: Option<DocumentColorOperation>,
+    workflow: ColorWorkflow,
     renderer: Option<WgpuRasterizer>,
     gpu: SnapshotGpu,
     device: wgpu::Device,
     brush: layer_core::BrushSnapshot,
     view: ViewState,
     time: f32,
-    request: u32,
     previews: Vec<Preview>,
     clipped: u64,
-    copy: bool,
 }
 pub(super) struct Preview { pub extent: [u32; 2], pub pixels: Vec<u8> }
 pub(super) fn compare(gpu: &SnapshotGpu, projects: [(&Project, [f32; 4]); 2], time: f32, control: CaptureControl) -> Result<Vec<Preview>, String> {
@@ -31,58 +25,43 @@ pub(super) fn compare(gpu: &SnapshotGpu, projects: [(&Project, [f32; 4]); 2], ti
 }
 impl Task {
     pub(super) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
-        session.require_document_idle()?;
-        let (request, operation, history) = session.state().requests.iter().find_map(|r| match r.kind {
-            HostRequestKind::Document { request: DocumentRequest::ChangeColor { operation } } => Some((r.id, Some(operation), None)),
-            HostRequestKind::Document { request: DocumentRequest::ColorHistory { redo } } => Some((r.id, None, Some(redo))),
+        let request = session.state().requests.iter().find_map(|r| match r.kind {
+            HostRequestKind::Document { request: DocumentRequest::ChangeColor { .. } | DocumentRequest::ColorHistory { .. } } => Some(r.id),
             _ => None,
         }).ok_or("No document color request is pending")?;
-        let (transition, candidate) = if let Some(redo) = history {
-            let (transition, project) = session.prepare_document_color_transition(if redo { ColorTransition::Redo } else { ColorTransition::Undo })?;
-            (Some(transition), Some(project))
-        } else { (None, None) };
+        let workflow = ColorWorkflow::begin(session, request)?;
         let gpu = session.engine().backend().0.as_ref().ok_or("Canvas unavailable")?;
         Ok(Self {
-            original: session.capture_project_recovery()?, candidate, transition, operation,
+            workflow,
             renderer: None, gpu: gpu.snapshot_gpu(), device: gpu.device().clone(),
             brush: session.engine().configured_brush().clone(), view: session.engine().view(),
-            time: session.engine().animation_time(), request, previews: Vec::new(), clipped: 0, copy: false,
+            time: session.engine().animation_time(), previews: Vec::new(), clipped: 0,
         })
     }
     fn work(&mut self, choice: Option<layer_color::DocumentColorChange>, copy: bool, control: CaptureControl) -> Result<(), String> {
-        use layer_color::DocumentColorChange as Change;
         if self.renderer.is_some() || !self.previews.is_empty() { return Err("Color result was already prepared".into()); }
-        if copy && self.operation != Some(DocumentColorOperation::Convert) { return Err("Only conversion can make a flattened copy".into()); }
-        self.copy = copy;
+        let plan = self.workflow.select(choice, copy)?;
         let budget = layer_color::photo::PhotoMemoryBudget::current().encode_bytes;
-        if let Some(operation) = self.operation {
-            let change = choice.ok_or("Choose a color change")?;
-            if !matches!((operation, change), (DocumentColorOperation::Assign, Change::Assign(_))
-                | (DocumentColorOperation::Convert, Change::Convert { .. }) | (DocumentColorOperation::Depth, Change::Depth { .. })) {
-                return Err("Color choice does not match the request".into());
-            }
-            let prepared = if copy {
-                let Change::Convert { space, options } = change else { unreachable!() };
-                self.gpu.capture(self.original.clone(), self.view.background_rgba_linear, self.time,
+        let prepared = match plan {
+            ColorPreparation::History => None,
+            ColorPreparation::Flatten { color, options } => Some(
+                self.gpu.capture(self.workflow.original.clone(), self.view.background_rgba_linear, self.time,
                     Default::default(), control.clone()).map_err(|e| e.to_string())?
-                    .flattened_document(layer_core::color::DocumentColor { space, depth: self.original.document.color.depth }, options, budget)?
-            } else {
-                layer_color::prepare_document_color(&self.original, change, budget, || control.is_cancelled())?
-            };
-            self.clipped = prepared.statistics.clipped_channels;
-            self.candidate = Some(prepared.project);
-        } else if choice.is_some() { return Err("History uses its saved color result".into()); }
-        let project = self.candidate.as_ref().ok_or("Color candidate is missing")?;
-        let matrix = self.original.document.color.space.linear_transform(project.document.color.space);
-        let transform = |color: &mut [f32; 4]| {
-            let rgb = layer_core::color::rgb::apply(matrix, [color[0], color[1], color[2]].map(f64::from));
-            color[..3].copy_from_slice(&rgb.map(|v| v as f32));
+                    .flattened_document(color, options, budget)?),
+            ColorPreparation::Edit(change) => Some(layer_color::prepare_document_color(
+                &self.workflow.original, change, budget, || control.is_cancelled())?),
         };
-        let mut view = self.view; transform(&mut view.background_rgba_linear);
-        let mut brush = self.brush.clone(); transform(&mut brush.color_rgba_linear);
-        transform(&mut brush.color_dynamics.secondary_color_rgba_linear);
-        if self.operation.is_some() {
-            self.previews = compare(&self.gpu, [(&self.original, self.view.background_rgba_linear), (project, view.background_rgba_linear)], self.time, control.clone())?;
+        if let Some(prepared) = prepared {
+            self.clipped = prepared.statistics.clipped_channels;
+            self.workflow.candidate = Some(prepared.project);
+        }
+        let project = self.workflow.candidate.as_ref().ok_or("Color candidate is missing")?;
+        let mut view = self.view;
+        let mut brush = self.brush.clone();
+        layer_render::remap_document_colors(self.workflow.original.document.color.space,
+            project.document.color.space, &mut brush, &mut view);
+        if !self.workflow.is_history() {
+            self.previews = compare(&self.gpu, [(&self.workflow.original, self.view.background_rgba_linear), (project, view.background_rgba_linear)], self.time, control.clone())?;
         }
         if !copy {
             let mut canvas = self.gpu.color_canvas(project.clone(), &brush, view, self.time, control).map_err(|e| e.to_string())?;
@@ -95,39 +74,24 @@ impl Task {
             renderer.configure_ui_previews(crate::DISPLAY_SPACE).map_err(|e| e.to_string())?;
             self.renderer = Some(renderer);
         }
+        if !self.workflow.is_history() { self.workflow.comparison_completed()?; }
         Ok(())
     }
-    pub(super) fn write_copy(&self, stream: impl Write) -> Result<(), String> {
-        if !self.copy || self.previews.len() != 2 { return Err("Preview a flattened copy before saving".into()); }
-        self.candidate.as_ref().ok_or("Converted copy is not ready")?.write(stream)
+    pub(super) fn write_copy(&self, stream: impl Write, cancelled: bool) -> Result<(), String> {
+        self.workflow.copy_project(cancelled)?.write(stream)
     }
     pub(super) fn adopt(&mut self, app: &mut CapyApple, task: &CapyProjectTask) -> Result<(), String> {
-        if self.copy { return Err("Save the flattened copy separately".into()); }
         let session = &mut app.host.session;
-        if session.state().document_file.epoch != task.epoch || session.engine().document().revision != task.revision
-            || session.renderer_mut().0.as_ref().map(|r| r.device()) != Some(&self.device)
-            || !session.state().requests.iter().any(|r| r.id == self.request) {
-            return Err("The drawing or canvas changed; prepare the color change again".into());
-        }
-        session.require_document_idle()?;
-        let prepared = if let Some(prepared) = self.transition.take() { prepared }
-        else {
-            let candidate = self.candidate.as_ref().ok_or("Color result is not ready")?;
-            session.prepare_document_color_transition(ColorTransition::Apply {
-                color: candidate.document.color, layers: candidate.document.layers.clone(),
-            })?.0
-        };
+        let device_current = session.engine().backend().0.as_ref().map(|r| r.device()) == Some(&self.device);
+        let prepared = self.workflow.prepare_commit(session, task.control.is_cancelled(), device_current)?;
         let next = self.renderer.as_mut().ok_or("Color canvas is not ready")?;
         let [w, h] = session.state().camera.viewport;
         next.resize_surface(w, h).map_err(|e| e.to_string())?;
         if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
-        let retired = session.renderer_mut().0.replace(self.renderer.take().unwrap());
-        if let Err(error) = session.commit_document_color_transition(prepared) {
-            self.renderer = std::mem::replace(&mut session.renderer_mut().0, retired);
-            return Err(error);
-        }
-        self.renderer = retired; // Retired GPU resources leave on the file worker.
-        session.complete_document_request(self.request, Ok(true))?;
+        session.commit_document_color_candidate(prepared,
+            |renderer| std::mem::swap(&mut renderer.0, &mut self.renderer))?;
+        // The task keeps retired GPU resources for destruction on the file worker.
+        session.complete_document_request(self.workflow.identity.request(), Ok(true))?;
         app.host.document_adopted();
         Ok(())
     }
@@ -189,8 +153,8 @@ pub unsafe extern "C" fn capy_project_details(task: *const CapyProjectTask) -> *
             Payload::Source(source) => serde_json::to_string(&source.details()?),
             Payload::Export(export) => serde_json::to_string(&export.details()?),
             Payload::Color(t) => serde_json::to_string(&serde_json::json!({
-                "color":t.original.document.color, "result":t.candidate.as_ref().map(|p| p.document.color),
-                "clipped_channels":t.clipped, "copy":t.copy,
+                "color":t.workflow.original.document.color, "result":t.workflow.candidate.as_ref().map(|p| p.document.color),
+                "clipped_channels":t.clipped, "copy":t.workflow.is_copy(),
             })),
             _ => return Err("No document details are available".into()),
         }.map_err(|e| e.to_string())?;

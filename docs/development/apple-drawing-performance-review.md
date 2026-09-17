@@ -263,3 +263,76 @@ this integration, and its Android measurements do not establish iPad timing.
 The physical iPad review remains unchanged. The combined source passes five
 focused Metal pixel/history tests, both Release builds without warnings and
 Web compilation; it has no new device performance qualification.
+
+
+## Composition attribution and finalization overlap
+
+A further bounded review uses the same four local Mac Metal replays at source
+base `4e833915`, with frozen binaries and temporary nested timing probes. The
+probes separate source preparation, other scene-job encoding, native command
+finalization, queue submission and explicit completion waits. Their intervals
+are disjoint, exclude earlier paint/source initialization and later presentation,
+and sum to no more than the enclosing composition interval in every frame.
+The remaining interval includes scene planning and display-cache encoding.
+All instrumentation is removed from the production change; its exact patches,
+binary/source hashes and CSVs remain in `artifacts/apple-composition-review-v1/`.
+
+| Share of composition elapsed time | Ordinary circles | Small zigzags | Wide circles | Coalesced circles |
+| --- | ---: | ---: | ---: | ---: |
+| Source preparation | 7.4% | 11.2% | 8.9% | 13.4% |
+| Other scene-job encoding | 1.0% | 0.9% | 0.8% | 0.8% |
+| Command finalization | 28.3% | 28.3% | 25.1% | 24.3% |
+| Queue submission | 3.0% | 3.5% | 3.2% | 3.0% |
+| Explicit completion waits | 59.6% | 55.4% | 61.5% | 58.0% |
+
+These are elapsed CPU intervals, not GPU shader attribution. In particular,
+waiting can include brush work encoded before composition, and command
+finalization can include driver synchronization. The results do not establish
+that source conversion, brush arithmetic or composition shaders are free, or
+that all wait time can be removed.
+
+They do expose one avoidable serialization: the previous implementation waited
+for the first eight-tile half before finalizing and submitting the second.
+The second half now finishes and submits first, then the CPU waits for the first
+before preparing a third. This overlaps costly native finalization with the
+previous GPU batch without adding persistent state or another rendering path.
+Commands still execute in the same queue order. At most two halves (16 tiles)
+are live; the final half still accompanies the ordinary frame. The source-upload
+byte ceiling, decoded cache, staging callbacks and native command chunk ceiling
+are unchanged. Browser waits were already asynchronous/no-op here; this is a
+shared native scheduling improvement, not a claim of faster Web execution.
+
+Two paired runs, with reversed run order on the repeat, give these stroke-phase
+completion medians. Ranges show the two observations, not confidence intervals.
+
+| Workload | Before, ms | After, ms | Median improvement |
+| --- | ---: | ---: | ---: |
+| 2 samples/frame, 571 px circles | 4.10–4.14 | 4.09–4.10 | Approximately unchanged |
+| 8 samples/frame, 96 px zigzags | 10.64–10.71 | 9.67–9.75 | About 9% |
+| 8 samples/frame, 1024 px circles | 23.58–23.73 | 19.36–19.96 | About 15–18% |
+| 64 samples/frame, 571 px circles | 39.23–39.67 | 30.47–31.53 | About 20–23% |
+
+Ordinary-input p95 also improves in both pairs, from 15.27/14.80 ms to
+13.45/13.00 ms. All four workloads retain byte-identical canonical tile roots
+and exact Undo/Redo. Dab counts, composited pixels, source misses, display batch
+counts and retained display bytes match across all runs. Equal display bytes do
+not establish equal process RSS or native driver allocation peaks. The 64-sample
+case remains a stress batch representing approximately 267 ms of input.
+
+Keep this small ordering correction. The measurements justify it without a
+brush-specific threshold, larger cache, lower precision or architecture rewrite.
+They also answer the optimality question: the previous 50 ms result was not a
+proven floor, and a general avoidable cost remained. The next useful physical
+check is one combined iPad qualification of the resulting build; these offscreen
+Mac measurements do not predict its p99 or Pencil-to-screen latency. Further
+structural optimization should wait for remaining visible stalls and measured
+GPU pass costs. Do not continue changing containers, contact spans or cache sizes
+solely because theoretical peak bandwidth suggests a much shorter frame.
+
+The final uninstrumented change passes 31 focused Metal tests covering bounded
+and complete display pixels, partial edges, mips, transformed/masked artwork,
+preview cancellation, exact source upload/capture, Undo/Redo, rejected cache
+writes and device replacement. Web and iOS-target renderer compilation pass.
+No iPad app was installed or restarted during the attribution review. The change
+is grouped with the following shared color/source transaction milestone, following
+the user's check-in policy; its handoff records subsequent device deployment.
