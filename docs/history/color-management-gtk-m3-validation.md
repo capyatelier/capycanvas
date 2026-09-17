@@ -300,3 +300,9 @@ Setup, Soft Proof and Gamut Warning now share one View menu section.
 The GTK photo-master workflow and compile check pass. The inspected properties
 capture and logs are in `artifacts/color-m3/document-properties-review/`; the
 existing `profile-review-2/review/launch.sh` is updated to this build.
+
+Turning off both Soft Proof and Gamut Warning now hides the proof status instead
+of displaying a saved target during normal viewing. Turning either option back
+on restores the indicator. The target, cached transform and document remain intact.
+The existing proof journey checks status visibility alongside canvas comparison,
+unchanged saved data and export independence.

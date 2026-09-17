@@ -10,6 +10,7 @@ pub(super) fn wait_proof(w: &Rc<Workspace>, prefix: &str) {
     loop {
         pump(20);
         if w.proof.label.text().starts_with(prefix) {
+            assert_eq!(w.proof.label.is_visible(), prefix != "Normal", "proof status visibility");
             return;
         }
         assert!(

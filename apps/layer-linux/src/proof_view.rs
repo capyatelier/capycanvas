@@ -116,7 +116,7 @@ impl ProofView {
             self.desired
                 .borrow()
                 .as_ref()
-                .is_some_and(|d| d.key.recipe.is_some()),
+                .is_some_and(|d| d.key.recipe.is_some() && (d.enabled || d.gamut)),
         );
         if self
             .desired
@@ -142,9 +142,9 @@ impl ProofView {
                     Ok(()) => {
                         let label = if desired.enabled { format!("Proof: {name}{}", if desired.gamut { " · Gamut warning" } else { "" }) }
                             else if desired.gamut { format!("Gamut: {name}") }
-                            else { format!("Normal · Proof target: {name}") };
+                            else { "Normal".into() };
                         state.label.set_text(&label);
-                        state.label.set_tooltip_text(Some(&format!("{label}\nPrint simulation affects viewing only. Colors beyond the SDR proof domain are clamped for preview and marked by Gamut Warning.")));
+                        state.label.set_tooltip_text(Some(&label));
                     }
                     Err(error) => {
                         state.label.set_text("Proof unavailable");

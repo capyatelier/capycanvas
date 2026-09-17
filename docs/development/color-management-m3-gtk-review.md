@@ -51,7 +51,8 @@ Saved profiles from the previous review session have been copied into this one.
    a proof target does not choose an export profile. Compare exports made with
    proof/warnings on and off; simulation and warning gray must never enter them.
 8. Try cancelling setup and switching **View → Soft Proof** off and on. Turning
-   the preview off retains its settings. An invalid or unsupported ICC must produce
+   both viewing options off hides the proof status and retains its settings.
+   An invalid or unsupported ICC must produce
    an actionable error. Open Drawing and Add Profile should use the desktop picker
    and remember their own last-used folders, including from another app window.
 
