@@ -1,4 +1,4 @@
-use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, response};
+use super::new_photo::{capture_ui, chooser, finish, invoke, ready, response};
 use super::place_source::{snapshot, source};
 use super::*;
 use layer_core::color::{ColorProfile, RgbSpace};
@@ -91,7 +91,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
         action: LayerAction::RepairSourceProfile { id: id.0 },
     });
     profile_dialog(&w);
-    combo(&w, "source-profile-space").set_selected(0);
+    super::new_photo::profile_action(&w, "source", "builtin-0");
     preview_ready(&w);
     pump(200);
     capture_ui(&w, &directory, "untouched-source.png");
@@ -102,11 +102,10 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     // must acknowledge cancellation without publishing any artwork or stale UI.
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
-    let space = combo(&w, "source-profile-space");
-    space.set_selected(0);
+    super::new_photo::profile_action(&w, "source", "builtin-0");
     pump(1);
     for index in [1, 2, 0, 3] {
-        space.set_selected(index);
+        super::new_photo::profile_action(&w, "source", &format!("builtin-{index}"));
     }
     let dialog = w
         .window
@@ -120,15 +119,9 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     assert_eq!(snapshot(&w), clean);
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
-    combo(&w, "source-profile-space").set_selected(4);
     let choose_profile = |path: &std::path::Path| {
         let dialog = w.window.visible_dialog().unwrap();
-        click(
-            &find_named(dialog.upcast_ref(), "source-profile-choose")
-                .unwrap()
-                .downcast::<gtk::Button>()
-                .unwrap(),
-        );
+        super::new_photo::profile_action(&w, "source", "add");
         let file = chooser();
         file.set_file(&gtk::gio::File::for_path(path)).unwrap();
         pump(200);
@@ -207,7 +200,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     let baked_bytes = snapshot(&w);
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
-    combo(&w, "source-profile-space").set_selected(3);
+    super::new_photo::profile_action(&w, "source", "builtin-3");
     preview_ready(&w);
     pump(200);
     capture_ui(&w, &directory, "baked-source-choice.png");
@@ -216,7 +209,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     assert_eq!(snapshot(&w), baked_bytes);
     invoke(&w, CommandId::RepairSourceProfile);
     profile_dialog(&w);
-    combo(&w, "source-profile-space").set_selected(3);
+    super::new_photo::profile_action(&w, "source", "builtin-3");
     preview_ready(&w);
     response(&w, "apply");
     finish(&w);

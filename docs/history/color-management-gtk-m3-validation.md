@@ -208,3 +208,40 @@ and file dialogs use the native in-process chooser. No open drawing was discarde
 Follow the [manual review guide](../development/color-management-m3-gtk-review.md).
 The handoff stops for the user's app review and confirmation. Automated checks
 and a running build do **not** imply that the user has accepted phase 3.
+
+
+## Profile-picker review revision
+
+The follow-up GTK review removes the two-stage profile selection, optional target
+name and separate setup management button. One picker now lists saved profiles
+and standard color spaces, with **Add profile…** and **Manage saved profiles…**
+always available below the scrolling choices. Adding validates the profile for
+its current role, saves the exact validated bytes once and selects it immediately.
+The descriptive ICC name (filename fallback) supplies new proof names. Filename
+fallbacks persist as bounded display metadata beside unchanged ICC bytes. Removing
+a saved entry preserves the currently selected bytes and embedded document data;
+an embedded profile outside the library remains available as the current profile.
+
+Proof, source interpretation/repair and export share this picker and keep their
+selections independent. Source compatibility filters the visible library. File
+reads and validation stay on workers; an export preset selected during loading
+supersedes the pending profile result. Profile failures disable the dependent
+confirmation action and remain visible; cancellation preserves the prior choice.
+A damaged saved proof can still be opened to remove or replace its target.
+
+Soft Proof Setup contains four settings: profile, rendering intent, black point
+compensation and **Print simulation** (Colors only / Black ink / Paper and ink).
+The simulation choices map to the existing saved semantics without renderer,
+transform, artwork, history-format or export-encoding changes. The numerical and
+performance qualifications above therefore remain applicable.
+
+Verification artifacts are in `artifacts/color-m3/profile-picker/`. Native GTK
+checks cover proof setup/compare/edit/save/reopen/export, all simulation choices,
+add-and-select, duplicate import, saved-profile reuse, removal with embedded-data
+preservation, cancellation, stale export-preset completion, untagged Open/Place/Paste,
+source repair, export presets and resized PNG/TIFF/JPEG delivery. All four profile
+unit tests pass, including the unnamed-profile filename/reuse regression. Final
+executable identities and launch verification are recorded in
+`profile-picker/review/build.json`. Use the updated
+[manual guide](../development/color-management-m3-gtk-review.md) for this revision;
+manual acceptance is still pending.

@@ -980,7 +980,7 @@ impl Preferences {
                 row.add_suffix(&button);
                 row.set_activatable_widget(Some(&button));
                 group.add(&row);
-                let row = text_row("ICC profile library", "Import or remove reusable source and delivery profiles.");
+                let row = text_row("Saved profiles", "Add or remove profiles for proofing, source interpretation and delivery.");
                 let button = gtk::Button::with_label("Manage…");
                 button.set_widget_name("color-profile-library");
                 button.set_valign(gtk::Align::Center);

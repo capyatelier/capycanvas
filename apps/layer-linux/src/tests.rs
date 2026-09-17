@@ -683,7 +683,7 @@ fn native_document_files() {
             }
             for (name, selected) in [
                 ("export-preset", "Web / Share"), ("export-format", "PNG"),
-                ("export-space", "sRGB"), ("export-depth", "8-bit SDR"),
+                ("export-depth", "8-bit SDR"),
                 ("export-background", "Keep transparency"),
             ] {
                 let row = find_named(options.upcast_ref(), name).unwrap()
@@ -699,8 +699,7 @@ fn native_document_files() {
                     .downcast::<adw::ComboRow>().unwrap().selected(), 1);
                 assert!(!find_named(options.upcast_ref(), "export-dither").unwrap()
                     .downcast::<adw::SwitchRow>().unwrap().is_sensitive());
-                find_named(options.upcast_ref(), "export-space").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(3);
+                new_photo::profile_action(&w, "export", "builtin-3");
             }
             if path == &jpeg_path {
                 find_named(options.upcast_ref(), "export-format").unwrap()
@@ -716,8 +715,7 @@ fn native_document_files() {
                 assert!(!options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
                 background.set_selected(2);
                 assert!(options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
-                find_named(options.upcast_ref(), "export-space").unwrap()
-                    .downcast::<adw::ComboRow>().unwrap().set_selected(1);
+                new_photo::profile_action(&w, "export", "builtin-1");
                 let quality = find_named(options.upcast_ref(), "export-jpeg-quality").unwrap()
                     .downcast::<adw::SpinRow>().unwrap();
                 assert!(quality.is_visible());
@@ -753,11 +751,8 @@ fn native_document_files() {
                 adjustment.set_value(0.);
             }
             if let Some((_, profile_path, _, channels)) = custom_exports.iter().find(|(p, _, _, _)| p == path) {
-                let space = find_named(options.upcast_ref(), "export-space").unwrap().downcast::<adw::ComboRow>().unwrap();
-                space.set_selected(4);
                 let alert = options.clone().downcast::<adw::AlertDialog>().unwrap();
-                assert!(!alert.is_response_enabled("export"));
-                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::Button>().unwrap();
+                let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap();
                 let wait_profile = || {
                     let deadline = Instant::now() + Duration::from_secs(15);
                     while Instant::now() < deadline && !button.is_sensitive() { pump(5); }
@@ -765,11 +760,11 @@ fn native_document_files() {
                 };
                 // Cancellation and invalid metadata retain the sheet and do not
                 // enable delivery with a silently assumed profile.
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
-                assert!(!alert.is_response_enabled("export"));
-                button.emit_clicked();
+                assert!(alert.is_response_enabled("export"));
+                new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(&bad_profile)).unwrap();
                 pump(250);
@@ -777,14 +772,14 @@ fn native_document_files() {
                 wait_profile();
                 assert!(find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
                 assert!(!alert.is_response_enabled("export"));
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(profile_path)).unwrap();
                 pump(250);
                 file.response(gtk::ResponseType::Accept);
                 wait_profile();
                 assert!(!find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
-                button.emit_clicked();
+                new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
                 assert!(alert.is_response_enabled("export"));

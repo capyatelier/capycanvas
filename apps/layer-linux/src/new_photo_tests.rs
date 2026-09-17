@@ -59,6 +59,27 @@ pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
         .downcast()
         .unwrap()
 }
+pub(super) fn profile_action(w: &Rc<Workspace>, prefix: &str, action: &str) {
+    let menu = find_named(w.window.visible_dialog().unwrap().upcast_ref(), &format!("{prefix}-profile-choose"))
+        .unwrap().downcast::<gtk::MenuButton>().unwrap();
+    menu.popup();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let button = loop {
+        pump(10);
+        if let Some(button) = find_named(menu.popover().unwrap().upcast_ref(), &format!("{prefix}-profile-{action}")) {
+            break button.downcast::<gtk::Button>().unwrap();
+        }
+        assert!(Instant::now() < deadline, "profile action: {prefix}/{action}");
+    };
+    button.emit_clicked();
+    if action != "add" && action != "manage" {
+        while !menu.is_sensitive() { pump(10); assert!(Instant::now() < deadline, "profile read"); }
+    }
+}
+pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
+    find_named(w.window.visible_dialog().unwrap().upcast_ref(), name).unwrap()
+        .downcast::<adw::ActionRow>().unwrap().subtitle().unwrap().into()
+}
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     let dialog = w
         .window
@@ -448,7 +469,7 @@ fn native_new_presets_and_profiled_photo_master() {
     let delivery = output.join(format!("Photo delivery-{}.tif", std::process::id()));
     invoke(&restored, CommandId::ExportDocument);
     combo(&restored, "export-preset").set_selected(2);
-    combo(&restored, "export-space").set_selected(3);
+    profile_action(&restored, "export", "builtin-3");
     response(&restored, "export");
     let save = chooser();
     save.set_current_folder(Some(&gtk::gio::File::for_path(&output)))

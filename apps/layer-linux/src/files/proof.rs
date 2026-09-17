@@ -48,30 +48,14 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_width_request(480);
     let group = adw::PreferencesGroup::new();
-    let target = choice(
+    let chooser = super::profile::ProfileChooser::new(
+        w,
         "Proof profile",
         "proof-profile",
-        &[
-            "sRGB",
-            "Display P3",
-            "Adobe RGB (1998)",
-            "ProPhoto RGB",
-            "ICC profile…",
-        ],
-    );
-    group.add(&target);
-    let chooser = super::profile::ProfileChooser::new(
-        &w.window,
-        &target,
         working,
         super::profile::ProfilePurpose::Proof,
     );
     group.add(&chooser.row);
-    let name = adw::EntryRow::builder()
-        .title("Target name (optional)")
-        .build();
-    name.set_widget_name("proof-name");
-    group.add(&name);
     let intents = [
         RenderingIntent::RelativeColorimetric,
         RenderingIntent::Perceptual,
@@ -96,38 +80,19 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
         .build();
     bpc.set_widget_name("proof-bpc");
     group.add(&bpc);
-    let ink = adw::SwitchRow::builder()
-        .title("Simulate black ink")
-        .active(true)
-        .build();
-    ink.set_widget_name("proof-black-ink");
-    group.add(&ink);
-    let paper = adw::SwitchRow::builder()
-        .title("Simulate paper color")
-        .subtitle("Includes black-ink simulation")
-        .build();
-    paper.set_widget_name("proof-paper");
-    group.add(&paper);
-    let manage = gtk::Button::with_label("Manage ICC Profiles…");
-    manage.set_widget_name("proof-manage-profiles");
-    manage.connect_clicked(glib::clone!(
-        #[weak]
-        w,
-        move |_| {
-            glib::MainContext::default().spawn_local(glib::clone!(
-                #[weak]
-                w,
-                async move {
-                    if let Err(error) = super::profile::manage(&w).await {
-                        w.changed(Err(error));
-                    }
-                }
-            ));
-        }
-    ));
+    let simulation = choice(
+        "Print simulation",
+        "proof-simulation",
+        &["Colors only", "Black ink", "Paper and ink"],
+    );
+    simulation.set_selected(1);
+    group.add(&simulation);
+    intent.set_tooltip_text(Some("How colors are mapped into the printer’s range. Use the intent recommended by your print provider."));
+    let intent_hint = gtk::Label::builder().label("Rendering intent controls how colors outside the printer’s range are mapped. Match your print provider’s recommendation.").wrap(true).xalign(0.).build();
+    intent_hint.add_css_class("dim-label");
     content.append(&group);
     content.append(&chooser.error);
-    content.append(&manage);
+    content.append(&intent_hint);
     let detail = gtk::Label::builder().label("Applies to the canvas and Navigator only. Use Save As for a print variant. Colors beyond the SDR proof domain are clamped for preview and marked by Gamut Warning.")
         .wrap(true).xalign(0.).build();
     content.append(&detail);
@@ -151,29 +116,24 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             bpc.set_sensitive(!absolute);
         }
     ));
-    paper.connect_active_notify(glib::clone!(
-        #[weak]
-        ink,
-        move |paper| {
-            if paper.is_active() {
-                ink.set_active(true);
-            }
-            ink.set_sensitive(!paper.is_active());
-        }
-    ));
     if let Some(recipe) = &previous {
         let embedded = recipe.profile.clone();
-        let channels = gio::spawn_blocking(move || layer_color::profile_channels(&embedded))
+        match gio::spawn_blocking(move || super::profile::describe(embedded))
             .await
-            .map_err(|_| "Profile reader failed")?
-            .unwrap_or(layer_core::color::ProfileChannels::Rgb);
-        let profile = ExportProfile {
-            profile: recipe.profile.clone(),
-            name: recipe.name.clone(),
-            channels,
-        };
-        (chooser.restore)(profile);
-        name.set_text(&recipe.name);
+            .map_err(|_| "Profile reader failed".to_string())
+            .and_then(|r| r)
+        {
+            Ok(mut profile) => {
+                if profile.name == super::profile::UNNAMED_PROFILE {
+                    profile.name = recipe.name.clone();
+                }
+                (chooser.restore)(profile);
+            }
+            Err(error) => {
+                chooser.error.set_label(&error);
+                chooser.error.set_visible(true);
+            }
+        }
         intent.set_selected(
             intents
                 .iter()
@@ -181,11 +141,20 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
                 .unwrap() as u32,
         );
         bpc.set_active(recipe.conversion.black_point_compensation);
-        ink.set_active(recipe.simulate_black_ink);
-        paper.set_active(recipe.simulate_paper);
-    } else {
-        target.set_selected(4);
+        simulation.set_selected(if recipe.simulate_paper {
+            2
+        } else {
+            u32::from(recipe.simulate_black_ink)
+        });
     }
+    dialog.set_response_enabled("apply", (chooser.selected)().is_ok());
+    chooser.row.connect_subtitle_notify(glib::clone!(
+        #[weak]
+        dialog,
+        #[strong(rename_to = selected)]
+        chooser.selected,
+        move |_| dialog.set_response_enabled("apply", selected().is_ok())
+    ));
     loop {
         let response = crate::alert::choose(dialog.clone(), &w.window).await;
         if response != "apply" && response != "remove" {
@@ -202,17 +171,12 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
             if response == "remove" {
                 return Ok(None);
             }
-            let profile = (chooser.selected)(target.selected())?;
-            let label = if name.text().trim().is_empty() {
-                profile.name
-            } else {
-                name.text().trim().to_owned()
-            };
-            let mut recipe = ProofRecipe::new(label, profile.profile);
+            let profile = (chooser.selected)()?;
+            let mut recipe = ProofRecipe::new(profile.name, profile.profile);
             recipe.conversion.intent = intents[intent.selected() as usize];
             recipe.conversion.black_point_compensation = bpc.is_active();
-            recipe.simulate_paper = paper.is_active();
-            recipe.simulate_black_ink = ink.is_active();
+            recipe.simulate_paper = simulation.selected() == 2;
+            recipe.simulate_black_ink = simulation.selected() != 0;
             recipe.validate()?;
             Ok(Some(recipe))
         })();

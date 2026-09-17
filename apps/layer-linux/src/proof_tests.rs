@@ -40,7 +40,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     ready(&w);
     let original = snapshot(&w);
     invoke(&w, CommandId::SoftProofSetup);
-    combo(&w, "proof-profile").set_selected(0);
+    super::new_photo::profile_action(&w, "proof", "builtin-0");
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), original);
@@ -67,7 +67,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
             });
         });
     invoke(&w, CommandId::SoftProofSetup);
-    combo(&w, "proof-profile").set_selected(0);
+    super::new_photo::profile_action(&w, "proof", "builtin-0");
     click(
         &find_button(
             w.window.visible_dialog().unwrap().upcast_ref(),
@@ -138,6 +138,18 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
             .session
             .rendering_suspended()
     );
+    invoke(&w, CommandId::SoftProofSetup);
+    let broken_setup = w
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(!broken_setup.is_response_enabled("apply"));
+    assert!(broken_setup.is_response_enabled("remove"));
+    response(&w, "cancel");
+    finish(&w);
+    assert_eq!(snapshot(&w), failed_document);
     invoke(&w, CommandId::Undo);
     wait_proof(&w, "Proof: Latest");
     assert_eq!(
@@ -245,6 +257,179 @@ fn toggle(w: &Rc<Workspace>, name: &str) -> adw::SwitchRow {
 #[test]
 #[ignore = "isolated Wayland display and hardware GPU"]
 #[allow(deprecated)]
+fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
+    use super::new_photo::{profile_action, profile_name};
+    let app = native_test_app("art.capycanvas.ProfilePicker");
+    let w = Workspace::with_project(&app, Some((new_drawing(128, 64).unwrap(), None)));
+    w.window.present();
+    ready(&w);
+    let output = std::path::Path::new("../../artifacts/color-m3/profile-picker")
+        .canonicalize()
+        .unwrap();
+    let path = output.join("Unhelpful filename.icm");
+    let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let expected =
+        layer_color::profile_description(&ColorProfile::Icc(bytes.clone().into())).unwrap();
+    invoke(&w, CommandId::SoftProofSetup);
+    let setup = w
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert!(!setup.is_response_enabled("apply"));
+    for _ in 0..2 {
+        profile_action(&w, "proof", "add");
+        let file = chooser();
+        file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+        pump(150);
+        file.response(gtk::ResponseType::Accept);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !setup.is_response_enabled("apply") {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+        assert_eq!(profile_name(&w, "proof-profile"), expected);
+    }
+    // Import selects immediately and duplicate imports occupy one saved entry.
+    profile_action(&w, "proof", "manage");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while w.window.visible_dialog().unwrap().widget_name() != "profile-library-manager" {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let manager = w.window.visible_dialog().unwrap();
+    let list = find_named(manager.upcast_ref(), "profile-library-list")
+        .unwrap()
+        .downcast::<gtk::ListBox>()
+        .unwrap();
+    assert!(list.row_at_index(0).is_some());
+    assert!(list.row_at_index(1).is_none());
+    response(&w, "close");
+    profile_action(&w, "proof", "builtin-0");
+    assert_eq!(profile_name(&w, "proof-profile"), "sRGB");
+    profile_action(&w, "proof", "saved-0");
+    assert_eq!(profile_name(&w, "proof-profile"), expected);
+    let menu = find_named(setup.upcast_ref(), "proof-profile-choose")
+        .unwrap()
+        .downcast::<gtk::MenuButton>()
+        .unwrap();
+    menu.popup();
+    pump(300);
+    assert!(
+        find_named(
+            menu.popover().unwrap().upcast_ref(),
+            "proof-profile-current"
+        )
+        .is_none(),
+        "saved/current profile must not be duplicated"
+    );
+    super::new_photo::capture_ui(&w, &output, "picker.png");
+    // Popovers use a separate native surface and are absent from window captures.
+    let popover = menu.popover().unwrap();
+    let scene = gtk::Snapshot::new();
+    gtk::WidgetPaintable::new(Some(&popover)).snapshot(
+        &scene,
+        popover.width() as f64,
+        popover.height() as f64,
+    );
+    let node = scene.to_node().expect("profile popover snapshot");
+    w.window
+        .renderer()
+        .unwrap()
+        .render_texture(&node, None)
+        .save_to_png(output.join("picker-menu.png"))
+        .unwrap();
+    menu.popdown();
+    // Removing a library copy leaves the selected bytes usable and reusable.
+    profile_action(&w, "proof", "manage");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while w.window.visible_dialog().unwrap().widget_name() != "profile-library-manager" {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let manager = w.window.visible_dialog().unwrap();
+    let list = find_named(manager.upcast_ref(), "profile-library-list")
+        .unwrap()
+        .downcast::<gtk::ListBox>()
+        .unwrap();
+    list.select_row(list.row_at_index(0).as_ref());
+    find_named(manager.upcast_ref(), "profile-library-remove")
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap()
+        .emit_clicked();
+    while list.row_at_index(0).is_some() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    response(&w, "close");
+    assert_eq!(profile_name(&w, "proof-profile"), expected);
+    profile_action(&w, "proof", "current");
+    // Cancel adding a replacement leaves the current selection usable.
+    profile_action(&w, "proof", "add");
+    chooser().response(gtk::ResponseType::Cancel);
+    while !setup.is_response_enabled("apply") {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    assert_eq!(profile_name(&w, "proof-profile"), expected);
+    for simulation in 0..3 {
+        if simulation != 0 {
+            invoke(&w, CommandId::SoftProofSetup);
+        }
+        combo(&w, "proof-simulation").set_selected(simulation);
+        response(&w, "apply");
+        finish(&w);
+        wait_proof(&w, "Proof:");
+        let proof = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .proof
+            .clone()
+            .unwrap();
+        assert_eq!(proof.name, expected);
+        assert_eq!(proof.profile, ColorProfile::Icc(bytes.clone().into()));
+        assert_eq!(proof.simulate_paper, simulation == 2);
+        assert_eq!(proof.simulate_black_ink, simulation != 0);
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    // A preset chosen while an added profile finishes loading wins over that
+    // stale completion, including its preset label and delivery selection.
+    invoke(&w, CommandId::ExportDocument);
+    profile_action(&w, "export", "add");
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    combo(&w, "export-preset").set_selected(2);
+    combo(&w, "export-preset").set_selected(0);
+    let menu = find_named(
+        w.window.visible_dialog().unwrap().upcast_ref(),
+        "export-profile-choose",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !menu.is_sensitive() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    assert_eq!(profile_name(&w, "export-space"), "sRGB");
+    assert_eq!(combo(&w, "export-preset").selected(), 0);
+    response(&w, "cancel");
+    finish(&w);
+    w.window.destroy();
+}
+
+#[test]
+#[ignore = "isolated Wayland display and hardware GPU"]
+#[allow(deprecated)]
 fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let app = native_test_app("art.capycanvas.PrintProof");
     let output = std::path::Path::new("../../artifacts/color-m3/gtk-journey");
@@ -284,18 +469,17 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     assert!(!toggle(&w, "proof-bpc").is_sensitive());
     combo(&w, "proof-intent").set_selected(0);
     toggle(&w, "proof-bpc").set_active(true);
-    toggle(&w, "proof-paper").set_active(true);
-    assert!(toggle(&w, "proof-black-ink").is_active());
-    assert!(!toggle(&w, "proof-black-ink").is_sensitive());
-    click(
-        &find_named(
-            w.window.visible_dialog().unwrap().upcast_ref(),
-            "proof-profile-choose",
-        )
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap(),
-    );
+    combo(&w, "proof-simulation").set_selected(2);
+    for removed in [
+        "proof-name",
+        "proof-profile-file",
+        "proof-black-ink",
+        "proof-paper",
+        "proof-manage-profiles",
+    ] {
+        assert!(find_named(w.window.visible_dialog().unwrap().upcast_ref(), removed).is_none());
+    }
+    super::new_photo::profile_action(&w, "proof", "add");
     let file = chooser();
     file.set_file(&gtk::gio::File::for_path(&icc)).unwrap();
     pump(150);
@@ -305,12 +489,17 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         pump(20);
         let row: adw::ActionRow = find_named(
             w.window.visible_dialog().unwrap().upcast_ref(),
-            "proof-profile-file",
+            "proof-profile",
         )
         .unwrap()
         .downcast()
         .unwrap();
-        if row.subtitle().is_some_and(|s| s.contains("CMYK")) {
+        if row.subtitle().is_some_and(|s| {
+            s == layer_color::profile_description(&ColorProfile::Icc(
+                std::fs::read(&icc).unwrap().into(),
+            ))
+            .unwrap()
+        }) {
             break;
         }
         assert!(
@@ -460,9 +649,12 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let delivery = output.join(format!("RGB delivery-{}.tif", std::process::id()));
     invoke(&restored, CommandId::ExportDocument);
     // The proof import must not preselect CMYK or alter delivery presets.
-    assert_ne!(combo(&restored, "export-space").selected(), 4);
+    assert_eq!(
+        super::new_photo::profile_name(&restored, "export-space"),
+        "sRGB"
+    );
     combo(&restored, "export-preset").set_selected(2);
-    combo(&restored, "export-space").set_selected(0);
+    super::new_photo::profile_action(&restored, "export", "builtin-0");
     response(&restored, "export");
     let file = chooser();
     file.set_current_folder(Some(&gtk::gio::File::for_path(&output)))

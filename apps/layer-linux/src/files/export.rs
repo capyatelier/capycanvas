@@ -149,7 +149,7 @@ struct Choice {
     library: ExportPresets,
 }
 
-async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
+async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
     let document = snapshot.project.document.color;
     let master_resolution = snapshot.project.document.resolution;
     let library = Rc::new(std::cell::RefCell::new(presets::load(document).await?));
@@ -319,20 +319,9 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     });
     refresh_size();
     let format = combo(&group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
-    let space = combo(
-        &group,
-        "Color space",
-        "export-space",
-        &[
-            "sRGB",
-            "Display P3",
-            "Adobe RGB (1998)",
-            "ProPhoto RGB",
-            "Custom ICC",
-        ],
-    );
-    let profile = ProfileChooser::new(&w.window, &space, document.space, ProfilePurpose::Output);
-    group.add(&profile.row);
+    let profile = ProfileChooser::new(w, "Delivery profile", "export-space", document.space, ProfilePurpose::Output);
+    let space = profile.row.clone();
+    group.add(&space);
     let selected_profile = profile.selected.clone();
     let depth = combo(
         &group,
@@ -426,15 +415,15 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         .build();
     validation.add_css_class("error");
     validation.set_widget_name("export-validation");
-    space.connect_selected_notify(glib::clone!(
+    space.connect_subtitle_notify(glib::clone!(
         #[weak]
         background,
         #[weak]
         format,
         #[strong]
         selected_profile,
-        move |space| {
-            if selected_profile(space.selected()).is_ok_and(|p| p.channels == ProfileChannels::Cmyk)
+        move |_| {
+            if selected_profile().is_ok_and(|p| p.channels == ProfileChannels::Cmyk)
             {
                 if format.selected() == 0 {
                     format.set_selected(1);
@@ -554,7 +543,6 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     ));
     for row in [
         &format,
-        &space,
         &depth,
         &background,
         &intent,
@@ -575,6 +563,9 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             }
         ));
     }
+    space.connect_subtitle_notify(glib::clone!(#[weak] preset, #[strong] updating, move |_| {
+        if !updating.get() { updating.set(true); preset.set_selected(3); updating.set(false); }
+    }));
     for row in [&bpc, &dither, &enlarge] {
         row.connect_active_notify(glib::clone!(
             #[weak]
@@ -611,12 +602,12 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         glib::clone!(
             #[weak]
             note,
-            #[weak]
-            space,
+            #[strong]
+            selected_profile,
             move |depth: &adw::ComboRow| {
                 note.set_label(if depth.selected() == 0 && document.depth == IntegerDepth::U16 {
                 "This copy reduces 16-bit artwork to 8-bit. The master retains its precision."
-            } else if depth.selected() == 0 && space.selected() == 3 {
+            } else if depth.selected() == 0 && selected_profile().is_ok_and(|p| p.profile == layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::ProPhoto)) {
                 "16-bit is recommended for ProPhoto RGB gradients and further editing."
             } else {
                 "The matching color profile is embedded in the image."
@@ -625,7 +616,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         );
     update_note(&depth);
     depth.connect_selected_notify(update_note);
-    space.connect_selected_notify(glib::clone!(
+    space.connect_subtitle_notify(glib::clone!(
         #[weak]
         depth,
         move |_| {
@@ -635,8 +626,6 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     let read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>> = Rc::new(glib::clone!(
         #[weak]
         format,
-        #[weak]
-        space,
         #[weak]
         depth,
         #[weak]
@@ -666,7 +655,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
                     2 => ExportFormat::Jpeg,
                     _ => ExportFormat::Png,
                 },
-                profile: selected_profile(space.selected())?,
+                profile: selected_profile()?,
                 depth: if depth.selected() == 0 {
                     IntegerDepth::U8
                 } else {
@@ -716,7 +705,6 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
     ));
     for row in [
         &format,
-        &space,
         &depth,
         &background,
         &intent,
@@ -728,6 +716,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             move |_| validate()
         });
     }
+    space.connect_subtitle_notify({ let validate = validate.clone(); move |_| validate() });
     for row in [&bpc, &dither, &enlarge] {
         row.connect_active_notify({
             let validate = validate.clone();
@@ -783,7 +772,6 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
         &preset,
         &size,
         &format,
-        &space,
         &depth,
         &background,
         &intent,
@@ -793,6 +781,7 @@ async fn choose_recipe(w: &Workspace, snapshot: &DocumentExport) -> Result<Optio
             move |_| refresh()
         });
     }
+    space.connect_subtitle_notify({ let refresh = refresh_preview.clone(); move |_| refresh() });
     for row in [&bpc, &dither, &enlarge] {
         row.connect_active_notify({
             let refresh = refresh_preview.clone();
