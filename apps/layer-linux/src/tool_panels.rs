@@ -472,7 +472,9 @@ mod wheel {
         pub menu: RefCell<Option<gtk::Popover>>,
         pub menu_slot: Cell<ColorSlot>,
         pub view: Cell<ViewColor>,
-        pub disc: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, ViewColor, gtk::gdk::Texture)>>,
+        pub headroom: Cell<f32>,
+        pub linear_field: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, Vec<[f32; 4]>)>>,
+        pub disc: RefCell<Option<(u32, f32, ColorShape, layer_core::color::RgbSpace, ViewColor, f32, f32, gtk::gdk::Texture)>>,
         pub ring: RefCell<Option<(u32, ColorShape, layer_core::color::RgbSpace, ViewColor, gtk::gdk::Texture)>>,
     }
     #[glib::object_subclass]
@@ -588,16 +590,29 @@ mod wheel {
                 let hue = state.wheel_components()[0];
                 {
                     let mut cache = self.disc.borrow_mut();
-                    if cache.as_ref().is_none_or(|(s, h, p, c, v, _)| *s != side || *h != hue || *p != shape || *c != space || *v != view) {
-                        let mut pixels = vec![0; side as usize * side as usize * 4];
-                        state.render_field_in(side, view.space(), &mut pixels);
-                        *cache = Some((side, hue, shape, space, view, view.rgba8([side, side], pixels)));
+                    let headroom = self.headroom.get();
+                    let intensity = state.hdr_intensity();
+                    if cache.as_ref().is_none_or(|(s, h, p, c, v, e, d, _)| *s != side || *h != hue || *p != shape || *c != space || *v != view || *e != intensity || *d != headroom) {
+                        let texture = if matches!(view, ViewColor::Mapped { .. }) {
+                            let mut linear = self.linear_field.borrow_mut();
+                            if linear.as_ref().is_none_or(|(s, h, p, c, _)| *s != side || *h != hue || *p != shape || *c != space) {
+                                let mut pixels = vec![[0.;4]; side as usize * side as usize];
+                                state.render_field_base_linear(side, &mut pixels);
+                                *linear = Some((side, hue, shape, space, pixels));
+                            }
+                            crate::display_color::picker_texture_with_gain(view, headroom, space, [side,side], &linear.as_ref().unwrap().4, intensity.exp2())
+                        } else {
+                            let mut pixels = vec![0; side as usize * side as usize * 4];
+                            state.render_field_in(side, view.space(), &mut pixels);
+                            view.rgba8([side,side], pixels)
+                        };
+                        *cache = Some((side, hue, shape, space, view, intensity, headroom, texture));
                     }
                     snapshot.push_fill(&color_field_path(shape, &geometry), gtk::gsk::FillRule::Winding);
-                    snapshot.append_texture(&cache.as_ref().unwrap().5, &bounds);
+                    snapshot.append_texture(&cache.as_ref().unwrap().7, &bounds);
                     snapshot.pop();
                 }
-                draw_wheel(snapshot, &state, &geometry, view);
+                draw_wheel(snapshot, &state, &geometry, view, self.headroom.get());
                 snapshot.restore();
             }
             for button in self.corners.borrow().iter() {
@@ -645,6 +660,7 @@ pub struct ColorPanel {
     menu_edit: gtk::Button,
     menu_library: gtk::Button,
     brightness: crate::number_control::NumberControl,
+    intensity: crate::hdr_color_scale::HdrColorScale,
     edit_color: gtk::Button,
 }
 impl ColorPanel {
@@ -656,8 +672,12 @@ impl ColorPanel {
         wheel.set_valign(gtk::Align::Fill);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
-        let brightness = crate::number_control::NumberControl::new(
-            layer_ui::NumericControl::number(-16., 15., 0.1, 2).unit("EV"), "Brightness", "");
+        let mut spec = layer_ui::NumericControl::number(-16., f64::from(65504f32.log2()), 0.1, 2).unit("EV");
+        spec.kind = layer_ui::NumericKind::Slider;
+        let brightness = crate::number_control::NumberControl::value_header(spec, "HDR");
+        brightness.add_css_class("hdr-color-control");
+        let intensity = crate::hdr_color_scale::HdrColorScale::new();
+        brightness.append(&intensity);
         brightness.set_widget_name("color-hdr-brightness");
         root.append(&brightness);
         let edit_color = gtk::Button::from_icon_name("document-edit-symbolic");
@@ -665,7 +685,9 @@ impl ColorPanel {
         edit_color.update_property(&[gtk::accessible::Property::Label("Edit Color")]);
         edit_color.add_css_class("flat");
         edit_color.set_widget_name("color-edit-button");
-        brightness.first_child().unwrap().downcast::<gtk::Box>().unwrap().append(&edit_color);
+        let header = brightness.first_child().unwrap().downcast::<gtk::Box>().unwrap();
+        header.set_spacing(2);
+        header.append(&edit_color);
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Background, "Background color"),
@@ -772,11 +794,23 @@ impl ColorPanel {
             menu_edit,
             menu_library,
             brightness,
+            intensity,
             edit_color,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
-        self.brightness.connect_value_changed(glib::clone!(#[weak] workspace, move |i| workspace.dispatch(UiAction::Color { action: ColorAction::Brightness { stops: i.value() as f32 } })));
+        self.brightness.connect_value_changed(glib::clone!(#[weak] workspace, move |i| {
+            workspace.dispatch(UiAction::Color { action: ColorAction::HdrIntensity { stops: i.value() as f32 } });
+            if let Some(g) = workspace.gpu.borrow().as_ref() { i.set_value(f64::from(g.session.state().colors.hdr_intensity())); }
+        }));
+        self.intensity.connect_value_changed(glib::clone!(#[weak] workspace, move |i| {
+            if i.updating() { return; }
+            workspace.dispatch(UiAction::Color { action: ColorAction::HdrIntensity { stops: i.value() as f32 } });
+            // Rejected out-of-storage-range edits leave the native control at
+            // the accepted value, including in retained color-panel drawers.
+            let colors = workspace.gpu.borrow().as_ref().map(|g| g.session.state().colors.clone());
+            if let Some(colors) = colors { i.refresh(&colors, workspace.view_color(), workspace.picker_headroom()); }
+        }));
         self.edit_color.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
             let slot = workspace.gpu.borrow().as_ref().map(|g| g.session.state().colors.slot);
             if let Some(slot) = slot { crate::color_editor::show(&workspace, slot); }
@@ -978,18 +1012,22 @@ impl ColorPanel {
         drag.connect_cancel(move |_, _| part.set(None));
         self.wheel.add_controller(drag);
     }
-    pub fn refresh(&self, state: &ColorState, view: ViewColor) {
+    pub fn headroom(&self) -> f32 { self.wheel.imp().headroom.get() }
+    pub fn refresh(&self, state: &ColorState, view: ViewColor, headroom: f32) {
         let hdr = matches!(view, ViewColor::Mapped { .. });
         self.brightness.set_visible(hdr);
+        if !hdr { self.wheel.imp().linear_field.borrow_mut().take(); }
         if hdr { self.root.reorder_child_after(&self.brightness, None::<&gtk::Widget>); }
         else { self.root.reorder_child_after(&self.wheel, None::<&gtk::Widget>); }
         self.edit_color.set_visible(hdr);
         self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
         let ev = state.definition().brightness_ev(state.rgb_space()).ok().flatten();
-        self.brightness.set_sensitive(ev.is_some() && state.slot != ColorSlot::Transparent);
-        self.brightness.set_value(f64::from(ev.unwrap_or(0.)));
+        self.brightness.set_sensitive(state.slot != ColorSlot::Transparent);
+        self.brightness.set_value(f64::from(state.hdr_intensity()));
+        if hdr { self.intensity.refresh(state, view, headroom); }
+        let previous_headroom = self.wheel.imp().headroom.replace(headroom);
         let previous_view = self.wheel.imp().view.replace(view);
-        if self.initialized.replace(true) && previous_view == view && *self.wheel.imp().color.borrow() == *state {
+        if self.initialized.replace(true) && previous_view == view && previous_headroom == headroom && *self.wheel.imp().color.borrow() == *state {
             return;
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
@@ -1171,19 +1209,23 @@ fn color_field_path(shape: ColorShape, g: &ColorWheelGeometry) -> gtk::gsk::Path
     path.to_path()
 }
 
-fn draw_wheel(snapshot: &gtk::Snapshot, state: &ColorState, g: &ColorWheelGeometry, view: ViewColor) {
+fn draw_wheel(snapshot: &gtk::Snapshot, state: &ColorState, g: &ColorWheelGeometry, view: ViewColor, headroom: f32) {
     let hue = state.wheel_hue_color_in(state.wheel_components()[0], view.space());
     let color = state.preview_in(state.definition(), view.space());
     let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.);
-    for (point, rgb) in [
+    for (index, (point, rgb)) in [
         (state.wheel_hue_marker(g, state.wheel_components()[0]), hue),
         (state.wheel_marker(g), [color[0], color[1], color[2]]),
-    ] {
+    ].into_iter().enumerate() {
         let path = gtk::gsk::PathBuilder::new();
         path.add_circle(&gtk::graphene::Point::new(point[0], point[1]), radius);
         snapshot.push_fill(&path.to_path(), gtk::gsk::FillRule::Winding);
         let bounds = gtk::graphene::Rect::new(point[0]-radius, point[1]-radius, radius*2.,radius*2.);
-        snapshot.append_texture(&view.solid([rgb[0],rgb[1],rgb[2],1.]), &bounds);
+        let texture = if index == 1 && matches!(view, ViewColor::Mapped { .. }) {
+            let mut p = state.definition().linear_in(state.rgb_space()).unwrap(); p[3] = 1.;
+            crate::display_color::picker_texture(view, headroom, state.rgb_space(), [1,1], &[p])
+        } else { view.solid([rgb[0],rgb[1],rgb[2],1.]) };
+        snapshot.append_texture(&texture, &bounds);
         snapshot.pop();
         let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0.,0.,g.center[0]*2.,g.center[1]*2.));
         cr.arc(point[0] as f64,point[1] as f64,radius as f64,0.,std::f64::consts::TAU);

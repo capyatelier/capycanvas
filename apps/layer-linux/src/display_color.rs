@@ -183,6 +183,54 @@ impl ViewColor {
     }
 }
 
+/// HDR picker artwork: Float32 evaluation followed by a half-float, tagged
+/// display derivative. SDR-only displays use the document's saved rendition.
+pub(crate) fn picker_texture(view: ViewColor, headroom: f32, space: RgbSpace,
+    extent: [u32; 2], pixels: &[[f32; 4]]) -> gdk::Texture {
+    picker_texture_with_gain(view, headroom, space, extent, pixels, 1.)
+}
+pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: RgbSpace,
+    extent: [u32; 2], pixels: &[[f32; 4]], gain: f32) -> gdk::Texture {
+    let document = if let ViewColor::Mapped { document, .. } = view { document } else { space };
+    let to_document = space.linear_transform(document);
+    let document_pixel = |p: [f32; 4]| {
+        let rgb = layer_core::color::rgb::apply(to_document, [p[0],p[1],p[2]].map(f64::from));
+        [rgb[0] as f32 * gain,rgb[1] as f32 * gain,rgb[2] as f32 * gain,p[3]]
+    };
+    if headroom > 1. {
+        let to_srgb = document.linear_transform(RgbSpace::Srgb);
+        let to_2020 = layer_core::color::hdr::srgb_to_bt2020();
+        let mut bytes = Vec::with_capacity(pixels.len() * 8);
+        for &p in pixels {
+            let p = layer_core::color::hdr::map_display_premultiplied(document_pixel(p), headroom);
+            let rgb = layer_core::color::rgb::apply(to_2020,
+                layer_core::color::rgb::apply(to_srgb, [p[0],p[1],p[2]].map(f64::from)));
+            for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([p[3]]) {
+                bytes.extend_from_slice(&half::f16::from_f32(v).to_bits().to_ne_bytes());
+            }
+        }
+        gdk::MemoryTextureBuilder::new().set_width(extent[0] as i32).set_height(extent[1] as i32)
+            .set_format(gdk::MemoryFormat::R16g16b16a16Float).set_stride(extent[0] as usize * 8)
+            .set_color_state(&gdk::ColorState::rec2100_linear())
+            .set_bytes(Some(&glib::Bytes::from_owned(bytes))).build()
+    } else {
+        let rendition = if let ViewColor::Mapped { recipe, .. } = view {
+            let [exposure, contrast, knee] = recipe.map(f32::from_bits);
+            layer_core::color::hdr::SdrRendition { exposure, contrast, knee }
+        } else { Default::default() };
+        let transform = document.linear_transform(view.space());
+        let mut bytes = Vec::with_capacity(pixels.len() * 4);
+        for p in pixels {
+            let p = document_pixel(*p);
+            let rgb = rendition.map_rgb([p[0],p[1],p[2]]);
+            let rgb = layer_core::color::rgb::apply(transform, rgb.map(f64::from));
+            bytes.extend(rgb.map(|v| (view.space().encode(v).clamp(0.,1.) * 255.).round() as u8));
+            bytes.push((p[3] * 255.).round() as u8);
+        }
+        view.rgba8(extent, bytes)
+    }
+}
+
 #[path = "color_pair.rs"]
 mod pair;
 pub use pair::ColorPair;

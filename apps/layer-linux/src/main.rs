@@ -3,6 +3,7 @@ mod canvas;
 mod display_color;
 mod proof_view;
 mod hdr;
+mod hdr_color_scale;
 mod effects;
 mod files;
 mod histogram;

@@ -260,8 +260,14 @@ processing and fixed reference white of 203 cd/m². It supports noninterlaced
 The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for display
 and reference-white details. New Drawing offers an **HDR drawing** preset.
 HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
-values. The color panel adds peak-channel **Brightness (EV)**; hue changes retain
-above-white brightness, while field/value picking chooses a new brightness.
+values. Only HDR documents show the **HDR** intensity ramp above the picker:
+a thick horizontal current-color gradient with a circular thumb and editable EV
+value. It multiplies the base color in linear light; +2 EV is ×4, including the
+circle/square/triangle field, while black stays black and alpha is unchanged.
+Hue and field edits retain the chosen intensity and EV edits retain the marker.
+The field and ramp use managed half-float display textures on a capable GTK
+display, or the document's SDR appearance on an SDR-only display. The hue guide
+stays a stable SDR reference. SDR documents retain the existing picker/layout.
 Curves and the histogram mark SDR white; curve processing options are in Advanced.
 
 Export's overview chooses **Dynamic range: SDR or HDR** and format. Size,

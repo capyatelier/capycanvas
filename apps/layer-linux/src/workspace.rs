@@ -1647,11 +1647,15 @@ impl Workspace {
     pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
         self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
     }
+    pub(crate) fn picker_headroom(&self) -> f32 {
+        if !self.window.renderer().is_some_and(|r| matches!(r.type_().name(), "GskVulkanRenderer" | "GskGLRenderer")) { return 1.; }
+        self.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
+    }
     pub(crate) fn display_description(&self) -> String {
         let encoding = self.gpu.borrow().as_ref().and_then(|g| g.session.engine().backend().display_encoding);
         let mut description = match encoding {
-            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; the color wheel and swatches use SDR previews.".to_string(),
-            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; the color wheel and swatches use SDR previews.".to_string(),
+            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; the HDR picker uses the same display headroom. The hue guide and small swatches use SDR previews.".to_string(),
+            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; the HDR picker uses the same display headroom. The hue guide and small swatches use SDR previews.".to_string(),
             None => self.view_color().description().to_string(),
         };
         if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {
@@ -1758,12 +1762,13 @@ impl Workspace {
                     self.hdr_status.set_visible(hdr && !proof);
                     let preview = g.session.state().preview_sdr || g.session.state().sdr_appearance_preview.is_some();
                     let headroom = g.session.renderer_mut().display_headroom;
-                    if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS; }
+                    if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS | regions::BRUSH; }
                     self.hdr_status.set_label(if preview && headroom > 1. { "SDR preview" } else if headroom > 1. { "HDR" } else { "Showing SDR" });
                     self.hdr_status.set_tooltip_text(Some("Display details"));
                     if let Err(e) = g.session.renderer_mut().set_hdr_view(rendition, preview) { eprintln!("HDR viewing: {e}"); }
 
                 }
+                if self.color_panel.headroom() != self.picker_headroom() { change.regions |= regions::BRUSH; }
                 self.proof.sync(self);
                 let publication = self
                     .gpu
@@ -2157,8 +2162,10 @@ impl Workspace {
             self.tool_settings.refresh(self, &state);
             self.placement_actions.refresh(&state);
         }
+        if regions & (regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
+            self.color_panel.refresh(&state.colors, self.view_color(), self.picker_headroom());
+        }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
-            self.color_panel.refresh(&state.colors, self.view_color());
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
             self.color.set_color(state.colors.definition(), self.view_color());

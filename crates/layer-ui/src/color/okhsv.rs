@@ -91,7 +91,7 @@ impl Hue {
         }
     }
     #[inline]
-    fn linear_rgb(&self, saturation: f32, value: f32) -> [f64; 3] {
+    pub(super) fn linear_rgb(&self, saturation: f32, value: f32) -> [f64; 3] {
         if value <= 0. {
             return [0.; 3];
         }

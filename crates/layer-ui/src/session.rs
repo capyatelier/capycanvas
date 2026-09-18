@@ -141,6 +141,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         .map_err(|e| e.to_string())?;
         let mut colors = ColorState::default();
         colors.set_rgb_space(engine.document().color.space)?;
+        colors.set_hdr_enabled(engine.document().color.depth.is_float())?;
         let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -2473,18 +2474,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::Color { action } => {
-                if matches!(action, ColorAction::Brightness { .. }) && !self.engine.document().color.depth.is_float() {
-                    return Err("HDR brightness requires an HDR drawing".into());
+                let hdr = self.engine.document().color.depth.is_float();
+                if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. }) && !hdr {
+                    return Err("HDR intensity requires an HDR drawing".into());
                 }
-                // Hue changes retain the selected HDR brightness. Field/value
-                // picking remains an explicit choice of a new brightness.
-                let brightness = if self.engine.document().color.depth.is_float() && matches!(action,
-                    ColorAction::PickWheel { part: ColorWheelPart::Hue, .. } |
-                    ColorAction::Component { index: 0, .. }) {
-                    self.state.colors.definition().brightness_ev(self.state.colors.rgb_space())?.filter(|v| *v > 0.)
-                } else { None };
+                self.state.colors.set_hdr_enabled(hdr)?;
                 self.state.colors.apply(action)?;
-                if let Some(stops) = brightness { self.state.colors.apply(ColorAction::Brightness { stops })?; }
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)

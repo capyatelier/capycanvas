@@ -60,6 +60,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Prepare the new picker before publishing document resources.
             candidate.state.colors = self.state.colors.clone();
             candidate.state.colors.set_rgb_space(destination)?;
+            candidate.state.colors.set_hdr_enabled(candidate.engine.document().color.depth.is_float())?;
             // File preparation uses a generic session. Resolve prediction with
             // this window's live capability before transferring its engine.
             candidate.state.platform = self.state.platform;

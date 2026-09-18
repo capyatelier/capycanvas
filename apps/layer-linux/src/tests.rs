@@ -19,6 +19,8 @@ mod export_resize;
 mod new_photo;
 #[path = "hdr_tests.rs"]
 mod hdr;
+#[path = "hdr_picker_tests.rs"]
+mod hdr_picker;
 #[path = "place_source_tests.rs"]
 mod place_source;
 #[path = "photo_drop_tests.rs"]

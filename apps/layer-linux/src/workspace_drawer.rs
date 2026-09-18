@@ -159,7 +159,8 @@ impl Body {
             Self::Toolbar(_) => regions::LAYOUT | regions::BRUSH | regions::COMMANDS,
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
             Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
-            Self::Color(_) | Self::Sizes(_) => regions::BRUSH,
+            Self::Color(_) => regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
+            Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
             Self::Navigator(_) => {
                 regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS
@@ -172,7 +173,7 @@ impl Body {
             Self::Toolbar(v) => v.refresh(w, state),
             Self::Tools(v) => v.refresh(w, &state.tool_set, state.theme),
             Self::Settings(v) => v.refresh(w, state),
-            Self::Color(v) => v.refresh(&state.colors, w.view_color()),
+            Self::Color(v) => v.refresh(&state.colors, w.view_color(), w.picker_headroom()),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),

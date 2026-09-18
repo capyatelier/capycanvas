@@ -8,6 +8,8 @@ mod document_tests;
 mod gamut;
 mod okhsv;
 mod editor;
+mod hdr_picker;
+use hdr_picker::HdrPaint;
 pub use editor::{ColorEditor, ColorInputModel};
 mod form;
 pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui};
@@ -72,6 +74,8 @@ pub enum ColorWheelPart {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ColorAction {
     Brightness { stops: f32 },
+    /// Multiply the bounded picker color in linear light, retaining its coordinates.
+    HdrIntensity { stops: f32 },
     SetSlot { slot: ColorSlot, color: RgbColor },
     Library { action: ColorLibraryAction },
     /// The definition is retained even when outside the document/display gamut.
@@ -132,6 +136,8 @@ pub struct ColorState {
     // Retain both projections, independently for each paint, including across saves.
     #[serde(default)]
     coordinates: [Option<ColorCoordinates>; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hdr_picker: Option<[HdrPaint; 2]>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -212,12 +218,14 @@ impl Default for ColorState {
             paint_slot: ColorSlot::Foreground,
             hues: [60., 0.],
             coordinates: [None; 2],
+            hdr_picker: None,
         }
     }
 }
 impl ColorState {
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.library.validate()?;
+        self.validate_hdr_picker()?;
         for color in [self.foreground, self.background] {
             Self::validate_definition(color)?;
         }
@@ -355,7 +363,7 @@ impl ColorState {
             .expect("validated paint color")
     }
     fn picker_rgba(&self) -> [f32; 4] {
-        self.rgba().map(|v| v.clamp(0., 1.))
+        self.picker_base().encoded_in(self.rgb_space).expect("validated picker color").map(|v| v.clamp(0., 1.))
     }
     /// Explicit SDR fallback for hosts whose widget colors are sRGB.
     pub fn preview(&self, color: RgbColor) -> [f32; 4] {
@@ -512,7 +520,12 @@ impl ColorState {
     }
     pub fn set_color(&mut self, color: RgbColor) -> Result<(), String> {
         Self::validate_definition(color)?;
-        let rgba = color.encoded_in(self.rgb_space)?.map(|v| v.clamp(0., 1.));
+        let paint = self.hdr_picker.map(|_| HdrPaint::from_color(color, self.rgb_space)).transpose()?;
+        self.set_color_with_picker(color, paint)
+    }
+    fn set_color_with_picker(&mut self, color: RgbColor, paint: Option<HdrPaint>) -> Result<(), String> {
+        Self::validate_definition(color)?;
+        let rgba = paint.map_or(color, |p| p.base).encoded_in(self.rgb_space)?.map(|v| v.clamp(0., 1.));
         let index = self.index();
         let old_hsv = self.components_in(ColorSpace::Hsv);
         let old_hls = self.components_in(ColorSpace::Hls);
@@ -555,11 +568,12 @@ impl ColorState {
             self.foreground = color;
         }
         self.slot = self.paint_slot;
+        if let (Some(paints), Some(paint)) = (&mut self.hdr_picker, paint) { paints[index] = paint; }
         Ok(())
     }
     fn set_components(&mut self, mut values: [f32; 3]) -> Result<(), String> {
         values[0] = values[0].rem_euclid(360.);
-        self.set_rgba(from_components(values, self.space, self.rgba()[3]))?;
+        self.set_picker_rgba(from_components(values, self.space, self.rgba()[3]))?;
         let index = self.index();
         let c = self.coordinates[index].as_mut().unwrap();
         if self.space == ColorSpace::Hsv {
@@ -576,7 +590,7 @@ impl ColorState {
     fn set_okhsv(&mut self, mut values: [f32; 3]) -> Result<(), String> {
         values[0] = values[0].rem_euclid(360.);
         let [r, g, b] = okhsv::to_rgb_in(self.rgb_space, values);
-        self.set_rgba([r, g, b, self.rgba()[3]])?;
+        self.set_picker_rgba([r, g, b, self.rgba()[3]])?;
         let index = self.index();
         let coordinates = self.coordinates[index].as_mut().unwrap();
         coordinates.okhsv = Some(values);
@@ -594,6 +608,7 @@ impl ColorState {
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
         match action {
             ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev(self.rgb_space, stops)?)?,
+            ColorAction::HdrIntensity { stops } => self.set_hdr_intensity(stops)?,
             ColorAction::SetSlot { slot, color } => {
                 if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
                 Self::validate_definition(color)?;
@@ -657,6 +672,7 @@ impl ColorState {
                 std::mem::swap(&mut self.foreground, &mut self.background);
                 self.hues.swap(0, 1);
                 self.coordinates.swap(0, 1);
+                if let Some(paints) = &mut self.hdr_picker { paints.swap(0, 1); }
             }
             ColorAction::Space { space } => self.space = space,
             ColorAction::RgbaComponent { index, value } => {
@@ -666,7 +682,8 @@ impl ColorState {
                 if index == 3 {
                     let mut color = self.definition();
                     color.rgba[3] = value;
-                    self.set_color(color)?;
+                    let paint = self.hdr_picker.map(|p| { let mut p = p[self.index()]; p.base.rgba[3] = value; p });
+                    self.set_color_with_picker(color, paint)?;
                 } else {
                     let mut rgba = self.rgba();
                     rgba[index] = value;
@@ -710,7 +727,7 @@ impl ColorState {
                                 for c in 0..3 {
                                     rgba[c] = weights[0] + weights[2] * hue[c];
                                 }
-                                self.set_rgba(rgba)?;
+                                self.set_picker_rgba(rgba)?;
                             }
                         }
                     }

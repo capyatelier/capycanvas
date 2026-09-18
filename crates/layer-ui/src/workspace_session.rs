@@ -338,6 +338,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut working = capture.working;
         let space = self.engine.document().color.space;
         working.colors.set_rgb_space(space)?;
+        working.colors.set_hdr_enabled(self.engine.document().color.depth.is_float())?;
         let mut brush = working.tools.brush_in(preset(working.preset)?, space);
         brush.color_rgba_linear = working.colors.definition().linear_in(space)?;
         // This is the only fallible mutation; CanvasEngine validates before setting.

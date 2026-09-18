@@ -1,10 +1,14 @@
 # HDR color picker options after user feedback
 
-The user finds the separate Brightness slider above the wheel odd. This is an
-assessment for choosing the next interaction; the picker has not been redesigned
-as part of the export-preview fix.
+Decision after this assessment: the user chose a thick horizontal current-color
+HDR ramp above the picker, with a circular thumb like the hue ring. It is visible
+only for HDR documents. Intensity multiplies linear RGB and the field displays
+the selected EV while retaining its marker. SDR documents are unchanged.
+Implementation/validation: `../history/color-management-hdr-picker.md`.
 
-## What feels wrong in the current implementation
+The assessment below records the options considered before that decision.
+
+## What felt wrong in the previous implementation
 
 - “Brightness” is log2 of the largest positive linear RGB component, not measured
   luminance or an exposure offset from a separately retained base color.
