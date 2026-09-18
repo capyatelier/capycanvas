@@ -1,5 +1,77 @@
 # Large-photo drawing: algorithm review — 2026-09-17
 
+## Current G-Pen follow-up
+
+After the document errors were fixed, the user confirmed visible Pencil lag
+relative to Clip Studio Paint at a comparable brush size. The earlier uncertain
+perceptual status below is superseded; the remaining issue is not just Diagnostics.
+
+The retained physical trace identifies substantial tile preparation and command
+materialization cost: median GPU-active time is 15.357 ms within 41.684 ms total
+completion, and command finalization occupies 68% of sampled running render CPU
+stacks. Committed brush and prediction passes contribute, but so do source copies,
+scene composition and display reduction. The replay's `composition_ms` includes
+finalization and GPU waits; it is not a measurement of compositor shader arithmetic.
+There is no measured hardware lower bound and no evidence that G-Pen's shape
+evaluation alone dominates.
+
+Two shared renderer simplifications remove work without changing brush fidelity:
+
+- Dry paint reads only the destination pixel. Its material binding now prepares
+  the center tile, leaving the eight unused neighboring slots empty. Wet,
+  watercolor and ungathered smudge/liquify keep their required neighborhoods.
+- A single destination-reading prediction batch can already read committed
+  color/coverage and write its result directly. Native scene composition now uses
+  that existing path for dry/wet paint too, removing redundant private prediction
+  color/coverage initialization. Watercolor and multiple prediction batches keep
+  their existing state handling.
+
+The first-principles cost is touched tiles multiplied by their brush, source,
+composition and display passes. Evaluating ink coverage and changed layered pixels
+is necessary; decoding unread neighbors and copying unused prediction state is
+not. These changes reduce those constants without a new rendering path, cache
+limit, platform condition, brush-size threshold or preset special case.
+
+Sixteen local Mac replays cover four workloads in both execution orders. Median
+completed-update time improves by approximately 6–12%, with identical final native
+artwork, exact Undo/Redo, dab counts, composited pixels and display submissions.
+For eight-sample 570.7 px circles, the two pairs improve from 26.48 to 23.22 ms
+and 26.35 to 22.82 ms. Small 96 px zigzags, two-sample circles and 1024 px circles
+also improve. The tests use the earlier saved 9504×6336 drawing.
+
+A physical iPad comparison uses a fresh preserved copy of the current large
+drawing, 180 drawing updates and 360 zoom updates. At 570.7 px, completed drawing
+median/p99 improve from **32.094/52.151 ms to 28.781/42.757 ms**. Cached zoom
+median/p99 are **1.812/9.044 ms and 1.798/8.748 ms**. Final native artwork matches
+exactly and both versions pass exact Undo/Redo. This is one completed run per
+version, with eight synthetic input samples per update, manual 8 ms prediction,
+fixed 768 MiB display admission and offscreen completion. It does not measure
+native presentation or prove parity with Clip Studio Paint. The physical Pencil
+retest remains pending.
+
+The initial combined fixture completes 570 px, then terminates with signal 9;
+the isolated 2048 px baseline also terminates without a complete result. Neither
+qualifies wide-brush performance or establishes the termination's cause. The
+current review's settings showed 2048 px, so the requested physical retest names
+570 px explicitly. The normal updated Release is restored with all 14 complete
+recoveries and 144 original files byte-identical; temporary replay output is
+retained off-device and removed from the app.
+
+Existing source/materialized-pixel and cold native ProPhoto/U16 tests now include
+dry paint; their wet/smudge/liquify cases still pass. Single-prediction coverage
+and private-fork transitions pass on both legacy and native renderers, as do the
+material specialization and native G-Pen checks. Both Apple Release builds and
+Web compilation pass. Android has no separately measured performance result.
+Evidence is `artifacts/apple-gpen-cost-v1/`, based on `02be7ad1` plus this change.
+
+A faster staging-buffer reuse experiment is excluded: the existing pool retains
+its high-water allocation, and large source uploads were not qualified for
+bounded retention across hosts. No pool change ships. Further optimization should
+target measured command/copy costs; neither a speculative G-Pen rewrite nor a
+claim that the remaining delay is unavoidable follows from these results.
+
+## Earlier measurements and algorithm review
+
 The current tile-based design is appropriate, but approximately 50–60 ms p99 is
 not an established hardware limit. The shared follow-up below removes redundant
 preparation and overlaps bounded submissions. Retain it; further optimization

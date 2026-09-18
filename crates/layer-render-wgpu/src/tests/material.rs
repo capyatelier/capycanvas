@@ -264,7 +264,12 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
 
 #[test]
 fn single_prediction_borrows_coverage_and_survives_private_preview_transitions() {
-    let mut renderer = material_renderer();
+    for renderer in [material_renderer(), WgpuRasterizer::new_native_headless(Default::default()).unwrap()] {
+        check_single_prediction_coverage(renderer);
+    }
+}
+
+fn check_single_prediction_coverage(mut renderer: WgpuRasterizer) {
     renderer.resize_surface(384, 128).unwrap();
     let layer = Layer::paint(LayerId(1), "Prediction coverage");
     let mut style = test_style(BrushExecution::Dry);
@@ -356,5 +361,6 @@ fn single_prediction_borrows_coverage_and_survives_private_preview_transitions()
         [0, 0, 0],
         "single prediction borrows committed coverage"
     );
-    assert_eq!(preview_bytes, 2 * PAGE_BYTES);
+    let pixel_bytes = u64::from(renderer.device.working_format().block_copy_size(None).unwrap());
+    assert_eq!(preview_bytes, 2 * u64::from(PAGE_SIZE).pow(2) * pixel_bytes);
 }

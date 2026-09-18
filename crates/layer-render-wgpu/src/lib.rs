@@ -1701,30 +1701,28 @@ impl WgpuRasterizer {
 
     fn material_bind_group(
         &mut self,
-        layer_id: LayerId,
+        batch: &DabBatch,
         coordinate: [u32; 2],
-        stroke_id: StrokeId,
-        watercolor: bool,
         preview: bool,
         gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
-            if gathered.is_some() && i != 4 {
-                // Completed smudge/liquify fields already contain every traced
-                // source sample. Only this destination page remains necessary
-                // for smudge mixing and alpha lock; neighbors are not read.
+            if (batch.style.execution == BrushExecution::Dry || gathered.is_some()) && i != 4 {
+                // Dry paint reads only its destination pixel. Completed gather
+                // fields already contain nonlocal smudge/liquify samples.
+                // Neither needs to decode or bind surrounding source tiles.
                 [-1_000_000; 2]
             } else {
                 [i as i32 % 3 - 1, i as i32 / 3 - 1]
             }
         });
-        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
+        self.prepare_raw_neighborhood(batch.layer_id, coordinate, offsets, preview, encoder)?;
         let layer = self
             .paint_layers
             .iter()
-            .find(|layer| layer.id == layer_id)
-            .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
+            .find(|layer| layer.id == batch.layer_id)
+            .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
         let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
         let coverage = if preview {
             self.preview_coverage_pages
@@ -1737,11 +1735,11 @@ impl WgpuRasterizer {
             layer
                 .coverage_pages
                 .iter()
-                .find(|p| p.coordinate == coordinate && p.owner == Some(stroke_id))
+                .find(|p| p.coordinate == coordinate && p.owner == Some(batch.stroke_id))
         })
         .map(|p| &p.active().view)
         .unwrap_or(&self.empty_scalar_view);
-        let auxiliary = if watercolor {
+        let auxiliary = if BrushPassPlan::for_style(&batch.style).state.watercolor_wetness {
             let pages = if preview {
                 &self.preview_watercolor_wetness_pages
             } else {
@@ -2913,10 +2911,8 @@ impl WgpuRasterizer {
                             .min(self.target_extent(batch.layer_id)[1].saturating_sub(1) / PAGE_SIZE),
                     ];
                     self.material_bind_group(
-                        batch.layer_id,
+                        batch,
                         coordinate,
-                        batch.stroke_id,
-                        false,
                         false,
                         None,
                         encoder,
@@ -3579,7 +3575,7 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == coordinate)
                 .expect("preview page is prepared before encoding");
             let local = if self.preview_full_pages {
-                // Smudge and liquify return the committed color outside their
+                // Destination brushes retain committed color outside their
                 // contacts. Writing the complete page replaces separate source
                 // initialization and prevents holes in scene/capture consumers.
                 page_rect(coordinate).page_local(coordinate)
@@ -4238,8 +4234,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 .filter(|batch| batch.kind == DabBatchKind::Preview && batch.dab_count != 0)
                 .all(|batch| {
                     BrushPassPlan::for_style(&batch.style).requires_destination()
-                        && (!scene_required || matches!(batch.style.execution,
-                            BrushExecution::Smudge | BrushExecution::Liquify))
                 });
         if new_preview_layer.is_none() {
             // Preview is disposable by contract. Release its high-water pool

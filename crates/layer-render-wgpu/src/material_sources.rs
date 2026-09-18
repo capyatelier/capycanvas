@@ -278,7 +278,6 @@ impl WgpuRasterizer {
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let timing = self.telemetry.enabled;
         let started = timing.then(web_time::Instant::now);
-        let plan = BrushPassPlan::for_style(&batch.style);
         let operation = match batch.style.execution {
             BrushExecution::Liquify => Some(0),
             BrushExecution::Smudge => Some(1),
@@ -302,10 +301,8 @@ impl WgpuRasterizer {
         if !distant {
             let started = timing.then(web_time::Instant::now);
             let result = self.material_bind_group(
-                batch.layer_id,
+                batch,
                 coordinate,
-                batch.stroke_id,
-                plan.state.watercolor_wetness,
                 preview,
                 None,
                 encoder,
@@ -433,10 +430,8 @@ impl WgpuRasterizer {
         let (samples, meta) = (gather.fields[current].1.clone(), gather.complete.clone());
         let started = timing.then(web_time::Instant::now);
         let result = self.material_bind_group(
-            batch.layer_id,
+            batch,
             coordinate,
-            batch.stroke_id,
-            plan.state.watercolor_wetness,
             preview,
             Some((&samples, &meta)),
             encoder,

@@ -156,6 +156,35 @@ similar G-Pen size. This reopens no document blocker; the next performance work
 must separate brush evaluation from composition/submission and fix the measured
 cause in shared code where possible.
 
+## Shared G-Pen preparation and prediction — 2026-09-17
+
+The visible large-brush lag follow-up removes two unnecessary costs in the shared
+renderer: dry paint no longer decodes/binds eight unread neighboring source tiles,
+and native dry/wet prediction reuses the existing direct committed-color/coverage
+path instead of copying private state. Watercolor and multiple preview batches
+retain their required state. No brush arithmetic, fidelity, cache policy or
+platform-specific path changes.
+
+Four reversed-order Mac workloads improve median completed-update time by 6–12%
+with exact final artwork and Undo/Redo. A physical iPad 570.7 px comparison improves
+median/p99 from 32.094/52.151 ms to 28.781/42.757 ms, again with exact native artwork
+and history. This is a synthetic offscreen comparison, not Pencil-to-display
+latency or perceptual acceptance. The earlier CPU/GPU attribution identifies
+command materialization and copies as substantial costs; it does not prove a
+hardware floor or G-Pen arithmetic bottleneck. See the
+[current algorithm review](apple-drawing-performance-review.md#current-g-pen-follow-up)
+for measurements, fixture failures and limits.
+
+The source/cold-native brush regressions, native/legacy prediction transitions,
+material specialization and native G-Pen checks pass. Both final Release builds
+and Web compilation pass. The normal updated iPad Release is restored with all
+14 recoveries and 144 original files preserved exactly. Private fixture output is
+removed after retention; other installed editors and the running Mac review are
+unchanged. The iPad binary is built at `02be7ad1` with the two shared runtime
+changes, recorded in `artifacts/apple-gpen-cost-v1/`. The physical Pencil retest
+is pending; the overall performance gate stays open. An unqualified staging-pool
+experiment is removed and is not part of this milestone.
+
 ## Shared workflow adoption — 2026-09-17
 
 Main's `f09df94a` centralizes color/photo workflows for Web, Android and GTK.
