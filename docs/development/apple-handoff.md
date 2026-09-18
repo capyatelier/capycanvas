@@ -82,6 +82,36 @@ is retained in `artifacts/apple-settings-links-v1/`. Physical UIKit/OS delivery
 remains separate. The installed prediction review apps are retained with the
 user's drawings; the XP-Pen check now passes.
 
+## Mac file panels and window titles
+
+The native two-window workflow reproduces two host defects: saving a drawing
+leaves its OS window named “Capy Canvas,” and switching windows can bury the
+standalone Save panel even after returning to its drawing through the Window
+menu. Each scene now binds its native title to the existing document name.
+Open/Save use AppKit's [document-sheet presentation](https://developer.apple.com/documentation/appkit/nssavepanel/beginsheetmodal(for:completionhandler:)),
+with a weak owning window supplied by the existing window delegate. No window
+registry or duplicate document state is added.
+
+The attached panel also exposes an existing Select All limitation: its remote
+filename field is not an in-process `NSTextView`, so Command-A can reach the
+canvas instead. Native menu handling now asks AppKit's responder chain to perform
+Select All; unhandled actions continue to the shared canvas command. This also
+removes the concrete text-view cast. Evidence and qualification are retained in
+`artifacts/apple-window-files-v1/`.
+
+Both native tests pass (`mac-v7`, zero skipped). Two independently named windows
+retain their own drawings, Undo histories and saved destinations while a Save As
+sheet is pending. Returning to its owner, cancelling, retrying, reopening the
+copy and ordinary Save preserve the expected source-file bytes and sampled
+artwork. The existing failed-Open/Discard/Cancel/retry workflow also passes with
+the attached panels. A separate AppKit check verifies native text selection and
+the unhandled canvas-command fallback. The final Mac Release builds without
+compiler warnings; retained captures are reviewed and the isolated test
+processes have exited. The native tests retain the earlier unattributed
+main-thread responsiveness warning; these are workflow checks, not performance
+measurements. Artist review apps and the iPad are untouched. Provider delivery
+and the remaining physical lifecycle/window cases stay open.
+
 ## Filter-preview cancellation — 2026-09-17
 
 Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)

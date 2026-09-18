@@ -35,6 +35,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkFailedProjectOpenPreservesArtwork(in: editorCaptureApplication())
     }
 
+    @MainActor func testSavePanelKeepsItsDocumentAcrossWindowFocus() throws {
+        try checkSavePanelKeepsItsDocumentAcrossWindowFocus(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeImageImport() throws {
         try checkNativeImageImport(in: editorCaptureApplication())
     }
