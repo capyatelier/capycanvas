@@ -27,6 +27,20 @@ pass. The normal iPad app is restored with all 14 recoveries/files preserved;
 physical Pencil smoothness remains pending. This supersedes the older uncertain
 perceptual status in R6 without closing that gate.
 
+Shared preview scheduling at `aeb2a5c4` now also passes Apple's affected shared,
+Metal, ABI and mounted-owner checks plus both Release builds. Cancellation,
+automatic retry during edits and local save/reopen remain working. This integrates
+the policy that defers optional previews during drawing; it supplies no new
+physical latency result. The installed iPad review remains the G-Pen runtime
+qualified as `e350a585`, pending the requested Pencil retest. See the
+[preview qualification](apple-handoff.md#filter-preview-cancellation--2026-09-17).
+
+The additional [dry-paint copy removal](apple-drawing-performance-review.md#dry-paint-tile-preservation)
+improves large-brush Mac replay medians by roughly 6–8% with exact artwork/history.
+Twelve focused renderer tests, both Release builds and Web compilation pass.
+It is not installed in either review app and supplies no new iPad perceptual
+result. R6 remains open pending the already-requested physical Pencil check.
+
 Main now includes shared SDR color/photo work and workflow centralization through
 `a1150ece`, shader-startup integration through `bc9593b2`, and filter-probe texture
 reuse at `1724e5c6`. The grouped document-blocker fixes pass 72 active native tests

@@ -87,9 +87,17 @@ user's drawings; the XP-Pen check now passes.
 Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)
 moves this lifecycle into Rust. The current ABI transfers an already validated
 atlas; shared status replaces the former cancellation flag and Swift pending
-request state described below. The updated native owner test still covers
-cancellation, real failures, retry, save/reopen and continued drawing. Its Swift
-execution and macOS/iPadOS builds need revalidation after this migration.
+request state described below. Apple qualification at `aeb2a5c4` passes six shared
+scheduler tests, four Metal preview tests (the opt-in benchmark stays ignored),
+two Apple preview ABI tests and the mounted Swift/Metal owner on both Apple
+policies. The latter covers cancellation, genuine failures, automatic retry
+during repeated edits, local Save As/reopen, continued drawing and exact Undo.
+Both Release builds pass without compiler warnings. Private evidence is under
+`artifacts/apple-preview-scheduler-v1/`; the initial GPU test selector matched
+zero tests, and the corrected module selector supplies the four-test result.
+The scheduler defers optional preview work during active input; these checks do
+not establish physical drawing latency. The installed iPad review remains the
+shared G-Pen runtime qualified as `e350a585`, with its Pencil retest pending.
 
 The user reports `effect shader: Filter preview cancelled because its source
 changed`, blocking further drawing, large-photo Save As/reopen and performance
@@ -191,6 +199,19 @@ unchanged. The iPad binary is built at `02be7ad1` with the two shared runtime
 changes, recorded in `artifacts/apple-gpen-cost-v1/`. The physical Pencil retest
 is pending; the overall performance gate stays open. An unqualified staging-pool
 experiment is removed and is not part of this milestone.
+
+The subsequent dry-paint preservation change folds committed color/coverage
+copies into the existing full-tile material draw, passing through pixels outside
+the planned damage. Sixteen reversed-order Mac replays preserve exact artwork
+and history: 570.7 px eight-sample median completion improves by 5.6–8.1%,
+1024 px by 5.6–7.3%, and two-sample input by about 2.2%. Small-brush medians
+change little; some control p99 values regress. Twelve focused Metal checks,
+including byte-exact untouched extended-color pixels, and both Apple Release
+builds plus Web compilation pass. See the
+[measurements and limits](apple-drawing-performance-review.md#dry-paint-tile-preservation).
+Private evidence is `artifacts/apple-paint-copy-v1/`. Both review apps remain
+unchanged; the iPad still runs the earlier `e350a585` runtime pending the requested
+Pencil comparison. No physical speedup is claimed for this additional change.
 
 ## Shared workflow adoption — 2026-09-17
 

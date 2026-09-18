@@ -596,7 +596,7 @@ impl BrushReservoir {
 struct LayerPage {
     coordinate: [u32; 2],
     primary: PageSurface,
-    // Inactive color is overwritten by a full-page copy or the post-stroke
+    // Inactive color is overwritten by a full-page copy, dry draw or post-stroke
     // edge pass before use. Only a new primary needs a separate clear.
     secondary: Option<PageSurface>,
     active_secondary: bool,
@@ -2680,6 +2680,7 @@ impl WgpuRasterizer {
         }
 
         let plan = BrushPassPlan::for_style(&batch.style);
+        let writes_full_page = batch.style.execution == BrushExecution::Dry;
         let layer_index = self
             .paint_layers
             .iter()
@@ -2757,10 +2758,12 @@ impl WgpuRasterizer {
                 .coverage_pages
                 .iter()
                 .find(|page| page.coordinate == coordinate && page.owner == Some(batch.stroke_id));
-            // Preserve this batch's old generations together, before any tile
-            // draws. Source neighborhoods remain consumed one draw at a time.
-            page.active().copy_to(page.surface(!page.active_secondary), encoder);
-            if let Some(coverage) = coverage {
+            // Nonlocal brushes preserve old generations before any tile draws.
+            // Dry draws preserve untouched pixels while writing the new page.
+            if !writes_full_page {
+                page.active().copy_to(page.surface(!page.active_secondary), encoder);
+            }
+            if let Some(coverage) = coverage.filter(|_| !writes_full_page) {
                 let destination = if coverage.active_secondary {
                     &coverage.primary
                 } else {
@@ -2790,7 +2793,7 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), false, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), false, encoder,
             )?;
             let page = self.paint_layers[layer_index]
                 .pages
@@ -2798,10 +2801,17 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == job.coordinate)
                 .expect("destination page remains live while encoding");
             let destination = page.surface(job.destination_secondary);
-            // Initialize the inactive wetness target once for the submitted
-            // update. Every internal deposition microbatch accumulates into it
-            // with fixed-function MAX blending before transport begins.
-            let local = job.local;
+            // Dry paint copies untouched pixels in its existing draw.
+            let local = if writes_full_page {
+                PixelRect::full([PAGE_SIZE; 2])
+            } else {
+                job.local
+            };
+            let color_load = if writes_full_page {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
             let texture_set = self
                 .texture_sets
                 .iter()
@@ -2843,7 +2853,7 @@ impl WgpuRasterizer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -2852,7 +2862,7 @@ impl WgpuRasterizer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -3435,7 +3445,7 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), true, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), true, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3567,7 +3577,7 @@ impl WgpuRasterizer {
             let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
                 .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, coordinate, range, false, encoder,
+                batch_index, batch, batch_dabs, coordinate, PixelRect::full([PAGE_SIZE; 2]), range, false, encoder,
             )?;
             let page = self
                 .preview_pages

@@ -75,6 +75,7 @@ struct MaterialSources {
     // 0: adjacent pages; 1: disjoint gather pages; 2: gathered sample field.
     // Adjacent pages also provide the ordered dry-contact range in zw.
     header: vec4<u32>,
+    // For dry paint, pages[0] is the local dirty rectangle (min xy, max xy).
     pages: array<vec4<u32>, 9>,
 }
 @group(2) @binding(12) var<uniform> material_sources: MaterialSources;
@@ -783,6 +784,17 @@ fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<
 
 @fragment
 fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
+    if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
+        let p = vec2<u32>(fragment_position.xy);
+        let bounds = material_sources.pages[0];
+        if any(p < bounds.xy) || any(p >= bounds.zw) {
+            return MaterialOutput(
+                textureLoad(source_11, vec2<i32>(p), 0),
+                vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0),
+                vec4<f32>(0.0),
+            );
+        }
+    }
     var result = paint_fragment(fragment_position);
     if style.color.a > 0.5 {
         let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);

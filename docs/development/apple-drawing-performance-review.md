@@ -70,6 +70,47 @@ bounded retention across hosts. No pool change ships. Further optimization shoul
 target measured command/copy costs; neither a speculative G-Pen rewrite nor a
 claim that the remaining delay is unavoidable follows from these results.
 
+### Dry-paint tile preservation
+
+A further shared change removes the committed dry-brush color and coverage
+copies. The existing material draw now writes the whole destination tile and
+passes through source pixels outside the existing tile damage rectangle. It
+evaluates the same contacts inside that rectangle. This combines preservation
+with painting, without changing tile storage, memory ceilings, brush arithmetic
+or native prediction policy. Wet and nonlocal material preparation is unchanged.
+
+Sixteen Mac replays at `aeb2a5c4` plus this change use the same four workloads in
+both execution orders, preserving exact final native artwork, Undo/Redo, dab
+counts, composition area and submission counts:
+
+| Workload | Median completion before → after (ms), two execution orders |
+| --- | --- |
+| 2 samples/update, 570.7 px circles | 14.35 → 14.04; 14.25 → 13.93 |
+| 8 samples/update, 570.7 px circles | 23.67 → 21.75; 23.11 → 21.82 |
+| 8 samples/update, 96 px zigzags | 7.00 → 6.88; 7.05 → 6.96 |
+| 8 samples/update, 1024 px circles | 44.20 → 40.95; 43.26 → 40.82 |
+
+The large-brush median improves by 5.6–8.1%; smaller input batches improve about
+2.2%, and the small-brush median changes little. This is not an every-percentile
+improvement: one small-brush p99 rises from 11.11 to 13.28 ms, and one two-sample
+p99 rises from 24.05 to 24.90 ms. These are Mac offscreen completion measurements,
+not physical iPad or pen-to-display results.
+
+Twelve focused Metal tests pass, covering material specialization, prediction,
+cold/native/source paint and masks. The extended-color reference test now also
+checks every pixel outside the changed rectangle byte-for-byte, across all
+document RGB spaces, U8/U16 depths, tested blend modes and alpha locking.
+Both Apple Release builds and Web compilation pass. The Web check uses the
+installed LLVM compiler for `CC_wasm32_unknown_unknown` and
+`AR_wasm32_unknown_unknown`; the initial system-clang attempt lacked a Wasm
+target and is retained as a toolchain failure.
+
+Evidence is `artifacts/apple-paint-copy-v1/`. Neither review app is replaced:
+the installed iPad still runs the preceding `e350a585` G-Pen milestone while its
+Pencil comparison is pending. The upload-pool experiment remains excluded;
+the installed wgpu pool has no public retention limit, and this change requires
+no new allocator. This follow-up does not close physical performance acceptance.
+
 ## Earlier measurements and algorithm review
 
 The current tile-based design is appropriate, but approximately 50–60 ms p99 is

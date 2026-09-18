@@ -272,6 +272,7 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         dabs: &[Dab],
         coordinate: [u32; 2],
+        local: PixelRect,
         dab_range: std::ops::Range<u32>,
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
@@ -311,8 +312,11 @@ impl WgpuRasterizer {
             // fast stroke at every pixel of every touched tile. Only dry
             // contacts are local; smudge/liquify/wet updates retain their full
             // dependency sequence. Use the same swept bounds as allocation.
-            if batch.style.contact.is_some() && batch.style.execution == BrushExecution::Dry {
-                let header = [0u32, 0, dab_range.start, dab_range.len() as u32];
+            if batch.style.execution == BrushExecution::Dry {
+                // The same tile bounds also let the dry draw preserve the rest
+                // of the page without separate color and coverage copies.
+                let header = [0u32, 0, dab_range.start, dab_range.len() as u32,
+                    local.min_x(), local.min_y(), local.max_x(), local.max_y()];
                 let bytes: Vec<_> = header.into_iter().flat_map(u32::to_le_bytes).collect();
                 self.uploads.write(encoder, &self.queue, &self.material_source_meta, &bytes)?;
             }
