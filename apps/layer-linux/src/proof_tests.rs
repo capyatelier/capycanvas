@@ -1019,7 +1019,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
         assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
-        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-headroom","sdr-appearance-highlight_color","proof-mode"] {
+        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-highlights","sdr-appearance-highlight_color","proof-mode"] {
             let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
             let b=widget.compute_bounds(&viewport).unwrap();
             assert!(b.x()>=0. && b.x()+b.width()<=viewport.width() as f32+1.,"{name}: {b:?} vs {}",viewport.width());

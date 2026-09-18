@@ -327,11 +327,25 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
     assert_eq!(project(&photo).document.sdr_rendition,saved);
     mode.set_active_name(Some("sdr"));pump(50);
-    let method=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").unwrap().downcast::<gtk::DropDown>().unwrap();
-    for (index,expected) in [(1,layer_core::color::hdr::SdrMethod::ToneMap),(0,layer_core::color::hdr::SdrMethod::Photographic)] {
-        method.set_selected(index);pump(50);assert_eq!(project(&photo).document.sdr_rendition.method,expected);assert_eq!(pixels(&photo),painted);
-        assert_eq!(highlight.is_mapped(),expected==layer_core::color::hdr::SdrMethod::Photographic);
-    }
+    assert!(find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").is_none());
+    let shoulder=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlights").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    shoulder.set_value(0.75);shoulder.emit_by_name::<()>("value-changed",&[]);pump(50);
+    assert_eq!(project(&photo).document.sdr_rendition.highlights,0.75);
+    assert_eq!(project(&photo).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::Unified);
+    assert_eq!(pixels(&photo),painted);
+    // Opening a previous method keeps its exact recipe; migration is explicit,
+    // and one Undo restores both the recipe and the compatibility panel.
+    let legacy=SdrRendition{method:layer_core::color::hdr::SdrMethod::ToneMap,exposure:-0.8,..default};
+    let change=photo.gpu.borrow_mut().as_mut().unwrap().session.set_sdr_rendition(legacy);
+    photo.changed(change);ready(&photo);
+    assert_eq!(project(&photo).document.sdr_rendition,legacy);
+    assert!(!highlight.is_mapped());
+    let update=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-update").unwrap().downcast::<gtk::Button>().unwrap();
+    assert!(update.is_mapped());update.emit_clicked();ready(&photo);
+    assert_eq!(project(&photo).document.sdr_rendition,default);assert!(highlight.is_mapped());
+    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,legacy);
+    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
+    assert_eq!(pixels(&photo),painted);
     appearance_button(&window,"reset");assert_eq!(project(&photo).document.sdr_rendition,default);
     appearance_exposure(&window,-0.5);
     capture_ui(&photo,&directory,"sdr-appearance-canvas.png");
@@ -753,10 +767,12 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
         let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
         for _ in 0..48{let mut row=Vec::new();for x in 0..64{let a=if transparent{x as f32/63.}else{1.};let v=layer_core::color::hdr::encode_pixel([4.,0.5,0.2,a]).unwrap();row.extend(v.into_iter().flat_map(u16::to_le_bytes));}source.push_row(&row).unwrap();}
         p.document.layers[0].source=Some(std::sync::Arc::new(source.finish().unwrap()));
+        if transparent { p.document.sdr_rendition.method=layer_core::color::hdr::SdrMethod::ToneMap; }
         let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);
         invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"auto");
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {pump(20);let b=find_named(panel.upcast_ref(),"sdr-appearance-auto").unwrap().downcast::<gtk::Button>().unwrap();if b.label().as_deref()==Some("Auto"){break;}assert!(Instant::now()<deadline);}
+        assert_eq!(project(&w).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::Unified);
         let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum::<f64>().max(1.).log2();
         assert!((project(&w).document.sdr_rendition.headroom as f64-expected_peak).abs()<0.002);
         let original=snapshot(&w);

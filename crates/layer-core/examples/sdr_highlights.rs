@@ -10,9 +10,9 @@ fn main() {
     ];
     let recipes = [
         ("Previous", SdrRendition::legacy_default()),
-        ("Photographic · White", SdrRendition::default()),
-        ("Photographic · 50%", SdrRendition {highlight_color:0.5,..Default::default()}),
-        ("Photographic · Color", SdrRendition {highlight_color:1.,..Default::default()}),
+        ("Unified · White", SdrRendition::default()),
+        ("Unified · 50%", SdrRendition {highlight_color:0.5,..Default::default()}),
+        ("Unified · Color", SdrRendition {highlight_color:1.,..Default::default()}),
     ];
     let mut result = Vec::new();
     for (name, color) in colors {

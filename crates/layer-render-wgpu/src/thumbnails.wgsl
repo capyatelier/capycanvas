@@ -48,7 +48,7 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         // Neutral checker colors in linear light (sRGB #bbb / #eee).
         let square = (u32(v.position.x)/4u + u32(v.position.y)/4u) % 2u;
         let gray = select(.497, .855, square == 0u);
-        let color=hdr_map_sdr(vec4(record.color.rgb*record.color.a,record.color.a),record.rendition,record.highlight.x);
+        let color=hdr_map_sdr(vec4(record.color.rgb*record.color.a,record.color.a),record.rendition,record.highlight.xy);
         return vec4<f32>(color.rgb + gray * (1.-color.a), 1.);
     }
     if any(v.uv < vec2<f32>(0.)) || any(v.uv > vec2<f32>(1.)) { discard; }
@@ -58,5 +58,5 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         let gray = select(raw.r, 1.-raw.r, record.options.y == 1u);
         return vec4<f32>(gray, gray, gray, 1.);
     }
-    return hdr_map_sdr(raw,record.rendition,record.highlight.x);
+    return hdr_map_sdr(raw,record.rendition,record.highlight.xy);
 }

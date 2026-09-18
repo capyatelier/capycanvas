@@ -18,7 +18,7 @@ impl SnapshotRenderer {
     /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
     pub fn hdr_headroom(&mut self) -> Result<f32,String> {
         let mut peak=1f32;
-        let photographic=self.sdr_rendition.is_some_and(|r|r.method==layer_core::color::hdr::SdrMethod::Photographic);
+        let photographic=self.sdr_rendition.is_some_and(|r|r.uses_gamut_mapping());
         self.hdr_rows(|extent,space,read|{
             let m=layer_core::color::hdr::to_bt2020(space);
             let mut row=vec![[0.;4];extent[0] as usize];

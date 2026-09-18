@@ -20,7 +20,7 @@ fn sample_overview(p: vec2<i32>) -> vec4<f32> {
         raw = mix(mix(sample_overview(low), sample_overview(low + vec2(1, 0)), t.x),
             mix(sample_overview(low + vec2(0, 1)), sample_overview(low + vec2(1, 1)), t.x), t.y);
     }
-    raw=hdr_map_sdr(raw,options.rendition,options.highlight.x);
+    raw=hdr_map_sdr(raw,options.rendition,options.highlight.xy);
     let gray = select(.497, .855, (xy.x / 4u + xy.y / 4u) % 2u == 0u);
     return vec4(raw.rgb + gray * (1. - clamp(raw.a, 0., 1.)), 1.);
 }

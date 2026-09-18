@@ -82,7 +82,7 @@ impl ViewportPresenter {
     pub fn set_hdr_view(&mut self, renderer: &WgpuRasterizer, rendition: Option<layer_core::color::hdr::SdrRendition>, headroom: f32) -> Result<(), GpuRasterError> {
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err(GpuRasterError::Color("Invalid display HDR headroom".into())); }
         if let Some(r) = rendition { r.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
-        let options = rendition.map_or([0.; 8], |r| { let p = r.parameters(); [p[0],p[1],p[2],p[3],headroom,p[4],0.,0.] });
+        let options = rendition.map_or([0.; 8], |r| { let p = r.parameters(); [p[0],p[1],p[2],p[3],headroom,p[4],p[5],0.] });
         if options != self.hdr_options {
             renderer.queue.write_buffer(&self.hdr_uniform, 0, options.map(f32::to_ne_bytes).as_flattened());
             self.hdr_options = options;

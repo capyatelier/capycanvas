@@ -24,13 +24,14 @@ fn hdr_sdr_pq_decode(code:f32)->f32 {
     let p=pow(code,32./2523.);
     return 10000.*pow(max(p-3424./4096.,0.)/(2413./128.-2392./128.*p),16384./2610.);
 }
-fn hdr_bt2390(x:f32,headroom:f32)->f32 {
+fn hdr_bt2390(x:f32,headroom:f32,highlights:f32)->f32 {
     if x<=0. {return 0.;}
     let peak=exp2(headroom);
     if peak==1. || x>=peak {return min(x,1.);}
     let pq_peak=hdr_sdr_pq_encode(peak*203.);
     let output=hdr_sdr_pq_encode(203.)/pq_peak;
-    let knee=max(2.*output-1.,0.);
+    var knee=max(2.*output-1.,0.);
+    if highlights!=0. {knee=max(output-exp2(-highlights)*(1.-output),0.); }
     let q=hdr_sdr_pq_encode(x*203.)/pq_peak;
     if q<=knee {return x;}
     let t=(q-knee)/(1.-knee);
@@ -39,40 +40,48 @@ fn hdr_bt2390(x:f32,headroom:f32)->f32 {
     let mapped=(2.*t3-3.*t2+1.)*knee+(t3-2.*t2+t)*(1.-knee)+(-2.*t3+3.*t2)*output;
     return clamp(hdr_sdr_pq_decode(mapped*pq_peak)/203.,0.,1.);
 }
-fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>,highlight_color:f32)->vec4<f32> {
+fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
     if options.w==0. || paint.a<=0. {return paint;}
     let rgb=paint.rgb/paint.a;
     let rec=hdr_to_rec2020(rgb);
     let peak=max(0.,max(rec.r,max(rec.g,rec.b)));
     if peak<=0. {return vec4(vec3(0.),paint.a);}
+    if options.w==6. {
+        let y=dot(rec,vec3(0.2627002,0.6779981,0.0593017));
+        if y<=0. {return vec4(vec3(0.),paint.a);}
+        let mapped=hdr_sdr_bounded_adjust(hdr_bt2390(y,options.z,appearance.y),options);
+        return vec4(rgb/y*mapped*paint.a,paint.a);
+    }
     if options.w==5. {
         let y=dot(rec,vec3(0.2627002,0.6779981,0.0593017));
         if y<=0. {return vec4(vec3(0.),paint.a);}
-        let bright=hdr_bt2390(hdr_sdr_adjust(y,options),options.z);
-        let colorful=hdr_bt2390(hdr_sdr_adjust(peak,options),options.z)*min(y/peak,1.);
-        let mapped=bright+highlight_color*(colorful-bright);
+        let bright=hdr_bt2390(hdr_sdr_adjust(y,options),options.z,0.);
+        let colorful=hdr_bt2390(hdr_sdr_adjust(peak,options),options.z,0.)*min(y/peak,1.);
+        let mapped=bright+appearance.x*(colorful-bright);
         return vec4(rgb/y*mapped*paint.a,paint.a);
     }
     let x=hdr_sdr_adjust(peak,options);
     var mapped=x;
     if options.w==1. {mapped=hdr_rwtmo(x,options.z);}
     if options.w==2. {mapped=x/exp2(options.z);}
-    if options.w==4. {mapped=hdr_bt2390(x,options.z);}
+    if options.w==4. {mapped=hdr_bt2390(x,options.z,0.);}
     return vec4(rgb/peak*mapped*paint.a,paint.a);
 }
-fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>,highlight_color:f32)->vec4<f32> {
-    let p=hdr_tone_sdr(paint,options,highlight_color);
+fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
+    let p=hdr_tone_sdr(paint,options,appearance);
     if options.w==0. || p.a<=0. {return p;}
     var rgb=hdr_to_output(p.rgb/p.a);
-    if options.w==5. {rgb=hdr_compress_gamut(rgb,HDR_OUTPUT_LUMA);}
+    if options.w==6. {rgb=hdr_unified_gamut(rgb,HDR_OUTPUT_LUMA,appearance.x);}
+    else if options.w==5. {rgb=hdr_compress_gamut(rgb,HDR_OUTPUT_LUMA);}
     else {rgb=clamp(rgb,vec3(0.),vec3(1.));}
     return vec4(hdr_from_output(rgb)*p.a,p.a);
 }
 // Print LUTs have a bounded working-RGB input. ICC delivery uses the same
 // preparation before the profile transform, including Photographic gamut mapping.
-fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>,highlight_color:f32)->vec4<f32> {
-    let p=hdr_tone_sdr(paint,options,highlight_color);
+fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
+    let p=hdr_tone_sdr(paint,options,appearance);
     if options.w==0. || p.a<=0. {return p;}
+    if options.w==6. {return vec4(hdr_unified_gamut(p.rgb/p.a,HDR_WORKING_LUMA,appearance.x)*p.a,p.a);}
     if options.w==5. {return vec4(hdr_compress_gamut(p.rgb/p.a,HDR_WORKING_LUMA)*p.a,p.a);}
     return vec4(clamp(p.rgb/p.a,vec3(0.),vec3(1.))*p.a,p.a);
 }
@@ -91,4 +100,23 @@ fn hdr_compress_gamut(rgb:vec3<f32>,weights:vec3<f32>)->vec3<f32> {
     if extent<=.98 {return rgb;}
     let compressed=.98+.02*(extent-.98)/(extent-.96);
     return clamp(vec3(y)+chroma*(compressed/extent),vec3(0.),vec3(1.));
+}
+
+fn hdr_sdr_bounded_adjust(value:f32,options:vec4<f32>)->f32 {
+    if value<=0. || value>=1. {return clamp(value,0.,1.);}
+    if options.y==1. {let gain=exp2(options.x);return value*gain/(1.-value+value*gain);}
+    let pivot=log2(.18/.82);
+    let odds=log2(value/(1.-value));
+    let adjusted=exp2(clamp(options.y*(odds-pivot)+pivot+options.x,-126.,120.));
+    return adjusted/(1.+adjusted);
+}
+fn hdr_unified_gamut(rgb:vec3<f32>,weights:vec3<f32>,color:f32)->vec3<f32> {
+    let white=hdr_compress_gamut(rgb,weights);
+    if color==0. {return white;}
+    let y=dot(rgb,weights);
+    if y<=0. {return vec3(0.);}
+    let low=min(0.,min(rgb.r,min(rgb.g,rgb.b)));
+    let positive=max(vec3(y)+(rgb-vec3(y))*(y/(y-low)),vec3(0.));
+    let peak=max(1.,max(positive.r,max(positive.g,positive.b)));
+    return clamp(white+color*(positive/peak-white),vec3(0.),vec3(1.));
 }

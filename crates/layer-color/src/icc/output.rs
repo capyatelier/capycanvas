@@ -17,6 +17,7 @@ pub struct WorkingEncoder {
     dither: OutputDither,
     hdr_proof_input: bool,
     photographic_gamut: bool,
+    unified_color: Option<f32>,
     source_luma: [f32; 3],
     output_luma: [f32; 3],
 }
@@ -94,6 +95,7 @@ impl WorkingEncoder {
             dither: encoding.dither,
             hdr_proof_input: false,
             photographic_gamut: false,
+            unified_color: None,
         })
     }
 
@@ -108,6 +110,16 @@ impl WorkingEncoder {
     pub fn with_photographic_gamut(mut self, enabled: bool) -> Self {
         self.photographic_gamut = enabled;
         self
+    }
+
+    pub fn with_sdr_gamut(mut self, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Self {
+        self.photographic_gamut = rendition.is_some_and(|r| r.uses_gamut_mapping());
+        self.unified_color = rendition.filter(|r| r.method == layer_core::color::hdr::SdrMethod::Unified).map(|r| r.highlight_color);
+        self
+    }
+    fn map_gamut(&self, rgb: [f32; 3], weights: [f32; 3]) -> [f32; 3] {
+        if let Some(color) = self.unified_color { layer_core::color::hdr::unified_sdr_gamut(rgb, weights, color) }
+        else { layer_core::color::hdr::compress_sdr_gamut(rgb, weights) }
     }
 
     /// Use this interpretation for the written file, including any generated
@@ -189,9 +201,9 @@ impl WorkingEncoder {
                 };
                 let rgb = if self.photographic_gamut {
                     match &self.kind {
-                        OutputKind::Builtin { matrix, .. } => layer_core::color::hdr::compress_sdr_gamut(
+                        OutputKind::Builtin { matrix, .. } => self.map_gamut(
                             layer_core::color::rgb::apply(*matrix, rgb.map(f64::from)).map(|v| v as f32), self.output_luma),
-                        _ => layer_core::color::hdr::compress_sdr_gamut(rgb, self.source_luma),
+                        _ => self.map_gamut(rgb, self.source_luma),
                     }
                 } else { rgb };
                 let (rgb, alpha) = if let Some(matte) = matte {

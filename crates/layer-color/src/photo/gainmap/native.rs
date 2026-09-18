@@ -243,7 +243,7 @@ pub(super) fn write(
             // The photographic base uses the same bounded sRGB rendition as
             // ordinary sharing. Encode those colors in the gain-map application
             // space; RGB gains still reconstruct the original wide-color HDR.
-            let mut sdr = if rendition.method == hdr::SdrMethod::Photographic {
+            let mut sdr = if rendition.uses_gamut_mapping() {
                 rgb::apply(hdr::srgb_to_bt2020(), photographic.map_rgb(raw).map(f64::from)).map(|v|v as f32)
             } else { rgb::apply(matrix, mapper.tone_rgb(raw).map(f64::from)).map(|v| v as f32) };
             for c in 0..3 {

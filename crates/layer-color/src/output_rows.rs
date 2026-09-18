@@ -21,7 +21,7 @@ pub fn encode_working_rows(
     if let Some(r) = rendition { r.validate().map_err(str::to_string)?; }
     let encoder = WorkingEncoder::new(working, target, options)?
         .with_hdr_proof_input(rendition.is_some())
-        .with_photographic_gamut(rendition.is_some_and(|r| r.method == layer_core::color::hdr::SdrMethod::Photographic));
+        .with_sdr_gamut(rendition);
     let mapper = rendition.map(|r| r.mapper(working, working));
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
@@ -129,8 +129,8 @@ mod tests {
         for working in RgbSpace::ALL {
             let matrix=RgbSpace::Srgb.linear_transform(working);
             let pixels=physical.map(|p|{let p=layer_core::color::rgb::apply(matrix,p).map(|v|v as f32);[p[0]*0.25,p[1]*0.25,p[2]*0.25,0.25]});
-            for highlight_color in [0.,0.5,1.] {
-                let recipe=SdrRendition{method:SdrMethod::Photographic,highlight_color,..Default::default()};
+            for (method, highlights, highlight_color) in [(SdrMethod::Photographic,0.,0.5),(SdrMethod::Unified,-1.,0.),(SdrMethod::Unified,0.,0.5),(SdrMethod::Unified,1.,1.)] {
+                let recipe=SdrRendition{method,highlights,highlight_color,..Default::default()};
                 for output in RgbSpace::ALL {
                     let actual=deliver(working,ColorProfile::Builtin(output),&pixels,Some(recipe));
                     let mapper=recipe.mapper(working,output);
@@ -148,7 +148,7 @@ mod tests {
                 // Independent explicit proof preparation before ICC conversion.
                 let bounded=pixels.map(|p|{
                     let tone=recipe.mapper(working,working).tone_rgb([p[0]/p[3],p[1]/p[3],p[2]/p[3]]);
-                    let rgb=compress_sdr_gamut(tone,sdr_luminance_weights(working));
+                    let rgb=if method == SdrMethod::Unified { layer_core::color::hdr::unified_sdr_gamut(tone,sdr_luminance_weights(working),highlight_color) } else {compress_sdr_gamut(tone,sdr_luminance_weights(working))};
                     [rgb[0]*p[3],rgb[1]*p[3],rgb[2]*p[3],p[3]]
                 });
                 let expected=deliver(working,profile,&bounded,None);

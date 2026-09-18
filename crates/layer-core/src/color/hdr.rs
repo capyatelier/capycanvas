@@ -2,7 +2,7 @@
 use super::f16;
 
 mod sdr;
-pub use sdr::{SdrMapper, SdrMethod, SdrRendition, to_bt2020, compress_sdr_gamut, sdr_luminance_weights, BT2020_LUMA};
+pub use sdr::{SdrMapper, SdrMethod, SdrRendition, to_bt2020, compress_sdr_gamut, unified_sdr_gamut, sdr_luminance_weights, BT2020_LUMA};
 
 pub const REFERENCE_WHITE_NITS: f32 = 203.;
 pub const MAX_LINEAR: f32 = 65504.;

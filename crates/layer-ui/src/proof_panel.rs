@@ -1,7 +1,7 @@
 //! Portable Proof control definitions and print-option policy. Hosts supply
 //! native widgets, profile I/O and asynchronous preparation, not option semantics.
 use crate::{ExportProfile, NumericControl, NumericKind};
-use layer_core::color::{ProofRecipe, RenderingIntent, hdr::SdrMethod};
+use layer_core::color::{ProofRecipe, RenderingIntent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -124,35 +124,6 @@ impl PrintProofSettings {
     }
 }
 
-pub fn sdr_method_choices(saved: SdrMethod) -> Vec<ProofChoice<SdrMethod>> {
-    let mut choices = vec![
-        ProofChoice {
-            value: SdrMethod::Photographic,
-            label: "Photographic",
-        },
-        ProofChoice {
-            value: SdrMethod::ToneMap,
-            label: "Browser",
-        },
-    ];
-    match saved {
-        SdrMethod::Bt2390 => choices.push(ProofChoice {
-            value: saved,
-            label: "Saved: Perceptual",
-        }),
-        SdrMethod::Scale => choices.push(ProofChoice {
-            value: saved,
-            label: "Saved: Scale",
-        }),
-        SdrMethod::Clip => choices.push(ProofChoice {
-            value: saved,
-            label: "Saved: Clip",
-        }),
-        _ => (),
-    }
-    choices
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct ProofNumberControl {
     pub key: &'static str,
@@ -161,11 +132,11 @@ pub struct ProofNumberControl {
 }
 pub fn sdr_number_controls() -> [ProofNumberControl; 4] {
     [
-        ("exposure", "Exposure", -12., 12., 0.1, 2, "EV", 1., -4., 4.),
+        ("exposure", "Brightness", -4., 4., 0.04, 0, "%", 25., -4., 4.),
         (
             "contrast", "Contrast", 0.25, 4., 0.01, 0, "%", 100., 0.5, 2.,
         ),
-        ("headroom", "HDR range", 0., 16., 0.1, 2, "EV", 1., 0., 6.),
+        ("highlights", "Highlights", -1., 1., 0.01, 0, "%", 100., -1., 1.),
         ("highlight_color", "Highlight color", 0., 1., 0.01, 0, "%", 100., 0., 1.),
     ]
     .map(
@@ -175,9 +146,10 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 4] {
             numeric.scale = scale;
             numeric.soft_min = soft_min;
             numeric.soft_max = soft_max;
-            if key == "contrast" || key == "highlight_color" {
+            if key == "contrast" || key == "highlight_color" || key == "highlights" {
                 numeric.resolution = 0.01;
             }
+            if key == "highlights" { numeric.endpoint_labels = Some(["Detail".into(), "Bright".into()]); }
             if key == "highlight_color" {
                 numeric.endpoint_labels = Some(["White".into(), "Color".into()]);
             }
