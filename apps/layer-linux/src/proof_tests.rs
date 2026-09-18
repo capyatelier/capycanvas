@@ -1004,7 +1004,7 @@ fn native_desktop_file_picker_uses_portal() {
 #[test]
 #[ignore = "isolated Wayland display and GPU"]
 fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
-    let output=std::path::Path::new("../../artifacts/color-m4/proof-panel-live");
+    let output=std::path::Path::new("../../artifacts/color-m4/local-tone/layout");
     std::fs::create_dir_all(output).unwrap();
     let app=native_test_app("art.capycanvas.ProofPanel");
     let mut p=new_drawing(512,384).unwrap();p.document.color.depth=SampleDepth::F16;
@@ -1019,7 +1019,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
         assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
-        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-highlights","sdr-appearance-highlight_color","proof-mode"] {
+        for name in ["sdr-appearance-exposure","sdr-tone-pad-surface","sdr-tone-pad-tone","sdr-tone-pad-detail","sdr-appearance-highlight_color","proof-mode"] {
             let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
             let b=widget.compute_bounds(&viewport).unwrap();
             assert!(b.x()>=0. && b.x()+b.width()<=viewport.width() as f32+1.,"{name}: {b:?} vs {}",viewport.width());

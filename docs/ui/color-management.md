@@ -258,7 +258,7 @@ extracted detail at 100%. Brightness adjusts final SDR midtones with fixed black
 and white. Highlight color trades bright, increasingly white highlights for more
 of their color. These controls author the SDR rendition, not the HDR master.
 
-The pad supports drag, arrow keys (Shift for larger steps), numeric entry below
+The pad supports drag, arrow keys (Shift for larger steps), numeric entry beside
 it, Escape to cancel and double-click to reset its two axes. **Auto** measures the
 edited HDR luminance range and resets Brightness, keeping Tone, Detail and
 Highlight color. **Reset** restores the starting local rendition. Existing saved

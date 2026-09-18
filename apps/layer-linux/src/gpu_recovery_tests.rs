@@ -173,6 +173,8 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         .session
         .engine()
         .checkpoint();
+    if color.depth.is_float() {until(|| w.local_tone.ready_count().is_some());}
+    let local_before=w.local_tone.ready_count();
     let failed_root = stroke(true);
     w.wake();
     until(|| {
@@ -260,6 +262,9 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         checkpoint
     );
     assert!(!w.restart_canvas.is_visible());
+    if color.depth.is_float() {
+        until(|| w.local_tone.ready_count().is_some_and(|n| n>local_before.unwrap()));
+    }
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
     });

@@ -21,25 +21,27 @@ pub(crate) struct ParameterPad {
 }
 impl ParameterPad {
     pub fn new(name: &str, spec: ParameterPadSpec) -> Rc<Self> {
-        let root = panel_controls::column();
+        let root = panel_controls::action_row();
         root.set_widget_name(name);
         let area = gtk::DrawingArea::builder()
-            .content_width(120)
-            .content_height(72)
+            .content_width(80)
+            .content_height(60)
             .hexpand(true)
             .focusable(true)
             .build();
         area.set_widget_name(&format!("{name}-surface"));
         area.update_property(&[gtk::accessible::Property::Label(&format!("{} and {}",spec.axes[0].label,spec.axes[1].label)),gtk::accessible::Property::Description("Drag to adjust both values. Arrow keys adjust one axis. Escape cancels. Double-click resets.")]);
         root.append(&area);
-        let readouts = panel_controls::action_row();
+        let readouts = panel_controls::column();
         let numbers = spec.axes.each_ref().map(|axis| {
+            let row=panel_controls::action_row();
             let label = gtk::Label::new(Some(axis.label));
-            readouts.append(&label);
+            label.set_xalign(0.);label.set_width_chars(6);
+            row.append(&label);
             let number = NumberControl::value_only(axis.numeric.clone(), axis.label);
             number.set_widget_name(&format!("{name}-{}", axis.key));
             number.set_halign(gtk::Align::Fill);
-            readouts.append(&number);
+            row.append(&number);readouts.append(&row);
             number
         });
         root.append(&readouts);

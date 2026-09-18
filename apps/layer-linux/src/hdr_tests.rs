@@ -822,7 +822,7 @@ fn native_local_tone_pad_and_five_hdr_photos() {
         while w.local_tone.ready_count().is_none(){pump(10);assert!(start.elapsed()<Duration::from_secs(60),"analysis: {}",w.local_tone.label.text());}
         let count=w.local_tone.ready_count();eprintln!("LOCAL_PHOTO {name} analysis_ready_ms={:.2}",start.elapsed().as_secs_f64()*1000.);
         capture_ui(&w,&evidence,&format!("{name}.png"));
-        let pad=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();assert!(pad.is_mapped());assert!(pad.width()>100 && pad.height()>60);
+        let pad=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();assert!(pad.is_mapped());assert!(pad.width()>70 && pad.height()>=60);
         let controllers=pad.observe_controllers();let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
         let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
         let clicks=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureClick>()).unwrap();
@@ -834,7 +834,7 @@ fn native_local_tone_pad_and_five_hdr_photos() {
         assert_eq!(w.local_tone.ready_count(),count,"pad must reuse analysis");
         invoke(&w,CommandId::Undo);ready(&w);assert_eq!(project(&w).document.sdr_rendition,recipe,"one undo per drag");
         invoke(&w,CommandId::Redo);ready(&w);assert_eq!(project(&w).document.sdr_rendition,edited);
-        assert!(keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Right,&0u32,&gdk::ModifierType::empty()]));
+        assert!(keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Left,&0u32,&gdk::ModifierType::empty()]));
         assert_ne!(w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition,edited);
         keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Escape,&0u32,&gdk::ModifierType::empty()]);pump(20);assert_eq!(project(&w).document.sdr_rendition,edited,"Escape restores gesture");
         clicks.emit_by_name::<()>("pressed",&[&2i32,&40f64,&40f64]);pump(20);

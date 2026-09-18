@@ -18,7 +18,7 @@ Proof keeps its Off / SDR / Print selector. SDR now has a **Tone × Detail pad**
 - **Highlight color** trades bright, increasingly white highlights for more of
   their color. This affects only the SDR rendition.
 
-Drag the pad, use its arrow keys, or edit either numerical value below it.
+Drag the pad, use its arrow keys, or edit either numerical value beside it.
 Shift-arrow moves farther. Escape cancels an active adjustment; double-click
 resets both pad axes. A drag is one undo step. These are live document settings,
 with no Apply or Revert. Auto measures the edited HDR range; Reset restores the
@@ -128,3 +128,73 @@ Native workflow results and large-document measurements are appended after the
 review build has passed its checks. Physical HDR luminance/transport on the user's
 monitor, touch/pen hardware, browser/mobile host integration and constrained
 hardware are not qualified by an isolated desktop test.
+
+### Recorded GTK results
+
+Feature checkpoint `8b2c81ed`; main sync `207ec78f` includes origin/main
+`bdcfac3d`. Linux reference: Fedora 44, kernel 7.1.10, NVIDIA RTX PRO 6000
+Blackwell Max-Q, driver 610.57.04, Vulkan. Isolated Mutter Wayland desktop,
+1600×1000 at 120 Hz, bundled GTK 4.22.4. These are single desktop qualification
+runs, not power-controlled or constrained-device measurements.
+
+- Shared tests: 104 core, 84 color, 475 UI pass (663 total; seven unrelated
+  color tests require external fixtures and remain ignored).
+- CPU/GPU local comparison and legacy SDR/HDR/print comparison pass. All 17
+  snapshot tests pass, including storage preservation, band limits, placement,
+  resizing, cancellation and shared capture lifetimes.
+- Four real codec tests pass. Spatially different SDR bases reconstruct the HDR
+  master in both JPEG and transparent AVIF. The local test's sampled maximum HDR
+  channel error was 0.04641 for lossy JPEG and 0.00547 for AVIF, in linear reference-
+  white units. These small fixtures do not establish worst-case image-wide bounds.
+- GTK HDR open/edit/exposure/curves/painting/sampling/histogram, live proof,
+  undo/redo, save/reopen and actual SDR PNG/HDR PNG export pass. Native HDR JPEG
+  and transparent AVIF preview/export/reopen pass. Explicit format interaction
+  now prevents a late transparency recommendation from replacing that choice.
+- Five downloaded native HDR projects load. Pad changes reuse the completed
+  guide, gestures undo in one step, Escape restores the previous value and reset
+  preserves artwork. Thirty scripted pad updates, including 5 ms event pumping
+  between updates, took roughly 194–209 ms in the initial run; this is not
+  input-to-present latency. The guide was already ready after the test's normal
+  startup wait, so its reported zero additional wait is not a cold-open timing.
+- Paint/Photo panel geometry and immediate tab tear-off pass. Numeric readouts
+  sit beside the pad so both lower sliders fit even the tight Photo group.
+- Simulated GPU failure, replacement device, exact surviving artwork, undo/redo
+  and rebuilding a current local guide on the replacement device pass.
+
+A same-executable comparison of global versus local SDR encoded previews used
+the retained 8192×7324 ProPhoto F16 fixture with 20 effects:
+
+| Measure | Unified global baseline | Local rendition |
+| --- | ---: | ---: |
+| Preview completion | 14,075 ms | 13,700 ms |
+| Largest 10 ms UI heartbeat gap | 34.96 ms | 23.50 ms |
+| Cancel/close | 148.38 ms | 135.26 ms |
+| Peak sampled process-tree RSS | 1,333,384 KiB | 1,408,440 KiB |
+| Peak NVML graphics residency | 1,889 MiB | 1,893 MiB |
+| Temporary codec staging | 0 | 0 |
+
+The approximately 73 MiB RSS difference includes analysis and renderer workers;
+it is not just the final guide. Half-second memory sampling can miss brief peaks.
+The small time differences do not establish a speed improvement. Full 60 MP
+JPEG/AVIF publication, long-session behavior and p95/p99 input-to-present latency
+remain unmeasured for this local change.
+
+### Web check limitations
+
+The complete workspace check and release Wasm build pass. The Wasm build reports
+an unused native-only local-guide cache field; an existing Apple dead-code warning
+also remains. Chrome 152.0.7977.64 / hardware WebGPU reached application readiness,
+but this run did **not** pass the browser workflow gates:
+
+- The HDR-boundary harness attempted Open while the command remained disabled;
+  it timed out before fetching the test file. A diagnostic captured that state.
+- Print setup, profile retention, cancel and preservation-failure/retry passed,
+  but the proof-versus-normal presented-canvas screenshot assertion failed.
+- Chrome also reported `A valid external Instance reference no longer exists`.
+  This warning alone does not establish the cause of either workflow failure.
+
+Logs are `web-hdr-limits*.log`, `web-diagnostic.log` and `web-proof.log`. No baseline
+comparison establishes whether these browser failures predate this change, so
+browser workflow qualification remains unresolved. The new interactive panel
+and asynchronous view-guide integration are GTK only; Web HDR editing remains
+explicitly unsupported. The broader phase-4 common gates are not declared complete.
