@@ -82,6 +82,54 @@ is retained in `artifacts/apple-settings-links-v1/`. Physical UIKit/OS delivery
 remains separate. The installed prediction review apps are retained with the
 user's drawings; the XP-Pen check now passes.
 
+## Mac file panels and window titles
+
+The native two-window workflow reproduces two host defects: saving a drawing
+leaves its OS window named “Capy Canvas,” and switching windows can bury the
+standalone Save panel even after returning to its drawing through the Window
+menu. Each scene now binds its native title to the existing document name.
+Open/Save use AppKit's [document-sheet presentation](https://developer.apple.com/documentation/appkit/nssavepanel/beginsheetmodal(for:completionhandler:)),
+with a weak owning window supplied by the existing window delegate. No window
+registry or duplicate document state is added.
+
+The attached panel also exposes an existing Select All limitation: its remote
+filename field is not an in-process `NSTextView`, so Command-A can reach the
+canvas instead. Native menu handling now asks AppKit's responder chain to perform
+Select All; unhandled actions continue to the shared canvas command. This also
+removes the concrete text-view cast. Evidence and qualification are retained in
+`artifacts/apple-window-files-v1/`.
+
+Both native tests pass (`mac-v7`, zero skipped). Two independently named windows
+retain their own drawings, Undo histories and saved destinations while a Save As
+sheet is pending. Returning to its owner, cancelling, retrying, reopening the
+copy and ordinary Save preserve the expected source-file bytes and sampled
+artwork. The existing failed-Open/Discard/Cancel/retry workflow also passes with
+the attached panels. A separate AppKit check verifies native text selection and
+the unhandled canvas-command fallback. The final Mac Release builds without
+compiler warnings; retained captures are reviewed and the isolated test
+processes have exited. The native tests retain the earlier unattributed
+main-thread responsiveness warning; these are workflow checks, not performance
+measurements. Artist review apps and the iPad are untouched. Provider delivery
+and the remaining physical lifecycle/window cases stay open.
+
+## Retained Pencil sensor qualification
+
+The retained physical prediction recording contains 3,390 real contact samples
+with varying finite pressure, tilt and roll, plus eight hover samples and a
+hover-exit event. The current UIKit contact-packing and hover functions are
+unchanged from that recording. This establishes physical delivery into the
+numeric input ABI; the recording contains no estimated-property correction
+callbacks and does not establish visual tilt/roll response or Mac sensors.
+
+At `65533be2`, the focused input ABI regression passes for both Apple policies
+with G-Pen, Pencil, Watercolor Wash and Smudge. Partial and delayed corrections
+produce the same backing/composited pixels as final sensor values supplied
+directly, with exact Undo/Redo and rejection of stale updates. These supplied
+callbacks complement the physical delivery evidence without replacing remaining
+device checks. The same revision's iPad Release builds without compiler warnings;
+it was not installed over the running artist review. Private evidence is under
+`artifacts/apple-ipad-window-review-v1/`.
+
 ## Filter-preview cancellation — 2026-09-17
 
 Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)

@@ -110,7 +110,9 @@ its own window when warm delivery creates another. These checks do not establish
 the full file-provider or lifecycle matrix; evidence and current scope are in
 the [Apple handoff](../../docs/development/apple-handoff.md).
 
-macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
+macOS attaches NSOpenPanel/NSSavePanel to the owning document window, whose native
+title follows the current filename. Returning through the Window menu also
+returns to that drawing's pending panel. iPad uses UIDocumentPickerViewController:
 Save As prepares an archive in a private temporary directory before presenting
 the export picker. Save acknowledgments follow the completed destination write
 or successful picker export, never location selection alone. Cancelled or failed

@@ -21,6 +21,7 @@ private struct MacEditorScene: View {
     var body: some View {
         EditorView(store: store) { MacMetalCanvas(store: store) }
             .frame(minWidth: 700, minHeight: 500)
+            .navigationTitle(store.projectFiles.title)
             .focusedSceneValue(\.editorStore, store)
     }
 }

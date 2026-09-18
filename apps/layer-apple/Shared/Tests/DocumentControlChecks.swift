@@ -43,6 +43,140 @@ import AppKit
 }
 
 extension XCTestCase {
+    @MainActor func checkSavePanelKeepsItsDocumentAcrossWindowFocus(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Window Files " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstURL = root.appendingPathComponent("First.capy")
+        let secondURL = root.appendingPathComponent("Second.capy")
+        let copyURL = root.appendingPathComponent("First Copy.capy")
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch()
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        XCTAssertTrue(paint.waitForExistence(timeout: 30))
+        if !paint.isSelected { workspaceActivate(paint) }
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"),
+            evaluatedWith: app.descendants(matching: .any)["canvas"].firstMatch)
+        waitForExpectations(timeout: 30)
+        let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
+        let firstID = scenes.firstMatch.identifier
+        let first = app.windows.containing(.any, identifier: firstID).firstMatch
+        func command(_ id: String, _ label: String) {
+            editorMenu(in: app, menu: "File", id: id, label: label)
+        }
+        func expectTitle(_ window: XCUIElement, _ name: String) {
+            expectation(for: NSPredicate { _, _ in window.title == name }, evaluatedWith: window)
+                .expectationDescription = "Native window title: \(name)"
+            waitForExpectations(timeout: 15)
+        }
+        func focus(_ name: String) {
+            editorMenu(in: app, menu: "Window", id: "", label: name)
+        }
+        func expectRows(_ window: XCUIElement, _ count: Int) {
+            let rows = window.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+            expectation(for: NSPredicate { _, _ in rows.count == count }, evaluatedWith: window)
+                .expectationDescription = "\(count) visible layer rows in \(window.title)"
+            waitForExpectations(timeout: 15)
+        }
+        func beginSaveAs(_ url: URL) -> XCUIElement {
+            command("save_document_as", "Save As…")
+            let save = app.windows.buttons["OKButton"].firstMatch
+            XCTAssertTrue(save.waitForExistence(timeout: 15))
+            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(root.path + "\n")
+            let name = app.textFields["saveAsNameTextField"]
+            workspaceActivate(name)
+            name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)
+            return save
+        }
+        func finishSave(_ save: XCUIElement) {
+            XCTAssertTrue(save.isHittable)
+            save.click()
+            XCTAssertTrue(save.waitForNonExistence(timeout: 15))
+        }
+        func history(_ label: String) {
+            editorMenu(in: app, menu: "Edit", id: label.lowercased(), label: label)
+        }
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectation(for: NSPredicate { _, _ in
+            let sample = self.editorPixels(in: app); return Int(sample[2]) > Int(sample[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let painted = editorPixels(in: app)
+        finishSave(beginSaveAs(firstURL))
+        expectTitle(first, "First.capy")
+        let originalFirst = try Data(contentsOf: firstURL)
+        command("new_window", "New Window")
+        let secondScene = scenes.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(secondScene.waitForExistence(timeout: 30))
+        // Paint belongs to the first window; use the available Photo workspace
+        // to expose the second drawing's Layers panel without moving that owner.
+        workspaceActivate(secondScene.buttons["workspace-switch-builtin:workspace:photographer"])
+        let second = app.windows.containing(.any, identifier: secondScene.identifier).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 15), app.debugDescription)
+        expectRows(second, 2)
+        finishSave(beginSaveAs(secondURL))
+        expectTitle(second, "Second.capy")
+        let originalSecond = try Data(contentsOf: secondURL)
+
+        focus("First.capy")
+        workspaceActivate(first.buttons["layer-New layer"])
+        expectRows(first, 3)
+        _ = beginSaveAs(copyURL)
+        focus("Second.capy")
+        workspaceActivate(second.buttons["layer-New layer"])
+        expectRows(second, 3)
+        history("Undo"); expectRows(second, 2)
+        history("Redo"); expectRows(second, 3)
+        focus("First.capy")
+        let cancel = app.windows.buttons["CancelButton"].firstMatch
+        XCTAssertTrue(cancel.isHittable)
+        cancel.click()
+        XCTAssertTrue(app.windows.buttons["OKButton"].firstMatch.waitForNonExistence(timeout: 15))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copyURL.path))
+        expectTitle(first, "First.capy"); expectTitle(second, "Second.capy")
+        expectRows(first, 3); expectRows(second, 3)
+        XCTAssertEqual(try Data(contentsOf: firstURL), originalFirst)
+        XCTAssertEqual(try Data(contentsOf: secondURL), originalSecond)
+
+        focus("First.capy")
+        history("Undo"); expectRows(first, 2)
+        history("Redo"); expectRows(first, 3)
+        let retry = beginSaveAs(copyURL)
+        focus("Second.capy")
+        focus("First.capy")
+        finishSave(retry)
+        expectTitle(first, "First Copy.capy"); expectTitle(second, "Second.capy")
+        let copied = try Data(contentsOf: copyURL)
+        XCTAssertEqual(try Data(contentsOf: firstURL), originalFirst)
+        XCTAssertEqual(try Data(contentsOf: secondURL), originalSecond)
+        focus("Second.capy")
+        command("save_document", "Save")
+        expectation(for: NSPredicate { _, _ in (try? Data(contentsOf: secondURL)) != originalSecond }, evaluatedWith: second)
+        waitForExpectations(timeout: 15)
+        XCTAssertEqual(try Data(contentsOf: copyURL), copied)
+
+        focus("First Copy.capy")
+        command("open_document", "Open…")
+        let open = app.windows.buttons["OKButton"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(copyURL.path + "\n")
+        workspaceActivate(open)
+        XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+        expectTitle(first, "First Copy.capy"); expectRows(first, 3)
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: first)
+        waitForExpectations(timeout: 15)
+        focus("Second.capy")
+        history("Undo"); expectRows(second, 2)
+        expectRows(first, 3)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        attachEditor(in: app, name: "independent-file-dialog-owners")
+        app.terminate()
+    }
+
     @MainActor func checkNativeImagePaste(in app: XCUIApplication) throws {
         let clipboard = try NativePhotoPasteboard()
         addTeardownBlock { await MainActor.run { clipboard.restore() } }
