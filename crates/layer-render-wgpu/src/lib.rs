@@ -254,6 +254,7 @@ pub enum GpuRasterError {
     SizeOverflow,
     MapFailed(String),
     WaitFailed(String),
+    FilterPreviewCancelled,
     Effect(String),
 }
 
@@ -264,6 +265,7 @@ impl fmt::Display for GpuRasterError {
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
+            Self::FilterPreviewCancelled => formatter.write_str("Filter preview source changed"),
             Self::AdapterUnavailable => {
                 formatter.write_str("no compatible wgpu adapter is available")
             }

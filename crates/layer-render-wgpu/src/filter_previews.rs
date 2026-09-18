@@ -617,9 +617,7 @@ impl FilterPreviews {
         self.request.as_ref()?;
         while let Ok(ready) = self.rx.try_recv() {
             let result = if self.cancelled {
-                Err(GpuRasterError::Effect(
-                    "Filter preview cancelled because its source changed".into(),
-                ))
+                Err(GpuRasterError::FilterPreviewCancelled)
             } else {
                 match ready {
                     Ready::ProbeNext(result) => result.and_then(|_| self.probe_batch(r)),
@@ -946,7 +944,7 @@ mod tests {
                 timeout: Some(READBACK_TIMEOUT),
             })
             .unwrap();
-        assert!(r.take_filter_previews().unwrap().is_err());
+        assert!(matches!(r.take_filter_previews(), Some(Err(GpuRasterError::FilterPreviewCancelled))));
         assert!(!r.filter_previews_pending());
         assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 4);
         r.request_filter_previews(request(&layers, 3)).unwrap();

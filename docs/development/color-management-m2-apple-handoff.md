@@ -1,6 +1,15 @@
 # Phase 2 handoff: macOS and iPadOS
 
-2026-09-16. Implement and qualify complete SDR color/photo editing on **both**
+Latest closure: the user confirms iPad large-photo Save As/Open and ordinary Save
+work after the file-access fix. Filter-preview cancellations now retry without
+blocking the editor. Keep large-brush smoothness and sustained watercolor
+acceptance open; older pending local-save references below are superseded by the
+[save-access record](apple-handoff.md#save-access-after-save-as--2026-09-17).
+Physical iPad keyboard and second-Mac-display checks are user-deferred, as is
+iCloud acceptance.
+
+Original integration brief, 2026-09-16 (implementation milestones below supersede
+its starting-state assessment): implement and qualify complete SDR color/photo editing on **both**
 Apple hosts. GTK is qualified within its recorded envelope; Web/Android have
 passing device workflows, with the latest user retest pending. Apple is not yet
 compatible with all shared phase 2 contracts. Start from the integration of

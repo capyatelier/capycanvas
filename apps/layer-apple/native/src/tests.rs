@@ -422,6 +422,62 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
 }
 
 #[test]
+fn changing_filter_preview_source_does_not_fail_the_editor_and_can_retry() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
+        let status = app.request(2, json!({"type":"filter_previews", "request":81,
+            "revision":revision, "filters":["curves"], "size":[96,40]})).unwrap();
+        assert_eq!(status["accepted"], true);
+        app.action(json!({"type":"set_layer_opacity", "opacity":0.5}));
+        app.draw_frame();
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0.as_ref().unwrap().device()
+            .poll(wgpu::PollType::Wait { submission_index:None, timeout:Some(std::time::Duration::from_secs(30)) }).unwrap();
+        let mut cancelled = false;
+        let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
+        assert!(atlas.is_null(), "Stale preview pixels must not be published");
+        assert!(cancelled, "Source changes complete the pending preview request");
+        let error = unsafe { capy_apple_error(app.0) };
+        assert!(error.is_null(), "Ordinary preview cancellation interrupted the editor: {}",
+            unsafe { CStr::from_ptr(error) }.to_string_lossy());
+        let pixels = app.pixels();
+        let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
+        let status = app.request(2, json!({"type":"filter_previews", "request":82,
+            "revision":revision, "filters":["curves"], "size":[96,40]})).unwrap();
+        assert_eq!(status["accepted"], true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
+            assert!(!cancelled, "Cancellation must not leak into the retry");
+            assert!(unsafe { capy_apple_error(app.0) }.is_null());
+            if !atlas.is_null() {
+                let mut info = std::mem::MaybeUninit::<CapyFilterPreviewInfo>::uninit();
+                unsafe { capy_filter_previews_read(atlas, info.as_mut_ptr()) };
+                assert_eq!(unsafe { info.assume_init() }.request, 82);
+                unsafe { capy_filter_previews_free(atlas) };
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(app.pixels(), pixels, "Preview retry cannot change artwork");
+        assert_eq!(unsafe { &*app.0 }.host.session.filter_preview_revision(), revision);
+        app.action(json!({"type":"color", "action":{"op":"definition",
+            "color":{"space":"Srgb", "rgba":[1.0,0.0,0.0,1.0]}}}));
+        app.stroke();
+        app.draw_frame();
+        assert_ne!(app.pixels(), pixels, "Drawing must still publish new ink");
+        app.invoke("undo");
+        app.draw_frame();
+        assert_eq!(app.pixels(), pixels, "Drawing and Undo still work after cancellation");
+    }
+}
+
+#[test]
 fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_edits() {
     for platform in [0, 1] {
         let app = App::new(platform);
@@ -442,7 +498,9 @@ fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_
         assert_eq!(status["accepted"], true);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let atlas = loop {
-            let atlas = unsafe { capy_apple_take_filter_previews(app.0) };
+            let mut cancelled = true;
+            let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
+            assert!(!cancelled);
             assert!(unsafe { capy_apple_error(app.0) }.is_null());
             if !atlas.is_null() {
                 break atlas;

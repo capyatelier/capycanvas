@@ -5,6 +5,7 @@ struct FilterPreviewReply: Sendable {
     let status: JSON
     let atlas: NativeFilterPreviews?
     let error: String?
+    var cancelled = false
 }
 
 /// An immutable Rust allocation, independent of the live editor. Image creation
@@ -122,6 +123,7 @@ final class NativeFilterPreviews: @unchecked Sendable {
         guard generation == self.generation else { return false }
         guard key.epoch == self.key?.epoch else { return !visible.isEmpty }
         if let error = reply.error { pending = nil; store.failure = error; return false }
+        if reply.cancelled { pending = nil }
         if reply.status["accepted"].bool { pending = Pending(request: request, key: key) }
         if let atlas = reply.atlas {
             let decoded = await Task.detached(priority: .utility) { atlas.decode() }.value

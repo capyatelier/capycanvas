@@ -101,7 +101,8 @@ typedef struct {
     size_t count;
     const char *filters;
 } CapyFilterPreviewInfo;
-CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
+/* cancelled is required; true completes a stale request without an editor error. */
+CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app, bool *cancelled);
 void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
 void capy_filter_previews_free(CapyFilterPreviews *previews);
 /* Logical editor bounds/clip/order records. Owner-only, maximum 32 slots.

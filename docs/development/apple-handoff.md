@@ -14,6 +14,10 @@ does not qualify all of those new contracts.
 Ship complete, visually consistent native iPadOS and macOS apps with fast,
 readable workflows, shared maintainable code, and validated drawing performance.
 
+The user now defers physical iPad hardware-keyboard and second-Mac-display
+acceptance for this release. Preserve their unverified status without keeping
+them as release blockers or requesting the absent hardware again.
+
 The 2026-09-16 user confirmations close the XP-Pen manual-prediction check:
 64 ms visibly leads farther than 0 ms in the fixed Mac review app. The user also
 accepts the native iPadOS window control for full-screen parity. Preserve the
@@ -77,6 +81,80 @@ now closes AppKit rejection/retry acceptance. The original fixture limitation
 is retained in `artifacts/apple-settings-links-v1/`. Physical UIKit/OS delivery
 remains separate. The installed prediction review apps are retained with the
 user's drawings; the XP-Pen check now passes.
+
+## Filter-preview cancellation — 2026-09-17
+
+The user reports `effect shader: Filter preview cancelled because its source
+changed`, blocking further drawing, large-photo Save As/reopen and performance
+acceptance. Drawing or editing can legitimately invalidate a pending Filters
+thumbnail. The shared renderer previously labeled that cancellation as an effect
+shader failure, and Apple's background preview controller raised a modal editor
+error. The fix gives cancellation a distinct renderer result and passes it through
+the Apple ABI as a completion flag. The controller releases the stale request and
+retries current visible previews; genuine errors still follow error reporting.
+No artwork, shader, file-storage or performance algorithm is changed.
+
+The deterministic Metal regression reproduces the exact reported error before
+the fix. Both Apple policies then pass cancellation, fresh retry pixels,
+unchanged artwork, new ink and exact Undo. The shared chunked-probe regression
+passes. The production Swift/Metal controller passes cancellation, genuine error
+reporting, repeated edits, automatic retry, local Save As/reopen and subsequent
+editing/Undo on both policies. Both Release builds pass without warnings.
+The corrected iPad Release is installed and open at Recovered Drawings. All
+13 complete recoveries, saved files and settings remain byte-identical across
+installation; other installed editor app descriptors are unchanged.
+Private evidence is under `artifacts/apple-preview-cancellation-v1/`. The initial
+Swift fixture needed to wait for the newly created document's shader readiness;
+its failed setup run is retained. The subsequent user confirmations of Save As
+and ordinary Save close the reported blocking workflow; drawing performance
+acceptance remains separate. The unqualified source-upload staging experiment is parked
+in `artifacts/apple-source-staging-v1/`; it is not part of this device build.
+
+## Save access after Save As — 2026-09-17
+
+The user confirms Save As now works, but ordinary Save reports “Operation not
+permitted.” A real App Sandbox fixture reproduces that exact error with a valid
+read/write grant to one disposable file: coordination enters, but creating a
+sibling temporary file fails. The writer now uses Foundation's replacement
+directory on the destination volume and its atomic replacement/move operation.
+It continues streaming and syncing the archive before publication, without a
+second full-size data copy or broader folder permission.
+
+The native coordinator also retains the actual picker URL instead of rebuilding
+it from the shared URI. Successful Open updates that destination; failed Open and
+cancelled Save As preserve it. This follows Apple's
+[security-scoped URL contract](https://developer.apple.com/documentation/foundation/nsurl)
+and [file replacement API](https://developer.apple.com/documentation/foundation/filemanager/replaceitemat(_:withitemat:backupitemname:options:)).
+
+The permanent file-only sandbox regression passes three successive replacements,
+exact reads, failed/cancelled write preservation, denied sibling access and
+balanced scopes. The file workflow suite covers both Apple policies. Recovery
+qualification now includes two deliberate partial-archive kills and six observed
+manifest/publication/discard kills; complete old/new recovery, retry and stale
+removal all pass. The initial polling fixture missed the brief archive-writing
+phase after replacement files moved out of the recovery folder; that failed
+observation is retained, and the revised fixture holds a partial real archive
+inside the production writer before killing its owned process. No timing hook was
+added to production. Private evidence is `artifacts/apple-save-access-v1/`.
+Both final Release builds pass without warnings. The corrected iPad app is
+installed and open at Recovered Drawings, with all 13 complete recoveries, saved
+files and settings byte-identical across installation. The user now confirms ordinary Save works after the fix. This closes the
+reported Save-permission blocker; iCloud remains deferred.
+
+The two document-blocker fixes form one milestone. Main's `bc9593b2` shared
+shader-startup changes are integrated and pass all 72 active Apple native tests
+(one explicit 61 MP hardware fixture remains ignored). The subsequent `1724e5c6`
+filter-probe texture reuse also integrates cleanly; its shared chunk/probe test
+and both Apple preview tests pass. Both final Release builds pass without warnings.
+Evidence and publication verification are under
+`artifacts/apple-document-milestone-v1/`. The physically confirmed iPad app remains
+the Save-access build on `7beb55b7` with these same document fixes; it has not been
+replaced solely for upstream startup integration. No new physical performance
+result is inferred from the builds or native suite. After the Save confirmation,
+the user reports drawing still feels laggy relative to Clip Studio Paint with a
+similar G-Pen size. This reopens no document blocker; the next performance work
+must separate brush evaluation from composition/submission and fix the measured
+cause in shared code where possible.
 
 ## Shared workflow adoption — 2026-09-17
 

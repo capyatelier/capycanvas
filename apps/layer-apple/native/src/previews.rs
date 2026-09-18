@@ -79,10 +79,17 @@ pub struct CapyFilterPreviewInfo {
 /// # Safety
 /// Call on the serial editor owner. The returned allocation has no editor/GPU
 /// references and can be read and freed on an image worker after editor teardown.
+/// `cancelled` must point to a writable bool. Source changes complete the pending
+/// request with this flag, without setting the editor's error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_take_filter_previews(
     app: *mut CapyApple,
+    cancelled: *mut bool,
 ) -> *mut CapyFilterPreviews {
+    let Some(cancelled) = (unsafe { cancelled.as_mut() }) else {
+        return std::ptr::null_mut();
+    };
+    *cancelled = false;
     let Some(app) = (unsafe { app.as_mut() }) else {
         return std::ptr::null_mut();
     };
@@ -96,7 +103,13 @@ pub unsafe extern "C" fn capy_apple_take_filter_previews(
         let Some(result) = renderer.take_filter_previews() else {
             return Ok(std::ptr::null_mut());
         };
-        let atlas = result.map_err(|e| e.to_string())?;
+        let atlas = match result {
+            Err(layer_render_wgpu::GpuRasterError::FilterPreviewCancelled) => {
+                *cancelled = true;
+                return Ok(std::ptr::null_mut());
+            }
+            result => result.map_err(|e| e.to_string())?,
+        };
         let filters =
             CString::new(serde_json::to_string(&atlas.filters).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;

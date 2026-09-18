@@ -127,10 +127,15 @@ enum ProjectFileIO {
         if let coordinationError { throw coordinationError }
         return value
     }
-    /// Stream into a private sibling file. The destination is unchanged until
-    /// validation/compression/write and fsync all succeed. No Data-sized copy.
+    /// Stream into a system-provided replacement directory on the same volume.
+    /// A picked file grants access to that file, not arbitrary siblings or its
+    /// parent directory. Foundation publishes the replacement within that grant.
+    /// The destination is unchanged until validation/write/fsync all succeed.
     static func atomicWrite(to url: URL, beforeCommit: () throws -> Void = {}, write: (Int32) throws -> Void) throws {
-        let directory = url.deletingLastPathComponent()
+        let manager = FileManager.default
+        let directory = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask,
+            appropriateFor: url, create: true)
+        defer { try? manager.removeItem(at: directory) }
         let temporary = directory.appendingPathComponent(".\(UUID().uuidString).capy-tmp")
         let descriptor = temporary.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL, 0o600) }
         guard descriptor >= 0 else { throw posixFailure() }
@@ -141,12 +146,11 @@ enum ProjectFileIO {
         let closed = close(descriptor); opened = false
         guard closed == 0 else { throw posixFailure() }
         try beforeCommit()
-        guard temporary.path.withCString({ source in url.path.withCString { rename(source, $0) } }) == 0
-            else { throw posixFailure() }
-        let directoryDescriptor = directory.path.withCString { open($0, O_RDONLY) }
-        guard directoryDescriptor >= 0 else { throw posixFailure() }
-        defer { close(directoryDescriptor) }
-        guard fsync(directoryDescriptor) == 0 else { throw posixFailure() }
+        if manager.fileExists(atPath: url.path) {
+            _ = try manager.replaceItemAt(url, withItemAt: temporary)
+        } else {
+            try manager.moveItem(at: temporary, to: url)
+        }
     }
     static func stagingURL(title: String, extension suffix: String = "capy") throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
