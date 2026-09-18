@@ -45,7 +45,7 @@ mod deferred;
 mod paint_transform;
 mod pixel_transform;
 use builtin_masks::builtin_masks;
-use deferred::Deferred;
+use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
 use pipeline_device::PipelineDevice;
 #[cfg(not(target_arch = "wasm32"))]
@@ -6305,7 +6305,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     ]
     .map(|(layout, shader, entry, blend, label)| {
         let (device, layout, shader) = (device.clone(), layout.clone(), shader.clone());
-        Deferred::new(move || brush_pipeline(&device, &layout, &shader, entry, blend, label))
+        Deferred::pipeline(move |mode| {
+            brush_pipeline_recipe(mode, &device, &layout, &shader, entry, blend, label)
+        })
     });
     let max_blend = wgpu::BlendState {
         color: wgpu::BlendComponent {
@@ -6383,8 +6385,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             material_pipeline_layout.clone(),
             material_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline_targets_with_constants(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6397,13 +6400,27 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     });
     let material_gather = std::array::from_fn(|index| {
         let operation = [MaterialOperation::Liquify, MaterialOperation::Smudge][index];
-        let (device, layout, shader) = (device.clone(), material_pipeline_layout.clone(), material_shader.clone());
-        Deferred::new(move || fullscreen_pipeline_targets_with_constants(
-            &device, &layout, &shader, "gather_fragment",
-            &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba32Float,
-                blend: None, write_mask: wgpu::ColorWrites::ALL })],
-            &[("MATERIAL_OPERATION", operation as u32 as f64)], "gather distant material samples",
-        ))
+        let (device, layout, shader) = (
+            device.clone(),
+            material_pipeline_layout.clone(),
+            material_shader.clone(),
+        );
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
+                &device,
+                &layout,
+                &shader,
+                "gather_fragment",
+                &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba32Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                &[("MATERIAL_OPERATION", operation as u32 as f64)],
+                "gather distant material samples",
+            )
+        })
     });
     let watercolor_transport = std::array::from_fn(|step| {
         let (device, layout, shader) = (
@@ -6411,8 +6428,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             watercolor_transport_layout.clone(),
             watercolor_transport_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline_targets_with_constants(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6440,8 +6458,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             material_pipeline_layout.clone(),
             material_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6458,8 +6477,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             edge_pipeline_layout.clone(),
             stroke_edge_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6494,8 +6514,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             watercolor_pipeline_layout.clone(),
             watercolor_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6509,8 +6530,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     let export = {
         let (device, layout, shader) =
             (device.clone(), export_layout.clone(), export_shader.clone());
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6536,15 +6558,17 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     }
 }
 
-fn brush_pipeline(
+fn brush_pipeline_recipe(
+    mode: CompileMode,
     device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
     blend: wgpu::BlendState,
     label: &'static str,
-) -> wgpu::RenderPipeline {
-    brush_pipeline_format(
+) -> Compilation<wgpu::RenderPipeline> {
+    brush_pipeline_format_recipe(
+        mode,
         device,
         layout,
         shader,
@@ -6555,7 +6579,8 @@ fn brush_pipeline(
     )
 }
 
-fn brush_pipeline_format(
+fn brush_pipeline_format_recipe(
+    mode: CompileMode,
     device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -6563,45 +6588,127 @@ fn brush_pipeline_format(
     blend: wgpu::BlendState,
     format: wgpu::TextureFormat,
     label: &'static str,
-) -> wgpu::RenderPipeline {
+) -> Compilation<wgpu::RenderPipeline> {
     const ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
         0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
         4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4,
         8 => Float32x4, 9 => Float32x4, 10 => Float32x4
     ];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: mem::size_of::<Dab>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &ATTRIBUTES,
-            })],
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: mem::size_of::<Dab>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &ATTRIBUTES,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            ..Default::default()
+    )
+}
+
+fn fullscreen_pipeline_recipe(
+    mode: CompileMode,
+    device: &PipelineDevice,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    blend: Option<wgpu::BlendState>,
+    format: wgpu::TextureFormat,
+    label: &'static str,
+) -> Compilation<wgpu::RenderPipeline> {
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
+}
+
+fn fullscreen_pipeline_targets_with_constants_recipe(
+    mode: CompileMode,
+    device: &PipelineDevice,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    targets: &[Option<wgpu::ColorTargetState>],
+    constants: &[(&str, f64)],
+    label: &'static str,
+) -> Compilation<wgpu::RenderPipeline> {
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
+                targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
 }
 
 fn fullscreen_pipeline(
@@ -6613,68 +6720,18 @@ fn fullscreen_pipeline(
     format: wgpu::TextureFormat,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+    fullscreen_pipeline_recipe(
+        CompileMode::Immediate,
+        device,
+        layout,
+        shader,
+        fragment_entry,
+        blend,
+        format,
+        label,
+    )
+    .immediate()
 }
-
-fn fullscreen_pipeline_targets_with_constants(
-    device: &PipelineDevice,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
-    targets: &[Option<wgpu::ColorTargetState>],
-    constants: &[(&str, f64)],
-    label: &'static str,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants,
-                ..Default::default()
-            },
-            targets,
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
 fn align_up(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
 }

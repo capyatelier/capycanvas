@@ -68,7 +68,7 @@ pub(super) struct Scene {
     capacity: usize,
     record_count: usize,
     upload: Vec<u8>,
-    pipeline: [wgpu::RenderPipeline; 2],
+    pipeline: [Deferred<wgpu::RenderPipeline>; 2],
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
@@ -329,7 +329,6 @@ impl Scene {
             pipeline,
             ..
         } = r.scene_pipelines.clone();
-        let pipeline = pipeline.map(|p| p.compile().clone());
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(128) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
@@ -1910,8 +1909,9 @@ impl Pipelines {
         let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
             let (device, pipeline_layout, shader) =
                 (device.clone(), pipeline_layout.clone(), shader.clone());
-            Deferred::new(move || {
-                fullscreen_pipeline(
+            Deferred::pipeline(move |mode| {
+                fullscreen_pipeline_recipe(
+                    mode,
                     &device,
                     &pipeline_layout,
                     &shader,
@@ -1937,13 +1937,16 @@ fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
     let a = Scene::new(&r);
     let b = Scene::new(&r);
     assert_eq!(
-        a.pipeline,
+        a.pipeline.clone().map(|p| p.compile().clone()),
         r.scene_pipelines
             .pipeline
             .clone()
             .map(|p| p.compile().clone())
     );
-    assert_eq!(a.pipeline, b.pipeline);
+    assert_eq!(
+        a.pipeline.map(|p| p.compile().clone()),
+        b.pipeline.map(|p| p.compile().clone())
+    );
     assert_eq!(a.uniforms, b.uniforms);
     assert_eq!(a.layout, b.layout);
     assert_ne!(a.buffer, b.buffer, "mutable records are not shared");

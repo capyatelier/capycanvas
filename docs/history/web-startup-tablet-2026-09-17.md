@@ -155,3 +155,90 @@ intervals and queue completion do not measure physical scanout or end-to-end
 input-to-photon latency. The async sample was sequential, not randomized; use
 its large display-stall reduction as a mechanism check, not a precision claim
 about total shader compilation speed.
+
+## Implemented follow-ups
+
+The follow-up to `7beb55b7` implements three changes:
+
+- Storage request settlement schedules a coalesced workspace tick after the
+  promise settles, including rejection and worker failure. The 100 ms timer
+  remains responsible for leases, maintenance and delayed observation.
+- The browser compiler uses typed asynchronous render/compute pipeline recipes.
+  A narrow vendored wgpu addition shares descriptor conversion with the immediate
+  API, starts the browser promise and installs rejection handling immediately,
+  and returns a typed pipeline only on success. Futures own their GPU handles;
+  renderer/session borrows and error-scope guards never cross an await.
+  Up to four same-priority pipeline requests run together. Procedural texture
+  generation and filter transactions retain separate task boundaries. Required
+  document/brush work still precedes speculative work.
+- Native writeback, promotion and publication validation now compile before
+  brush readiness, instead of before paper. Preparing native transfer tables
+  retains deferred scene pipelines. This restores **four pipelines before the
+  first canvas**, down from 22. Native hosts retain their worker/cache path;
+  standalone encoding constructors still prepare their pipelines eagerly.
+
+The same owned async path covers loaded document filters and runtime catalog
+validation. Failed candidates cannot replace the working catalog. Pipeline
+promise failures and all three device error scopes are drained before completion
+is published, with labels and browser error details preserved.
+
+Three ordinary tablet reloads produced the following medians. The comparison
+column is the earlier library-only fix, so it already excludes the original
+23-second input lock.
+
+| Metric | Library-only fix | Follow-up |
+| --- | ---: | ---: |
+| Workspace ready | 1,992 ms | **1,036 ms** |
+| First canvas submission | 1,343 ms | **1,065 ms** |
+| First viewport GPU completion | 1,404 ms | **1,177 ms** |
+| Current brush ready | 2,095 ms | 2,173 ms |
+| Full catalog ready | 23,379 ms | **19,199 ms** |
+| Display callback interval, p95 | 242 ms | **8.5 ms** |
+| Worst display interval per run | 592 ms | **83 ms** |
+| Intervals over 50 ms per run | 75 | **2** |
+| Pipelines created before canvas | 22 | **4** |
+
+All 187 observed pipeline creations remain; 178 use the async APIs. The others
+are paper/presentation and thumbnail pipelines. Brush readiness is approximately
+unchanged (2.14–2.43 seconds in the three follow-up runs). The main gains are
+earlier usable controls/paper and continuous display updates during compilation.
+Full warmup ranged from 17.78 to 20.89 seconds. These samples were taken later in
+the same device session, not as randomized before/after pairs; do not interpret
+small timing differences as a precise regression or improvement. The earlier
+three-pair storage-only experiment independently measured 2,005 ms to 899 ms.
+
+An intermediate implementation awaited every native pipeline separately and
+delayed brush readiness to roughly 3.14 seconds. Bounded async batching removed
+that regression without batching CPU-heavy texture recipes. It also reduced
+total warmup from that intermediate implementation's roughly 28.76 seconds.
+
+Follow-up validation includes the physical-tablet staged-startup checks, required
+pipeline promise and optional validation holds, actual painting/camera input,
+loaded-filter ordering, injected compute rejection with canvas restart, and
+injected render rejection with atomic catalog preservation and successful retry.
+All 24 Android-native Settings taps also succeeded during an ordinary warmup run.
+The native hardware checks cover startup ordering/teardown, native publication
+readiness, painting/undo/save/reopen/device replacement, and runtime filter
+validation/rejection. The storage transport test covers success, rejection,
+worker failure, pending operations and explicit reconnect.
+The physical-tablet workspace suite passed creation, rename, switching, preview
+and cancel, history/undo, reload, layout and brush reset, and deletion. Its full
+warmup waits now use the same 55-second allowance as the device harness. Run it
+with `--workspace-manager` on a fresh dedicated origin: the suite assumes the
+default header pins, and document recovery dialogs from painting fixtures can
+intercept its menu contacts.
+
+Raw timing runs, summaries, screenshots, build hashes and validation logs are in
+`artifacts/web-startup-2026-09-17/implemented-optimizations/` (ignored by Git).
+Run the storage transport test with
+`node --test apps/layer-web/workspace-client.test.mjs`; use the tablet command
+above for the expanded staged-startup suite.
+
+Further shader optimization has lower priority now that background warmup no
+longer repeatedly stalls the display. Full catalog readiness still takes about
+19 seconds, but controls become usable around one second and the current brush
+around 2.2 seconds. Keep those user-visible milestones as the targets. Before
+changing module delivery or bundling the 161 icons, measure a production build
+over a representative cold network connection: the USB development measurements
+do not establish their production cost. A larger shader/cache redesign is not
+justified by these remaining startup measurements alone.

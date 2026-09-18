@@ -47,7 +47,8 @@ to a CPU renderer. The [startup record](../history/web-staged-startup.md) descri
 the scheduling work and its measured limits. The later
 [tablet startup investigation](../history/web-startup-tablet-2026-09-17.md)
 separates workspace input readiness from canvas/brush readiness, records the
-startup-library input-lock fix, and measures the remaining GPU compilation stalls.
+startup-library input-lock fix, and records asynchronous pipeline compilation,
+storage-completion wakeups and the restored first-canvas staging boundary.
 
 The client also persists its workspace in browser storage and connects shared
 project requests to browser file access and downloads through

@@ -55,7 +55,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
 
 // Keep validation/serialization of retained history off the editor thread too.
 // The worker uses the same Wasm policy and the same IndexedDB adapter as tests.
-export function createWorkspaceClient(url) {
+export function createWorkspaceClient(url, { onSettled = () => {} } = {}) {
   let worker, sequence = 0, failed;
   const pending = new Map();
   function start() {
@@ -74,7 +74,7 @@ export function createWorkspaceClient(url) {
           if (!worker) start();
           const id = ++sequence; pending.set(id,{resolve,reject}); worker.postMessage({id,request});
         } catch(e) { reject(JSON.stringify({kind:"unavailable",message:String(e)})); }
-      });
+      }).finally(onSettled);
     },
   };
 }

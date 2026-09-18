@@ -83,6 +83,20 @@ synchronization remain unchanged. Other targets retain their existing policy. Se
 
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when no patch remains necessary.
+
+`wgpu-webgpu-async-pipelines.patch` exposes WebGPU-only asynchronous render and
+compute pipeline creation. Both immediate and asynchronous APIs use the same
+descriptor conversion; the new calls copy descriptor data before returning an
+owned promise future and produce an ordinary typed wgpu pipeline only after
+success. Rejections retain the pipeline label, reason and browser message.
+Native backends and the existing immediate API are unchanged.
+
+The renderer chooses this API in its browser compilation queue, retaining
+required-work ordering, error scopes and readiness gates. Native compilation
+keeps its existing worker/cache path. This addresses GPU-process display
+stalls that merely yielding JavaScript tasks did not resolve. The
+[tablet startup record](../docs/history/web-startup-tablet-2026-09-17.md)
+records the evidence and physical-device regressions.
 ## HEIF/AVIF source color preservation
 
 `libheif-source-profile.patch` applies to upstream libheif **1.23.4**. With

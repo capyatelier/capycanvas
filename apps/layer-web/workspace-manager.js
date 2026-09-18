@@ -119,6 +119,13 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     recoveryText.textContent = text; if (!recovery.open) recovery.showModal();
   }
   function tick() { if (observePending) { observePending = false; app.workspace_observe(); } applyChange(app.workspace_tick()); render(); }
+  let wakeTimer;
+  function wake() {
+    // JsFuture must observe the settled reply before the controller polls it.
+    // A task also avoids reentering a borrowed Wasm session and coalesces replies.
+    if (wakeTimer != null) return;
+    wakeTimer = setTimeout(() => { wakeTimer = null; tick(); }, 0);
+  }
   // Reload replaces this document in the same browsing context. Reusing its
   // fenced identity avoids treating the old document's short lease as another
   // window. A new navigation/tab always receives an independent identity, even
@@ -135,6 +142,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   window.addEventListener("pageshow", () => send({ type: "resume" }));
   window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });
   return {
+    wake,
     observe() { observePending = true; },
     send,
     handle(request) {

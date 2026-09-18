@@ -89,7 +89,8 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             }),
             write_mask: wgpu::ColorWrites::RED,
         });
-        fullscreen_pipeline_targets_with_constants(
+        fullscreen_pipeline_targets_with_constants_recipe(
+            CompileMode::Immediate,
             &renderer.device,
             &layout,
             &shader,
@@ -98,6 +99,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             &[],
             "material uniform-dispatch reference",
         )
+        .immediate()
     });
     renderer.pipelines.material = std::array::from_fn(|index| {
         let pipeline = pipelines[index % MaterialPipelineKind::COUNT].clone();

@@ -87,8 +87,9 @@ impl MaskRenderer {
                 tip.clone(),
                 shader.clone(),
             );
-            Deferred::new(move || {
-                brush_pipeline_format(
+            Deferred::pipeline(move |mode| {
+                brush_pipeline_format_recipe(
+                    mode,
                     &device,
                     if i < 2 { &analytic } else { &tip },
                     &shader,
@@ -151,8 +152,9 @@ impl MaskRenderer {
         let initialize = {
             let (device, layout, init_shader) =
                 (device.clone(), layout.clone(), init_shader.clone());
-            Deferred::new(move || {
-                fullscreen_pipeline(
+            Deferred::pipeline(move |mode| {
+                fullscreen_pipeline_recipe(
+                    mode,
                     &device,
                     &layout,
                     &init_shader,

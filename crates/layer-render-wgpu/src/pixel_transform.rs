@@ -149,7 +149,7 @@ impl PixelTransform {
         let compile_device = device.clone();
         let parameters = layout.clone();
         let source = source_layout.clone();
-        let pipeline = Deferred::new(move || {
+        let pipeline = Deferred::pipeline(move |mode| {
             let device = &compile_device;
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("affine pixels with selection"),
@@ -165,7 +165,7 @@ impl PixelTransform {
                 bind_group_layouts: &[Some(&parameters), Some(&source)],
                 immediate_size: 0,
             });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            mode.render(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("affine cut and place"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {

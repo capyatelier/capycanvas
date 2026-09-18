@@ -95,15 +95,18 @@ impl Flood {
                     (device.clone(), pipeline_layout.clone(), shader.clone());
                 (
                     entry,
-                    Deferred::new(move || {
-                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: Some(entry),
-                            layout: Some(&layout),
-                            module: &shader,
-                            entry_point: Some(entry),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        })
+                    Deferred::pipeline(move |mode| {
+                        mode.compute(
+                            &device,
+                            &wgpu::ComputePipelineDescriptor {
+                                label: Some(entry),
+                                layout: Some(&layout),
+                                module: &shader,
+                                entry_point: Some(entry),
+                                compilation_options: Default::default(),
+                                cache: None,
+                            },
+                        )
                     }),
                 )
             })

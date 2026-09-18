@@ -4,7 +4,7 @@ use super::*;
 /// not change between this scan and encoding except for their own promotion.
 pub(super) struct Validator {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::ComputePipeline; 2],
+    pub(super) pipelines: [crate::Deferred<wgpu::ComputePipeline>; 2],
     tiles_per_dispatch: usize,
 }
 impl Validator {
@@ -59,18 +59,26 @@ impl Validator {
                     .replace("STATUS_BINDING", &tiles_per_dispatch.to_string())
                     .replace("VALIDATE", expression)
             );
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("native publication validation"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("native publication validation"),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            })
+            {
+                let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
+                crate::Deferred::pipeline(move |mode| {
+                    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("native publication validation"),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    });
+                    mode.compute(
+                        &device,
+                        &wgpu::ComputePipelineDescriptor {
+                            label: Some("native publication validation"),
+                            layout: Some(&pipeline_layout),
+                            module: &module,
+                            entry_point: Some("main"),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        },
+                    )
+                })
+            }
         });
         Self {
             layout,
