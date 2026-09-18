@@ -106,6 +106,27 @@ the native UI rejection/cancellation check uses a small fixture, not a separate
 
 The review package's `build-manifest.json` identifies source and binary hashes.
 
+## Desktop launch follow-up
+
+The final review executable also reproduced the earlier desktop startup fault.
+Three ordinary launch attempts exited before a canvas appeared; a subsequent
+capture launch terminated with SIGSEGV in `gdk_surface_handle_event` in the
+system `libgtk-4.so.1`. The backtrace reaches it through GDK event dispatch and
+`g_application_run`; it does not establish an application-side root cause.
+Evidence: `review/desktop-startup-backtrace.log` and
+`review/desktop-startup-instructions.log`. The same stack was already present in
+the pre-UI build's `review/startup-coredump.txt`; Vulkan alone is not a complete
+mitigation. The isolated Wayland acceptance runs above still pass.
+
+A diagnostic desktop launch with `G_MESSAGES_DEBUG=all G_ENABLE_DIAGNOSTIC=1`
+opened the review drawing and stayed running. Diagnostic logging is **not** a
+validated fix and was not added to the launcher. Desktop startup reliability
+remains a release blocker; the open window can be used for feature feedback.
+No GTK library replacement, timing workaround, clipping or precision reduction
+was introduced. See the upstream
+[GTK event dispatch implementation](https://github.com/GNOME/gtk/blob/4.22.4/gdk/gdksurface.c#L2790)
+for the library frame referenced by the local backtrace.
+
 ## Qualification limits
 
 Physical HDR display output, calibration, mixed-HDR-monitor moves, constrained
