@@ -112,6 +112,24 @@ main-thread responsiveness warning; these are workflow checks, not performance
 measurements. Artist review apps and the iPad are untouched. Provider delivery
 and the remaining physical lifecycle/window cases stay open.
 
+## Retained Pencil sensor qualification
+
+The retained physical prediction recording contains 3,390 real contact samples
+with varying finite pressure, tilt and roll, plus eight hover samples and a
+hover-exit event. The current UIKit contact-packing and hover functions are
+unchanged from that recording. This establishes physical delivery into the
+numeric input ABI; the recording contains no estimated-property correction
+callbacks and does not establish visual tilt/roll response or Mac sensors.
+
+At `65533be2`, the focused input ABI regression passes for both Apple policies
+with G-Pen, Pencil, Watercolor Wash and Smudge. Partial and delayed corrections
+produce the same backing/composited pixels as final sensor values supplied
+directly, with exact Undo/Redo and rejection of stale updates. These supplied
+callbacks complement the physical delivery evidence without replacing remaining
+device checks. The same revision's iPad Release builds without compiler warnings;
+it was not installed over the running artist review. Private evidence is under
+`artifacts/apple-ipad-window-review-v1/`.
+
 ## Filter-preview cancellation — 2026-09-17
 
 Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)

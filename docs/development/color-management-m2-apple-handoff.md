@@ -1,10 +1,12 @@
 # Phase 2 handoff: macOS and iPadOS
 
-Latest closure: the user confirms iPad large-photo Save As/Open and ordinary Save
-work after the file-access fix. Filter-preview cancellations now retry without
-blocking the editor. Keep large-brush smoothness and sustained watercolor
-acceptance open; older pending local-save references below are superseded by the
-[save-access record](apple-handoff.md#save-access-after-save-as--2026-09-17).
+Latest closure, 2026-09-18: the user accepts current full-pressure large-photo
+G-Pen performance and confirms local Save As/Open/ordinary Save. Filter-preview
+cancellations retry without blocking the editor, and repeated zoom is smooth.
+The shared optimization quality review is published. Do not repeat older pending
+G-Pen or local-save checks below; the [current release checklist](apple-release-checklist.md)
+tracks remaining UIKit controls, provider/lifecycle, managed-display and separate
+watercolor/memory/measurement acceptance.
 Physical iPad keyboard and second-Mac-display checks are user-deferred, as is
 iCloud acceptance.
 
