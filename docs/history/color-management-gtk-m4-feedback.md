@@ -6,6 +6,9 @@ and that Export was an awkward, long list. Work is in `~/code/capycanvas3` on
 
 Source milestones: `367d7ee1` (HDR and export), `471ae553` (local GTK runtime).
 
+Export preview transport was subsequently corrected in the
+[HDR master preview follow-up](color-management-hdr-export-preview.md).
+
 ## What changed
 
 **HDR viewing.** The old host only requested Windows-scRGB. This desktop's

@@ -271,7 +271,11 @@ preset actions use standard rows and name their target; unavailable controls
 are absent. JPEG offers opaque backgrounds and hides its fixed 8-bit depth.
 
 HDR exposes its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract.
-Its image is an SDR preview. A cancellable full-size range check gates export;
+On a capable display, Export shows the HDR master beside the selected HDR or
+SDR output. Master viewing ignores the temporary canvas SDR/proof toggles and
+the saved SDR rendition. Unsupported displays show explicitly labeled SDR
+previews. Display changes update the open preview. A cancellable full-size range
+check gates export;
 when it finds unsupported values, **Clip out-of-range colors** appears beside
 the warning. The writer checks again. SDR files use the saved SDR appearance.
 
