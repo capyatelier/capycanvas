@@ -12,6 +12,8 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--simulator", help="Booted iPad simulator UUID; required if several are booted")
+    parser.add_argument("--fixture", choices=["rows", "scenes"], default="rows",
+                        help="Row scrolling or per-scene reorder cancellation")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[3]
     apple = root / "apps/layer-apple"
@@ -40,22 +42,34 @@ def main():
     env["SDKROOT"] = sdk
     app = output / "RowChecks.app"
     app.mkdir()
+    fixture, marker = {
+        "rows": ("native-row-menus.swift", "PASS: native row sessions"),
+        "scenes": ("reorder-scene-lifecycle.swift", "PASS: native reorder scenes"),
+    }[args.fixture]
     sources = ["Shared/Bridge/JSON.swift", "Shared/Bridge/ReorderContact.swift",
                "Shared/Bridge/NativeReorderModel.swift", "Shared/Bridge/AppleContextMenu.swift",
                "Shared/Bridge/AppleContextMenuRequest.swift",
                "Shared/Editor/WorkspaceRowInteraction.swift",
                "iOS/Platform/NativeReorderInput.swift",
-               "tests/native-row-menus.swift"]
+               "tests/" + fixture]
     run("compile", ["xcrun", "--sdk", "iphonesimulator", "swiftc", "-parse-as-library",
                     "-sdk", sdk, "-target", "arm64-apple-ios18.0-simulator",
                     *[str(apple / name) for name in sources], "-o", str(app / "RowChecks")])
     bundle = "art.capycanvas.tests.rowcallbacks.run" + token
-    (app / "Info.plist").write_bytes(plistlib.dumps({
+    info = {
         "CFBundleIdentifier": bundle, "CFBundleExecutable": "RowChecks",
         "CFBundleName": "Row Callback Checks", "CFBundlePackageType": "APPL",
         "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0",
         "MinimumOSVersion": "18.0", "UIDeviceFamily": [2], "LSRequiresIPhoneOS": True,
-    }))
+    }
+    if args.fixture == "scenes":
+        info["UIApplicationSceneManifest"] = {
+            "UIApplicationSupportsMultipleScenes": True,
+            "UISceneConfigurations": {"UIWindowSceneSessionRoleApplication": [
+                {"UISceneConfigurationName": "Reorder lifecycle"}]},
+        }
+        info["UILaunchScreen"] = {}
+    (app / "Info.plist").write_bytes(plistlib.dumps(info))
     run("sign", ["codesign", "--force", "--sign", "-", str(app)])
     installed = False
     try:
@@ -64,9 +78,9 @@ def main():
         result = run("run", ["xcrun", "simctl", "launch", "--console", destination, bundle], timeout=60)
         # simctl can return zero after the app aborts on a failed assertion.
         # Require the marker emitted only after every callback check completes.
-        if "PASS: native row sessions" not in result or "Precondition failed" in result:
+        if marker not in result or "Precondition failed" in result:
             raise RuntimeError(f"Callback checks failed; inspect {output / 'run.log'}")
-        print("PASS: UIKit row contacts, two-way scrolling, cancellation and one commit per drop")
+        print(marker)
     finally:
         if installed:
             run("terminate", ["xcrun", "simctl", "terminate", destination, bundle], check=False)

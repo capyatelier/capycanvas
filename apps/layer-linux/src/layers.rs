@@ -1338,7 +1338,11 @@ impl Row {
         self.content_image.set_visible(s.content_icon.is_none());
         crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
         self.name.set_text(&s.label);
-        self.name.set_tooltip_text(Some(&s.label));
+        self.name.set_tooltip_text(Some(if s.editable {
+            &s.label
+        } else {
+            "Paper is protected; select a paint layer to draw"
+        }));
         self.thumbnails
             .set_margin_start((s.depth * 8).min(24) as i32);
         if s.selected {
@@ -1352,7 +1356,9 @@ impl Row {
         let drawing_target = s.editing && (s.editable || s.mask_selected);
         crate::icons::set_button(&self.selection, s.selection_icon);
         self.selection
-            .set_tooltip_text(Some(if drawing_target && s.reference {
+            .set_tooltip_text(Some(if s.editing && !s.editable && !s.mask_selected {
+                "Paper is selected and protected; select a paint layer to draw"
+            } else if drawing_target && s.reference {
                 "Drawing target · Reference layer · Click to select"
             } else if drawing_target {
                 "Drawing target · Click to select"
@@ -1408,7 +1414,7 @@ impl Row {
             self.content.set_tooltip_text(Some(if s.editable {
                 "Edit layer content"
             } else {
-                "Select paper"
+                "Paper is protected; select a paint layer to draw"
             }));
         }
         crate::icons::set(
@@ -1421,12 +1427,17 @@ impl Row {
         );
         self.lock
             .set_opacity(if s.locked || s.alpha_locked { 1. } else { 0. });
-        self.lock.set_tooltip_text(Some(if s.locked {
+        self.lock.set_tooltip_text(Some(if !s.editable {
+            "Paper is protected; select a paint layer to draw"
+        } else if s.locked {
             "Editing locked"
         } else {
             "Alpha locked"
         }));
         let mut parts = Vec::new();
+        if !s.editable {
+            parts.push("Protected".into());
+        }
         if s.blend != 0 {
             parts.push(s.blend_label.clone());
         }

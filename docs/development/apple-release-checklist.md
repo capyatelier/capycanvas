@@ -43,6 +43,10 @@ delivery through unchanged adapter code. The current sensor-correction regressio
 also passes exact pixel/history comparisons for four brush types on both Apple
 policies. Physical visual response and the remaining R3 interactions stay open.
 See the [sensor qualification](apple-handoff.md#retained-pencil-sensor-qualification).
+The [scene-cancellation regression](apple-handoff.md#ipad-scene-scoped-drag-cancellation)
+also reproduces and fixes an iPad window's deactivation cancelling another
+window's reorder contact. Supplied UIKit lifecycle callbacks pass; actual
+physical interruption remains under R3/R4.
 
 ## Acceptance rules
 

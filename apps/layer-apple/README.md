@@ -550,6 +550,11 @@ among several). It builds a disposable callback fixture, requires its completion
 marker even if `simctl` exits successfully, and removes its own app afterward.
 The fixture covers real scroll-view edge movement in both directions and shared
 contact policies; it does not synthesize physical finger/Pencil gestures.
+Add `--fixture scenes` to check cancellation with two real UIKit window scenes.
+Supplied scene/application notifications must cancel only the owning scene's
+pending contact, held menu or drag; late releases, resumed drops and reparenting
+are covered for mouse, touch and pen policies. This does not replace physical
+scene-interruption acceptance.
 `EditorLaunchTests/testLayerMenuDragUpward` and `EditorMenuChecks` exercise the
 UIKit editor on simulator or device destinations with disposable persistence.
 The connected iPad passes upward layer dragging with exact Undo/Redo, layer

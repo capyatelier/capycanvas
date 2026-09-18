@@ -42,6 +42,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     )));
     let control = CaptureControl::default();
     let worker_workflow = workflow.borrow().clone();
+    let memory_budget = layer_color::photo::PhotoMemoryBudget::current().source_bytes;
     let task = glib::MainContext::default().spawn_local(glib::clone!(
         #[weak] w,
         #[weak] explanation,
@@ -51,7 +52,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         #[strong] original_gpu,
         async move {
             let token = control.clone();
-            let result = gio::spawn_blocking(move || worker_workflow.prepare(None, layer_color::photo::PhotoMemoryBudget::current().source_bytes, || token.is_cancelled()))
+            let result = gio::spawn_blocking(move || worker_workflow.prepare(None, memory_budget, || token.is_cancelled()))
                 .await.map_err(|_| "Rasterization worker failed".to_string()).and_then(|r| r);
             if control.is_cancelled() { return; }
             let result = result.and_then(|(image, clipped)| {
