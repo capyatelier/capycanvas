@@ -917,6 +917,7 @@ impl Workspace {
         let header = header::Header::new();
         let system_status = crate::system_status::SystemStatus::new();
         let view_info = gtk::Label::new(Some("100% · 0°"));
+        view_info.set_tooltip_text(Some("Canvas zoom and rotation · Ctrl+0 fits the canvas"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
         status_bar.append(&proof.label);

@@ -5905,6 +5905,19 @@ fn native_layer_panel_review() {
     );
     assert!(w.layer_panel.opacity.is_sensitive());
     assert!(!state(&w).layer_tools.controls.mask);
+    let protected = find_css(&paper, "dim-label").unwrap();
+    assert_eq!(
+        protected.downcast::<gtk::Label>().unwrap().text(),
+        "Protected"
+    );
+    let thumbnail = find_css(&paper, "layer-thumbnail")
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    assert_eq!(
+        thumbnail.tooltip_text().as_deref(),
+        Some("Paper is protected; select a paint layer to draw")
+    );
     capture_reference(&w, &format!("{dir}/17-paper-selected.png"), 1.);
     open_menu(2, false, "18-paper-context");
     popover.popdown();
