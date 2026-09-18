@@ -250,14 +250,19 @@ control. In the Paint and Photo
 starting layouts it shares Color's tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
-For HDR artwork, **Proof → SDR** offers **Perceptual / Browser**. Perceptual uses
-a BT.2390 shoulder with a midtone-preserving knee; Browser retains the
-browser-derived reference-white fallback. **Exposure, Contrast and HDR range**
-use common compact slider/value controls. HDR range describes the input endpoint
+For HDR artwork, **Proof → SDR** offers **Photographic / Browser**. Photographic
+maps luminance with a BT.2390 shoulder and compresses color toward white as the
+destination gamut fills. **Highlight color** balances **White** (brighter
+highlights, the default) and **Color** (more saturation). Browser retains the
+browser-derived reference-white fallback. **Exposure, Contrast, HDR range and
+Highlight color** use common compact slider/value controls. HDR range describes the input endpoint
 above reference white, not monitor peak. The default is 2.30 EV (1000 nits at
 the fixed 203-nit reference white). **Auto** measures the edited composite and
-fits its peak; **Reset** restores the new defaults. Old Scale/Clip recipes reopen
-unchanged, until deliberately replaced.
+fits its luminance peak for Photographic, or max-channel peak for older methods;
+it preserves the method and Highlight color choice while resetting exposure and
+contrast. **Auto** and the **Reset** icon sit beside the method selector.
+Reset restores the Photographic defaults. Saved Perceptual (BT.2390), Browser,
+Scale and Clip recipes reopen unchanged, until deliberately replaced.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.

@@ -19,10 +19,14 @@ header ellipsis. SDR edits are document edits, saved with the master; dragging
 one control produces one undo step. Print selections apply after cancellable
 profile/LUT validation, preserving a replaced embedded profile locally first.
 
-SDR offers Perceptual and Browser, Exposure, Contrast, HDR range, Auto and Reset.
+SDR now offers Photographic and Browser, Exposure, Contrast, HDR range,
+Highlight color (White–Color), Auto and Reset. See the
+[implemented highlight follow-up](color-management-highlight-rendering.md#implemented-photographic-follow-up)
+for its math and validation. Saved Perceptual recipes remain available unchanged.
 Auto measures the edited full-resolution composite using bounded bands, ignores
-zero-coverage RGB, and fits the Rec.2020 max-channel range. It resets exposure
-and contrast. Cancellation and revision checks prevent stale analysis replacing
+zero-coverage RGB, and fits luminance for Photographic or the Rec.2020 max-channel
+range for older methods. It resets exposure and contrast, retaining the method
+and Highlight color setting. Cancellation and revision checks prevent stale analysis replacing
 new edits. It is explicit, not continuous re-analysis while painting. HDR range
 is the endpoint in stops above reference white: higher values preserve more
 bright distinctions; lower values make the rendition brighter. Its tooltip/name
@@ -75,7 +79,7 @@ Primary sources checked:
   separate authoring of SDR appearance alongside the HDR master supports keeping
   the fallback recipe persistent and distinct from temporary display proofing.
 
-The selected **Perceptual** default uses BT.2390 with knee offset 1, zero black,
+The initial **Perceptual** default used BT.2390 with knee offset 1, zero black,
 203-nit reference white and a 1000-nit initial endpoint. This is the best of the
 implemented/tested choices for keeping ordinary tones bright while smoothly
 compressing highlights. It is not libplacebo's entire renderer or a claim of
@@ -91,21 +95,22 @@ checks the Float32 implementation over 16,384 log-spaced inputs, including
 0–16 stops of headroom. Extended peaks clamp the knee at zero so negative PQ
 codes cannot generate NaNs. Shared CPU and GPU math must agree.
 
-Only Perceptual and Browser are offered for new selections. Saved Scale/Clip
-recipes still reopen unchanged, identified as saved legacy methods, until the
-user chooses another method. This preserves previous authored files. Reset is
-an intentional migration to the new default.
+The highlight follow-up replaces Perceptual with Photographic for new selections
+while retaining Browser. Saved BT.2390/Scale/Clip recipes reopen unchanged,
+identified as saved legacy methods, until the user chooses another method.
+Reset is an intentional migration to the new default.
 
 We considered BT.2446, ST 2094 methods, libplacebo's adaptive spline, Reinhard,
 filmic curves, and spatial/local operators. Adding a long algorithm list would
 not fix poor peak estimates or stale SDR fallbacks. Local operators need more
 memory, halo/edge qualification and a spatially consistent export/print path.
-They are not exposed as unqualified choices. Destination gamut limiting remains
-component limiting after conversion; hue-preserving perceptual gamut compression
-is still a limitation, particularly for highly saturated wide-gamut highlights.
+They are not exposed as unqualified choices. The old methods retain component
+limiting after conversion. Photographic adds constant-luminance compression in
+destination linear RGB; it is not a perceptually uniform hue-preserving mapper.
 The subsequent [highlight-rendering audit](color-management-highlight-rendering.md)
-explains the brightness loss in saturated highlights and recommends photographic
-highlight color roll-off. That rendering change is not in the current build.
+explains the brightness loss in saturated highlights and records the implemented
+Photographic follow-up. The measurements below remain the earlier baseline;
+new measurements are recorded in that follow-up.
 
 ## Interchange and codec boundaries
 
