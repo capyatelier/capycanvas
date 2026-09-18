@@ -160,6 +160,16 @@ runs, not power-controlled or constrained-device measurements.
   sit beside the pad so both lower sliders fit even the tight Photo group.
 - Simulated GPU failure, replacement device, exact surviving artwork, undo/redo
   and rebuilding a current local guide on the replacement device pass.
+- Launching all five photos on the actual HDR desktop exposed an early display-
+  hint race: the worker attempted presentation before the first frame configured
+  its swapchain. HDR transform updates now schedule a redraw only after a frame
+  exists. A native regression test holds back all frames while delivering an HDR
+  hint; it passes, as do repeated five-photo and device-recovery workflows.
+  The corrected production build opens all five canvases with negotiated PQ
+  presentation and no GPU errors. This checks transport/startup, not emitted
+  luminance or calibration. Logs: `gtk-early-hdr-hint.log`,
+  `gtk-photos-surface.log`, `gtk-recovery-surface.log` and
+  `review-desktop-fixed.log`.
 
 A same-executable comparison of global versus local SDR encoded previews used
 the retained 8192×7324 ProPhoto F16 fixture with 20 effects:

@@ -19,6 +19,8 @@ use std::{
     time::Duration,
 };
 mod color;
+#[cfg(test)]
+mod tests;
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -1228,7 +1230,10 @@ impl Worker {
     fn update_hdr_view(&mut self) -> Result<(), String> {
         let headroom = if self.preview_sdr { 1. } else { self.display_headroom };
         self.presenter.set_hdr_view(&self.renderer, self.hdr_rendition, headroom).map_err(error)?;
-        self.pending_present = true;
+        // Wayland may deliver an HDR display hint before GTK has supplied the
+        // first canvas geometry. Update the transform now, but only redraw an
+        // existing frame: draw() configures the swapchain before first acquire.
+        self.pending_present = self.last_view.is_some();
         Ok(())
     }
     fn draw(
