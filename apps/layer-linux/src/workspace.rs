@@ -806,6 +806,7 @@ pub struct Workspace {
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
+    pub(crate) local_tone: Rc<crate::local_tone_view::LocalToneView>,
     pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
     pub(crate) hdr_status: gtk::Button,
     pub(crate) recovery: Rc<crate::recovery::Recovery>,
@@ -931,8 +932,10 @@ impl Workspace {
         let view_info = gtk::Label::new(Some("100% · 0°"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
+        let local_tone=crate::local_tone_view::LocalToneView::new();
         let proof_panel = crate::files::proof::ProofPanel::new();
         status_bar.append(&proof.label);
+        status_bar.append(&local_tone.label);
         let hdr_status=gtk::Button::builder().visible(false).build();
         hdr_status.add_css_class("flat");
         hdr_status.set_widget_name("hdr-view-status");
@@ -1006,6 +1009,7 @@ impl Workspace {
             image_drop: RefCell::new(None),
             image_drop_label,
             proof,
+            local_tone,
             hdr_status,
             recovery: Rc::new(crate::recovery::Recovery::default()),
             surface,
@@ -1776,6 +1780,7 @@ impl Workspace {
                 }
                 if self.color_panel.headroom() != self.picker_headroom() { change.regions |= regions::BRUSH; }
                 self.proof.sync(self);
+                self.local_tone.sync(self);
                 let publication = self
                     .gpu
                     .borrow()

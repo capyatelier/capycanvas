@@ -130,14 +130,55 @@ pub struct ProofNumberControl {
     pub label: &'static str,
     pub numeric: NumericControl,
 }
-pub fn sdr_number_controls() -> [ProofNumberControl; 4] {
+pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
+    use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};
+    let mut tone = NumericControl::number(0., 0.85, 0.0085, 0).unit("%");
+    tone.scale = 100. / 0.85;
+    let mut detail = NumericControl::number(0.5, 2., 0.01, 0).unit("%");
+    detail.scale = 100.;
+    ParameterPadSpec {
+        axes: [
+            ParameterPadAxis {
+                key: "tone",
+                label: "Tone",
+                numeric: tone,
+                default: 0.6,
+            },
+            ParameterPadAxis {
+                key: "detail",
+                label: "Detail",
+                numeric: detail,
+                default: 1.,
+            },
+        ],
+    }
+}
+pub fn sdr_number_controls() -> [ProofNumberControl; 2] {
     [
-        ("exposure", "Brightness", -4., 4., 0.04, 0, "%", 25., -4., 4.),
         (
-            "contrast", "Contrast", 0.25, 4., 0.01, 0, "%", 100., 0.5, 2.,
+            "exposure",
+            "Brightness",
+            -4.,
+            4.,
+            0.04,
+            0,
+            "%",
+            25.,
+            -4.,
+            4.,
         ),
-        ("highlights", "Highlights", -1., 1., 0.01, 0, "%", 100., -1., 1.),
-        ("highlight_color", "Highlight color", 0., 1., 0.01, 0, "%", 100., 0., 1.),
+        (
+            "highlight_color",
+            "Highlight color",
+            0.,
+            1.,
+            0.01,
+            0,
+            "%",
+            100.,
+            0.,
+            1.,
+        ),
     ]
     .map(
         |(key, label, min, max, step, digits, unit, scale, soft_min, soft_max)| {
@@ -146,10 +187,9 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 4] {
             numeric.scale = scale;
             numeric.soft_min = soft_min;
             numeric.soft_max = soft_max;
-            if key == "contrast" || key == "highlight_color" || key == "highlights" {
+            if key == "highlight_color" {
                 numeric.resolution = 0.01;
             }
-            if key == "highlights" { numeric.endpoint_labels = Some(["Detail".into(), "Bright".into()]); }
             if key == "highlight_color" {
                 numeric.endpoint_labels = Some(["White".into(), "Color".into()]);
             }

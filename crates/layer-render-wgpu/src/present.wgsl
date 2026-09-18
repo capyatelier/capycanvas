@@ -178,7 +178,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
         return view_store(vec4<f32>(rgb * coverage, coverage));
     }
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
-    let paint = proof_artwork(artwork_at(p, camera.inverse.xy, camera.inverse.zw));
+    let paint = proof_artwork(artwork_at(p, camera.inverse.xy, camera.inverse.zw),p);
     let checker = select(0.80, 0.94, (i32(floor(p.x / 16.0)) + i32(floor(p.y / 16.0))) % 2 == 0);
     var rgb = view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a);
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
@@ -263,7 +263,7 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let footprint = fwidth(v.uv);
     let p = v.position.xy;
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
-    let paint = proof_artwork(coarse_area(v.uv, footprint));
+    let paint = proof_artwork(coarse_area(v.uv, footprint),v.uv*camera.offset_document.zw);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);
     let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
                    min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));

@@ -67,6 +67,7 @@ impl Frame {
     }
 }
 enum Command {
+    LocalTone(Option<Arc<layer_core::color::hdr::LocalToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     HdrView(Option<layer_core::color::hdr::SdrRendition>, bool),
     PrepareColor(Box<color::Request>),
@@ -161,6 +162,15 @@ pub struct RenderWorker {
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
 impl RenderWorker {
+    pub(crate) fn set_local_tone(
+        &self,
+        guide: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+    ) -> Result<mpsc::Receiver<Result<(), String>>, String> {
+        let (tx, rx) = mpsc::channel();
+        self.send(Command::LocalTone(guide, tx)).map_err(error)?;
+        Ok(rx)
+    }
+
     pub(crate) fn set_hdr_view(&mut self, rendition: Option<layer_core::color::hdr::SdrRendition>, preview_sdr: bool) -> Result<(), String> {
         if self.hdr_view != Some((rendition, preview_sdr)) {
             self.send(Command::HdrView(rendition, preview_sdr)).map_err(error)?;
@@ -905,6 +915,16 @@ impl Worker {
                 continue;
             }
             match command {
+                Command::LocalTone(guide, reply) => {
+                    let result = self
+                        .presenter
+                        .set_local_tone_guide(&self.renderer, guide)
+                        .map_err(error);
+                    if result.is_ok() {
+                        self.pending_present = self.last_view.is_some();
+                    }
+                    let _ = reply.send(result);
+                }
                 Command::HdrView(rendition, preview_sdr) => {
                     if rendition.is_some() && !self.hdr_attempted {
                         self.enable_hdr()?;

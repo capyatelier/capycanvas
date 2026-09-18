@@ -13,6 +13,7 @@ pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, 
 pub mod profile_library;
 pub mod proof_workflow;
 pub mod proof_panel;
+pub mod parameter_pad;
 
 mod import_policy;
 pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, read_import, require_sdr_host};

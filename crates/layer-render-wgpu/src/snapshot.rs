@@ -131,6 +131,7 @@ impl SnapshotGpu {
 
 pub struct SnapshotRenderer {
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
+    local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
     backing: HashMap<LayerId, Arc<RasterData>>,
@@ -272,7 +273,13 @@ impl SnapshotRenderer {
             background[3] *= if paper.visible { paper.opacity } else { 0. };
         }
         Ok(Self {
-            sdr_rendition: project.document.color.depth.is_float().then_some(project.document.sdr_rendition),
+            sdr_rendition: project
+                .document
+                .color
+                .depth
+                .is_float()
+                .then_some(project.document.sdr_rendition),
+            local_tone: None,
             renderer,
             layers,
             backing,
@@ -474,17 +481,30 @@ impl SnapshotRenderer {
                 std::iter::once((layer.id, false)).chain(layer.masks().map(|m| (m.id, true)))
             {
                 let extent = layer.local_extent(self.extent);
-                let inverse = layer_core::target_transform(&self.layers, id).inverse()
-                    .ok_or(GpuRasterError::InvalidTransform("Invalid snapshot layer placement"))?;
-                let local = pixel_rect(inverse.bounds(layer_core::Rect {
-                    min: layer_core::Point { x: pages.min_x() as f32, y: pages.min_y() as f32 },
-                    max: layer_core::Point { x: pages.max_x() as f32, y: pages.max_y() as f32 },
-                }), extent).expand(if mask { 1 } else { PAGE_SIZE }, extent);
+                let inverse = layer_core::target_transform(&self.layers, id)
+                    .inverse()
+                    .ok_or(GpuRasterError::InvalidTransform(
+                        "Invalid snapshot layer placement",
+                    ))?;
+                let local = pixel_rect(
+                    inverse.bounds(layer_core::Rect {
+                        min: layer_core::Point {
+                            x: pages.min_x() as f32,
+                            y: pages.min_y() as f32,
+                        },
+                        max: layer_core::Point {
+                            x: pages.max_x() as f32,
+                            y: pages.max_y() as f32,
+                        },
+                    }),
+                    extent,
+                )
+                .expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
                     if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {
-                        planned = planned
-                            .saturating_add(extent[0] as u64 * extent[1] as u64 / 2 + 64);
+                        planned =
+                            planned.saturating_add(extent[0] as u64 * extent[1] as u64 / 2 + 64);
                         planned = planned
                             .saturating_add(page_coordinates(local).count() as u64 * 256 * 256 * 5);
                     }

@@ -1,8 +1,29 @@
 // headroom.x>1 requires a host-negotiated linear HDR surface and compositor headroom.
-struct HdrView { rendition: vec4<f32>, headroom: vec4<f32> }
+struct HdrView { rendition: vec4<f32>, headroom: vec4<f32>, local: vec4<f32> }
 @group(0) @binding(9) var<uniform> hdr_view: HdrView;
+struct LocalToneGuide { size:vec4<u32>, samples:array<vec4<f32>> }
+@group(0) @binding(10) var<storage,read> local_tone:LocalToneGuide;
+fn local_tone_artwork(paint:vec4<f32>,position:vec2<f32>)->vec4<f32> {
+    if hdr_view.rendition.w!=7. || local_tone.size.x==0u || paint.a<=0. {return paint;}
+    let y=dot(paint.rgb/paint.a,HDR_WORKING_LUMA);
+    if y<=0. {return paint;}
+    let log_y=log2(max(y,0.000000059604645));
+    let q=clamp(position*vec2<f32>(local_tone.size.xy)/vec2<f32>(local_tone.size.zw)-.5,vec2(0.),vec2<f32>(local_tone.size.xy-1u));
+    let low=vec2<u32>(floor(q));let t=fract(q);
+    var total=0.;var value=0.;
+    for(var dy=0u;dy<2u;dy++){for(var dx=0u;dx<2u;dx++){
+        let xy=min(low+vec2(dx,dy),local_tone.size.xy-1u);
+        let p=local_tone.samples[xy.y*local_tone.size.x+xy.x];
+        let d=(p.x-log_y)/1.5;
+        let weight=select(1.-t.x,t.x,dx==1u)*select(1.-t.y,t.y,dy==1u)*p.z/(1.+d*d*d*d);
+        total+=weight;value+=weight*p.y;
+    }}
+    var base=log_y;if total>1e-12 {base=value/total;}
+    let stops=-hdr_view.local.x*(base+2.473931)+(hdr_view.local.y-1.)*(log_y-base);
+    return vec4(paint.rgb*exp2(clamp(stops,-32.,32.)),paint.a);
+}
 fn hdr_artwork(paint:vec4<f32>)->vec4<f32> {
-    if hdr_view.headroom.x<=1. {return hdr_map_sdr(paint,hdr_view.rendition,hdr_view.headroom.yz);}
+    if hdr_view.headroom.x<=1. {return hdr_map_sdr(paint,hdr_view.rendition,vec4(hdr_view.headroom.yz,hdr_view.local.xy));}
     if paint.a<=0. {return paint;}
     // Signed scRGB channels carry wide-gamut colors outside the sRGB cube.
     // Scale them together; clipping negative channels would change chromaticity.

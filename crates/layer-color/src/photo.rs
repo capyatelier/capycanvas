@@ -2,7 +2,7 @@
 //! file worker. PNG/TIFF output consumes rows, never a second full CPU canvas.
 use crate::{ProfileChannels, profile_bytes, profile_channels};
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
-use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
+use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
 use std::io::{BufRead, Read, Seek, Write};
 
 mod jpeg_codec;
@@ -11,24 +11,27 @@ mod jpeg_markers;
 mod jpeg_mpf;
 mod memory;
 pub use memory::PhotoMemoryBudget;
+mod gainmap;
+mod hdr_png;
 mod metadata;
 #[cfg(test)]
 mod metadata_tests;
 mod orientation;
 mod png_io;
-mod hdr_png;
-mod gainmap;
-pub use gainmap::{GainMapFormat, GainMapMetadata, gainmap_available, write_gainmap_rows, preview_gainmap_rows};
+pub use gainmap::{
+    GainMapFormat, GainMapMetadata, gainmap_available, preview_gainmap_rows, write_gainmap_rows,
+};
+pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide};
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
-mod tiff_io;
-mod raster_io;
 mod bmp_io;
 mod gif_io;
-mod webp_io;
 #[cfg(all(feature = "heif", target_os = "linux"))]
 mod heif_io;
+mod raster_io;
+mod tiff_io;
 #[cfg(test)]
 mod tiff_policy_tests;
+mod webp_io;
 pub use jpeg_io::{
     JpegEncodeOptions, read_jpeg, write_jpeg, write_jpeg_rows, write_jpeg_rows_with_options,
     write_jpeg_with_options,
@@ -45,21 +48,55 @@ pub struct PhotoFormat {
     pub mime_types: &'static [&'static str],
 }
 pub const PHOTO_FORMATS: &[PhotoFormat] = &[
-    PhotoFormat { name: "TIFF", extensions: &["tif", "tiff"], mime_types: &["image/tiff"] },
-    PhotoFormat { name: "PNG", extensions: &["png"], mime_types: &["image/png"] },
-    PhotoFormat { name: "WebP", extensions: &["webp"], mime_types: &["image/webp"] },
-    PhotoFormat { name: "BMP", extensions: &["bmp", "dib"], mime_types: &["image/bmp", "image/x-bmp", "image/x-ms-bmp"] },
-    PhotoFormat { name: "JPEG", extensions: &["jpg", "jpeg", "jpe"], mime_types: &["image/jpeg"] },
-    PhotoFormat { name: "GIF", extensions: &["gif"], mime_types: &["image/gif"] },
+    PhotoFormat {
+        name: "TIFF",
+        extensions: &["tif", "tiff"],
+        mime_types: &["image/tiff"],
+    },
+    PhotoFormat {
+        name: "PNG",
+        extensions: &["png"],
+        mime_types: &["image/png"],
+    },
+    PhotoFormat {
+        name: "WebP",
+        extensions: &["webp"],
+        mime_types: &["image/webp"],
+    },
+    PhotoFormat {
+        name: "BMP",
+        extensions: &["bmp", "dib"],
+        mime_types: &["image/bmp", "image/x-bmp", "image/x-ms-bmp"],
+    },
+    PhotoFormat {
+        name: "JPEG",
+        extensions: &["jpg", "jpeg", "jpe"],
+        mime_types: &["image/jpeg"],
+    },
+    PhotoFormat {
+        name: "GIF",
+        extensions: &["gif"],
+        mime_types: &["image/gif"],
+    },
     #[cfg(all(feature = "heif", target_os = "linux"))]
-    PhotoFormat { name: "HEIF", extensions: &["heif", "heic", "hif"], mime_types: &["image/heif", "image/heic"] },
+    PhotoFormat {
+        name: "HEIF",
+        extensions: &["heif", "heic", "hif"],
+        mime_types: &["image/heif", "image/heic"],
+    },
     #[cfg(all(feature = "heif", target_os = "linux"))]
-    PhotoFormat { name: "AVIF", extensions: &["avif"], mime_types: &["image/avif"] },
+    PhotoFormat {
+        name: "AVIF",
+        extensions: &["avif"],
+        mime_types: &["image/avif"],
+    },
 ];
 pub fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
     PHOTO_FORMATS.iter().filter(|_format| {
         #[cfg(all(feature = "heif", target_os = "linux"))]
-        if matches!(_format.name, "HEIF" | "AVIF") { return heif_io::available(); }
+        if matches!(_format.name, "HEIF" | "AVIF") {
+            return heif_io::available();
+        }
         true
     })
 }
@@ -124,10 +161,7 @@ fn validate_extent(extent: [u32; 2], dimension: u32) -> Result<(), String> {
 }
 
 /// Recognition uses file signatures; an extension never changes interpretation.
-pub fn read_photo(
-    input: impl BufRead + Seek,
-    limits: DecodeLimits,
-) -> Result<SourceImage, String> {
+pub fn read_photo(input: impl BufRead + Seek, limits: DecodeLimits) -> Result<SourceImage, String> {
     read_photo_detailed(input, limits).map(|photo| photo.source)
 }
 
@@ -145,9 +179,13 @@ pub fn read_photo_detailed_with_cancel(
     limits: DecodeLimits,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<DecodedPhoto, String> {
-    let check = || if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-        Err("Image read cancelled".to_string())
-    } else { Ok(()) };
+    let check = || {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            Err("Image read cancelled".to_string())
+        } else {
+            Ok(())
+        }
+    };
     check()?;
     let photo = read_photo_impl(input, limits, cancelled)?;
     check()?;
@@ -185,7 +223,11 @@ fn read_photo_impl(
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;
-    Ok(DecodedPhoto { source, first_frame: false, primary_image: false })
+    Ok(DecodedPhoto {
+        source,
+        first_frame: false,
+        primary_image: false,
+    })
 }
 
 fn interpretation(
@@ -248,6 +290,6 @@ mod jpeg_tests;
 #[cfg(test)]
 mod output_tests;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod raster_tests;
+#[cfg(test)]
+mod tests;

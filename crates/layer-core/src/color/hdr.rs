@@ -1,8 +1,13 @@
 //! Portable display-referred HDR semantics. Displays never redefine RGB 1.
 use super::f16;
 
+mod local;
 mod sdr;
-pub use sdr::{SdrMapper, SdrMethod, SdrRendition, to_bt2020, compress_sdr_gamut, unified_sdr_gamut, sdr_luminance_weights, BT2020_LUMA};
+pub use local::{LOCAL_GUIDE_EDGE, LocalToneBuilder, LocalToneGuide};
+pub use sdr::{
+    BT2020_LUMA, SdrMapper, SdrMethod, SdrRendition, compress_sdr_gamut, sdr_luminance_weights,
+    to_bt2020, unified_sdr_gamut,
+};
 
 pub const REFERENCE_WHITE_NITS: f32 = 203.;
 pub const MAX_LINEAR: f32 = 65504.;

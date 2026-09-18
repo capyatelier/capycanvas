@@ -250,19 +250,22 @@ control. In the Paint and Photo
 starting layouts it shares Color's tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
-For HDR artwork, **Proof → SDR** offers **Photographic / Browser**. Photographic
-maps luminance with a BT.2390 shoulder and compresses color toward white as the
-destination gamut fills. **Highlight color** balances **White** (brighter
-highlights, the default) and **Color** (more saturation). Browser retains the
-browser-derived reference-white fallback. **Exposure, Contrast, HDR range and
-Highlight color** use common compact slider/value controls. HDR range describes the input endpoint
-above reference white, not monitor peak. The default is 2.30 EV (1000 nits at
-the fixed 203-nit reference white). **Auto** measures the edited composite and
-fits its luminance peak for Photographic, or max-channel peak for older methods;
-it preserves the method and Highlight color choice while resetting exposure and
-contrast. **Auto** and the **Reset** icon sit beside the method selector.
-Reset restores the Photographic defaults. Saved Perceptual (BT.2390), Browser,
-Scale and Clip recipes reopen unchanged, until deliberately replaced.
+For HDR artwork, **Proof → SDR** has a **Tone × Detail pad**, plus compact
+**Brightness** and **Highlight color** controls. Move right to compress broad
+lighting differences around middle gray; move up to emphasize texture. Move left
+to retain more lighting contrast, or down to soften detail. The default preserves
+extracted detail at 100%. Brightness adjusts final SDR midtones with fixed black
+and white. Highlight color trades bright, increasingly white highlights for more
+of their color. These controls author the SDR rendition, not the HDR master.
+
+The pad supports drag, arrow keys (Shift for larger steps), numeric entry below
+it, Escape to cancel and double-click to reset its two axes. **Auto** measures the
+edited HDR luminance range and resets Brightness, keeping Tone, Detail and
+Highlight color. **Reset** restores the starting local rendition. Existing saved
+global recipes reopen unchanged; **Update controls** or Auto explicitly switches
+them to local tone mapping, with Undo available. The
+[algorithm, fixtures and qualification notes](../history/color-management-local-tone.md)
+explain the bounded local-Laplacian approximation and its limits.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.

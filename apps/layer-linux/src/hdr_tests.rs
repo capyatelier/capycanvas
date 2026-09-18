@@ -122,8 +122,12 @@ fn native_hdr_delivery_failure_and_cancellation_preserve_destination() {
 #[allow(deprecated)]
 fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u32) {
     invoke(w, CommandId::ExportDocument);
-    combo(w, "export-output").set_selected(u32::from(format >= 3));
-    combo(w, "export-format").set_selected(format.min(2));
+    let range=combo(w, "export-output");
+    range.set_selected(u32::from(format >= 3));
+    // Commit this explicit choice even when it equals the initial value.
+    range.notify("selected");
+    if format<3 {combo(w, "export-format").set_selected(format);}
+    eprintln!("DELIVER {name}: output={} format={}",combo(w,"export-output").selected(),combo(w,"export-format").selected());
     if format >= 3 {
         assert!(!combo(w, "export-depth").is_visible());
         assert!(!combo(w, "export-format").is_visible());
@@ -134,6 +138,7 @@ fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u
         combo(w, "export-depth").set_selected(0);
     }
     pump(200);
+    eprintln!("DELIVER READY {name}: output={} format={}",combo(w,"export-output").selected(),combo(w,"export-format").selected());
     response(w, "export");
     let file = chooser();
     file.set_current_folder(Some(&gtk::gio::File::for_path(directory)))
@@ -328,10 +333,10 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&photo).document.sdr_rendition,saved);
     mode.set_active_name(Some("sdr"));pump(50);
     assert!(find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").is_none());
-    let shoulder=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlights").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    let shoulder=find_named(photo.proof_panel.root.upcast_ref(),"sdr-tone-pad-tone").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
     shoulder.set_value(0.75);shoulder.emit_by_name::<()>("value-changed",&[]);pump(50);
-    assert_eq!(project(&photo).document.sdr_rendition.highlights,0.75);
-    assert_eq!(project(&photo).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::Unified);
+    assert_eq!(project(&photo).document.sdr_rendition.tone,0.75);
+    assert_eq!(project(&photo).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::LocalLaplacian);
     assert_eq!(pixels(&photo),painted);
     // Opening a previous method keeps its exact recipe; migration is explicit,
     // and one Undo restores both the recipe and the compatibility panel.
@@ -455,11 +460,13 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
             .unwrap();
     let mut row = vec![0; sdr.row_bytes()];
     let mut actual = vec![[0.; 4]; 512];
+    let guide=layer_color::build_local_tone_guide([512,384],RgbSpace::Srgb,||false,|y,row|{row.copy_from_slice(&painted[y as usize*512..(y as usize+1)*512]);Ok(())}).unwrap();
     for y in [0, 150, 383] {
         sdr.rows().read(y, &mut row).unwrap();
         decoder.decode_pixels(&row, &mut actual).unwrap();
         for (x, p) in actual.iter().enumerate() {
-            let expected = recipe.map_premultiplied(painted[y as usize * 512 + x], RgbSpace::Srgb);
+            let adjusted=guide.adjust(painted[y as usize * 512 + x],[x as f32+0.5,y as f32+0.5],RgbSpace::Srgb,recipe);
+            let expected = recipe.map_premultiplied(adjusted, RgbSpace::Srgb);
             for c in 0..3 {
                 assert!(
                     (p[c] - expected[c]).abs() < 0.01,
@@ -707,6 +714,7 @@ fn large_export_preview_and_cancellation(output:u32) {
     if std::env::var_os("LAYER_HDR_DEFAULT_RENDITION").is_some() {
         p.document.sdr_rendition = Default::default();
     }
+    if std::env::var_os("LAYER_HDR_GLOBAL_BASELINE").is_some() {p.document.sdr_rendition=SdrRendition::unified_default();}
     eprintln!("HDR_LARGE_RENDITION {:?}", p.document.sdr_rendition);
     assert_eq!(p.document.color.depth, SampleDepth::F16);
     assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
@@ -772,7 +780,7 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
         invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"auto");
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {pump(20);let b=find_named(panel.upcast_ref(),"sdr-appearance-auto").unwrap().downcast::<gtk::Button>().unwrap();if b.label().as_deref()==Some("Auto"){break;}assert!(Instant::now()<deadline);}
-        assert_eq!(project(&w).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::Unified);
+        assert_eq!(project(&w).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::LocalLaplacian);
         let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum::<f64>().max(1.).log2();
         assert!((project(&w).document.sdr_rendition.headroom as f64-expected_peak).abs()<0.002);
         let original=snapshot(&w);
@@ -796,5 +804,48 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
             let dialog=w.window.visible_dialog().unwrap();let flatten=find_named(dialog.upcast_ref(),"export-flatten").unwrap().downcast::<adw::SwitchRow>().unwrap();assert!(flatten.is_visible());flatten.set_active(true);wait();capture_ui(&w,&output,"jpeg-flatten.png");response(&w,"cancel");finish(&w);
         }
         assert_eq!(snapshot(&w),original);w.window.destroy();pump(100);
+    }
+}
+
+#[test]
+#[ignore = "private Wayland/GPU and downloaded local-tone review fixtures"]
+fn native_local_tone_pad_and_five_hdr_photos() {
+    let app=native_test_app("art.capycanvas.LocalToneReview");
+    let directory=std::path::Path::new("../../artifacts/color-m4/local-tone/images/review").canonicalize().unwrap();
+    let evidence=std::path::Path::new("../../artifacts/color-m4/local-tone/native");std::fs::create_dir_all(evidence).unwrap();let evidence=evidence.canonicalize().unwrap();
+    for name in ["abandoned_hall_01","venice_sunset","neon_photostudio","kiara_1_dawn","studio_small_09"] {
+        let path=directory.join(format!("{name}_2k.capy"));
+        let p=layer_core::Project::read(std::fs::File::open(&path).unwrap(),Default::default()).unwrap();
+        let recipe=p.document.sdr_rendition;assert!(recipe.is_local());let source=p.document.layers[0].source.clone();
+        let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);invoke(&w,CommandId::SdrRendition);appearance(&w);
+        let start=Instant::now();
+        while w.local_tone.ready_count().is_none(){pump(10);assert!(start.elapsed()<Duration::from_secs(60),"analysis: {}",w.local_tone.label.text());}
+        let count=w.local_tone.ready_count();eprintln!("LOCAL_PHOTO {name} analysis_ready_ms={:.2}",start.elapsed().as_secs_f64()*1000.);
+        capture_ui(&w,&evidence,&format!("{name}.png"));
+        let pad=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();assert!(pad.is_mapped());assert!(pad.width()>100 && pad.height()>60);
+        let controllers=pad.observe_controllers();let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
+        let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
+        let clicks=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureClick>()).unwrap();
+        let gesture=Instant::now();drag.emit_by_name::<()>("drag-begin",&[&20f64,&80f64]);
+        for i in 0..30 {drag.emit_by_name::<()>("drag-update",&[&(i as f64*3.),&(-i as f64)]);pump(5);}
+        drag.emit_by_name::<()>("drag-end",&[&87f64,&-29f64]);ready(&w);
+        eprintln!("LOCAL_PHOTO {name} 30_pad_updates_ms={:.2}",gesture.elapsed().as_secs_f64()*1000.);
+        let edited=project(&w).document.sdr_rendition;assert_ne!(edited.tone,recipe.tone);assert_ne!(edited.detail,recipe.detail);
+        assert_eq!(w.local_tone.ready_count(),count,"pad must reuse analysis");
+        invoke(&w,CommandId::Undo);ready(&w);assert_eq!(project(&w).document.sdr_rendition,recipe,"one undo per drag");
+        invoke(&w,CommandId::Redo);ready(&w);assert_eq!(project(&w).document.sdr_rendition,edited);
+        assert!(keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Right,&0u32,&gdk::ModifierType::empty()]));
+        assert_ne!(w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition,edited);
+        keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Escape,&0u32,&gdk::ModifierType::empty()]);pump(20);assert_eq!(project(&w).document.sdr_rendition,edited,"Escape restores gesture");
+        clicks.emit_by_name::<()>("pressed",&[&2i32,&40f64,&40f64]);pump(20);
+        let reset=project(&w).document.sdr_rendition;assert_eq!((reset.tone,reset.detail),(recipe.tone,recipe.detail));
+        assert_eq!(project(&w).document.layers[0].source,source,"proof must not edit source");
+        assert_eq!(w.local_tone.ready_count(),count);
+        if name=="abandoned_hall_01" {
+            invoke(&w,CommandId::ExportDocument);combo(&w,"export-output").set_selected(0);
+            let deadline=Instant::now()+Duration::from_secs(60);while !super::new_photo::export_enabled(&w){pump(20);assert!(Instant::now()<deadline);}
+            capture_ui(&w,&evidence,"local-sdr-export.png");response(&w,"cancel");finish(&w);
+        }
+        w.window.destroy();pump(100);
     }
 }

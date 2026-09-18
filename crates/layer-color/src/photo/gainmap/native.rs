@@ -185,6 +185,7 @@ pub(super) fn write(
     extent: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
+    guide: Option<&hdr::LocalToneGuide>,
     format: GainMapFormat,
     quality: u8,
     resolution: Option<layer_core::ImageResolution>,
@@ -218,6 +219,18 @@ pub(super) fn write(
     let matrix = hdr::to_bt2020(space);
     let mapper = rendition.mapper(space, space);
     let photographic = rendition.mapper(space, RgbSpace::Srgb);
+    let generated = if rendition.is_local() && guide.is_none() {
+        Some(crate::build_local_tone_guide(
+            extent,
+            space,
+            || cancel.load(std::sync::atomic::Ordering::Relaxed),
+            &mut read,
+        )?)
+    } else {
+        None
+    };
+    let guide = guide.or(generated.as_ref());
+    let weights = hdr::sdr_luminance_weights(space);
     let mut base = stage.create("base.raw")?;
     let mut master = stage.create("master")?;
     let mut row = vec![[0.; 4]; extent[0] as usize];
@@ -226,7 +239,7 @@ pub(super) fn write(
     for y in 0..extent[1] {
         check(cancel)?;
         read(y, &mut row)?;
-        for p in &row {
+        for (x, p) in row.iter().enumerate() {
             if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
                 return Err("Invalid HDR output pixel".into());
             }
@@ -240,12 +253,34 @@ pub(super) fn write(
                 [0.; 3]
             };
             let mut hdr = rgb::apply(matrix, raw.map(f64::from)).map(|v| v as f32);
+            let sdr_raw = if let Some(guide) = guide {
+                let position = [
+                    (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
+                    (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
+                ];
+                let adjusted = if a > 0. {
+                    guide
+                        .adjust_with_weights(*p, position, weights, rendition)
+                        .map(|v| v / a)
+                } else {
+                    [0.; 4]
+                };
+                [adjusted[0], adjusted[1], adjusted[2]]
+            } else {
+                raw
+            };
             // The photographic base uses the same bounded sRGB rendition as
             // ordinary sharing. Encode those colors in the gain-map application
             // space; RGB gains still reconstruct the original wide-color HDR.
             let mut sdr = if rendition.uses_gamut_mapping() {
-                rgb::apply(hdr::srgb_to_bt2020(), photographic.map_rgb(raw).map(f64::from)).map(|v|v as f32)
-            } else { rgb::apply(matrix, mapper.tone_rgb(raw).map(f64::from)).map(|v| v as f32) };
+                rgb::apply(
+                    hdr::srgb_to_bt2020(),
+                    photographic.map_rgb(sdr_raw).map(f64::from),
+                )
+                .map(|v| v as f32)
+            } else {
+                rgb::apply(matrix, mapper.tone_rgb(sdr_raw).map(f64::from)).map(|v| v as f32)
+            };
             for c in 0..3 {
                 sdr[c] = sdr[c].clamp(0., 1.);
                 if let Some(background) = matte {
@@ -499,6 +534,7 @@ pub(super) fn preview(
     bounds: [u32; 2],
     space: RgbSpace,
     rendition: SdrRendition,
+    guide: Option<&hdr::LocalToneGuide>,
     format: GainMapFormat,
     quality: u8,
     matte: Option<[f32; 3]>,
@@ -519,6 +555,7 @@ pub(super) fn preview(
         extent,
         space,
         rendition,
+        guide,
         format,
         quality,
         None,
@@ -598,33 +635,82 @@ pub(super) fn preview(
 mod lifecycle_tests {
     use super::*;
     #[test]
-    #[ignore="pinned Linux HDR codec bundle; actual process cancellation"]
+    #[ignore = "pinned Linux HDR codec bundle; actual process cancellation"]
     fn gainmap_cancel_reaps_an_active_codec_and_removes_staging() {
-        let cancelled=std::sync::Arc::new(AtomicBool::new(false));let flag=cancelled.clone();
-        let worker=std::thread::spawn(move||{
-            write(std::io::sink(),[2048,2048],RgbSpace::Srgb,SdrRendition::default(),GainMapFormat::Avif,90,None,None,false,&flag,|y,row|{
-                for (x,p) in row.iter_mut().enumerate(){let n=(x as u32).wrapping_mul(747796405).wrapping_add(y.wrapping_mul(2891336453));let n=(n^(n>>16)).wrapping_mul(2246822519);let v=(n&65535) as f32/65535.;*p=[v*4.,v*2.,0.25,1.];}Ok(())
-            })
-        });
-        let start=Instant::now();let mut codec=None;
-        while start.elapsed()<Duration::from_secs(40)&&codec.is_none(){
-            for task in fs::read_dir(format!("/proc/{}/task",std::process::id())).unwrap().flatten(){
-                if let Ok(children)=fs::read_to_string(task.path().join("children")){for pid in children.split_whitespace(){
-                    if fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|p|p.file_name().is_some_and(|n|n=="capy-hdr-codec"))
-                        && fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|b|b.windows(11).any(|s|s==b"encode-avif")){
-                        codec=Some(pid.to_string());break;
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let worker = std::thread::spawn(move || {
+            write(
+                std::io::sink(),
+                [2048, 2048],
+                RgbSpace::Srgb,
+                SdrRendition::default(),
+                None,
+                GainMapFormat::Avif,
+                90,
+                None,
+                None,
+                false,
+                &flag,
+                |y, row| {
+                    for (x, p) in row.iter_mut().enumerate() {
+                        let n = (x as u32)
+                            .wrapping_mul(747796405)
+                            .wrapping_add(y.wrapping_mul(2891336453));
+                        let n = (n ^ (n >> 16)).wrapping_mul(2246822519);
+                        let v = (n & 65535) as f32 / 65535.;
+                        *p = [v * 4., v * 2., 0.25, 1.];
                     }
-                }}
+                    Ok(())
+                },
+            )
+        });
+        let start = Instant::now();
+        let mut codec = None;
+        while start.elapsed() < Duration::from_secs(40) && codec.is_none() {
+            for task in fs::read_dir(format!("/proc/{}/task", std::process::id()))
+                .unwrap()
+                .flatten()
+            {
+                if let Ok(children) = fs::read_to_string(task.path().join("children")) {
+                    for pid in children.split_whitespace() {
+                        if fs::read_link(format!("/proc/{pid}/exe"))
+                            .is_ok_and(|p| p.file_name().is_some_and(|n| n == "capy-hdr-codec"))
+                            && fs::read(format!("/proc/{pid}/cmdline"))
+                                .is_ok_and(|b| b.windows(11).any(|s| s == b"encode-avif"))
+                        {
+                            codec = Some(pid.to_string());
+                            break;
+                        }
+                    }
+                }
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        let cancel_at=Instant::now();cancelled.store(true,Ordering::Release);
-        let result=worker.join().unwrap();assert!(codec.is_some(),"encoder never started: {result:?}");
+        let cancel_at = Instant::now();
+        cancelled.store(true, Ordering::Release);
+        let result = worker.join().unwrap();
+        assert!(codec.is_some(), "encoder never started: {result:?}");
         assert!(result.unwrap_err().contains("cancelled"));
-        assert!(cancel_at.elapsed()<Duration::from_secs(2),"codec cancellation exceeded two seconds");
-        assert!(!std::path::Path::new(&format!("/proc/{}",codec.unwrap())).exists(),"codec must be reaped");
-        let prefix=format!("capy-hdr-{}-",std::process::id());
-        assert!(!fs::read_dir(std::env::temp_dir()).unwrap().flatten().any(|e|e.file_name().to_string_lossy().starts_with(&prefix)),"private staging must be removed");
-        eprintln!("active AVIF codec cancellation: {:.2} ms",cancel_at.elapsed().as_secs_f64()*1000.);
+        assert!(
+            cancel_at.elapsed() < Duration::from_secs(2),
+            "codec cancellation exceeded two seconds"
+        );
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", codec.unwrap())).exists(),
+            "codec must be reaped"
+        );
+        let prefix = format!("capy-hdr-{}-", std::process::id());
+        assert!(
+            !fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(&prefix)),
+            "private staging must be removed"
+        );
+        eprintln!(
+            "active AVIF codec cancellation: {:.2} ms",
+            cancel_at.elapsed().as_secs_f64() * 1000.
+        );
     }
 }

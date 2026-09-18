@@ -50,7 +50,9 @@ pub struct ViewportPresenter {
     proof_buffer: wgpu::Buffer,
     proof_uniform: wgpu::Buffer,
     hdr_uniform: wgpu::Buffer,
-    hdr_options: [f32; 8],
+    hdr_options: [f32; 12],
+    local_buffer: wgpu::Buffer,
+    local_guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
@@ -79,12 +81,80 @@ pub struct ViewportPresenter {
 }
 
 impl ViewportPresenter {
-    pub fn set_hdr_view(&mut self, renderer: &WgpuRasterizer, rendition: Option<layer_core::color::hdr::SdrRendition>, headroom: f32) -> Result<(), GpuRasterError> {
-        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err(GpuRasterError::Color("Invalid display HDR headroom".into())); }
-        if let Some(r) = rendition { r.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
-        let options = rendition.map_or([0.; 8], |r| { let p = r.parameters(); [p[0],p[1],p[2],p[3],headroom,p[4],p[5],0.] });
+    pub fn set_local_tone_guide(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
+    ) -> Result<(), GpuRasterError> {
+        if match (&self.local_guide, &guide) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        } {
+            return Ok(());
+        }
+        let size = guide.as_ref().map_or(32, |g| g.byte_len()) as u64;
+        if size > renderer.device.limits().max_storage_buffer_binding_size as u64 {
+            return Err(GpuRasterError::Color(
+                "Local tone guide exceeds GPU buffer limit".into(),
+            ));
+        }
+        let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("local Laplacian Float32 guide"),
+            size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: true,
+        });
+        {
+            let mut bytes = buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .map_err(|e| GpuRasterError::Color(e.to_string()))?;
+            let mut packed = vec![0u8; size as usize];
+            if let Some(g) = &guide {
+                let header = [
+                    g.extent[0],
+                    g.extent[1],
+                    g.document_extent[0],
+                    g.document_extent[1],
+                ];
+                packed[..16].copy_from_slice(header.map(u32::to_ne_bytes).as_flattened());
+                for (out, p) in packed[16..].chunks_exact_mut(16).zip(&g.samples) {
+                    out.copy_from_slice(p.map(f32::to_ne_bytes).as_flattened());
+                }
+            }
+            bytes.copy_from_slice(&packed);
+        }
+        buffer.unmap();
+        self.local_buffer = buffer;
+        self.local_guide = guide;
+        self.bind_group = None;
+        Ok(())
+    }
+    pub fn set_hdr_view(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
+        headroom: f32,
+    ) -> Result<(), GpuRasterError> {
+        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) {
+            return Err(GpuRasterError::Color("Invalid display HDR headroom".into()));
+        }
+        if let Some(r) = rendition {
+            r.validate().map_err(|e| GpuRasterError::Color(e.into()))?;
+        }
+        let options = rendition.map_or([0.; 12], |r| {
+            let p = r.parameters();
+            [
+                p[0], p[1], p[2], p[3], headroom, p[4], p[5], 0., p[6], p[7], 0., 0.,
+            ]
+        });
         if options != self.hdr_options {
-            renderer.queue.write_buffer(&self.hdr_uniform, 0, options.map(f32::to_ne_bytes).as_flattened());
+            renderer.queue.write_buffer(
+                &self.hdr_uniform,
+                0,
+                options.map(f32::to_ne_bytes).as_flattened(),
+            );
             self.hdr_options = options;
         }
         Ok(())
@@ -113,14 +183,30 @@ impl ViewportPresenter {
     }
 
     pub fn proof_storage_bytes(&self) -> u64 {
-        if self.proof_lut.is_some() { self.proof_buffer.size() } else { 0 }
+        self.local_guide
+            .as_ref()
+            .map_or(0, |_| self.local_buffer.size())
+            + if self.proof_lut.is_some() {
+                self.proof_buffer.size()
+            } else {
+                0
+            }
     }
 
     /// Explicit viewport captures share immutable samples and the same viewing
     /// options; they do not allocate another LUT. Export never calls this path.
     pub fn inherit_proof(&mut self, renderer: &WgpuRasterizer, source: &Self) {
+        if self.local_buffer != source.local_buffer {
+            self.local_buffer = source.local_buffer.clone();
+            self.local_guide = source.local_guide.clone();
+            self.bind_group = None;
+        }
         if self.hdr_options != source.hdr_options {
-            renderer.queue.write_buffer(&self.hdr_uniform, 0, source.hdr_options.map(f32::to_ne_bytes).as_flattened());
+            renderer.queue.write_buffer(
+                &self.hdr_uniform,
+                0,
+                source.hdr_options.map(f32::to_ne_bytes).as_flattened(),
+            );
             self.hdr_options = source.hdr_options;
         }
         if self.proof_buffer == source.proof_buffer && self.proof_uniform == source.proof_uniform {
@@ -143,8 +229,13 @@ impl ViewportPresenter {
         enabled: bool,
         gamut: bool,
     ) -> Result<(), GpuRasterError> {
-        if lut.as_ref().is_some_and(|l| l.space() != renderer.device.working_space()) {
-            return Err(GpuRasterError::Color("Proof preview working space is stale".into()));
+        if lut
+            .as_ref()
+            .is_some_and(|l| l.space() != renderer.device.working_space())
+        {
+            return Err(GpuRasterError::Color(
+                "Proof preview working space is stale".into(),
+            ));
         }
         let same = match (&self.proof_lut, &lut) {
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
@@ -154,27 +245,44 @@ impl ViewportPresenter {
         if !same {
             let size = lut.as_ref().map_or(20, |l| l.byte_len()) as u64;
             if size > renderer.device.limits().max_storage_buffer_binding_size as u64 {
-                return Err(GpuRasterError::Color("Proof preview exceeds the GPU buffer limit".into()));
+                return Err(GpuRasterError::Color(
+                    "Proof preview exceeds the GPU buffer limit".into(),
+                ));
             }
             let buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("proof viewing samples"), size,
-                usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: true,
+                label: Some("proof viewing samples"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: true,
             });
             if let Some(lut) = &lut {
                 // Nested f32 arrays have no padding or uninitialized bytes.
-                let bytes = unsafe { std::slice::from_raw_parts(lut.samples().as_ptr().cast::<u8>(), lut.byte_len()) };
-                buffer.slice(..).get_mapped_range_mut()
-                    .map_err(|e| GpuRasterError::Color(e.to_string()))?.copy_from_slice(bytes);
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(lut.samples().as_ptr().cast::<u8>(), lut.byte_len())
+                };
+                buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .map_err(|e| GpuRasterError::Color(e.to_string()))?
+                    .copy_from_slice(bytes);
             }
             buffer.unmap();
             self.proof_buffer = buffer;
             self.proof_lut = lut;
             self.bind_group = None;
         }
-        let options = self.proof_lut.as_ref().map_or([0; 4], |lut| [
-            lut.edge(), layer_core::color::RgbSpace::ALL.iter().position(|s| *s == lut.space()).unwrap() as u32 | (u32::from(lut.dark_grid()) << 8),
-            u32::from(enabled), u32::from(gamut),
-        ]);
+        let options = self.proof_lut.as_ref().map_or([0; 4], |lut| {
+            [
+                lut.edge(),
+                layer_core::color::RgbSpace::ALL
+                    .iter()
+                    .position(|s| *s == lut.space())
+                    .unwrap() as u32
+                    | (u32::from(lut.dark_grid()) << 8),
+                u32::from(enabled),
+                u32::from(gamut),
+            ]
+        });
         if self.proof_options != options {
             let bytes = unsafe { std::slice::from_raw_parts(options.as_ptr().cast::<u8>(), 16) };
             renderer.queue.write_buffer(&self.proof_uniform, 0, bytes);
@@ -201,7 +309,15 @@ impl ViewportPresenter {
     ) -> Result<Self, GpuRasterError> {
         color.shader_encoding(format)?;
         let mut presenter = Self::with_device(&renderer.device, format, color);
-        presenter.set_hdr_view(renderer, renderer.document_color().depth.is_float().then_some(Default::default()), 1.)?;
+        presenter.set_hdr_view(
+            renderer,
+            renderer
+                .document_color()
+                .depth
+                .is_float()
+                .then_some(Default::default()),
+            1.,
+        )?;
         Ok(presenter)
     }
 
@@ -222,6 +338,16 @@ impl ViewportPresenter {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("viewport bindings"),
             entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(32),
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -301,7 +427,11 @@ impl ViewportPresenter {
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: std::num::NonZeroU64::new(32) },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(48),
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -412,16 +542,31 @@ impl ViewportPresenter {
             layout,
             uniform,
             proof_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("disabled proof samples"), size: 20,
-                usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+                label: Some("disabled proof samples"),
+                size: 20,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
             }),
             proof_uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("proof viewing options"), size: 16,
+                label: Some("proof viewing options"),
+                size: 16,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor { label: Some("HDR viewing options"), size: 32, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
-            hdr_options: [0.; 8],
+            hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("HDR viewing options"),
+                size: 48,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            hdr_options: [0.; 12],
+            local_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("disabled local tone guide"),
+                size: 32,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }),
+            local_guide: None,
             proof_options: [0; 4],
             timing: None,
             proof_lut: None,
@@ -655,7 +800,11 @@ impl ViewportPresenter {
             .live_display
             .as_ref()
             .map_or(composite, |cache| &cache.coarse.view);
-        let next = renderer.live_display.as_ref().and_then(|c| c.next_view()).unwrap_or(coarse);
+        let next = renderer
+            .live_display
+            .as_ref()
+            .and_then(|c| c.next_view())
+            .unwrap_or(coarse);
         let geometry = renderer
             .live_display
             .as_ref()
@@ -703,9 +852,22 @@ impl ViewportPresenter {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(next),
                     },
-                    wgpu::BindGroupEntry { binding: 7, resource: self.proof_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 8, resource: self.proof_uniform.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 9, resource: self.hdr_uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: self.proof_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: self.proof_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: self.hdr_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: self.local_buffer.as_entire_binding(),
+                    },
                 ],
             }));
             self.document_extent = renderer.document_extent;

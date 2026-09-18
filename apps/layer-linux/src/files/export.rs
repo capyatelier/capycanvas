@@ -802,6 +802,17 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     rendition_view.connect_active_name_notify(glib::clone!(#[weak] comparison, move |group| comparison.show_fallback(group.active_name().as_deref()==Some("sdr"))));
     let recommend=Rc::new(std::cell::Cell::new(false));
     range.connect_selected_notify(glib::clone!(#[strong] recommend, move |_| recommend.set(false)));
+    // A user may explicitly choose the already selected HDR-native entry while
+    // coverage is still being analysed. That produces no selected notification.
+    // Any interaction with this chooser takes precedence over late recommendations.
+    let output_input=gtk::EventControllerLegacy::new();
+    output_input.set_propagation_phase(gtk::PropagationPhase::Capture);
+    output_input.connect_event(glib::clone!(#[strong] recommend, move |_,event| {
+        if matches!(event.event_type(),gtk::gdk::EventType::ButtonPress | gtk::gdk::EventType::TouchBegin | gtk::gdk::EventType::KeyPress) {recommend.set(false);}
+        glib::Propagation::Proceed
+    }));
+    range.add_controller(output_input);
+
     range.connect_selected_notify(glib::clone!(#[weak] rendition_view, #[weak] comparison, move |range| {
         if range.selected()<2 {rendition_view.set_active_name(Some("hdr"));comparison.show_fallback(false);}
     }));

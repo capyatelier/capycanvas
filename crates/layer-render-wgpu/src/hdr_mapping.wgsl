@@ -40,16 +40,19 @@ fn hdr_bt2390(x:f32,headroom:f32,highlights:f32)->f32 {
     let mapped=(2.*t3-3.*t2+1.)*knee+(t3-2.*t2+t)*(1.-knee)+(-2.*t3+3.*t2)*output;
     return clamp(hdr_sdr_pq_decode(mapped*pq_peak)/203.,0.,1.);
 }
-fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
+fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>)->vec4<f32> {
     if options.w==0. || paint.a<=0. {return paint;}
     let rgb=paint.rgb/paint.a;
     let rec=hdr_to_rec2020(rgb);
     let peak=max(0.,max(rec.r,max(rec.g,rec.b)));
     if peak<=0. {return vec4(vec3(0.),paint.a);}
-    if options.w==6. {
+    if options.w==6. || options.w==7. {
         let y=dot(rec,vec3(0.2627002,0.6779981,0.0593017));
         if y<=0. {return vec4(vec3(0.),paint.a);}
-        let mapped=hdr_sdr_bounded_adjust(hdr_bt2390(y,options.z,appearance.y),options);
+        var point_options=options;
+        var shoulder=appearance.y;
+        if options.w==7. {point_options=vec4(options.x,1.,max(options.z*(1.-appearance.z)-2.473931*appearance.z,0.),6.);shoulder=0.;}
+        let mapped=hdr_sdr_bounded_adjust(hdr_bt2390(y,point_options.z,shoulder),point_options);
         return vec4(rgb/y*mapped*paint.a,paint.a);
     }
     if options.w==5. {
@@ -67,21 +70,21 @@ fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f3
     if options.w==4. {mapped=hdr_bt2390(x,options.z,0.);}
     return vec4(rgb/peak*mapped*paint.a,paint.a);
 }
-fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
+fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>)->vec4<f32> {
     let p=hdr_tone_sdr(paint,options,appearance);
     if options.w==0. || p.a<=0. {return p;}
     var rgb=hdr_to_output(p.rgb/p.a);
-    if options.w==6. {rgb=hdr_unified_gamut(rgb,HDR_OUTPUT_LUMA,appearance.x);}
+    if options.w==6. || options.w==7. {rgb=hdr_unified_gamut(rgb,HDR_OUTPUT_LUMA,appearance.x);}
     else if options.w==5. {rgb=hdr_compress_gamut(rgb,HDR_OUTPUT_LUMA);}
     else {rgb=clamp(rgb,vec3(0.),vec3(1.));}
     return vec4(hdr_from_output(rgb)*p.a,p.a);
 }
 // Print LUTs have a bounded working-RGB input. ICC delivery uses the same
 // preparation before the profile transform, including Photographic gamut mapping.
-fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>,appearance:vec2<f32>)->vec4<f32> {
+fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>)->vec4<f32> {
     let p=hdr_tone_sdr(paint,options,appearance);
     if options.w==0. || p.a<=0. {return p;}
-    if options.w==6. {return vec4(hdr_unified_gamut(p.rgb/p.a,HDR_WORKING_LUMA,appearance.x)*p.a,p.a);}
+    if options.w==6. || options.w==7. {return vec4(hdr_unified_gamut(p.rgb/p.a,HDR_WORKING_LUMA,appearance.x)*p.a,p.a);}
     if options.w==5. {return vec4(hdr_compress_gamut(p.rgb/p.a,HDR_WORKING_LUMA)*p.a,p.a);}
     return vec4(clamp(p.rgb/p.a,vec3(0.),vec3(1.))*p.a,p.a);
 }

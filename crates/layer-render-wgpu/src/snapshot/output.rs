@@ -3,53 +3,159 @@ use super::*;
 use layer_core::color::RgbSpace;
 
 impl SnapshotRenderer {
-    pub fn write_gainmap(&mut self, output: impl std::io::Write, format: layer_color::photo::GainMapFormat, quality:u8, matte:Option<[f32;3]>, clip:bool) -> Result<layer_color::OutputStatistics,String> {
-        let rendition=self.sdr_rendition.ok_or("Gain-map delivery requires an HDR document")?;
-        let control=self.control.clone(); let resolution=self.output_resolution;
-        self.hdr_rows(|extent,space,read|layer_color::photo::write_gainmap_rows(output,extent,space,rendition,format,quality,resolution,matte,clip,control.cancellation_flag(),read))
+    /// Immutable full-document analysis, shared by preview and every delivery
+    /// size. The row reader and Laplacian worker both observe cancellation.
+    pub fn local_tone_guide(
+        &mut self,
+    ) -> Result<Arc<layer_core::color::hdr::LocalToneGuide>, String> {
+        if let Some(guide) = &self.local_tone {
+            return Ok(guide.clone());
+        }
+        let extent = self.extent;
+        let space = self.color().space;
+        let control = self.control.clone();
+        let mut rows = Rows::new(self);
+        let guide = Arc::new(layer_color::build_local_tone_guide(
+            extent,
+            space,
+            || control.is_cancelled(),
+            |y, row| {
+                row.copy_from_slice(rows.read(y)?);
+                Ok(())
+            },
+        )?);
+        self.local_tone = Some(guide.clone());
+        Ok(guide)
     }
-    pub fn write_hdr_png(&mut self, output: impl std::io::Write, clip: bool) -> Result<layer_color::OutputStatistics, String> {
+    pub fn write_gainmap(
+        &mut self,
+        output: impl std::io::Write,
+        format: layer_color::photo::GainMapFormat,
+        quality: u8,
+        matte: Option<[f32; 3]>,
+        clip: bool,
+    ) -> Result<layer_color::OutputStatistics, String> {
+        let rendition = self
+            .sdr_rendition
+            .ok_or("Gain-map delivery requires an HDR document")?;
+        let control = self.control.clone();
         let resolution = self.output_resolution;
-        self.hdr_rows(|extent, space, read| layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read))
+        let guide = if rendition.is_local() {
+            Some(self.local_tone_guide()?)
+        } else {
+            None
+        };
+        self.hdr_rows(|extent, space, read| {
+            layer_color::photo::write_gainmap_rows_with_guide(
+                output,
+                extent,
+                space,
+                rendition,
+                guide.as_deref(),
+                format,
+                quality,
+                resolution,
+                matte,
+                clip,
+                control.cancellation_flag(),
+                read,
+            )
+        })
+    }
+    pub fn write_hdr_png(
+        &mut self,
+        output: impl std::io::Write,
+        clip: bool,
+    ) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
+        self.hdr_rows(|extent, space, read| {
+            layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read)
+        })
     }
 
     /// Exact edited peak in the selected mapper's domain: D65 luminance for
     /// Photographic, Rec.2020 max-RGB for legacy methods.
     /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
-    pub fn hdr_headroom(&mut self) -> Result<f32,String> {
-        let mut peak=1f32;
-        let photographic=self.sdr_rendition.is_some_and(|r|r.uses_gamut_mapping());
-        self.hdr_rows(|extent,space,read|{
-            let m=layer_core::color::hdr::to_bt2020(space);
-            let mut row=vec![[0.;4];extent[0] as usize];
-            for y in 0..extent[1]{read(y,&mut row)?;for p in &row{if p[3]>0.{
-                let v=layer_core::color::rgb::apply(m,[p[0] as f64/p[3] as f64,p[1] as f64/p[3] as f64,p[2] as f64/p[3] as f64]);
-                if v.iter().any(|c| !c.is_finite()){return Err("Cannot measure non-finite HDR data".into());}
-                let measured=if photographic {v.into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum()}else{v.into_iter().fold(0f64,f64::max)};
-                peak=peak.max(measured as f32);
-            }}}
+    pub fn hdr_headroom(&mut self) -> Result<f32, String> {
+        let mut peak = 1f32;
+        let photographic = self.sdr_rendition.is_some_and(|r| r.uses_gamut_mapping());
+        self.hdr_rows(|extent, space, read| {
+            let m = layer_core::color::hdr::to_bt2020(space);
+            let mut row = vec![[0.; 4]; extent[0] as usize];
+            for y in 0..extent[1] {
+                read(y, &mut row)?;
+                for p in &row {
+                    if p[3] > 0. {
+                        let v = layer_core::color::rgb::apply(
+                            m,
+                            [
+                                p[0] as f64 / p[3] as f64,
+                                p[1] as f64 / p[3] as f64,
+                                p[2] as f64 / p[3] as f64,
+                            ],
+                        );
+                        if v.iter().any(|c| !c.is_finite()) {
+                            return Err("Cannot measure non-finite HDR data".into());
+                        }
+                        let measured = if photographic {
+                            v.into_iter()
+                                .zip(layer_core::color::hdr::BT2020_LUMA)
+                                .map(|(v, w)| v * f64::from(w))
+                                .sum()
+                        } else {
+                            v.into_iter().fold(0f64, f64::max)
+                        };
+                        peak = peak.max(measured as f32);
+                    }
+                }
+            }
             Ok(Default::default())
         })?;
-        let headroom=peak.log2();if headroom>16.{return Err("Edited HDR range exceeds the SDR mapper's 16-stop range. Adjust exposure first.".into());}Ok(headroom)
+        let headroom = peak.log2();
+        if headroom > 16. {
+            return Err(
+                "Edited HDR range exceeds the SDR mapper's 16-stop range. Adjust exposure first."
+                    .into(),
+            );
+        }
+        Ok(headroom)
     }
     pub fn inspect_hdr_output(&mut self) -> Result<layer_color::OutputStatistics, String> {
-        self.hdr_rows(|extent, space, read| layer_color::photo::inspect_hdr_rows(extent, space, read))
+        self.hdr_rows(|extent, space, read| {
+            layer_color::photo::inspect_hdr_rows(extent, space, read)
+        })
     }
 
-    pub(super) fn hdr_rows(&mut self, consume: impl FnOnce([u32; 2], RgbSpace, &mut dyn FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>) -> Result<layer_color::OutputStatistics, String>) -> Result<layer_color::OutputStatistics, String> {
+    pub(super) fn hdr_rows(
+        &mut self,
+        consume: impl FnOnce(
+            [u32; 2],
+            RgbSpace,
+            &mut dyn FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+        ) -> Result<layer_color::OutputStatistics, String>,
+    ) -> Result<layer_color::OutputStatistics, String> {
         self.check_cancelled().map_err(|e| e.to_string())?;
-        if !self.color().depth.is_float() { return Err("PQ delivery requires an HDR document".into()); }
+        if !self.color().depth.is_float() {
+            return Err("PQ delivery requires an HDR document".into());
+        }
         let extent = self.output_extent;
         let source_extent = self.extent;
         let space = self.color().space;
         let control = self.control.clone();
-        let mut resampler = (source_extent != extent).then(|| layer_color::RowResampler::new(source_extent, extent)).transpose()?;
+        let mut resampler = (source_extent != extent)
+            .then(|| layer_color::RowResampler::new(source_extent, extent))
+            .transpose()?;
         let mut source = Rows::new(self);
         consume(extent, space, &mut |y, row| {
             control.check().map_err(|e| e.to_string())?;
             if let Some(resampler) = &mut resampler {
-                resampler.read_row(y, row, &mut |y, row: &mut [[f32; 4]]| { row.copy_from_slice(source.read(y)?); Ok(()) })?;
-            } else { row.copy_from_slice(source.read(y)?); }
+                resampler.read_row(y, row, &mut |y, row: &mut [[f32; 4]]| {
+                    row.copy_from_slice(source.read(y)?);
+                    Ok(())
+                })?;
+            } else {
+                row.copy_from_slice(source.read(y)?);
+            }
             control.output_rows.store(y + 1, Ordering::Relaxed);
             Ok(())
         })
@@ -141,9 +247,18 @@ impl SnapshotRenderer {
         let source_extent = self.extent;
         let working = self.color().space;
         let control = self.control.clone();
-        let rendition = if target.depth.is_float() { None } else { self.sdr_rendition };
+        let rendition = if target.depth.is_float() {
+            None
+        } else {
+            self.sdr_rendition
+        };
+        let guide = if rendition.is_some_and(|r| r.is_local()) {
+            Some(self.local_tone_guide()?)
+        } else {
+            None
+        };
         let mut source = Rows::new(self);
-        layer_color::encode_working_rows(
+        layer_color::encode_working_rows_with_guide(
             working,
             source_extent,
             extent,
@@ -151,6 +266,7 @@ impl SnapshotRenderer {
             options,
             matte,
             rendition,
+            guide.as_deref(),
             |y, row| {
                 control.check().map_err(|e| e.to_string())?;
                 row.copy_from_slice(source.read(y)?);

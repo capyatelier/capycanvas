@@ -9,8 +9,8 @@ use layer_core::color::{
 use layer_ui::{
     ProofMode,
     proof_panel::{
-        PROOF_INTENTS, PrintProofControl, PrintProofSettings, ProofSimulation,
-        sdr_number_controls,
+        PROOF_INTENTS, PrintProofControl, PrintProofSettings, ProofSimulation, sdr_number_controls,
+        sdr_tone_pad,
     },
 };
 use std::{
@@ -69,7 +69,8 @@ pub(crate) struct ProofPanel {
 struct Form {
     mode: adw::ToggleGroup,
     stack: gtk::Stack,
-    controls: [NumberControl; 4],
+    controls: [NumberControl; 2],
+    pad: Rc<crate::parameter_pad::ParameterPad>,
     recipe: Cell<SdrRendition>,
     upgrade: gtk::Button,
     back: gtk::Button,
@@ -278,7 +279,9 @@ impl ProofPanel {
             }
         }
         if self.model.page.replace(page) != page {
-            self.model.serial.set(self.model.serial.get().wrapping_add(1));
+            self.model
+                .serial
+                .set(self.model.serial.get().wrapping_add(1));
         }
         self.model.error.borrow_mut().clear();
         if page != Page::Print {
@@ -299,15 +302,17 @@ impl ProofPanel {
     fn sdr_recipe(form: &Form) -> SdrRendition {
         SdrRendition {
             exposure: form.controls[0].value() as f32,
-            contrast: form.controls[1].value() as f32,
-            highlights: form.controls[2].value() as f32,
+            contrast: 1.,
+            highlights: 0.,
+            tone: form.pad.values()[0] as f32,
+            detail: form.pad.values()[1] as f32,
             headroom: form.recipe.get().headroom,
-            highlight_color: form.controls[3].value() as f32,
-            method: SdrMethod::Unified,
+            highlight_color: form.controls[1].value() as f32,
+            method: SdrMethod::LocalLaplacian,
         }
     }
     fn edit_sdr(&self, w: &Rc<Workspace>, form: &Form, phase: Option<ContactPhase>) {
-        if form.updating.get() || form.recipe.get().method != SdrMethod::Unified {
+        if form.updating.get() || !form.recipe.get().is_local() {
             return;
         }
         let recipe = Self::sdr_recipe(form);
@@ -371,8 +376,12 @@ impl ProofPanel {
         };
         let revision = project.document.revision;
         let previous = project.document.sdr_rendition;
-        let previous = if previous.method == SdrMethod::Unified { previous } else { SdrRendition::default() };
-        // Auto intentionally starts the unified controls for a legacy recipe;
+        let previous = if previous.is_local() {
+            previous
+        } else {
+            SdrRendition::default()
+        };
+        // Auto intentionally starts the local controls for a legacy recipe;
         // measure that mapper's luminance domain in the immutable snapshot too.
         project.document.sdr_rendition = previous;
         let control = layer_render_wgpu::snapshot::CaptureControl::default();
@@ -419,7 +428,8 @@ impl ProofPanel {
                                 .session
                                 .set_sdr_rendition(SdrRendition {
                                     headroom,
-                                    exposure: 0., contrast: 1.,
+                                    exposure: 0.,
+                                    contrast: 1.,
                                     ..previous
                                 });
                             w.changed(change);
@@ -602,24 +612,36 @@ impl ProofPanel {
             ProofMode::Print => Page::Print,
         };
         if self.model.page.replace(page) != page {
-            self.model.serial.set(self.model.serial.get().wrapping_add(1));
+            self.model
+                .serial
+                .set(self.model.serial.get().wrapping_add(1));
         }
-        if page != Page::Print { self.cancel_job(); }
+        if page != Page::Print {
+            self.cancel_job();
+        }
         if page != Page::Sdr {
-            if let Some(c) = self.model.analysis.borrow().as_ref() { c.cancel(); }
+            if let Some(c) = self.model.analysis.borrow().as_ref() {
+                c.cancel();
+            }
         }
         f.mode.set_active_name(Some(page.name()));
         f.stack.set_visible_child_name(page.name());
         for (c, v) in f
             .controls
             .iter()
-            .zip([recipe.exposure, recipe.contrast, recipe.highlights, recipe.highlight_color])
+            .zip([recipe.exposure, recipe.highlight_color])
         {
             c.set_value(v.into());
         }
         f.recipe.set(recipe);
-        let unified = recipe.method == SdrMethod::Unified;
-        for c in &f.controls { if let Some(row) = c.parent() { row.set_visible(unified); } }
+        f.pad.set_values([recipe.tone as f64, recipe.detail as f64]);
+        let unified = recipe.is_local();
+        f.pad.root.set_visible(unified);
+        for c in &f.controls {
+            if let Some(row) = c.parent() {
+                row.set_visible(unified);
+            }
+        }
         f.upgrade.set_visible(!unified);
         f.back.set_visible(self.model.export_wait.get());
         let p = self.model.print.borrow();
@@ -680,12 +702,15 @@ impl Form {
         let method_row = panel_controls::action_row();
         let upgrade = gtk::Button::with_label("Update controls");
         upgrade.set_widget_name("sdr-appearance-update");
-        upgrade.set_tooltip_text(Some("Keep the saved appearance until you choose to update. Updating starts the unified controls; Undo restores the saved appearance."));
+        upgrade.set_tooltip_text(Some("Keep the saved appearance until you choose to update. Updating starts local tone mapping; Undo restores the saved appearance."));
         method_row.append(&upgrade);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         method_row.append(&spacer);
         sdr.append(&method_row);
+        let pad = crate::parameter_pad::ParameterPad::new("sdr-tone-pad", sdr_tone_pad());
+        pad.area.set_tooltip_text(Some("Tone: compress lighting differences from left to right. Detail: soften to emphasize texture from bottom to top. Double-click resets."));
+        sdr.append(&pad.root);
         let controls = sdr_number_controls().map(|definition| {
             let (title, name, spec) = (definition.label, definition.key, definition.numeric);
             let c = NumberControl::inline(spec, title);
@@ -707,9 +732,7 @@ impl Form {
         reset.set_halign(gtk::Align::End);
         let auto = gtk::Button::with_label("Auto");
         auto.set_widget_name("sdr-appearance-auto");
-        auto.set_tooltip_text(Some(
-            "Measure the edited image range and reset brightness and contrast",
-        ));
+        auto.set_tooltip_text(Some("Measure the edited image range and reset brightness"));
         auto.connect_clicked(glib::clone!(
             #[weak]
             panel,
@@ -773,6 +796,7 @@ impl Form {
             mode,
             stack,
             controls,
+            pad,
             recipe: Cell::new(SdrRendition::default()),
             upgrade: upgrade.clone(),
             back,
@@ -806,6 +830,15 @@ impl Form {
                 }
             }
         ));
+        f.pad.connect_changed(glib::clone!(
+            #[weak]
+            panel,
+            #[weak]
+            w,
+            #[weak]
+            f,
+            move |phase, _| panel.edit_sdr(&w, &f, Some(phase))
+        ));
         for c in &f.controls {
             c.connect_value_changed(glib::clone!(
                 #[weak]
@@ -826,7 +859,11 @@ impl Form {
                 move |_, phase| panel.edit_sdr(&w, &f, Some(phase))
             ));
         }
-        upgrade.connect_clicked(glib::clone!(#[weak] reset, move |_| reset.emit_clicked()));
+        upgrade.connect_clicked(glib::clone!(
+            #[weak]
+            reset,
+            move |_| reset.emit_clicked()
+        ));
         reset.connect_clicked(glib::clone!(
             #[weak]
             panel,

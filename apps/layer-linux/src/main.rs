@@ -19,6 +19,8 @@ mod layers;
 mod navigator;
 mod number_control;
 mod panel_controls;
+mod parameter_pad;
+mod local_tone_view;
 mod preferences;
 mod previews;
 mod recovery;
