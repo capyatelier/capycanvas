@@ -25,7 +25,7 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels 
         const times=window.layerApp?.startupTimes;
         p.pipelines.push({label:descriptor.label,time:performance.now(),canvas:times?.canvas,brush:times?.brush});
         let hold;
-        if(descriptor.label==='layer analytic paint'&&!p.required){p.required=true;hold='required'}
+        if(descriptor.label==='layer destination brush color'&&times?.brush==null&&!p.required){p.required=true;hold='required'}
         else if(descriptor.label==='layer mask paint'&&times?.brush!=null&&!p.optional){p.optional=true;hold='optional'}
         if(hold){const scope=scopes.findLast(s=>s.filter==='validation');if(scope)scope.hold=hold}
         return original.call(this,descriptor);
@@ -40,9 +40,26 @@ export async function checkStagedStartup({ call, evaluate, settle, canvasPixels 
       "An unresolved required GPU validation must gate painting");
     const blank = await canvasPixels();
     assert.ok(blank.white > blank.total * 0.1, "Paper is visible before the brush compiles");
-    await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
-    assert.ok(await evaluate("document.querySelector('#settings').open"), "Settings work during compilation");
-    await evaluate(`layerApp.dispatch({type:'close_settings'});
+    await waitFor("layerApp.state().filter_load.pending");
+    await waitFor("JSON.parse(layerApp.app.workspace_view())?.ready");
+    assert.equal(await evaluate("layerApp.app.startup_progress()[2]"), false,
+      "Workspace adoption must not wait for the startup filter library");
+    for (const pointer of ["mouse", "touch", "pen"]) {
+      const point = await evaluate(`(()=>{const b=document.querySelector('[data-command="settings"]').getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2};})()`);
+      if (pointer === "touch") {
+        await call("Input.dispatchTouchEvent", {type:"touchStart",touchPoints:[{id:1,...point}]});
+        await new Promise(resolve => setTimeout(resolve, 70));
+        await call("Input.dispatchTouchEvent", {type:"touchEnd",touchPoints:[]});
+      } else {
+        for (const type of ["mousePressed", "mouseReleased"]) {
+          await call("Input.dispatchMouseEvent", {type,...point,button:"left",buttons:type==="mousePressed"?1:0,clickCount:1,pointerType:pointer});
+        }
+      }
+      await waitFor("document.querySelector('#settings').open");
+      await evaluate("layerApp.dispatch({type:'close_settings'})");
+      await settle();
+    }
+    await evaluate(`
       window.earlyContact = {type:'pointer',id:999n,kind:'pen',button:'primary',position:[650,450]};
       layerApp.app.input({...earlyContact,phase:'down'}); startupTest.release()`);
     await waitFor("window.startupTest?.held === 'optional'");
@@ -82,7 +99,14 @@ async function checkLoadedDocument({ call, evaluate, waitFor }) {
   const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
     window.documentStartupTest={held:false};
     const adapter=navigator.gpu.requestAdapter.bind(navigator.gpu);
-    navigator.gpu.requestAdapter=(...args)=>{
+    navigator.gpu.requestAdapter=async(...args)=>{
+      // Workspace ownership starts before GPU acquisition. Its read-only gate
+      // must finish before this fixture can insert a document filter.
+      await new Promise((resolve,reject)=>{const start=performance.now();function check(){
+        if(JSON.parse(layerApp.app.workspace_view())?.ready)resolve();
+        else if(performance.now()-start>10000)reject(Error('Workspace fixture timed out'));
+        else setTimeout(check,25);
+      }check();});
       // The document model is populated before GPU attachment, as on restore.
       layerApp.dispatch({type:'effect',action:{op:'insert',effect:'domain_warp'}});
       return adapter(...args);

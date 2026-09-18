@@ -263,23 +263,17 @@ impl WebApp {
         modules: JsValue,
         mode: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
-            serde_wasm_bindgen::from_value(modules).map_err(js)?;
-        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
-        let change = self
-            .session
-            .load_effect_package(
-                manifest,
-                |name| {
-                    modules
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| format!("Missing filter module: {name}"))
-                },
-                mode,
-            )
-            .map_err(js)?;
-        serialize(&change)
+        self.install_filters(manifest, modules, mode, false)
+    }
+    /// Startup refresh owns only the library. It must not block workspace
+    /// adoption/input or migrate programs embedded in a reopened document.
+    pub fn load_filter_library(
+        &mut self,
+        manifest: &str,
+        modules: JsValue,
+        mode: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        self.install_filters(manifest, modules, mode, true)
     }
     pub fn filter_preview_revision(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.filter_preview_revision())
@@ -621,6 +615,31 @@ impl WebGpu {
 }
 
 impl WebApp {
+    fn install_filters(
+        &mut self,
+        manifest: &str,
+        modules: JsValue,
+        mode: JsValue,
+        library_only: bool,
+    ) -> Result<JsValue, JsValue> {
+        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
+            serde_wasm_bindgen::from_value(modules).map_err(js)?;
+        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
+        let read = |name: &str| {
+            modules
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("Missing filter module: {name}"))
+        };
+        let change = if library_only {
+            self.session.load_effect_library(manifest, read, mode)
+        } else {
+            self.session.load_effect_package(manifest, read, mode)
+        }
+        .map_err(js)?;
+        serialize(&change)
+    }
+
     fn prepare_startup(&mut self) -> Result<(), JsValue> {
         let engine = self.session.engine();
         let Some(gpu) = &engine.backend().0 else {

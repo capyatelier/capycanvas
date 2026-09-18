@@ -4,11 +4,11 @@ const previewJobs=new Map();
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 // Host I/O only: Rust validates the filenames, definitions, shaders and atomic
 // publication. This also accepts external packages without rebuilding Wasm.
-export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=>new URL(name,manifestUrl)) {
+export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=>new URL(name,manifestUrl), libraryOnly=false) {
   const read=async url=>{const response=await fetch(url,{cache:"no-cache"});if(!response.ok)throw new Error(`Filter package: HTTP ${response.status}`);return response.text();};
   const manifest=await read(manifestUrl),names=app.filter_package_modules(manifest);
   const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
-  return app.load_filter_package(manifest,modules,mode);
+  return libraryOnly ? app.load_filter_library(manifest,modules,mode) : app.load_filter_package(manifest,modules,mode);
 }
 export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged}) {
   const send=action=>dispatch({type:"effect",action});

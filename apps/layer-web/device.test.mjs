@@ -1,4 +1,5 @@
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkStagedStartup} from "./startup.test.mjs";
 import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -70,7 +71,10 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--image-placement")) {
+  if (process.argv.includes("--staged-startup")) {
+    await checkStagedStartup({call,evaluate,settle,canvasPixels});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--image-placement")) {
     await checkDeviceImagePlacement({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-feedback")) {

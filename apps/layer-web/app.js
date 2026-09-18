@@ -1489,7 +1489,10 @@ async function startGpu() {
     notice.hidden = true;
     wake();
     // Resource loading failure never disables the canvas or the working catalog.
-    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`))
+    // A catalog refresh cannot change the document. Explicit package imports
+    // still use the migrating path; making startup use it locks workspace
+    // adoption and consumes all input until the entire catalog has compiled.
+    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`), true)
       .catch(error=>console.warn("Using bundled filters:",error))
       .finally(() => { app.startup_catalog_submitted(); wake(); });
   } catch (error) {
@@ -1520,8 +1523,8 @@ async function gpuOperation(operation) {
   }
 }
 
-async function loadFilters(url, mode="add", moduleUrl) {
-  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl);
+async function loadFilters(url, mode="add", moduleUrl, libraryOnly=false) {
+  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl,libraryOnly);
   update(change.regions);
   if(change.canvas_wake)wake();
   return app.state().filter_load.request_id;

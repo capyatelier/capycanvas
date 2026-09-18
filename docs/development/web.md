@@ -44,7 +44,10 @@ vary by browser and OS; a desktop browser test cannot establish mobile behavior.
 GPU startup is staged so controls can appear before the complete shader catalog
 is ready. The app reports unavailable GPU access rather than switching painting
 to a CPU renderer. The [startup record](../history/web-staged-startup.md) describes
-the scheduling work and its measured limits.
+the scheduling work and its measured limits. The later
+[tablet startup investigation](../history/web-startup-tablet-2026-09-17.md)
+separates workspace input readiness from canvas/brush readiness, records the
+startup-library input-lock fix, and measures the remaining GPU compilation stalls.
 
 The client also persists its workspace in browser storage and connects shared
 project requests to browser file access and downloads through
@@ -227,6 +230,9 @@ LAYER_DEVICE_CDP=http://127.0.0.1:9228 \
   LAYER_WEB_URL=http://127.0.0.1:4173/ LAYER_TEST_ARTIFACTS=artifacts/web-android \
   node apps/layer-web/device.test.mjs --drawer-style
 ```
+
+Use `--staged-startup` on that dedicated origin to verify workspace input,
+mouse/touch/pen Settings activation and painting while shader validation is held.
 
 [`device.test.mjs`](../../apps/layer-web/device.test.mjs) finds the tab by its exact
 URL, including the trailing slash, connects to its CDP WebSocket and reloads it.
