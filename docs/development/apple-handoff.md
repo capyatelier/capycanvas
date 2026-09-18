@@ -171,6 +171,29 @@ similar G-Pen size. This reopens no document blocker; the next performance work
 must separate brush evaluation from composition/submission and fix the measured
 cause in shared code where possible.
 
+## Large-brush performance accepted — 2026-09-18
+
+The user accepts current full-pressure drawing performance and requests a code
+quality/generalization review before publication. Close the reported 61 MP,
+2048 px G-Pen performance blocker; do not request another Pencil comparison or
+continue tuning that workload. This is perceptual release acceptance, not proof
+of a numerical hardware limit. Other release gates remain independent.
+
+The unfinished display-target experiment was abandoned before compilation or
+installation, and its source was restored. The shared cleanup replaces sentinel coordinates with explicit absent-neighbor
+entries and reuses one conservative contact radius per dab. The review covers
+contact planning, dry destination preparation and batching, prediction retirement,
+source access and composition traversal. These choices follow brush capabilities
+and renderer formats rather than preset names or Apple platform checks. Web,
+Android, Linux, Windows and Apple all use the shared Float32 document renderer.
+All 51 focused tests pass, including the expanded 12-preset comparison and
+nonlocal material/source checks. Both Apple Release builds and Web compilation
+also pass without compiler warnings. The matched Clippy
+review finds the same existing diagnostics on baseline and cleanup, with no new
+findings or suppression attributes. See the
+[shared-code review](apple-drawing-performance-review.md#shared-code-quality-and-brush-scope--2026-09-18)
+for evidence and limits. The installed review apps and artist drawings are untouched.
+
 ## Source reuse without cache expansion — 2026-09-18
 
 The [source-reuse correction](apple-drawing-performance-review.md#source-reuse-within-the-existing-budget--2026-09-18)
@@ -185,9 +208,12 @@ Release builds and Web compilation now pass without compiler warnings.
 
 The updated normal iPad Release is open at Recovered Drawings. All 14 complete
 recoveries and 148 original support/document files are preserved exactly; other
-editor apps and the Mac review are unchanged. The current physical question asks
-whether full-pressure 2048 px drawing still visibly falls behind the Pencil.
-Keep that acceptance pending until answered; do not infer it from p99 alone.
+editor apps and the Mac review are unchanged. The user now reports improved full-pressure drawing but roughly 60 ms p99,
+and requests proof of whether further optimization is possible. The
+[physical-limit audit](apple-drawing-performance-review.md#physical-limit-audit-after-the-latest-pencil-report--2026-09-18)
+finds remaining source-reuse headroom at the existing memory budget; it does not
+establish a numerical hardware floor or full perceptual acceptance. Do not repeat
+the preceding pending Pencil question as though this response had not arrived.
 Evidence and process ownership are under `artifacts/apple-source-reuse-v1/`.
 Earlier review ownership and pending-test references below are historical.
 
