@@ -207,7 +207,10 @@ as a harness failure, not an application regression.
   fixture. Browser output is software-driven, not touch/pen-device qualification.
 - `artifacts/color-m4/review/launch.sh` opens the runnable review master with
   isolated app settings/workspaces/recovery. Its README gives feature steps.
-  The source worktree remains available at `/tmp/capycanvas-hdr-m4`.
+  The source now lives in `~/code/capycanvas3` on branch `capycanvas3`, after a
+  user-requested relocation on 2026-09-17. That checkout was fast-forwarded to
+  `d6b295ae`, preserving its existing local documentation edits. Further work
+  uses that checkout; `/tmp/capycanvas-hdr-m4` was only the original build path.
 
 User feature feedback and physical/cross-platform qualification remain explicit
 review items. Missing measurements are not passes, and no push to origin/master
