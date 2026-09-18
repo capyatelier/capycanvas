@@ -581,7 +581,7 @@ impl FilterPreviews {
                 (height * self.rendering.len() as u32) as f32,
             ]);
             data[8] = 10.;
-            data[24..28].copy_from_slice(&r.ui_rendition_parameters());
+            data[24..32].copy_from_slice(&r.ui_rendition_parameters());
             data[12..16].copy_from_slice(&[
                 (origin[0] - crop[0]) as f32,
                 (origin[1] - crop[1]) as f32,

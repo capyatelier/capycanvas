@@ -19,7 +19,9 @@ pub fn encode_working_rows(
     ) -> Result<(), String>,
 ) -> Result<OutputStatistics, String> {
     if let Some(r) = rendition { r.validate().map_err(str::to_string)?; }
-    let encoder = WorkingEncoder::new(working, target, options)?.with_hdr_proof_input(rendition.is_some());
+    let encoder = WorkingEncoder::new(working, target, options)?
+        .with_hdr_proof_input(rendition.is_some())
+        .with_photographic_gamut(rendition.is_some_and(|r| r.method == layer_core::color::hdr::SdrMethod::Photographic));
     let mapper = rendition.map(|r| r.mapper(working, working));
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
@@ -118,5 +120,40 @@ mod tests {
         let icc=ColorProfile::Icc(crate::profile_bytes(&ColorProfile::Builtin(RgbSpace::Srgb)).unwrap().into());
         let result=deliver(RgbSpace::Srgb,icc,&p,Some(SdrRendition::default()));
         assert!(result.iter().zip(builtin).all(|(a,b)|a.abs_diff(b)<=3),"ICC neutral rendition differs: {result:?}");
+    }
+
+    #[test]
+    fn photographic_delivery_matches_viewing_and_icc_proof_input() {
+        use layer_core::color::hdr::{SdrMethod, sdr_luminance_weights, compress_sdr_gamut};
+        let physical=[[8.,0.,0.],[0.,0.,16.],[-0.1,3.,0.5],[0.18;3]];
+        for working in RgbSpace::ALL {
+            let matrix=RgbSpace::Srgb.linear_transform(working);
+            let pixels=physical.map(|p|{let p=layer_core::color::rgb::apply(matrix,p).map(|v|v as f32);[p[0]*0.25,p[1]*0.25,p[2]*0.25,0.25]});
+            for highlight_color in [0.,0.5,1.] {
+                let recipe=SdrRendition{method:SdrMethod::Photographic,highlight_color,..Default::default()};
+                for output in RgbSpace::ALL {
+                    let actual=deliver(working,ColorProfile::Builtin(output),&pixels,Some(recipe));
+                    let mapper=recipe.mapper(working,output);
+                    for (i,p) in pixels.iter().enumerate() {
+                        let expected=mapper.map_premultiplied(*p);
+                        for c in 0..3 {
+                            let code=(output.encode(f64::from(expected[c]/expected[3]))*65535.).round() as u16;
+                            assert!(actual[i*4+c].abs_diff(code)<=2,"view/export mismatch {working:?} {output:?} {p:?}");
+                        }
+                        assert_eq!(actual[i*4+3],16384);
+                    }
+                }
+                let profile=ColorProfile::Icc(crate::profile_bytes(&ColorProfile::Builtin(RgbSpace::Srgb)).unwrap().into());
+                let actual=deliver(working,profile.clone(),&pixels,Some(recipe));
+                // Independent explicit proof preparation before ICC conversion.
+                let bounded=pixels.map(|p|{
+                    let tone=recipe.mapper(working,working).tone_rgb([p[0]/p[3],p[1]/p[3],p[2]/p[3]]);
+                    let rgb=compress_sdr_gamut(tone,sdr_luminance_weights(working));
+                    [rgb[0]*p[3],rgb[1]*p[3],rgb[2]*p[3],p[3]]
+                });
+                let expected=deliver(working,profile,&bounded,None);
+                assert_eq!(actual,expected,"ICC must receive exactly the same bounded RGB as mapped print proofing");
+            }
+        }
     }
 }

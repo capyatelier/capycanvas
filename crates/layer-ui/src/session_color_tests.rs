@@ -474,11 +474,11 @@ fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
     let renderer=Recorder{color:document.color,..Default::default()};
     let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
     let original=s.engine.document().sdr_rendition;
-    let changed=SdrRendition{exposure:1.5,..original};
+    let changed=SdrRendition{exposure:1.5,highlight_color:0.65,..original};
     s.set_proof_mode(ProofMode::Sdr).unwrap();
     let checkpoint=s.engine.checkpoint();
     s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
-    for exposure in [0.2,0.8,1.5]{s.edit_sdr_rendition(ContactPhase::Move,SdrRendition{exposure,..original}).unwrap();}
+    for exposure in [0.2,0.8,1.5]{s.edit_sdr_rendition(ContactPhase::Move,SdrRendition{exposure,..changed}).unwrap();}
     assert_eq!(s.engine.document().sdr_rendition,changed);
     assert_eq!(s.engine.checkpoint(),checkpoint);
     assert!(s.capture_project_recovery().is_err(),"Recovery must not capture an unfinished contact");

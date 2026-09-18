@@ -1019,7 +1019,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
         assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
-        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-headroom","proof-mode"] {
+        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-headroom","sdr-appearance-highlight_color","proof-mode"] {
             let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
             let b=widget.compute_bounds(&viewport).unwrap();
             assert!(b.x()>=0. && b.x()+b.width()<=viewport.width() as f32+1.,"{name}: {b:?} vs {}",viewport.width());
@@ -1031,7 +1031,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         let edited=snapshot(&w);assert_ne!(edited,before);
         let mode=find_named(w.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
         mode.set_active_name(Some("off"));pump(50);assert!(!state(&w).preview_sdr);assert_eq!(snapshot(&w),edited);
-        mode.set_active_name(Some("sdr"));pump(50);assert!(state(&w).preview_sdr);
+        mode.set_active_name(Some("sdr"));pump(300);assert!(state(&w).preview_sdr);
         super::new_photo::capture_ui(&w,output,&format!("{}-sdr.png",preset.name()));
         mode.set_active_name(Some("print"));pump(300);
         assert!(w.proof_panel.root.width()<=viewport.width(),"Print controls must fit {}",preset.name());

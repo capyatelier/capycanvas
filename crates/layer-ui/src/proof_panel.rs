@@ -127,8 +127,8 @@ impl PrintProofSettings {
 pub fn sdr_method_choices(saved: SdrMethod) -> Vec<ProofChoice<SdrMethod>> {
     let mut choices = vec![
         ProofChoice {
-            value: SdrMethod::Bt2390,
-            label: "Perceptual",
+            value: SdrMethod::Photographic,
+            label: "Photographic",
         },
         ProofChoice {
             value: SdrMethod::ToneMap,
@@ -136,6 +136,10 @@ pub fn sdr_method_choices(saved: SdrMethod) -> Vec<ProofChoice<SdrMethod>> {
         },
     ];
     match saved {
+        SdrMethod::Bt2390 => choices.push(ProofChoice {
+            value: saved,
+            label: "Saved: Perceptual",
+        }),
         SdrMethod::Scale => choices.push(ProofChoice {
             value: saved,
             label: "Saved: Scale",
@@ -155,13 +159,14 @@ pub struct ProofNumberControl {
     pub label: &'static str,
     pub numeric: NumericControl,
 }
-pub fn sdr_number_controls() -> [ProofNumberControl; 3] {
+pub fn sdr_number_controls() -> [ProofNumberControl; 4] {
     [
         ("exposure", "Exposure", -12., 12., 0.1, 2, "EV", 1., -4., 4.),
         (
             "contrast", "Contrast", 0.25, 4., 0.01, 0, "%", 100., 0.5, 2.,
         ),
         ("headroom", "HDR range", 0., 16., 0.1, 2, "EV", 1., 0., 6.),
+        ("highlight_color", "Highlight color", 0., 1., 0.01, 0, "%", 100., 0., 1.),
     ]
     .map(
         |(key, label, min, max, step, digits, unit, scale, soft_min, soft_max)| {
@@ -170,8 +175,11 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 3] {
             numeric.scale = scale;
             numeric.soft_min = soft_min;
             numeric.soft_max = soft_max;
-            if key == "contrast" {
+            if key == "contrast" || key == "highlight_color" {
                 numeric.resolution = 0.01;
+            }
+            if key == "highlight_color" {
+                numeric.endpoint_labels = Some(["White".into(), "Color".into()]);
             }
             ProofNumberControl {
                 key,

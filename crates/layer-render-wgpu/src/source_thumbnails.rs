@@ -118,7 +118,7 @@ impl SourceThumbnails {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(32),
+                        min_binding_size: NonZeroU64::new(48),
                     },
                     count: None,
                 },
@@ -144,7 +144,7 @@ impl SourceThumbnails {
         let working = overview_buffer(d);
         let display_parameters = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("photo thumbnail orientation and rendition"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

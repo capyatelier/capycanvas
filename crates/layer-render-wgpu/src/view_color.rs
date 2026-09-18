@@ -81,12 +81,17 @@ pub(crate) fn shader(source: RgbSpace, destination: RgbSpace) -> String {
     result
 }
 
-/// Tone mapping uses fixed Rec.2020 primaries; gamut clipping follows conversion
-/// to the output space. Results return in working RGB for composition.
+/// Tone mapping uses fixed Rec.2020 primaries; destination gamut compression
+/// (or legacy clipping) follows conversion. Return working RGB for composition.
 pub(crate) fn hdr_shader(source: RgbSpace, destination: RgbSpace) -> String {
-    format!("{}\n{}\n{}\n{}",
+    let luma = |space| {
+        let w = layer_core::color::hdr::sdr_luminance_weights(space);
+        format!("vec3<f32>({:.12},{:.12},{:.12})", w[0], w[1], w[2])
+    };
+    format!("{}\n{}\n{}\nconst HDR_WORKING_LUMA:vec3<f32>={};\nconst HDR_OUTPUT_LUMA:vec3<f32>={};\n{}",
         matrix_shader("hdr_to_rec2020", layer_core::color::hdr::to_bt2020(source)),
         transform("hdr_to_output",source,destination),
         transform("hdr_from_output",destination,source),
+        luma(source), luma(destination),
         include_str!("hdr_mapping.wgsl"))
 }

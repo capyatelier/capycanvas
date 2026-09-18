@@ -297,7 +297,7 @@ export async function checkProfileLibrary({evaluate}) {
   await evaluate(`layerApp.dispatch({type:'open_settings',page:'color'})`);
   await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Manage Color Profiles…').click()`);
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
-  await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
+  await evaluate(`[...[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelectorAll('button')].find(b=>b.textContent==='Remove').click()`);
   await wait(`![...document.querySelectorAll('.profile-library .profile-entry')].some(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   await evaluate(`[...document.querySelectorAll('.profile-library button')].find(b=>b.textContent==='Done').click();layerApp.dispatch({type:'close_settings'});`);
   await invoke('save_document_as');await idle();

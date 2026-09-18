@@ -13,16 +13,20 @@ impl SnapshotRenderer {
         self.hdr_rows(|extent, space, read| layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read))
     }
 
-    /// Exact edited max-RGB in the same Rec.2020 domain as the SDR mapper.
+    /// Exact edited peak in the selected mapper's domain: D65 luminance for
+    /// Photographic, Rec.2020 max-RGB for legacy methods.
     /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
     pub fn hdr_headroom(&mut self) -> Result<f32,String> {
         let mut peak=1f32;
+        let photographic=self.sdr_rendition.is_some_and(|r|r.method==layer_core::color::hdr::SdrMethod::Photographic);
         self.hdr_rows(|extent,space,read|{
             let m=layer_core::color::hdr::to_bt2020(space);
             let mut row=vec![[0.;4];extent[0] as usize];
             for y in 0..extent[1]{read(y,&mut row)?;for p in &row{if p[3]>0.{
                 let v=layer_core::color::rgb::apply(m,[p[0] as f64/p[3] as f64,p[1] as f64/p[3] as f64,p[2] as f64/p[3] as f64]);
-                for c in v{if !c.is_finite(){return Err("Cannot measure non-finite HDR data".into());}peak=peak.max(c as f32);}
+                if v.iter().any(|c| !c.is_finite()){return Err("Cannot measure non-finite HDR data".into());}
+                let measured=if photographic {v.into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum()}else{v.into_iter().fold(0f64,f64::max)};
+                peak=peak.max(measured as f32);
             }}}
             Ok(Default::default())
         })?;

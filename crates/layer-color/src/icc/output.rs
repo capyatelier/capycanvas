@@ -16,6 +16,9 @@ pub struct WorkingEncoder {
     kind: OutputKind,
     dither: OutputDither,
     hdr_proof_input: bool,
+    photographic_gamut: bool,
+    source_luma: [f32; 3],
+    output_luma: [f32; 3],
 }
 enum OutputKind {
     Builtin {
@@ -84,10 +87,13 @@ impl WorkingEncoder {
             },
         };
         Ok(Self {
+            source_luma: layer_core::color::hdr::sdr_luminance_weights(source),
+            output_luma: layer_core::color::hdr::sdr_luminance_weights(match destination.profile { ColorProfile::Builtin(space) => space, _ => source }),
             destination,
             kind,
             dither: encoding.dither,
             hdr_proof_input: false,
+            photographic_gamut: false,
         })
     }
 
@@ -95,6 +101,12 @@ impl WorkingEncoder {
     /// Ordinary SDR conversion and native backing keep their existing contract.
     pub fn with_hdr_proof_input(mut self, enabled: bool) -> Self {
         self.hdr_proof_input = enabled;
+        self
+    }
+    /// Compress HDR rendition color before alpha/matte compositing. Builtin RGB
+    /// uses the destination gamut; ICC delivery shares the proof LUT input gamut.
+    pub fn with_photographic_gamut(mut self, enabled: bool) -> Self {
+        self.photographic_gamut = enabled;
         self
     }
 
@@ -151,6 +163,11 @@ impl WorkingEncoder {
         if matte.is_none() && !destination.channels.has_alpha() && input.iter().any(|p| p[3] < 1.) {
             return Err("Opaque output requires an explicit matte for transparency".into());
         }
+        let matte = matte.map(|m| {
+            if self.photographic_gamut && let OutputKind::Builtin { matrix, .. } = &self.kind {
+                layer_core::color::rgb::apply(*matrix, m.map(f64::from)).map(|v| v as f32)
+            } else { m }
+        });
         let maximum = if destination.depth.is_float() { 1. } else { f64::from(destination.depth.maximum()) };
         let step = destination.depth.bytes();
         let mut statistics = OutputStatistics::default();
@@ -170,6 +187,13 @@ impl WorkingEncoder {
                 } else {
                     [p[0], p[1], p[2]]
                 };
+                let rgb = if self.photographic_gamut {
+                    match &self.kind {
+                        OutputKind::Builtin { matrix, .. } => layer_core::color::hdr::compress_sdr_gamut(
+                            layer_core::color::rgb::apply(*matrix, rgb.map(f64::from)).map(|v| v as f32), self.output_luma),
+                        _ => layer_core::color::hdr::compress_sdr_gamut(rgb, self.source_luma),
+                    }
+                } else { rgb };
                 let (rgb, alpha) = if let Some(matte) = matte {
                     (
                         std::array::from_fn(|c| rgb[c] * p[3] + matte[c] * (1. - p[3])),
@@ -207,7 +231,7 @@ impl WorkingEncoder {
                         identity,
                     } => {
                         let linear = [values[i][0], values[i][1], values[i][2]].map(f64::from);
-                        let rgb = if *identity {
+                        let rgb = if *identity || self.photographic_gamut {
                             linear
                         } else {
                             layer_core::color::rgb::apply(*matrix, linear)

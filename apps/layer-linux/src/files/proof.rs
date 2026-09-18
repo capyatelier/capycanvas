@@ -69,10 +69,11 @@ pub(crate) struct ProofPanel {
 struct Form {
     mode: adw::ToggleGroup,
     stack: gtk::Stack,
-    controls: [NumberControl; 3],
+    controls: [NumberControl; 4],
     method: gtk::DropDown,
     legacy_method: Cell<SdrMethod>,
     range_row: gtk::Box,
+    highlight_row: gtk::Box,
     back: gtk::Button,
     auto: gtk::Button,
     chooser: profile::ProfilePicker,
@@ -302,6 +303,7 @@ impl ProofPanel {
             exposure: form.controls[0].value() as f32,
             contrast: form.controls[1].value() as f32,
             headroom: form.controls[2].value() as f32,
+            highlight_color: form.controls[3].value() as f32,
             method: sdr_method_choices(form.legacy_method.get())[form.method.selected() as usize]
                 .value,
         }
@@ -370,6 +372,7 @@ impl ProofPanel {
             }
         };
         let revision = project.document.revision;
+        let previous = project.document.sdr_rendition;
         let control = layer_render_wgpu::snapshot::CaptureControl::default();
         *self.model.analysis.borrow_mut() = Some(control.clone());
         self.update_all(w);
@@ -414,7 +417,8 @@ impl ProofPanel {
                                 .session
                                 .set_sdr_rendition(SdrRendition {
                                     headroom,
-                                    ..Default::default()
+                                    exposure: 0., contrast: 1.,
+                                    ..previous
                                 });
                             w.changed(change);
                         }
@@ -607,7 +611,7 @@ impl ProofPanel {
         for (c, v) in f
             .controls
             .iter()
-            .zip([recipe.exposure, recipe.contrast, recipe.headroom])
+            .zip([recipe.exposure, recipe.contrast, recipe.headroom, recipe.highlight_color])
         {
             c.set_value(v.into());
         }
@@ -632,6 +636,7 @@ impl ProofPanel {
                 .unwrap() as u32,
         );
         f.range_row.set_visible(recipe.method != SdrMethod::Clip);
+        f.highlight_row.set_visible(recipe.method == SdrMethod::Photographic);
         f.back.set_visible(self.model.export_wait.get());
         let p = self.model.print.borrow();
         if let Some(profile) = &p.profile {
@@ -688,15 +693,20 @@ impl Form {
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
         let sdr = panel_controls::column();
-        let method = gtk::DropDown::from_strings(
-            &sdr_method_choices(SdrMethod::Bt2390)
+        let method = panel_controls::dropdown(
+            &sdr_method_choices(SdrMethod::Photographic)
                 .iter()
                 .map(|c| c.label)
                 .collect::<Vec<_>>(),
         );
         method.set_widget_name("sdr-appearance-method");
-        sdr.append(&panel_controls::row("Method", &method));
+        let method_row = panel_controls::action_row();
+        method.set_hexpand(true);
+        method.set_tooltip_text(Some("SDR mapping"));
+        method_row.append(&method);
+        sdr.append(&method_row);
         let range_row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let highlight_row = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let controls = sdr_number_controls().map(|definition| {
             let (title, name, spec) = (definition.label, definition.key, definition.numeric);
             let c = NumberControl::inline(spec, title);
@@ -705,12 +715,18 @@ impl Form {
             if name == "headroom" {
                 range_row.append(&row);
                 sdr.append(&range_row);
+            } else if name == "highlight_color" {
+                c.set_tooltip_text(Some("White preserves highlight brightness; Color retains more saturation"));
+                highlight_row.append(&row);
+                sdr.append(&highlight_row);
             } else {
                 sdr.append(&row);
             }
             c
         });
-        let reset = gtk::Button::with_label("Reset");
+        let reset = gtk::Button::from_icon_name("view-refresh-symbolic");
+        reset.set_tooltip_text(Some("Reset SDR appearance"));
+        reset.update_property(&[gtk::accessible::Property::Label("Reset SDR appearance")]);
         reset.set_widget_name("sdr-appearance-reset");
         reset.set_halign(gtk::Align::End);
         let auto = gtk::Button::with_label("Auto");
@@ -725,11 +741,8 @@ impl Form {
             w,
             move |_| panel.fit_sdr(&w)
         ));
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, panel_controls::SPACING);
-        actions.set_halign(gtk::Align::End);
-        actions.append(&auto);
-        actions.append(&reset);
-        sdr.append(&actions);
+        method_row.append(&auto);
+        method_row.append(&reset);
         stack.add_named(&crate::workspace::scroll(&sdr), Some("sdr"));
         let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");
@@ -785,8 +798,9 @@ impl Form {
             stack,
             controls,
             method,
-            legacy_method: Cell::new(SdrMethod::Bt2390),
+            legacy_method: Cell::new(SdrMethod::Photographic),
             range_row,
+            highlight_row,
             back,
             chooser,
             intent,

@@ -42,6 +42,9 @@ pub struct NumericControl {
     /// not. The default is supplied by the settings schema, not by the host.
     #[serde(default)]
     pub default_value: Option<f64>,
+    /// Optional words for exact slider endpoints. Editing still uses numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_labels: Option<[String; 2]>,
 }
 impl NumericControl {
     pub fn number(min: f64, max: f64, step: f64, digits: u32) -> Self {
@@ -62,6 +65,7 @@ impl NumericControl {
             scale: 1.0,
             unit: String::new(),
             default_value: None,
+            endpoint_labels: None,
         }
     }
     pub fn unit(mut self, unit: &str) -> Self {
@@ -205,7 +209,10 @@ impl NumericControl {
             resolved * self.scale
         };
         let edit = format!("{:.*}", self.digits as usize, shown);
-        let text = if self.unit.is_empty() {
+        let text = if let Some(labels) = &self.endpoint_labels
+            && (resolved == self.min || resolved == self.max) {
+            labels[usize::from(resolved == self.max)].clone()
+        } else if self.unit.is_empty() {
             edit.clone()
         } else {
             format!("{edit} {}", self.unit)
@@ -291,6 +298,22 @@ impl NumericRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endpoint_words_preserve_numeric_editing_and_slider_policy() {
+        let mut spec = NumericControl::percent();
+        spec.digits = 0;
+        spec.endpoint_labels = Some(["White".into(), "Color".into()]);
+        for (position, label, edit) in [(0.,"White","0"),(0.5,"50 %","50"),(1.,"Color","100")] {
+            let result = spec.resolve(0., NumericOperation::Position {position}).unwrap();
+            assert_eq!(result.value, position);
+            assert_eq!(result.text, label);
+            assert_eq!(result.edit, edit);
+            assert_eq!(expr(&spec, &result.edit).unwrap().value, position);
+        }
+        let json=serde_json::to_string(&spec).unwrap();
+        assert_eq!(serde_json::from_str::<NumericControl>(&json).unwrap(),spec);
+        assert!(!NumericControl::percent().resolve(0.,NumericOperation::Format).unwrap().text.contains("White"));
+    }
 
     #[test]
     fn only_settings_accept_empty_expressions_as_reset() {

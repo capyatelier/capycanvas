@@ -308,6 +308,14 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let default = project(&photo).document.sdr_rendition;
     invoke(&photo, CommandId::SdrRendition);
     let window = appearance(&photo);
+    let highlight=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    assert!(highlight.is_mapped());
+    highlight.set_value(0.65);highlight.emit_by_name::<()>("value-changed",&[]);pump(50);
+    assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
+    assert_eq!(pixels(&photo),painted);
+    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
+    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
+    invoke(&photo,CommandId::Undo);ready(&photo);
     for removed in ["sdr-appearance-apply","sdr-appearance-cancel","sdr-appearance-compare","proof-preview-sdr","proof-advanced"] {
         assert!(find_named(photo.proof_panel.root.upcast_ref(),removed).is_none());
     }
@@ -320,8 +328,9 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&photo).document.sdr_rendition,saved);
     mode.set_active_name(Some("sdr"));pump(50);
     let method=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").unwrap().downcast::<gtk::DropDown>().unwrap();
-    for (index,expected) in [(1,layer_core::color::hdr::SdrMethod::ToneMap),(0,layer_core::color::hdr::SdrMethod::Bt2390)] {
+    for (index,expected) in [(1,layer_core::color::hdr::SdrMethod::ToneMap),(0,layer_core::color::hdr::SdrMethod::Photographic)] {
         method.set_selected(index);pump(50);assert_eq!(project(&photo).document.sdr_rendition.method,expected);assert_eq!(pixels(&photo),painted);
+        assert_eq!(highlight.is_mapped(),expected==layer_core::color::hdr::SdrMethod::Photographic);
     }
     appearance_button(&window,"reset");assert_eq!(project(&photo).document.sdr_rendition,default);
     appearance_exposure(&window,-0.5);
@@ -331,6 +340,8 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&photo).document.sdr_rendition,recipe);assert_eq!(pixels(&photo),painted);
     invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
     invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,recipe);
+    highlight.set_value(0.35);highlight.emit_by_name::<()>("value-changed",&[]);pump(50);
+    recipe.highlight_color=0.35;assert_eq!(project(&photo).document.sdr_rendition,recipe);
     // The host eyedropper samples artwork, independent of mapped presentation.
     photo.dispatch(UiAction::Layer {
         action: LayerAction::Tool {
@@ -746,7 +757,7 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
         invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"auto");
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {pump(20);let b=find_named(panel.upcast_ref(),"sdr-appearance-auto").unwrap().downcast::<gtk::Button>().unwrap();if b.label().as_deref()==Some("Auto"){break;}assert!(Instant::now()<deadline);}
-        let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().fold(1f64,f64::max).log2();
+        let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum::<f64>().max(1.).log2();
         assert!((project(&w).document.sdr_rendition.headroom as f64-expected_peak).abs()<0.002);
         let original=snapshot(&w);
         invoke(&w,CommandId::ExportDocument);

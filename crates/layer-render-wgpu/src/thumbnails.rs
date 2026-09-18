@@ -48,8 +48,8 @@ impl WgpuRasterizer {
         }
         Ok(())
     }
-    pub(super) fn ui_rendition_parameters(&self) -> [f32; 4] {
-        self.ui_rendition.map_or([0.; 4], |r| r.parameters())
+    pub(super) fn ui_rendition_parameters(&self) -> [f32; 8] {
+        self.ui_rendition.map_or([0.; 8], |r| r.parameters())
     }
 
     /// Configure the display-only byte outputs before requesting any previews.
@@ -360,7 +360,7 @@ impl PreviewPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: NonZeroU64::new(64),
+                        min_binding_size: NonZeroU64::new(80),
                     },
                     count: None,
                 },
@@ -481,15 +481,15 @@ impl PreviewPipeline {
         let sources: Vec<_> = std::iter::once(None)
             .chain(coordinates.into_iter().map(Some))
             .collect();
-        let stride = r
+        let alignment = r
             .device
             .limits()
-            .min_uniform_buffer_offset_alignment
-            .max(64) as usize;
+            .min_uniform_buffer_offset_alignment as usize;
+        let stride = 80usize.div_ceil(alignment) * alignment;
         let mut bytes = vec![0u8; stride * sources.len()];
         for (i, coordinate) in sources.iter().enumerate() {
             let c = coordinate.unwrap_or([0; 2]);
-            let mut record = [0u32; 16];
+            let mut record = [0u32; 20];
             record[..4].copy_from_slice(&[
                 c[0] * PAGE_SIZE,
                 c[1] * PAGE_SIZE,
@@ -499,8 +499,8 @@ impl PreviewPipeline {
             record[4] = if i == 0 { 2 } else { u32::from(mask.is_some()) };
             record[5] = u32::from(mask.as_ref().is_some_and(|m| m.inverted));
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
-            if mask.is_none() { record[12..16].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
-            for (dst, value) in bytes[i * stride..i * stride + 64]
+            if mask.is_none() { record[12..20].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
+            for (dst, value) in bytes[i * stride..i * stride + 80]
                 .as_chunks_mut::<4>()
                 .0
                 .iter_mut()
@@ -543,7 +543,7 @@ impl PreviewPipeline {
                                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                                     buffer: &records,
                                     offset: 0,
-                                    size: NonZeroU64::new(64),
+                                    size: NonZeroU64::new(80),
                                 }),
                             },
                             wgpu::BindGroupEntry {

@@ -44,7 +44,7 @@ pub enum ViewColor {
     #[default]
     Srgb,
     DisplayP3,
-    Mapped { p3: bool, document: RgbSpace, recipe: [u32; 4] },
+    Mapped { p3: bool, document: RgbSpace, recipe: [u32; 8] },
 }
 impl ViewColor {
     pub fn with_rendition(self, document: layer_core::color::DocumentColor, rendition: layer_core::color::hdr::SdrRendition) -> Self {

@@ -1,5 +1,6 @@
 //! SDR delivery, independent of editing data and the connected monitor.
-//! Default: BT.2390's PQ-domain Hermite shoulder. Browser matching retains
+//! Default: luminance-based photographic rendering with a BT.2390 shoulder
+//! and constant-luminance gamut compression. Browser matching retains
 //! Skia's reference-white operator (RWTMO) in linear Rec.2020. Its Bezier avoids the
 //! reversals/overshoot of the eight-point approximation at extreme HDR ranges.
 //! See docs/history/color-management-sdr-proof-update.md and THIRD_PARTY_NOTICES.md.
@@ -16,6 +17,7 @@ pub enum SdrMethod {
     Scale,
     Clip,
     Bt2390,
+    Photographic,
 }
 
 /// An authored SDR rendition. Exposure is in stops, contrast pivots around
@@ -27,6 +29,9 @@ pub struct SdrRendition {
     pub contrast: f32,
     pub headroom: f32,
     pub method: SdrMethod,
+    /// 0 favors highlight luminance/white; 1 favors the original colorfulness.
+    /// Only used by Photographic. Alpha and the HDR master are never affected.
+    pub highlight_color: f32,
 }
 impl Default for SdrRendition {
     fn default() -> Self {
@@ -34,7 +39,8 @@ impl Default for SdrRendition {
             exposure: 0.,
             contrast: 1.,
             headroom: DEFAULT_HEADROOM,
-            method: SdrMethod::Bt2390,
+            method: SdrMethod::Photographic,
+            highlight_color: 0.,
         }
     }
 }
@@ -49,6 +55,8 @@ impl<'de> Deserialize<'de> for SdrRendition {
             headroom: Option<f32>,
             #[serde(default)]
             method: SdrMethod,
+            #[serde(default)]
+            highlight_color: f32,
             // Pre-release documents used a shoulder position, not an HDR range.
             // Preserve its direction around neutral; the new curve intentionally
             // changes the SDR derivative. Never discard invalid legacy data.
@@ -73,12 +81,15 @@ impl<'de> Deserialize<'de> for SdrRendition {
             contrast: s.contrast,
             headroom,
             method: s.method,
+            highlight_color: s.highlight_color,
         };
         r.validate().map_err(serde::de::Error::custom)?;
         Ok(r)
     }
 }
 impl SdrRendition {
+    /// Missing document recipes predate Photographic; never migrate on opening.
+    pub fn legacy_default() -> Self { Self { method: SdrMethod::Bt2390, ..Self::default() } }
     pub fn validate(self) -> Result<(), &'static str> {
         if !self.exposure.is_finite()
             || !(-12. ..=12.).contains(&self.exposure)
@@ -86,6 +97,8 @@ impl SdrRendition {
             || !(0.25..=4.).contains(&self.contrast)
             || !self.headroom.is_finite()
             || !(0. ..=16.).contains(&self.headroom)
+            || !self.highlight_color.is_finite()
+            || !(0. ..=1.).contains(&self.highlight_color)
         {
             return Err("Invalid SDR rendition settings");
         }
@@ -93,7 +106,7 @@ impl SdrRendition {
     }
     /// Shared compact parameters for renderer uniforms and preview cache keys.
     /// Method zero is reserved for disabled SDR mapping, not a saved recipe.
-    pub fn parameters(self) -> [f32; 4] {
+    pub fn parameters(self) -> [f32; 8] {
         [
             self.exposure,
             self.contrast,
@@ -103,15 +116,18 @@ impl SdrRendition {
                 SdrMethod::Scale => 2.,
                 SdrMethod::Clip => 3.,
                 SdrMethod::Bt2390 => 4.,
+                SdrMethod::Photographic => 5.,
             },
+            self.highlight_color, 0., 0., 0.,
         ]
     }
-    pub fn from_parameters(p: [f32; 4]) -> Result<Self, &'static str> {
+    pub fn from_parameters(p: [f32; 8]) -> Result<Self, &'static str> {
         let method = match p[3] {
             1. => SdrMethod::ToneMap,
             2. => SdrMethod::Scale,
             3. => SdrMethod::Clip,
             4. => SdrMethod::Bt2390,
+            5. => SdrMethod::Photographic,
             _ => return Err("Invalid SDR mapping method"),
         };
         let r = Self {
@@ -119,6 +135,7 @@ impl SdrRendition {
             contrast: p[1],
             headroom: p[2],
             method,
+            highlight_color: p[4],
         };
         r.validate()?;
         Ok(r)
@@ -135,6 +152,7 @@ impl SdrRendition {
             to_output: source
                 .linear_transform(destination)
                 .map(|r| r.map(|v| v as f32)),
+            output_luma: sdr_luminance_weights(destination),
         }
     }
     pub fn map_rgb(self, rgb: [f32; 3], space: RgbSpace) -> [f32; 3] {
@@ -162,30 +180,45 @@ pub struct SdrMapper {
     perceptual: Bt2390,
     to_rec2020: [[f32; 3]; 3],
     to_output: [[f32; 3]; 3],
+    output_luma: [f32; 3],
 }
 impl SdrMapper {
-    /// Unbounded straight source RGB after the common Rec.2020 max-RGB gain.
+    /// Unbounded straight source RGB after the shared Rec.2020 tone gain:
+    /// luminance/peak blend for Photographic, max-RGB for legacy methods.
     /// Destination gamut limiting follows primary conversion (or precedes an
     /// ICC proof LUT with a bounded working-RGB input domain).
     pub fn tone_rgb(self, rgb: [f32; 3]) -> [f32; 3] {
-        let peak = apply(self.to_rec2020, rgb).into_iter().fold(0., f32::max);
+        let rec = apply(self.to_rec2020, rgb);
+        let peak = rec.into_iter().fold(0., f32::max);
         if peak <= 0. {
             return [0.; 3];
         }
-        let x = if self.recipe.contrast == 1. {
-            peak * self.gain
-        } else {
-            0.18 * (self.recipe.contrast * (peak / 0.18).log2() + self.recipe.exposure)
-                .clamp(-126., 120.)
-                .exp2()
-        };
+        if self.recipe.method == SdrMethod::Photographic {
+            let y = luminance(rec, BT2020_LUMA);
+            if y <= 0. { return [0.; 3]; }
+            let bright = self.perceptual.map(self.adjust(y));
+            let colorful = self.perceptual.map(self.adjust(peak)) * (y / peak).min(1.);
+            let mapped = bright + self.recipe.highlight_color * (colorful - bright);
+            return rgb.map(|v| v / y * mapped);
+        }
+        let x = self.adjust(peak);
         let mapped = match self.recipe.method {
             SdrMethod::ToneMap => self.curve.map(x),
             SdrMethod::Scale => x / self.peak,
             SdrMethod::Clip => x,
             SdrMethod::Bt2390 => self.perceptual.map(x),
+            SdrMethod::Photographic => unreachable!(),
         };
         rgb.map(|v| v / peak * mapped)
+    }
+    fn adjust(self, peak: f32) -> f32 {
+        if self.recipe.contrast == 1. {
+            peak * self.gain
+        } else {
+            0.18 * (self.recipe.contrast * (peak / 0.18).log2() + self.recipe.exposure)
+                .clamp(-126., 120.)
+                .exp2()
+        }
     }
     pub fn tone_premultiplied(self, p: [f32; 4]) -> [f32; 4] {
         if p[3] <= 0. {
@@ -195,7 +228,10 @@ impl SdrMapper {
         [rgb[0] * p[3], rgb[1] * p[3], rgb[2] * p[3], p[3]]
     }
     pub fn map_rgb(self, rgb: [f32; 3]) -> [f32; 3] {
-        apply(self.to_output, self.tone_rgb(rgb)).map(|v| v.clamp(0., 1.))
+        let rgb = apply(self.to_output, self.tone_rgb(rgb));
+        if self.recipe.method == SdrMethod::Photographic {
+            compress_sdr_gamut(rgb, self.output_luma)
+        } else { rgb.map(|v| v.clamp(0., 1.)) }
     }
     pub fn map_premultiplied(self, p: [f32; 4]) -> [f32; 4] {
         if p[3] <= 0. {
@@ -204,6 +240,31 @@ impl SdrMapper {
         let rgb = self.map_rgb([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
         [rgb[0] * p[3], rgb[1] * p[3], rgb[2] * p[3], p[3]]
     }
+}
+
+pub const BT2020_LUMA: [f32; 3] = [0.2627002, 0.6779981, 0.0593017];
+fn luminance(rgb: [f32; 3], weights: [f32; 3]) -> f32 {
+    rgb[0] * weights[0] + rgb[1] * weights[1] + rgb[2] * weights[2]
+}
+/// D65-adapted luminance keeps the mapping invariant under working-space changes,
+/// including ProPhoto's D50 white. The weights sum to one.
+pub fn sdr_luminance_weights(space: RgbSpace) -> [f32; 3] {
+    let matrix = to_bt2020(space);
+    std::array::from_fn(|c| (0..3).map(|r| f64::from(BT2020_LUMA[r]) * matrix[r][c]).sum::<f64>() as f32)
+}
+/// Compress toward the neutral axis at constant D65 luminance. This preserves
+/// RGB hue direction instead of clipping channels independently. A rational
+/// shoulder starts at 98% of the gamut boundary, with continuous first derivative.
+/// It approaches (but cannot cross) that boundary. Neutral black/white are exact.
+pub fn compress_sdr_gamut(rgb: [f32; 3], weights: [f32; 3]) -> [f32; 3] {
+    let y = luminance(rgb, weights);
+    if y <= 0. { return [0.; 3]; }
+    if y >= 1. { return [1.; 3]; }
+    let chroma = rgb.map(|v| v - y);
+    let extent = chroma.into_iter().map(|v| if v > 0. { v / (1. - y) } else { -v / y }).fold(0., f32::max);
+    if extent <= 0.98 { return rgb; }
+    let compressed = 0.98 + 0.02 * (extent - 0.98) / (extent - 0.96);
+    chroma.map(|v| (y + v * (compressed / extent)).clamp(0., 1.))
 }
 
 /// ITU-R BT.2390 (2016), section 5.4: normalized PQ with a Hermite shoulder
@@ -318,7 +379,7 @@ mod tests {
                 assert!(y>=previous-0.0001&&y.is_finite()&&y<=1.);previous=y;
             }
         }
-        let r=SdrRendition::default();assert_eq!(r.method,SdrMethod::Bt2390);
+        let r=SdrRendition::legacy_default();assert_eq!(r.method,SdrMethod::Bt2390);
         let m=|r:SdrRendition,x|r.map_rgb([x;3],RgbSpace::Srgb)[0];
         assert!((m(r,0.18)-0.18).abs()<0.00002);
         assert!((m(r,1.)-0.661213).abs()<0.00015);
@@ -467,12 +528,13 @@ mod tests {
     }
     #[test]
     fn saved_recipes_and_previous_review_settings_validate() {
-        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip, SdrMethod::Bt2390] {
+        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip, SdrMethod::Bt2390, SdrMethod::Photographic] {
             let r = SdrRendition {
                 method,
                 exposure: -1.,
                 headroom: 4.,
                 contrast: 1.5,
+                highlight_color: 0.37,
             };
             assert_eq!(SdrRendition::from_parameters(r.parameters()).unwrap(), r);
             let json = serde_json::to_string(&r).unwrap();
@@ -504,5 +566,75 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn photographic_highlights_keep_luminance_hue_direction_and_coverage() {
+        let weights = sdr_luminance_weights(RgbSpace::Srgb);
+        let recipe = SdrRendition::default();
+        assert_eq!(recipe.method, SdrMethod::Photographic);
+        let mapper = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb);
+        for color in [[1.,0.,0.], [0.,1.,0.], [0.,0.,1.], [1.,0.3,0.02], [0.65,0.32,0.2], [-0.1,0.5,1.], [0.18;3]] {
+            let mut previous = 0.;
+            for i in 0..256 {
+                let ev = -12. + i as f32 * 24. / 255.;
+                let input = color.map(|v| v * ev.exp2());
+                let output = mapper.map_rgb(input);
+                let y = luminance(output, weights);
+                assert!(output.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v)));
+                assert!(y >= previous - 0.00015, "lightness reversal: {color:?} {ev}: {y} < {previous}");
+                previous = y;
+                let tone = mapper.tone_rgb(input);
+                let expected_y = luminance(tone, weights).clamp(0., 1.);
+                assert!((y - expected_y).abs() < 2e-6, "gamut mapping must preserve luminance");
+                let chroma = tone.map(|v| v - expected_y);
+                let mapped = output.map(|v| v - y);
+                let cross = [chroma[0]*mapped[1]-chroma[1]*mapped[0],chroma[1]*mapped[2]-chroma[2]*mapped[1]];
+                assert!(cross.iter().all(|v| v.abs() < 2e-5), "RGB hue direction changed");
+                let a = 0.03125;
+                let covered = mapper.map_premultiplied([input[0]*a,input[1]*a,input[2]*a,a]);
+                assert_eq!(covered[3], a);
+                for c in 0..3 { assert!((covered[c]/a-output[c]).abs()<2e-6); }
+            }
+            assert!(mapper.map_rgb(color.map(|v|v*4096.)).iter().all(|v|*v>0.999));
+        }
+        let bright = mapper.map_rgb([8.,0.,0.]);
+        let old = SdrRendition::legacy_default().map_rgb([8.,0.,0.],RgbSpace::Srgb);
+        assert!(luminance(bright,weights) > luminance(old,weights)*3.);
+        assert!(bright[1] > 0.6 && bright[2] > 0.6);
+        let color = SdrRendition { highlight_color: 1., ..recipe }.map_rgb([8.,0.,0.],RgbSpace::Srgb);
+        assert!(color[0]-color[1] > bright[0]-bright[1] + 0.4);
+        for x in [0.01,0.18,1.,4.,16.] {
+            assert_eq!(recipe.map_rgb([x;3],RgbSpace::Srgb),SdrRendition {highlight_color:1.,..recipe}.map_rgb([x;3],RgbSpace::Srgb));
+        }
+    }
+
+    #[test]
+    fn photographic_working_space_invariance_and_invalid_settings() {
+        for output in RgbSpace::ALL {
+            for highlight_color in [0.,0.3,1.] {
+                let recipe = SdrRendition {highlight_color,..Default::default()};
+                for rgb in [[4.,1.,0.25],[8.,0.,0.],[0.,0.,16.],[-0.1,3.,0.5],[0.18;3]] {
+                    let expected = recipe.mapper(RgbSpace::Srgb,output).map_rgb(rgb);
+                    for space in RgbSpace::ALL {
+                        let input=rgb::apply(RgbSpace::Srgb.linear_transform(space),rgb.map(f64::from)).map(|v|v as f32);
+                        let actual=recipe.mapper(space,output).map_rgb(input);
+                        for c in 0..3 {assert!((actual[c]-expected[c]).abs()<0.00015,"{space:?} {output:?}: {actual:?} != {expected:?}");}
+                    }
+                }
+            }
+        }
+        for bad in [-0.001,1.001,f32::NAN,f32::INFINITY] {
+            assert!(SdrRendition {highlight_color:bad,..Default::default()}.validate().is_err());
+        }
+        let mut document=serde_json::to_value(crate::Document::new("legacy",8,8)).unwrap();
+        document.as_object_mut().unwrap().remove("sdr_rendition");
+        let document:crate::Document=serde_json::from_value(document).unwrap();
+        assert_eq!(document.sdr_rendition,SdrRendition::legacy_default());
+        for (stored, expected) in [("bt2390",SdrMethod::Bt2390),("tone_map",SdrMethod::ToneMap)] {
+            let r:SdrRendition=serde_json::from_value(serde_json::json!({"exposure":0.,"contrast":1.,"headroom":2.3,"method":stored})).unwrap();
+            assert_eq!(r.method,expected);
+            assert_eq!(r.highlight_color,0.);
+        }
     }
 }

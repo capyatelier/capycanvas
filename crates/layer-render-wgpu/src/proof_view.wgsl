@@ -11,7 +11,7 @@ fn proof_at(p: vec3<u32>) -> ProofPoint {
 }
 fn proof_artwork(original: vec4<f32>) -> vec4<f32> {
     var paint=hdr_artwork(original);
-    if proof_options.x>=2u && (proof_options.z!=0u || proof_options.w!=0u) {paint=hdr_map_proof(original,hdr_view.rendition); }
+    if proof_options.x>=2u && (proof_options.z!=0u || proof_options.w!=0u) {paint=hdr_map_proof(original,hdr_view.rendition,hdr_view.headroom.y); }
     if paint.a <= 0. || proof_options.x < 2u || (proof_options.z == 0u && proof_options.w == 0u) { return paint; }
     let encoded = sdr_encode(paint.rgb / paint.a, proof_options.y & 255u);
     let outside = any(encoded < vec3(0.)) || any(encoded > vec3(1.));

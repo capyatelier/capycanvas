@@ -217,6 +217,7 @@ pub(super) fn write(
     fs::write(stage.path("profile"), profile_bytes(&profile)?).map_err(err)?;
     let matrix = hdr::to_bt2020(space);
     let mapper = rendition.mapper(space, space);
+    let photographic = rendition.mapper(space, RgbSpace::Srgb);
     let mut base = stage.create("base.raw")?;
     let mut master = stage.create("master")?;
     let mut row = vec![[0.; 4]; extent[0] as usize];
@@ -239,7 +240,12 @@ pub(super) fn write(
                 [0.; 3]
             };
             let mut hdr = rgb::apply(matrix, raw.map(f64::from)).map(|v| v as f32);
-            let mut sdr = rgb::apply(matrix, mapper.tone_rgb(raw).map(f64::from)).map(|v| v as f32);
+            // The photographic base uses the same bounded sRGB rendition as
+            // ordinary sharing. Encode those colors in the gain-map application
+            // space; RGB gains still reconstruct the original wide-color HDR.
+            let mut sdr = if rendition.method == hdr::SdrMethod::Photographic {
+                rgb::apply(hdr::srgb_to_bt2020(), photographic.map_rgb(raw).map(f64::from)).map(|v|v as f32)
+            } else { rgb::apply(matrix, mapper.tone_rgb(raw).map(f64::from)).map(|v| v as f32) };
             for c in 0..3 {
                 sdr[c] = sdr[c].clamp(0., 1.);
                 if let Some(background) = matte {

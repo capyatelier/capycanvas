@@ -105,6 +105,29 @@ pub(super) use native::read_gainmap;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(feature="heif",target_os="linux"))]
+    #[test]
+    #[ignore="requires pinned native HDR codec bundle"]
+    fn photographic_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
+        let cancel=AtomicBool::new(false);
+        for format in [GainMapFormat::Jpeg,GainMapFormat::Avif] {
+            let mut samples=Vec::new();
+            for highlight_color in [0.,1.] {
+                let recipe=SdrRendition{highlight_color,..Default::default()};
+                let alpha=if format==GainMapFormat::Avif{0.5}else{1.};
+                let read=|_:u32,row:&mut [[f32;4]]|{row.fill([8.*alpha,0.,0.,alpha]);Ok(())};
+                let (_,hdr,base,stats)=preview_gainmap_rows([32,32],[32,32],RgbSpace::Srgb,recipe,format,100,None,&cancel,read).unwrap();
+                assert_eq!(stats.clipped_channels,0);
+                let p=hdr[0];
+                eprintln!("PHOTOGRAPHIC_GAINMAP {format:?} color={highlight_color} hdr={p:?} base={:?}",base[0]);
+                assert!((p[0]/p[3]-8.).abs()<0.10 && (p[1]/p[3]).abs()<0.07 && (p[2]/p[3]).abs()<0.07,"HDR color reconstruction: {p:?}");
+                assert!((p[3]-alpha).abs()<0.002);
+                samples.push(base[0]);
+            }
+            let white=samples[0];let color=samples[1];
+            assert!(white[1]/white[3]>color[1]/color[3]+0.4,"SDR fallback must whiten while HDR stays red: {samples:?}");
+        }
+    }
     #[test]
     fn canonical_gain_preserves_the_authored_pair_and_near_black() {
         let m = GainMapMetadata {

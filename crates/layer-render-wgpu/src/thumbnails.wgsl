@@ -1,5 +1,5 @@
 // Bounds and framing stay on the GPU. Only the finished 32px image is mapped.
-struct Record { tile: vec4<u32>, options: vec4<u32>, color: vec4<f32>, rendition: vec4<f32> }
+struct Record { tile: vec4<u32>, options: vec4<u32>, color: vec4<f32>, rendition: vec4<f32>, highlight: vec4<f32> }
 @group(1) @binding(0) var<uniform> record: Record;
 @group(1) @binding(1) var pixels: texture_2d<f32>;
 @group(1) @binding(2) var sampling: sampler;
@@ -48,7 +48,7 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         // Neutral checker colors in linear light (sRGB #bbb / #eee).
         let square = (u32(v.position.x)/4u + u32(v.position.y)/4u) % 2u;
         let gray = select(.497, .855, square == 0u);
-        let color=hdr_map_sdr(vec4(record.color.rgb*record.color.a,record.color.a),record.rendition);
+        let color=hdr_map_sdr(vec4(record.color.rgb*record.color.a,record.color.a),record.rendition,record.highlight.x);
         return vec4<f32>(color.rgb + gray * (1.-color.a), 1.);
     }
     if any(v.uv < vec2<f32>(0.)) || any(v.uv > vec2<f32>(1.)) { discard; }
@@ -58,5 +58,5 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         let gray = select(raw.r, 1.-raw.r, record.options.y == 1u);
         return vec4<f32>(gray, gray, gray, 1.);
     }
-    return hdr_map_sdr(raw,record.rendition);
+    return hdr_map_sdr(raw,record.rendition,record.highlight.x);
 }
