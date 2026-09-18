@@ -98,6 +98,9 @@ impl CanvasRenderer for Renderer {
     ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
         self.0.as_mut()?.take_filter_previews()
     }
+    fn cancel_filter_previews(&mut self) {
+        if let Some(gpu) = &mut self.0 { gpu.cancel_filter_previews(); }
+    }
     fn request_thumbnail(
         &mut self,
         id: u64,

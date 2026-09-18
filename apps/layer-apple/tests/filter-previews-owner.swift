@@ -38,9 +38,8 @@ import SwiftUI
                 try await wait("Document completion") { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
                 try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             }
-            func preview(_ request: UInt64, filters: [String]) async -> FilterPreviewReply {
-                let query = JSON(["type": "filter_previews", "request": request,
-                    "revision": store.snapshot["filter_preview_revision"].raw, "filters": filters, "size": [96, 40]])
+            func preview(filters: [String]) async -> FilterPreviewReply {
+                let query = JSON(["type": "filter_previews", "filters": filters, "size": [96, 40]])
                 return await withCheckedContinuation { done in native.filterPreviews(query) { done.resume(returning: $0) } }
             }
             try await wait("Metal startup") { store.snapshot["shaders_ready"].bool }
@@ -57,21 +56,22 @@ import SwiftUI
             try require(flushed, "Complete initial artwork")
             try await wait("New drawing shaders") { store.snapshot["shaders_ready"].bool }
 
-            let start = await preview(1, filters: ["curves"])
-            try require(start.status["accepted"].bool && start.atlas == nil && start.error == nil,
-                "Start an asynchronous preview: \(start.status.stableKey), atlas=\(start.atlas != nil), error=\(start.error ?? "none")")
-            try await edit(["type": "set_layer_opacity", "opacity": 0.5]); await frame()
-            var cancelled = false
+            var start = await preview(filters: ["curves"])
             let deadline = Date().addingTimeInterval(15)
-            while !cancelled {
-                let reply = await preview(2, filters: [])
-                try require(reply.error == nil && reply.atlas == nil, reply.error ?? "Never publish stale pixels")
-                cancelled = reply.cancelled
-                try require(Date() < deadline, "Cancellation must release the pending request")
-                try await drain(0.01)
+            while !start.status["pending"].bool {
+                try require(start.error == nil && Date() < deadline, start.error ?? "Idle preview admission")
+                await frame(); try await drain(0.01)
+                start = await preview(filters: ["curves"])
             }
-            let invalid = await preview(3, filters: ["missing-filter"])
-            try require(invalid.error != nil && !invalid.cancelled, "Real preview failures must remain errors")
+            try require(start.atlas == nil && start.error == nil, "Start an asynchronous preview")
+            try await edit(["type": "set_layer_opacity", "opacity": 0.5]); await frame()
+            let cancelled = await preview(filters: [])
+            try require(cancelled.error == nil && cancelled.status["error"].isNull && cancelled.atlas == nil,
+                cancelled.error ?? "Never publish stale pixels or raise cancellation errors")
+            try require(!cancelled.status["pending"].bool && cancelled.status["key"].string != start.status["key"].string,
+                "Rust retires the changed source without a host-side pending request")
+            let invalid = await preview(filters: Array(repeating: "curves", count: 257))
+            try require(invalid.error != nil, "Invalid transport remains an error")
 
             store.filterPreviews.show(token: "check", id: "curves", width: 96, scale: 1)
             for step in 0..<6 {
@@ -93,7 +93,7 @@ import SwiftUI
             try await wait("Previews after Undo") { store.filterPreviews.images["curves"] != nil }
             try require(try Data(contentsOf: saved) == original, "Preview refresh and Undo never write the saved file")
             try require(store.failure == nil, "No background-preview failure")
-            note("PASS platform \(platform): typed cancellation, genuine error reporting, automatic retry during edits, local Save As/reopen, continued editing and Undo")
+            note("PASS platform \(platform): shared cancellation, genuine error reporting, automatic retry during edits, local Save As/reopen, continued editing and Undo")
         }
     }
     @MainActor static func main() {

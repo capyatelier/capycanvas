@@ -1,6 +1,5 @@
 import {colorButton, colorCss} from './color-controls.js';
-let previewRequest=0n;
-const previewJobs=new Map();
+import {filterPreviewView} from './filter-previews.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 // Host I/O only: Rust validates the filenames, definitions, shaders and atomic
 // publication. This also accepts external packages without rebuilding Wasm.
@@ -21,7 +20,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   const categoryIcon=element("span","filter-category-icon");
   pickerHeader.append(categoryIcon,category,search,searchButton);adjustments.append(pickerHeader,list);
-  const rows=new Map();let visibleIds=null,catalogRevision=null,pending=null,polling=false;
+  const rows=new Map();let visibleIds=null,catalogRevision=null;
   function refreshPicker(){
     const s=state(),picker=s.filter_picker;
     if(catalogRevision!==s.filter_catalog_revision){
@@ -53,40 +52,21 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     }
     if(!children.length)children.push(element("p","dim",picker.empty_label));list.replaceChildren(...children);contentChanged("adjustments");
   }
-  const previewKey=()=>{
+  const disposePreviews=filterPreviewView(app,()=>{
+    if(!adjustments.isConnected||!adjustments.clientHeight)return null;
     const width=Math.min(512,Math.max(80,Math.round(Math.max(1,list.clientWidth-12)*devicePixelRatio))),height=Math.min(128,Math.round(40*devicePixelRatio));
-    return {width,height,key:`${state().document_file.epoch}:${app.filter_preview_revision().map(String).join(":")}:${width}:${height}`};
-  };
-  function pollPreviews(){
-    polling=false;if(!pending)return;
-    try {
-      const result=app.take_filter_previews();
-      if(result){
-        const [id]=result, deliver=previewJobs.get(id);
-        previewJobs.delete(id); deliver?.(result);
-      }
-    }catch(error){if(pending)previewJobs.delete(pending.id);pending=null;console.warn("Filter previews unavailable",error);}
-    if(pending){polling=true;requestAnimationFrame(pollPreviews);}
-  }
-  const previewTimer = setInterval(()=>{
-    if(document.hidden||!adjustments.isConnected||!adjustments.clientHeight)return;
-    if(pending){if(!polling){polling=true;requestAnimationFrame(pollPreviews);}return;}
-    try {
-      const info=previewKey(),viewport=panels.get("adjustments").getBoundingClientRect(),filters=[];
-      for(const choice of state().adjustments){const row=rows.get(choice.id),rect=row?.node.getBoundingClientRect();if(rect?.height&&rect.bottom>Math.max(0,viewport.top)&&rect.top<Math.min(innerHeight,viewport.bottom)&&row.key!==info.key)filters.push(choice.id);if(filters.length===8)break;}
-      if(filters.length){const id=++previewRequest;if(app.request_filter_previews(id,filters,info.width,info.height)){
-        pending={id,key:info.key};
-        previewJobs.set(id,result=>{
-          const job=pending;pending=null;if(!job||job.key!==previewKey().key)return;
-          const [,width,height,filters]=result,bytes=result.bytes,rowHeight=height/filters.length,rowBytes=width*rowHeight*4;
-          filters.forEach((id,i)=>{const row=rows.get(id);if(!row)return;row.canvas.width=width;row.canvas.height=rowHeight;
-            const pixels=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset+i*rowBytes,rowBytes);
-            row.canvas.getContext("2d").putImageData(new ImageData(pixels,width,rowHeight),0,0);row.key=job.key;});
-        });
-        polling=true;requestAnimationFrame(pollPreviews);
-      }}
-    }catch(error){console.warn("Filter previews unavailable",error);}
-  },200);
+    const viewport=panels.get("adjustments").getBoundingClientRect(),filters=[];
+    for(const choice of state().adjustments){const rect=rows.get(choice.id)?.node.getBoundingClientRect();if(rect?.height&&rect.bottom>Math.max(0,viewport.top)&&rect.top<Math.min(innerHeight,viewport.bottom))filters.push(choice.id);}
+    return {filters,width,height};
+  },(images,key)=>{
+    for(const [id,row] of rows){
+      const pixels=images.get(id);
+      if(!pixels){if(row.key!==null){row.canvas.width=0;row.key=null;}continue;}
+      if(row.key===key)continue;
+      row.canvas.width=pixels.width;row.canvas.height=pixels.height;
+      row.canvas.getContext("2d").putImageData(pixels,0,0);row.key=key;
+    }
+  });
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),body=element("div","property-controls");properties.append(title,body);panels.get("properties").append(properties);
@@ -154,7 +134,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
-  return {refresh,dispose(){clearInterval(previewTimer);clearInterval(statsTimer);if(pending)previewJobs.delete(pending.id);pending=null;}};
+  return {refresh,dispose(){disposePreviews();clearInterval(statsTimer);}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
     let stops=[],selected=0,rampKey;

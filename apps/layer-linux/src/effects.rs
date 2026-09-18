@@ -4,7 +4,6 @@ mod gradient_preview;
 use crate::{number_control::NumberControl, workspace::Workspace};
 use gtk::{glib, prelude::*};
 use layer_core::EffectValue;
-use layer_render::CanvasRenderer;
 use layer_ui::{
     EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction, UiState,
 };
@@ -13,13 +12,6 @@ use std::{
     collections::HashMap,
     rc::Rc,
 };
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct PreviewKey {
-    revision: (u64, u64, u64),
-    size: [u32; 2],
-    color: crate::display_color::ViewColor,
-}
 
 pub struct EffectPanels {
     pub adjustments: gtk::Box,
@@ -35,10 +27,10 @@ pub struct EffectPanels {
     picker_updating: Cell<bool>,
     picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
     picker_rows: RefCell<HashMap<std::sync::Arc<str>, (gtk::Button, gtk::Picture)>>,
-    preview_key: Cell<Option<PreviewKey>>,
+    preview_key: RefCell<Option<String>>,
+    preview_color: Cell<Option<crate::display_color::ViewColor>>,
     preview_loaded: RefCell<HashMap<std::sync::Arc<str>, gtk::gdk::Texture>>,
     preview_request: Cell<u64>,
-    preview_pending: Cell<Option<(u64, PreviewKey)>>,
     pub properties: gtk::Box,
     pub stats: gtk::Box,
     title: gtk::Label,
@@ -179,10 +171,10 @@ impl EffectPanels {
             picker_updating: Cell::new(false),
             picker_visible: RefCell::new(Vec::new()),
             picker_rows: RefCell::new(HashMap::new()),
-            preview_key: Cell::new(None),
+            preview_key: RefCell::new(None),
+            preview_color: Cell::new(None),
             preview_loaded: RefCell::new(HashMap::new()),
             preview_request: Cell::new(0),
-            preview_pending: Cell::new(None),
             properties,
             stats,
             title,
@@ -400,35 +392,9 @@ impl EffectPanels {
         let Some(gpu) = gpu.as_mut() else {
             return;
         };
-        let revision = gpu.session.filter_preview_revision();
         let view_color = gpu.session.engine().backend().view_color;
-        while let Some(result) = gpu.session.renderer_mut().take_filter_previews() {
-            let pending = self.preview_pending.take();
-            let Ok(result) = result else {
-                continue;
-            };
-            if pending.is_none_or(|(id, key)| {
-                id != result.image.request_id
-                    || key.color != view_color
-                    || key.revision != revision
-                    || Some(key) != self.preview_key.get()
-            }) {
-                continue;
-            }
-            let count = result.filters.len();
-            let height = result.image.height / count as u32;
-            let stride = result.image.stride as usize;
-            let bytes = glib::Bytes::from_owned(result.image.bytes);
-            for (i, id) in result.filters.into_iter().enumerate() {
-                let start = i * height as usize * stride;
-                let row = glib::Bytes::from_bytes(&bytes, start..start + height as usize * stride);
-                let texture = view_color.texture_bytes([result.image.width, height],
-                    gtk::gdk::MemoryFormat::R8g8b8a8, stride, row);
-                self.preview_loaded.borrow_mut().insert(id, texture);
-            }
-        }
-        if self.preview_pending.get().is_some() {
-            return;
+        if self.preview_color.replace(Some(view_color)) != Some(view_color) {
+            gpu.session.reset_filter_previews();
         }
         let on_screen: Vec<_> = std::iter::once(self)
             .chain(extra.iter().map(|v| v.as_ref()))
@@ -448,49 +414,48 @@ impl EffectPanels {
                     .collect::<Vec<_>>()
             })
             .collect();
-        if on_screen.is_empty() {
-            return;
-        }
-        // A wider drawer can upgrade the cache; closing it must not render
-        // again merely to make already sufficient thumbnails smaller.
-        let minimum = self
-            .preview_key
-            .get()
-            .filter(|key| key.revision == revision)
-            .map_or([80, 40], |key| key.size);
-        let size = on_screen.iter().fold(minimum, |size, (_, picture)| {
+        let size = on_screen.iter().fold([80, 40], |size, (_, picture)| {
             let scale = picture.scale_factor() as u32;
-            [
-                size[0].max((picture.width().max(1) as u32 * scale).clamp(80, 512)),
-                size[1].max((40 * scale).min(128)),
-            ]
+            [size[0].max((picture.width().max(1) as u32 * scale).clamp(80, 512)),
+                size[1].max((40 * scale).min(128))]
         });
-        let key = PreviewKey { revision, size, color: view_color };
-        if self.preview_key.get() != Some(key) {
+        let filters = on_screen.iter().map(|(id, _)| id.clone()).collect();
+        let cache = layer_ui::FilterPreviewCache {
+            key: self.preview_key.borrow().clone(),
+            rows: self.preview_loaded.borrow().keys().cloned().collect(),
+        };
+        let Ok(update) = gpu.session.poll_filter_previews(
+            glib::monotonic_time().max(0) as u64 * 1000, filters, size, cache,
+        ) else { return; };
+        self.preview_request.set(update.status.requests);
+        if self.preview_key.borrow().as_ref() != Some(&update.status.key) {
             self.preview_loaded.borrow_mut().clear();
-            self.preview_key.set(Some(key));
+            *self.preview_key.borrow_mut() = Some(update.status.key);
         }
-        let mut filters = Vec::new();
-        for (id, picture) in on_screen {
-            if let Some(texture) = self.preview_loaded.borrow().get(&id) {
-                if picture.paintable().as_ref() != Some(texture.upcast_ref()) {
-                    picture.set_paintable(Some(texture));
-                }
-            } else if filters.len() < 8 && !filters.contains(&id) {
-                filters.push(id);
+        self.preview_loaded.borrow_mut().retain(|id, _| update.status.retained.contains(id));
+        if let Some(result) = update.image {
+            let count = result.filters.len();
+            let height = result.image.height / count as u32;
+            let stride = result.image.stride as usize;
+            let bytes = result.image.bytes;
+            for (i, id) in result.filters.into_iter().enumerate() {
+                let start = i * height as usize * stride;
+                let row = glib::Bytes::from_owned(bytes[start..start + height as usize * stride].to_vec());
+                let texture = view_color.texture_bytes([result.image.width, height],
+                    gtk::gdk::MemoryFormat::R8g8b8a8, stride, row);
+                self.preview_loaded.borrow_mut().insert(id, texture);
             }
         }
-        if filters.is_empty() {
-            return;
-        }
-        let id = self.preview_request.get().wrapping_add(1);
-        if gpu
-            .session
-            .request_filter_previews(id, filters, size)
-            .unwrap_or(false)
-        {
-            self.preview_request.set(id);
-            self.preview_pending.set(Some((id, key)));
+        let loaded = self.preview_loaded.borrow();
+        // Hidden retained pictures must release evicted rows too; otherwise
+        // the native widgets would defeat the common cache bound.
+        for view in std::iter::once(self).chain(extra.iter().map(|v| v.as_ref())) {
+            for (id, (_, picture)) in view.picker_rows.borrow().iter() {
+                let texture = loaded.get(id);
+                if picture.paintable().as_ref() != texture.map(|t| t.upcast_ref()) {
+                    picture.set_paintable(texture);
+                }
+            }
         }
     }
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {

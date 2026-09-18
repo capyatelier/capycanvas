@@ -172,6 +172,9 @@ impl CanvasRenderer for WebRenderer {
     ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
         self.0.as_mut()?.renderer.take_filter_previews()
     }
+    fn cancel_filter_previews(&mut self) {
+        if let Some(gpu) = &mut self.0 { gpu.renderer.cancel_filter_previews(); }
+    }
     fn request_thumbnail(
         &mut self,
         id: u64,
@@ -275,39 +278,31 @@ impl WebApp {
     ) -> Result<JsValue, JsValue> {
         self.install_filters(manifest, modules, mode, true)
     }
-    pub fn filter_preview_revision(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.filter_preview_revision())
-    }
-    pub fn request_filter_previews(
+    pub fn poll_filter_previews(
         &mut self,
-        request: u64,
         filters: JsValue,
+        cache: JsValue,
         width: u32,
         height: u32,
-    ) -> Result<bool, JsValue> {
-        if !self.gpu_ready() {
-            return Ok(false);
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let filters = if self.gpu_ready() {
+            serde_wasm_bindgen::from_value(filters).map_err(js)?
+        } else { Vec::new() };
+        let cache = serde_wasm_bindgen::from_value(cache).map_err(js)?;
+        let update = self.session.poll_filter_previews(
+            (now_ms.max(0.) * 1_000_000.) as u64, filters, [width, height],
+            cache,
+        ).map_err(js)?;
+        let result = serialize(&update.status)?;
+        if let Some(atlas) = update.image {
+            let image = atlas.image;
+            let header = serialize(&(image.request_id, image.width, image.height, atlas.filters))?;
+            js_sys::Reflect::set(&result, &JsValue::from_str("atlas"), &header)?;
+            js_sys::Reflect::set(&result, &JsValue::from_str("bytes"),
+                &js_sys::Uint8Array::from(image.bytes.as_slice()))?;
         }
-        let filters = serde_wasm_bindgen::from_value(filters).map_err(js)?;
-        self.session
-            .request_filter_previews(request, filters, [width, height])
-            .map_err(js)
-    }
-    pub fn take_filter_previews(&mut self) -> Result<JsValue, JsValue> {
-        let Some(result) = self.session.renderer_mut().take_filter_previews() else {
-            return Ok(JsValue::NULL);
-        };
-        let result = result.map_err(js)?;
-        let image = result.image;
-        // One typed byte transfer, not a JavaScript number/object per channel.
-        // Views of the returned atlas share this array in the browser.
-        let header = serialize(&(image.request_id, image.width, image.height, result.filters))?;
-        js_sys::Reflect::set(
-            &header,
-            &JsValue::from_str("bytes"),
-            &js_sys::Uint8Array::from(image.bytes.as_slice()),
-        )?;
-        Ok(header)
+        Ok(result)
     }
     pub fn action_tooltip(&self, label: &str, action: JsValue) -> Result<String, JsValue> {
         let action = serde_wasm_bindgen::from_value(action).map_err(js)?;

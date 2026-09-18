@@ -6,7 +6,6 @@ use jni::{
     objects::{JClass, JDoubleArray, JObject, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
-use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -762,14 +761,9 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     let result = (|| {
         let a = unsafe { app(handle) };
         a.observe_gpu_failure(true);
-        let renderer = a.host.session.renderer_mut();
-        if let Some(gpu) = &renderer.0 {
-            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        }
-        let Some(image) = renderer.take_filter_previews() else {
+        let Some(atlas) = a.host.take_filter_preview_image() else {
             return Ok(std::ptr::null_mut());
         };
-        let atlas = image.map_err(error)?;
         let image = atlas.image;
         let header =
             serde_json::json!([image.request_id, image.width, image.height, atlas.filters]);

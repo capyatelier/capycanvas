@@ -429,35 +429,32 @@ fn changing_filter_preview_source_does_not_fail_the_editor_and_can_retry() {
         app.draw_frame();
         app.stroke();
         app.draw_frame();
-        let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
-        let status = app.request(2, json!({"type":"filter_previews", "request":81,
-            "revision":revision, "filters":["curves"], "size":[96,40]})).unwrap();
-        assert_eq!(status["accepted"], true);
+        let query = json!({"type":"filter_previews", "filters":["curves"], "size":[96,40]});
+        let first = app.request(2, query.clone()).unwrap();
+        assert_eq!(first["pending"], false, "New work waits for idle admission");
+        std::thread::sleep(std::time::Duration::from_millis(210));
+        let status = app.request(2, query.clone()).unwrap();
+        assert_eq!(status["pending"], true);
         app.action(json!({"type":"set_layer_opacity", "opacity":0.5}));
         app.draw_frame();
-        unsafe { &mut *app.0 }.host.session.renderer_mut().0.as_ref().unwrap().device()
-            .poll(wgpu::PollType::Wait { submission_index:None, timeout:Some(std::time::Duration::from_secs(30)) }).unwrap();
-        let mut cancelled = false;
-        let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
+        let changed = app.request(2, query.clone()).unwrap();
+        assert_ne!(changed["key"], status["key"]);
+        assert_eq!(changed["pending"], false, "A source change retires its old request");
+        assert!(changed["error"].is_null());
+        let atlas = unsafe { capy_apple_take_filter_previews(app.0) };
         assert!(atlas.is_null(), "Stale preview pixels must not be published");
-        assert!(cancelled, "Source changes complete the pending preview request");
-        let error = unsafe { capy_apple_error(app.0) };
-        assert!(error.is_null(), "Ordinary preview cancellation interrupted the editor: {}",
-            unsafe { CStr::from_ptr(error) }.to_string_lossy());
+        assert!(unsafe { capy_apple_error(app.0) }.is_null());
         let pixels = app.pixels();
         let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
-        let status = app.request(2, json!({"type":"filter_previews", "request":82,
-            "revision":revision, "filters":["curves"], "size":[96,40]})).unwrap();
-        assert_eq!(status["accepted"], true);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
-            assert!(!cancelled, "Cancellation must not leak into the retry");
+            app.request(2, query.clone()).unwrap();
+            let atlas = unsafe { capy_apple_take_filter_previews(app.0) };
             assert!(unsafe { capy_apple_error(app.0) }.is_null());
             if !atlas.is_null() {
                 let mut info = std::mem::MaybeUninit::<CapyFilterPreviewInfo>::uninit();
                 unsafe { capy_filter_previews_read(atlas, info.as_mut_ptr()) };
-                assert_eq!(unsafe { info.assume_init() }.request, 82);
+                assert_eq!(unsafe { info.assume_init() }.request, 2);
                 unsafe { capy_filter_previews_free(atlas) };
                 break;
             }
@@ -488,19 +485,11 @@ fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_
         app.draw_frame();
         let before = app.pixels();
         let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
-        let status = app
-            .request(
-                2,
-                json!({"type":"filter_previews","request":73,"revision":revision,
-            "filters":["curves","gradient_map"],"size":[96,40]}),
-            )
-            .unwrap();
-        assert_eq!(status["accepted"], true);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let atlas = loop {
-            let mut cancelled = true;
-            let atlas = unsafe { capy_apple_take_filter_previews(app.0, &mut cancelled) };
-            assert!(!cancelled);
+            app.request(2, json!({"type":"filter_previews",
+                "filters":["curves","gradient_map"],"size":[96,40]})).unwrap();
+            let atlas = unsafe { capy_apple_take_filter_previews(app.0) };
             assert!(unsafe { capy_apple_error(app.0) }.is_null());
             if !atlas.is_null() {
                 break atlas;
@@ -528,7 +517,7 @@ fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_
                     info.stride,
                     info.count
                 ),
-                (73, 96, 80, 384, 30720)
+                (1, 96, 80, 384, 30720)
             );
             let filters: Value =
                 serde_json::from_slice(CStr::from_ptr(info.filters).to_bytes()).unwrap();

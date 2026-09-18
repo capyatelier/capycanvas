@@ -3895,6 +3895,9 @@ impl CanvasRenderer for WgpuRasterizer {
     ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
         self.poll_filter_previews()
     }
+    fn cancel_filter_previews(&mut self) {
+        self.cancel_filter_preview_request();
+    }
     fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
         let mask = self.mask(asset).ok()?;
         Some(mask.outline.get_or_init(|| {

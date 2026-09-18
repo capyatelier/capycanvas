@@ -165,3 +165,17 @@ the app debuggable. Reinstall the debug APK afterward for ordinary development.
 The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
 records the shared source-probe texture reuse fix, tablet measurements, and
 remaining preview/display memory-budget work.
+
+The [shared filter preview scheduling record](../history/filter-preview-scheduling-2026-09-17.md)
+records the Rust lifecycle, 61 MP latency and drawing responsiveness measurements,
+platform handoff and remaining memory work.
+
+The focused physical-device regressions are in `AndroidRasterTest`:
+`largePhotoFilterPreviews`, `largePhotoFilterPreviewDrawing` and
+`largePhotoFilterPreviewLifecycle`. They are opt-in via `-e filterPhoto true` and
+`-e filterDrawing true`. Place the photo at the test app's private
+`files/filter-memory-test.jpg`. Use a separate app ID with
+`-PcapyApplicationId=art.capycanvas.filtertest -PcapyAppLabel="Capy Filter Test"`;
+install both matching APKs and target `art.capycanvas.filtertest.test` for
+instrumentation. Reports are in its external-files directory. Production app
+storage must not be cleared to prepare these tests.

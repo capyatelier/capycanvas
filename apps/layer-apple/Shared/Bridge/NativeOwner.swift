@@ -129,10 +129,9 @@ final class NativeOwner: @unchecked Sendable {
         queue.async { [self] in
             do {
                 let status = try request(2, query) ?? JSON()
-                var cancelled = false
-                let pointer = capy_apple_take_filter_previews(handle, &cancelled)
+                let pointer = capy_apple_take_filter_previews(handle)
                 if let error = capy_apple_error(handle) { throw HostFailure(message: String(cString: error)) }
-                completion(FilterPreviewReply(status: status, atlas: pointer.map(NativeFilterPreviews.init), error: nil, cancelled: cancelled))
+                completion(FilterPreviewReply(status: status, atlas: pointer.map(NativeFilterPreviews.init), error: nil))
             } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
         }
     }

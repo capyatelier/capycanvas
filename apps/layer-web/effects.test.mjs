@@ -214,7 +214,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
     else if(number) await send({type:"effect",action:{op:"set",layer:view.layer,key:number.key,value:{kind:"number",value:number.kind.numeric.min}}});
     if(gradient) {
       await evaluate("document.querySelector('.gradient-ramp').click()");
-      await send({type:"effect",action:{op:"gradient_stop",layer:view.layer,key:gradient.key,index:null,position:.5,color:[.8,.2,.1,1],remove:false}});
+      await send({type:"effect",action:{op:"gradient_stop",layer:view.layer,key:gradient.key,index:null,position:.5,color:{space:"Srgb",rgba:[.8,.2,.1,1]},remove:false}});
       assert.equal(await evaluate("document.querySelectorAll('.gradient-stops button').length"),3);
       await send({type:"effect",action:{op:"reset",layer:view.layer,key:"amount"}});
     }
@@ -236,7 +236,7 @@ export async function checkAdjustments({call,evaluate,settle}) {
     };ready();
   })`);
   assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
-  const stats=await evaluate("layerApp.app.renderer_stats()");assert.ok(stats.samples.length>0,JSON.stringify({stats,layout:await evaluate("JSON.stringify(layerApp.app.layout(innerWidth,innerHeight),(_,v)=>typeof v==='bigint'?Number(v):v)"),error:await evaluate("document.querySelector('#status')?.textContent")}));
+  const stats=await evaluate("JSON.parse(JSON.stringify(layerApp.app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v))");assert.ok(stats.samples.length>0,JSON.stringify({stats,layout:await evaluate("JSON.stringify(layerApp.app.layout(innerWidth,innerHeight),(_,v)=>typeof v==='bigint'?Number(v):v)"),error:await evaluate("document.querySelector('#status')?.textContent")}));
   const order=stats.rows.map(row=>row.label);order.splice(Number(stats.chart_after_rows),0,"chart");
   assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),order);
   await capture("stats-dark");await send({type:"set_theme",theme:"light"});await capture("stats-light");

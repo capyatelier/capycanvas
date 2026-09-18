@@ -27,6 +27,7 @@ pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
+pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
 mod tools;

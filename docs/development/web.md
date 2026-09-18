@@ -254,3 +254,19 @@ adb -s "$CAPY_ANDROID_SERIAL" reverse --remove tcp:4173
 The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
 records the shared source-probe texture reuse fix, tablet measurements, and
 remaining preview/display memory-budget work.
+
+The [shared filter preview scheduling record](../history/filter-preview-scheduling-2026-09-17.md)
+records the Rust lifecycle, 61 MP latency and drawing responsiveness measurements,
+platform handoff and remaining memory work.
+
+For preview pixels and lifecycle on an attached Android browser, use the existing
+CDP forwarding workflow and an isolated test origin, then run:
+
+```bash
+LAYER_DEVICE_CDP=http://127.0.0.1:9230 LAYER_WEB_URL=http://127.0.0.1:8136/ \
+  node apps/layer-web/device.test.mjs --filter-previews
+```
+
+This covers cached reopening, source/category changes and GPU replacement; it
+writes `web-preview-lifecycle.json` and a capture under `artifacts/filter-memory/`.
+The check modifies its test document and must not target a user's working tab.

@@ -64,9 +64,11 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() {
         super.onStart()
+        host.filterPreviewCache.resume()
         host.workspaceInput(obj("type" to "resume"))
     }
     override fun onStop() {
+        host.filterPreviewCache.pause()
         host.recovery.capture()
         host.workspaceInput(obj("type" to "suspend"))
         super.onStop()

@@ -4,6 +4,7 @@ struct AdjustmentPanel: View {
     @ObservedObject var store: EditorStore
     @State private var projection = UUID().uuidString
     @Environment(\.displayScale) private var scale
+    @Environment(\.scenePhase) private var phase
     @FocusState private var searching: Bool
     private var picker: JSON { store.state["filter_picker"] }
     private var choices: [JSON] { store.state["adjustments"].array }
@@ -67,6 +68,8 @@ struct AdjustmentPanel: View {
         }.padding(6)
             .modifier(PanelBodyMeasurement(panel: "adjustments", part: "insets", intrinsicHeight: 12))
             .onChange(of: picker["search"].isNull) { _, closed in searching = !closed }
+            .onAppear { store.filterPreviews.setActive(phase != .background) }
+            .onChange(of: phase) { _, phase in store.filterPreviews.setActive(phase != .background) }
             .onDisappear { store.filterPreviews.hidePanel(projection) }
     }
 }

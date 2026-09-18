@@ -83,7 +83,8 @@ enum Command {
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
     ColorSample(layer_render::ColorSampleRequest),
-    FilterPreviews(layer_render::FilterPreviewRequest),
+    FilterPreviews(u64, layer_render::FilterPreviewRequest),
+    CancelFilterPreviews(u64),
     Frame(Box<Frame>),
     Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
@@ -105,7 +106,7 @@ enum Reply {
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
     ColorSample(Result<layer_render::ColorSample, String>),
-    FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
+    FilterPreviews(u64, Result<layer_render::FilterPreviewImage, String>),
     Error(String),
     Readback(ReadbackImage),
 }
@@ -144,6 +145,7 @@ pub struct RenderWorker {
     color_sample_pending: bool,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
     filter_previews_pending: bool,
+    filter_preview_generation: u64,
     effect_validation_pending: bool,
     effect_validation: Option<layer_render::EffectValidationResult>,
     pub(super) geometry: Option<Geometry>,
@@ -267,6 +269,7 @@ impl RenderWorker {
             color_sample_pending: false,
             filter_previews: VecDeque::new(),
             filter_previews_pending: false,
+            filter_preview_generation: 0,
             effect_validation_pending: false,
             effect_validation: None,
             geometry: None,
@@ -372,9 +375,11 @@ impl RenderWorker {
                     self.color_sample = Some(color);
                     self.color_sample_pending = false;
                 }
-                Reply::FilterPreviews(image) => {
-                    self.filter_previews_pending = false;
-                    self.filter_previews.push_back(image);
+                Reply::FilterPreviews(generation, image) => {
+                    if generation == self.filter_preview_generation {
+                        self.filter_previews_pending = false;
+                        self.filter_previews.push_back(image);
+                    }
                 }
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                 Reply::Readback(image) => self.readbacks.push_back(image),
@@ -525,7 +530,7 @@ impl CanvasRenderer for RenderWorker {
         if self.filter_previews_pending {
             return Ok(false);
         }
-        self.send(Command::FilterPreviews(request))?;
+        self.send(Command::FilterPreviews(self.filter_preview_generation, request))?;
         self.filter_previews_pending = true;
         Ok(true)
     }
@@ -539,6 +544,12 @@ impl CanvasRenderer for RenderWorker {
                 BackendError("Filter preview failed")
             })
         })
+    }
+    fn cancel_filter_previews(&mut self) {
+        self.filter_preview_generation = self.filter_preview_generation.wrapping_add(1);
+        let _ = self.send(Command::CancelFilterPreviews(self.filter_preview_generation));
+        self.filter_previews_pending = false;
+        self.filter_previews.clear();
     }
     type Error = BackendError;
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
@@ -703,6 +714,7 @@ impl Worker {
         let mut deferred = VecDeque::new();
         let mut pending_thumbnails = VecDeque::new();
         let mut last_canvas_frame = std::time::Instant::now();
+        let mut filter_preview_generation = 0;
         let mut document_drawn = false;
         #[cfg(test)]
         let mut fail_next_frame = false;
@@ -783,10 +795,14 @@ impl Worker {
                     .send(Reply::Region(region.map_err(error)))
                     .map_err(error)?;
             }
-            while let Some(image) = self.renderer.take_filter_previews() {
-                reply
-                    .send(Reply::FilterPreviews(image.map_err(error)))
-                    .map_err(error)?;
+            // The worker can advance a chunk independently of GTK's UI poll.
+            // Apply the same priority already used for optional thumbnails.
+            if last_canvas_frame.elapsed() >= Duration::from_millis(50) {
+                while let Some(image) = self.renderer.take_filter_previews() {
+                    reply
+                        .send(Reply::FilterPreviews(filter_preview_generation, image.map_err(error)))
+                        .map_err(error)?;
+                }
             }
             if let Some(result) = self.renderer.take_effect_validation() {
                 reply.send(Reply::EffectValidation(result)).map_err(error)?;
@@ -847,7 +863,7 @@ impl Worker {
                     Command::Region(_)
                         | Command::Thumbnail(..)
                         | Command::ColorSample(_)
-                        | Command::FilterPreviews(_)
+                        | Command::FilterPreviews(..)
                         | Command::Readback(_)
                 )
             {
@@ -916,14 +932,20 @@ impl Worker {
                     telemetry_enabled = enabled;
                     self.renderer.set_telemetry_enabled(enabled);
                 }
-                Command::FilterPreviews(request) => {
+                Command::CancelFilterPreviews(generation) => {
+                    filter_preview_generation = generation;
+                    self.renderer.cancel_filter_previews();
+                }
+                Command::FilterPreviews(generation, request) => {
+                    if generation < filter_preview_generation { continue; }
+                    filter_preview_generation = generation;
                     let result = self
                         .renderer
                         .request_filter_previews(request)
                         .map_err(error);
                     if !matches!(result, Ok(true)) {
                         reply
-                            .send(Reply::FilterPreviews(Err(result
+                            .send(Reply::FilterPreviews(generation, Err(result
                                 .err()
                                 .unwrap_or_else(|| "Preview renderer busy".into()))))
                             .map_err(error)?;

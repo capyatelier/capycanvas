@@ -751,6 +751,154 @@ class AndroidRasterTest {
         println("61 MP All filters: $result")
     }
 
+    @Test fun largePhotoFilterPreviewDrawing() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterDrawing") == "true")
+        open(File(activity.filesDir, "filter-memory-test.jpg"))
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        if (host.snapshot!!.getJSONObject("state").getJSONObject("workspace").optBoolean("zen_mode")) {
+            action(obj("type" to "invoke", "command" to "zen_mode"))
+        }
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, .5))))
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        fun panel(visible: Boolean) {
+            action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to !visible)))
+            if (visible) {
+                val current = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { it.getInt("id") == group }
+                if (current.optString("active") != "adjustments") action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+                // Selecting an already-active tab expands its controls. That
+                // consumes the next canvas contact as dismissal, not painting.
+                action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+            }
+        }
+        panel(false)
+        // Warm the brush/source before comparing timed strokes. Motion uses real
+        // OS stylus events and the host's real Choreographer; no manual frames.
+        motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 60, 4752.0 to 3168.0)
+        val runs = org.json.JSONArray()
+        val output = File(activity.getExternalFilesDir(null), "filter-preview-drawing.json")
+        for (visible in listOf(false, true, true, false)) {
+            panel(visible)
+            if (visible) {
+                // Invalidate the source without changing its geometry, then
+                // start drawing while the large-photo probe is still pending.
+                action(obj("type" to "set_layer_opacity", "opacity" to if (runs.length() % 2 == 0) .99 else 1.0))
+                compose.waitUntil(10_000) { host.filterPreviewCache.pending }
+            }
+            val previous = host.filterPreviewCache.images["curves"]?.key
+            val beforeRevision = native { state(it).getJSONObject("document_file").getLong("revision") }
+            val result = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0)
+            result.put("filters_visible", visible)
+            val afterRevision = native { state(it).getJSONObject("document_file").getLong("revision") }
+            assertTrue("The timed stylus contact must paint, not dismiss UI", afterRevision > beforeRevision)
+            result.put("before_revision", beforeRevision).put("after_revision", afterRevision)
+            if (visible) {
+                val released = SystemClock.uptimeMillis()
+                compose.waitUntil(60_000) {
+                    host.filterPreviewCache.images["curves"]?.let { it.key != previous } == true
+                }
+                result.put("preview_after_release_ms", SystemClock.uptimeMillis() - released)
+                assertNull(host.failure)
+            }
+            runs.put(result)
+            output.writeText(obj("runs" to runs).toString(2))
+        }
+        println("Filter preview drawing results: ${output.absolutePath}")
+        fun p95(values: List<Double>) = values.sorted()[((values.size - 1) * .95).toInt()]
+        fun metric(run: JSONObject, field: String): Double {
+            val timeline = run.getJSONObject("timeline")
+            val frames = timeline.array("frames").values().map { it as org.json.JSONArray }
+            return when (field) {
+                "queue" -> p95(timeline.array("inputs").values().map { it as org.json.JSONArray }
+                    .map { (it.getLong(2) - it.getLong(1)) / 1e6 })
+                "cpu" -> p95(frames.map { it.getLong(10) / 1e6 })
+                else -> p95(frames.zipWithNext { a, b -> (b.getLong(0) - a.getLong(0)) / 1e6 })
+            }
+        }
+        val controls = runs.objects().filter { !it.getBoolean("filters_visible") }
+        for (run in runs.objects().filter { it.getBoolean("filters_visible") }) {
+            for ((field, tolerance) in listOf("queue" to 2.0, "cpu" to 2.0, "gap" to .5)) {
+                assertTrue("Preview $field p95 must stay within $tolerance ms of the drawing control",
+                    metric(run, field) <= controls.maxOf { metric(it, field) } + tolerance)
+            }
+            assertTrue("Preview must resume promptly after drawing", run.getLong("preview_after_release_ms") < 20_000)
+        }
+    }
+
+    @Test fun largePhotoFilterPreviewLifecycle() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
+        open(File(activity.filesDir, "filter-memory-test.jpg"))
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        fun collapsed(value: Boolean) = action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to value)))
+        collapsed(false)
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+        action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+        fun pending() = compose.waitUntil(10_000) { host.filterPreviewCache.pending }
+        fun completed(previous: String? = null) {
+            compose.waitUntil(20_000) { host.filterPreviewCache.images["curves"]?.let { it.key != previous } == true }
+            assertNull(host.failure)
+        }
+        pending(); collapsed(true)
+        compose.waitUntil(5000) { !host.filterPreviewCache.pending }
+        val idleRequests = host.filterPreviewCache.request
+        SystemClock.sleep(300)
+        assertEquals("Hidden previews admit no new work", idleRequests, host.filterPreviewCache.request)
+        collapsed(false); completed()
+
+        var old = host.filterPreviewCache.images.getValue("curves").key
+        action(obj("type" to "set_layer_opacity", "opacity" to .98)); pending()
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        SystemClock.sleep(300)
+        assertFalse("Background work stopped", host.filterPreviewCache.pending)
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        completed(old)
+
+        old = host.filterPreviewCache.images.getValue("curves").key
+        action(obj("type" to "set_layer_opacity", "opacity" to .97)); pending()
+        scenario.onActivity { host.restartCanvas() }
+        compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("shaders_ready") == true }
+        completed(old)
+
+        action(obj("type" to "set_layer_opacity", "opacity" to .96)); pending()
+        val replacement = File(files, "filter-replacement.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.GREEN)
+        replacement.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        old = host.filterPreviewCache.images["curves"]?.key ?: ""
+        val previousEpoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+        open(replacement); scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch") != previousEpoch }
+        completed(old)
+        val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+        val tile = host.filterPreviewCache.images.getValue("curves")
+        assertTrue("Only the replacement document is presented", tile.key.startsWith("$epoch:"))
+        val image = tile.image.toPixelMap()
+        assertTrue("Replacement pixels reached the native bitmap", (0 until image.width).any {
+            val p = image[it, image.height / 2]; p.green > p.red + .5f && p.green > p.blue + .5f
+        })
+        assertNull(host.failure)
+    }
+
     @Test fun largePhotoSustainedDrawing() {
         Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("photoWorkflow") == "true")
         val photo = File(activity.filesDir, "photo-benchmark.jpg")

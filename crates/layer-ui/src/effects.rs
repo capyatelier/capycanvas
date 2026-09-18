@@ -5,6 +5,18 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 impl<B: CanvasRenderer> UiSession<B> {
+    /// Optional preview work yields to delivered input and unfinished edits.
+    /// Apply this to completion service as well as admission: taking a preview
+    /// can submit the next source-probe chunk.
+    pub fn filter_previews_idle(&self) -> bool {
+        !self.rendering_suspended
+            && !self.input_pending
+            && !self.touch.is_active()
+            && self.interaction.pointer.is_none()
+            && self.effect_gesture.is_none()
+            && !self.engine.has_active_stroke()
+            && !self.engine.has_pending_document_edits()
+    }
     pub fn filter_preview_revision(&self) -> (u64, u64, u64) {
         let doc = self.engine.document();
         (
@@ -21,10 +33,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         filters: Vec<Arc<str>>,
         size: [u32; 2],
     ) -> Result<bool, String> {
-        if self.input_pending
-            || self.engine.has_active_stroke()
-            || self.engine.has_pending_document_edits()
-        {
+        if !self.filter_previews_idle() {
             return Ok(false);
         }
         let doc = self.engine.document();

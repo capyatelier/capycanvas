@@ -84,6 +84,13 @@ user's drawings; the XP-Pen check now passes.
 
 ## Filter-preview cancellation — 2026-09-17
 
+Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)
+moves this lifecycle into Rust. The current ABI transfers an already validated
+atlas; shared status replaces the former cancellation flag and Swift pending
+request state described below. The updated native owner test still covers
+cancellation, real failures, retry, save/reopen and continued drawing. Its Swift
+execution and macOS/iPadOS builds need revalidation after this migration.
+
 The user reports `effect shader: Filter preview cancelled because its source
 changed`, blocking further drawing, large-photo Save As/reopen and performance
 acceptance. Drawing or editing can legitimately invalidate a pending Filters

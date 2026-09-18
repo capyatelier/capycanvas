@@ -33,6 +33,9 @@ pub use application_menu::{ApplicationLink, ApplicationMenu};
 pub use workspace_session::PreparedWorkspace;
 #[path = "effects.rs"]
 mod effects;
+#[path = "filter_previews.rs"]
+mod filter_previews;
+pub use filter_previews::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 #[path = "filter_loading.rs"]
 mod filter_loading;
 #[path = "project_files.rs"]
@@ -88,6 +91,7 @@ pub struct UiSession<R: CanvasRenderer> {
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
     navigator_preview: crate::navigator::Preview,
+    filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     rulers: rulers::RulerInteraction,
@@ -153,6 +157,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             navigator_drag: None,
             effect_gesture: None,
             navigator_preview: Default::default(),
+            filter_previews: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
             rulers: Default::default(),

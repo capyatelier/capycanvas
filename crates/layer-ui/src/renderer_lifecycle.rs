@@ -56,6 +56,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
         self.navigator_preview = Default::default();
+        self.renderer_mut().cancel_filter_previews();
+        self.filter_previews.renderer_replaced();
         if self.pending_filters.take().is_some() {
             self.state.filter_load.pending = false;
             self.state.filter_load.error =
@@ -115,6 +117,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.eyedropper.renderer_replaced();
         self.region_tools.renderer_replaced();
         self.navigator_preview = Default::default();
+        self.filter_previews.renderer_replaced();
         if let Some(pending) = &mut self.pending_filters {
             pending.validated = false;
         }
