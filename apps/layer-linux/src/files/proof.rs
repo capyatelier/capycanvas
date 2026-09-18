@@ -183,6 +183,7 @@ impl ProofPanel {
         };
         if self.model.identity.get() != Some(identity) {
             self.cancel_job();
+            if let Some(c)=self.model.analysis.borrow().as_ref(){c.cancel();}
             self.finish_export();
             self.model.identity.set(Some(identity));
             self.model.page.set(match mode {
@@ -418,6 +419,7 @@ impl ProofPanel {
         let panel = self.clone();
         let w = w.clone();
         glib::spawn_future_local(async move {
+            let close=w.window.connect_destroy(glib::clone!(#[strong] control,move |_|control.cancel()));
             let worker_control = control.clone();
             let result = gio::spawn_blocking(move || {
                 gpu.capture(
@@ -433,6 +435,7 @@ impl ProofPanel {
             .await
             .map_err(|_| "HDR analysis failed".to_string())
             .and_then(|r| r);
+            w.window.disconnect(close);
             panel.model.analysis.borrow_mut().take();
             if !control.cancellation_flag().load(Ordering::Acquire) {
                 let current = w.gpu.borrow().as_ref().is_some_and(|g| {
@@ -473,6 +476,7 @@ impl ProofPanel {
         {
             glib::timeout_future(std::time::Duration::from_millis(20)).await;
         }
+        if self.model.page.get() == Page::Print && self.model.print_dirty.get(){if let Some(form)=self.form.borrow().as_ref(){(form.chooser.selected)()?;}}
         if self.model.page.get() == Page::Print && !self.model.error.borrow().is_empty() {
             return Err(self.model.error.borrow().clone());
         }
@@ -543,6 +547,7 @@ impl ProofPanel {
         let panel = self.clone();
         let w = w.clone();
         glib::spawn_future_local(async move {
+            let close=w.window.connect_destroy(glib::clone!(#[strong] cancelled,move |_|cancelled.store(true,Ordering::Release)));
             w.proof.pause().await;
             let worker_cancelled = cancelled.clone();
             let worker_recipe = recipe.clone();
@@ -565,6 +570,7 @@ impl ProofPanel {
                     s.set_proof_recipe(Some(recipe.clone()))?};
                 w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,String>(Some(change))
             }.await;
+            w.window.disconnect(close);
             panel.model.busy.set(false);
             panel.model.cancelled.borrow_mut().take();
             if panel.model.identity.get() == Some(identity) && panel.model.serial.get() == serial {

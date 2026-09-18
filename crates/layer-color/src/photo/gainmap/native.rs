@@ -587,3 +587,38 @@ pub(super) fn preview(
     let (_, sdr) = sdr_preview.finish()?;
     Ok((preview_extent, hdr, sdr, stats))
 }
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    #[test]
+    #[ignore="pinned Linux HDR codec bundle; actual process cancellation"]
+    fn gainmap_cancel_reaps_an_active_codec_and_removes_staging() {
+        let cancelled=std::sync::Arc::new(AtomicBool::new(false));let flag=cancelled.clone();
+        let worker=std::thread::spawn(move||{
+            write(std::io::sink(),[2048,2048],RgbSpace::Srgb,SdrRendition::default(),GainMapFormat::Avif,90,None,None,false,&flag,|y,row|{
+                for (x,p) in row.iter_mut().enumerate(){let n=(x as u32).wrapping_mul(747796405).wrapping_add(y.wrapping_mul(2891336453));let n=(n^(n>>16)).wrapping_mul(2246822519);let v=(n&65535) as f32/65535.;*p=[v*4.,v*2.,0.25,1.];}Ok(())
+            })
+        });
+        let start=Instant::now();let mut codec=None;
+        while start.elapsed()<Duration::from_secs(40)&&codec.is_none(){
+            for task in fs::read_dir(format!("/proc/{}/task",std::process::id())).unwrap().flatten(){
+                if let Ok(children)=fs::read_to_string(task.path().join("children")){for pid in children.split_whitespace(){
+                    if fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|p|p.file_name().is_some_and(|n|n=="capy-hdr-codec"))
+                        && fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|b|b.windows(11).any(|s|s==b"encode-avif")){
+                        codec=Some(pid.to_string());break;
+                    }
+                }}
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let cancel_at=Instant::now();cancelled.store(true,Ordering::Release);
+        let result=worker.join().unwrap();assert!(codec.is_some(),"encoder never started: {result:?}");
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(cancel_at.elapsed()<Duration::from_secs(2),"codec cancellation exceeded two seconds");
+        assert!(!std::path::Path::new(&format!("/proc/{}",codec.unwrap())).exists(),"codec must be reaped");
+        let prefix=format!("capy-hdr-{}-",std::process::id());
+        assert!(!fs::read_dir(std::env::temp_dir()).unwrap().flatten().any(|e|e.file_name().to_string_lossy().starts_with(&prefix)),"private staging must be removed");
+        eprintln!("active AVIF codec cancellation: {:.2} ms",cancel_at.elapsed().as_secs_f64()*1000.);
+    }
+}

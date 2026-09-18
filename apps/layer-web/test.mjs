@@ -1,3 +1,4 @@
+import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdrLimits} from "./hdr-limits.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -228,7 +229,9 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--hdr-limits")) {
+  if (process.argv.includes("--gainmap-interchange")) {
+    await checkGainmapInterchange({evaluate});
+  } else if (process.argv.includes("--hdr-limits")) {
     await checkHdrLimits({evaluate});
     checkRasterErrors();
   } else if (process.argv.includes("--image-placement")) {

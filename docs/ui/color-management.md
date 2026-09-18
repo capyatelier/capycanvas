@@ -183,8 +183,8 @@ layer exchange. Add separately scoped layered PSD interchange to the roadmap.
 **Proof → Print → compare → make optional print edits → Export.**
 
 Select/import a printer/paper ICC profile and keep proof intent, BPC and paper/ink
-simulation together. **Soft Proof** and **Gamut Warning** are view toggles with
-shortcuts and an obvious **Proof: [target]** indicator. Compare with the normal
+simulation together. **Off / Print** selects the view; **Gamut warning** is in
+Print's Options, with an obvious **Proof: [target]** indicator. Compare with the normal
 view without editing pixels. Use Save As or normal document duplication for a
 print variant; a bespoke virtual-copy system is not a prerequisite.
 
@@ -245,40 +245,49 @@ capability-unknown. Extend existing exposure/curves, picker and histogram contro
 above reference white; do not make HDR an unrelated editing application. Users
 can edit on an SDR monitor without silently losing HDR source data.
 
-**Proof** is a dockable panel with **SDR / Print** pages. In the Paint and Photo
+**Proof** is a dockable panel with a common **Off / SDR / Print** segmented
+control. In the Paint and Photo
 starting layouts it shares Color's tab group. Drag its tab to float or relocate
-it using the normal workspace controls. SDR documents use the Print page.
+it using the normal workspace controls. SDR documents offer Off / Print.
 
-For HDR artwork, **Proof → SDR** offers **Tone map / Scale / Clip**. Tone map
-uses the browser-derived reference-white curve; Scale divides by the chosen HDR
-range; Clip deliberately discards out-of-range SDR detail. **Exposure, Contrast
-and HDR range** use compact labeled slider/value rows. HDR range is hidden for
-Clip. It describes the input endpoint above reference white, not monitor peak.
-The default is 2.30 EV (1000 nits at the fixed 203-nit reference white).
+For HDR artwork, **Proof → SDR** offers **Perceptual / Browser**. Perceptual uses
+a BT.2390 shoulder with a midtone-preserving knee; Browser retains the
+browser-derived reference-white fallback. **Exposure, Contrast and HDR range**
+use common compact slider/value controls. HDR range describes the input endpoint
+above reference white, not monitor peak. The default is 2.30 EV (1000 nits at
+the fixed 203-nit reference white). **Auto** measures the edited composite and
+fits its peak; **Reset** restores the new defaults. Old Scale/Clip recipes reopen
+unchanged, until deliberately replaced.
 
-Preview compares with the master. Compare saved and Reset SDR settings are in
-the overflow menu. Apply stores one undoable document change; Revert restores
-the saved settings. These settings are shared by SDR viewing, delivery and mapped
-print proofing; they never change HDR artwork. The SDR appearance entry in Document
-Properties and SDR Export opens this panel. Export returns to its retained draft
-after Apply/Revert, or through Return to Export when there are no pending changes.
-**View → Preview SDR** remains a temporary comparison on capable HDR displays.
+Changes are live, saved document edits, with one undo step per slider gesture.
+**Off** restores normal viewing without discarding the saved SDR rendition.
+These settings are shared by SDR viewing, delivery and mapped print proofing;
+they never change HDR artwork. **View → Proof**, Document Properties and Export
+open this panel. **Back to Export** returns to the retained export draft. There
+is no Apply/Revert, Preview checkbox or overflow menu beside the selector.
 
 **Proof → Print** chooses the printer/paper profile and ink/paper simulation.
-Rendering intent, black point compensation and gamut warning are in the Print
-options overflow menu. Apply prepares the proof asynchronously; Cancel preparation
-retains the previous proof. View and gamut-warning toggles never enter artwork
-or export. Preview, Apply and Revert stay at the bottom of the panel. A print
-profile remains separate from the export target. See the
-[browser mapping research and validation](../history/color-management-sdr-proof-update.md).
+Rendering intent, black point compensation and gamut warning are in the native
+**Options** expander. A changed profile prepares asynchronously with cancellation
+and retains the previous recipe if validation fails. View simulation and gamut
+warnings never enter artwork or export. The master saves one print recipe;
+Export's deliberate **Use print profile** action converts delivery pixels and
+tags them correctly. Normal sharing keeps its chosen RGB delivery profile. See
+the [mapping research and validation](../history/color-management-proof-export-update.md).
 
-HDR export offers at least one tested route. Gain-map delivery, if added, needs
-a newly generated map from the edited renditions; imported gain maps must never
-be reused unchanged after arbitrary edits.
+Export offers **HDR JPEG**, **HDR with transparency · AVIF**, **HDR native · PNG**,
+or **SDR** in one Output selector. The pinned Linux codecs regenerate one gain
+map from edited HDR and authored SDR at the final size; JPEG carries ISO and
+Ultra HDR metadata for that map. The HDR/SDR preview shows decoded output and
+its actual embedded base. Transparency recommends AVIF; JPEG requires explicit
+flattening. Size, Color & transparency and Preset have separate detail pages.
 
 GTK's review implementation uses linear half-float storage with Float32
 processing and fixed reference white of 203 cd/m². It supports noninterlaced
-16-bit PQ PNG input and BT.2020 PQ PNG output, plus authored SDR PNG/TIFF/JPEG.
+16-bit PQ PNG input and BT.2020 PQ PNG output, Ultra HDR JPEG and a constrained
+gain-map AVIF route, plus authored SDR PNG/TIFF/JPEG. Unsupported AVIF profiles,
+transforms and gain-map layouts fail explicitly. Other hosts reject the new
+gain-map output choices until their codec integration is qualified.
 The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for display
 and reference-white details. New Drawing offers an **HDR drawing** preset.
 HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
@@ -336,7 +345,7 @@ work, not silently to every open document.
 
 Menu placement proposal: **File** for New/Open/Import/Save/Export and Document
 Color; **Adjustments/Filter** for editable corrections; **View** for Histogram,
-Soft Proof and SDR preview; **Color panel / tool options** for numeric entry and
+the unified Proof panel; **Color panel / tool options** for numeric entry and
 sampling. The same actions need explicit touch and keyboard access. Exact native
 placement can adapt without altering meaning; no flow depends on existing menu
 or transport limitations.

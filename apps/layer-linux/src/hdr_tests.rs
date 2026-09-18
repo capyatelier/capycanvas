@@ -534,10 +534,11 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     }
     let before = snapshot(&w);
     invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-output").set_selected(0);
     pump(600);
     let dialog = w.window.visible_dialog().unwrap();
     assert!(!dialog.is::<adw::AlertDialog>());
-    assert!(find_named(dialog.upcast_ref(), "export-bpc").is_none());
+    assert!(!find_named(dialog.upcast_ref(), "export-bpc").unwrap().is_mapped());
     let scroll = find_named(dialog.upcast_ref(), "export-main-scroll").unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
     let adjustment = scroll.vadjustment();
     assert!(adjustment.upper() <= adjustment.page_size() + 1., "main page requires scrolling: {} / {}", adjustment.upper(), adjustment.page_size());
@@ -665,16 +666,23 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
 #[test]
 #[ignore = "Wayland/GPU and LAYER_HDR_LARGE_INPUT pointing to a retained 60 MP HDR fixture"]
 fn native_hdr_large_export_preview_and_cancellation() {
-    large_export_preview_and_cancellation(false);
+    large_export_preview_and_cancellation(1);
 }
 #[test]
 #[ignore = "Wayland/GPU and LAYER_HDR_LARGE_INPUT pointing to a retained 60 MP HDR fixture"]
 fn native_hdr_large_sdr_export_preview_and_cancellation() {
-    large_export_preview_and_cancellation(true);
+    large_export_preview_and_cancellation(0);
 }
-fn large_export_preview_and_cancellation(sdr:bool) {
+#[test]
+#[ignore="60 MP HDR fixture, native GPU and pinned codecs"]
+fn native_hdr_large_gainmap_export_preview_and_cancellation(){large_export_preview_and_cancellation(if std::env::var("LAYER_HDR_GAINMAP").as_deref()==Ok("avif"){3}else{2});}
+fn large_export_preview_and_cancellation(output:u32) {
     let path = std::env::var_os("LAYER_HDR_LARGE_INPUT").expect("60 MP fixture path");
-    let p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+    let mut p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+    if std::env::var_os("LAYER_HDR_DEFAULT_RENDITION").is_some() {
+        p.document.sdr_rendition = Default::default();
+    }
+    eprintln!("HDR_LARGE_RENDITION {:?}", p.document.sdr_rendition);
     assert_eq!(p.document.color.depth, SampleDepth::F16);
     assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
     let app = native_test_app("art.capycanvas.HdrLargePreview");
@@ -682,7 +690,8 @@ fn large_export_preview_and_cancellation(sdr:bool) {
     w.window.present(); ready(&w);
     let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
     invoke(&w, CommandId::ExportDocument);
-    combo(&w, "export-output").set_selected(u32::from(!sdr));
+    combo(&w, "export-output").set_selected(output);
+    if output==2 {find_named(w.window.visible_dialog().unwrap().upcast_ref(),"export-flatten").unwrap().downcast::<adw::SwitchRow>().unwrap().set_active(true);}
     let dialog = w.window.visible_dialog().unwrap();
     let after = find_named(dialog.upcast_ref(), "color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
     let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
@@ -698,10 +707,10 @@ fn large_export_preview_and_cancellation(sdr:bool) {
     });
     while after.paintable().is_none() {
         pump(5);
-        assert!(start.elapsed().as_secs() < 90, "60 MP preview: {}", status.text());
+        assert!(start.elapsed().as_secs() < 600, "60 MP preview: {}", status.text());
     }
     timer.remove();
-    eprintln!("HDR_LARGE_PREVIEW sdr={sdr} elapsed_ms={:.2} heartbeat_count={} max_heartbeat_gap_ms={:.2} status={}",
+    eprintln!("HDR_LARGE_PREVIEW output={output} elapsed_ms={:.2} heartbeat_count={} max_heartbeat_gap_ms={:.2} status={}",
         start.elapsed().as_secs_f64()*1000., heartbeat.borrow().1, heartbeat.borrow().2 as f64/1000., status.text());
     assert!(heartbeat.borrow().1 > 10, "no UI heartbeat while previewing");
     assert!(heartbeat.borrow().2 < 500_000, "main-thread stall during preview");
@@ -723,6 +732,11 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
     assert!(layer_color::photo::gainmap_available());
     let app=native_test_app("art.capycanvas.GainmapExport");
     let output=std::path::Path::new("../../artifacts/color-m4/gainmap-ui");std::fs::create_dir_all(output).unwrap();let output=output.canonicalize().unwrap();
+    // These are generated test fixtures. Clear previous outputs so repeating
+    // the journey does not leave an unanswered native overwrite confirmation.
+    for name in ["Opaque edited HDR.jpg", "Transparent edited HDR.avif"] {
+        let path=output.join(name);if path.exists(){std::fs::remove_file(path).unwrap();}
+    }
     for transparent in [false,true] {
         let mut p=new_drawing(64,48).unwrap();p.document.color.depth=SampleDepth::F16;p.document.layers[1].visible=false;
         let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();

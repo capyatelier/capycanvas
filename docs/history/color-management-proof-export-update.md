@@ -141,28 +141,99 @@ Validation logs and review qualification are listed in the review README.
 Physical HDR luminance, Apple/mobile and Windows HDR output require separate
 hardware qualification; passing GPU numerical tests does not replace it.
 
-## Checkpoint evidence
+## Validation evidence
 
-- Shared core/color/UI suites: 94 / 83 (+7 codec fixture tests skipped) / 471
-  passed before the final peak-analysis addition; the new Float64 shoulder
-  oracle also passes. Logs: `proof-export-shared-tests.log`,
-  `proof-bt2390-reference.log` under `artifacts/color-m4/`.
-- Actual native workflows passed: `gainmap-native.log` (HDR JPEG, transparent
-  AVIF, default recommendation, real decoded previews, Auto and reopening),
-  `proof-live-print.log` (CMYK print simulation, history, master save/reopen,
-  independent RGB delivery), `proof-live-layout.log` (Paint/Photo compact and
-  floating panels, immediate tab dragging, live changes and Undo),
-  `proof-live-preservation.log` (failed preservation, automatic replacement,
-  one embedded profile and a clean-machine reopening).
-- `proof-bt2390-gpu.log`: CPU/GPU SDR mapping and mapped print proof agree on
-  Vulkan for sRGB/ProPhoto, PQ/scRGB surfaces, signed highlights and alpha. The
-  Float32 PQ tolerance is 0.0004 scRGB / 0.00008 PQ code, derived from the
-  independent equation bound and scRGB's 203/80 scale. Artwork bytes stay exact.
-- `export-gainmap-tests.log`: 64×48 edited HDR gradient up to RGB 8, JPEG and
-  alpha AVIF reopen as F16; both JPEG metadata schemas present; 300 ppi survives.
-  Quality-100 maximum absolute HDR channel error: JPEG 0.1174, AVIF 0.0036;
-  alpha error below 0.0005. These are lossy route tolerances, not master precision.
+All logs are retained under `artifacts/color-m4/`. The branch includes
+`origin/main` through `09285af3` (Apple-only changes after the shared-renderer
+merge at `3a7eb637`; they do not alter the tested Linux renderer).
 
-These initial passes do not replace remaining independent viewer, large-image,
-browser and physical-display qualification. Do not treat the checkpoint as a
-release-signoff declaration.
+- Shared suites: core **95**, color **83** (+7 ignored fixtures), UI **471**,
+  Windows Rust **104** (+1 native D3D test ignored on Linux). The final color
+  suite with Linux codecs enabled passes **86**, with 20 opt-in integration
+  tests excluded from that default run. Logs: `proof-export-final-shared.log`,
+  `proof-export-final-ui.log`, `proof-export-final-windows.log`,
+  `proof-export-final-color-heif.log`. The first UI run had one stale format-list
+  expectation; the final UI log records the corrected full pass.
+- Workspace check and browser Wasm build pass: `proof-export-final-workspace.log`,
+  `proof-export-web-build.log`. Browser workspace unit tests pass in
+  `proof-export-web-unit.log`. The two renderer contact tests added by the main
+  merge pass in `proof-export-main-contact.log`.
+- Float64 BT.2390 oracle: `proof-bt2390-reference.log`. GPU view suite **6** pass
+  (+1 licensed CMYK fixture ignored), HDR suite **4** pass:
+  `proof-export-final-gpu-view.log`, `proof-export-final-gpu-hdr.log`. CPU/GPU SDR
+  mapping and mapped print agree on Vulkan for sRGB/ProPhoto, PQ/scRGB surfaces,
+  signed highlights and alpha. Float32 PQ tolerance is 0.0004 scRGB / 0.00008 PQ
+  code, derived from the independent equation bound and scRGB's 203/80 scale.
+- Native workflows: `gainmap-native-final.log` covers JPEG/AVIF recommendations, Auto,
+  decoded HDR/SDR previews, flattening, file export and F16 reopening using the
+  staged review codec bundle. `proof-live-hdr-final.log` covers editing, history,
+  live SDR, save/reopen, HDR/SDR delivery and retained export drafts.
+  `proof-live-layout.log` covers compact Paint/Photo panels, floating/tab dragging,
+  live edits and Undo. `proof-live-print-final.log` covers CMYK simulation,
+  save/reopen, independent RGB delivery and explicit print-profile selection.
+  `proof-live-picker-final.log`, `proof-live-cancellation-final.log` and
+  `proof-live-preservation.log` cover native profile controls, stale work,
+  cancellation, failed validation and preservation of a replaced embedded profile.
+- Final native export navigation and range-preflight checks pass in
+  `proof-export-navigation-final.log` and `proof-export-preflight-final.log`.
+  Repeated fixture exports now clear only their own generated outputs; an initial
+  rerun had stopped at GTK's overwrite confirmation. The navigation assertion
+  now checks that advanced controls are not mapped on the main page, rather than
+  assuming that retained detail-page widgets do not exist.
+- `proof-export-desktop/test.log`: the connected Wayland HDR desktop negotiates
+  49.261× headroom (compositor reports 10000-nit peak / 142-nit reference; these
+  are capabilities, not measurements). The decoded master texture retains red
+  4.470145 and GSK renders 4.444563, including the alpha/checker composite.
+  Temporary canvas SDR preview does not replace the export master. Simulated
+  capability transitions update the export preview correctly. This verifies
+  above-white transport, not calibrated emitted luminance.
+- `export-gainmap-tests.log`: quality-100 64×48 edited HDR gradient up to RGB 8,
+  both JPEG schemas, 300 ppi and AVIF alpha. Maximum absolute HDR channel error
+  is 0.1174 for JPEG and 0.0036 for AVIF; alpha error is below 0.0005. These are
+  lossy route tolerances, not master precision. `export-gainmap-renditions.log`
+  verifies changed recipes regenerate the actual SDR base while preserving HDR,
+  and independently forces the ISO and XMP JPEG reconstruction paths to agree.
+- `export-codec-cancellation.log`: cancelling an active 2048² AVIF encode kills
+  and reaps the codec process and removes private staging in **12.63 ms**.
+- Independent SDR decoding: Chrome **152.0.7977.64** matches neutral/dark authored
+  JPEG and AVIF bases within two 8-bit codes; AVIF alpha survives. A colored JPEG
+  matches the independent Pillow/LittleCMS ICC-aware legacy decode.
+  `gainmap-browser-final.log`, `gainmap-interchange/browser-sdr-results.json` and
+  `gainmap-interchange/legacy-sdr-reference.json` retain the evidence.
+  The accelerated canvas returned transparent pixels even for an ordinary SDR
+  JPEG control in this NVIDIA/Dawn test environment. The successful decoder
+  checks use `willReadFrequently` CPU canvas. This does not establish physical
+  HDR browser presentation. Browser-app HDR rejection and existing SDR/print
+  workflows also pass in `proof-export-web.log`.
+
+### 60 MP responsiveness and memory
+
+Single runs of the retained 8192×7324 F16 ProPhoto document with 20 effects,
+RTX PRO 6000 Blackwell, NVIDIA 610.57.04, Vulkan, isolated 1600×1000@120 Wayland:
+
+| Preview | Time | Max UI heartbeat gap | Cancel | Process-tree peak RSS | GPU residency |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SDR, saved Browser recipe | 8.40 s | 41.35 ms | 144 ms | 1,273,712 KiB | 1890 MiB |
+| SDR, new Perceptual default | 10.94 s | 22.45 ms | 133 ms | 1,302,360 KiB | 1894 MiB |
+| HDR JPEG, saved recipe | 19.73 s | 33.90 ms | 151 ms | 2,447,972 KiB | 1894 MiB |
+| HDR AVIF, saved recipe | 29.62 s | 19.86 ms | 147 ms | 4,246,224 KiB | 1890 MiB |
+
+Logs: `proof-export-large-{sdr,perceptual,jpeg,avif}.log` with corresponding
+`.memory.json` and `.time.txt`. The old fixture has no explicit method and retains
+Browser; the Perceptual run explicitly replaces its recipe in memory without
+rewriting the fixture. JPEG/AVIF codec subprocesses are included in RSS; maximum
+private staging is approximately 1.92 / 1.99 GB respectively. Sampling every
+0.5 seconds can miss shorter peaks. These are encoded previews followed by
+cancellation, **not final 60 MP file-publication tests**. The fixture contains
+out-of-range colors; output remains blocked until explicit clipping is chosen.
+
+The previous pre-update SDR baseline was 8.91 s / 19.56 ms gap / 152 ms cancel
+and 1,313,440 KiB process RSS (`main-merge-large-sdr.log`). Renderer changes from
+main and uncontrolled thermal/power conditions prevent attributing differences
+solely to the tone mapper. UI heartbeats are not physical input latency or
+120 Hz qualification. Constrained devices still need separate memory budgets.
+
+Physical HDR luminance/calibration, mixed-monitor movement, actual print matching,
+touch/pen contacts and Apple/Windows/mobile HDR viewing remain unqualified.
+Sharing services may strip auxiliary metadata. This is a review build, not a
+cross-platform release-signoff declaration.

@@ -119,6 +119,51 @@ mod tests {
             assert!((restored - hdr).abs() < 1e-5, "{base} {hdr} {restored}");
         }
     }
+    #[cfg(all(feature="heif",target_os="linux"))]
+    #[test]
+    #[ignore="requires pinned native HDR codec bundle"]
+    fn gainmap_rendition_changes_regenerate_fallback_and_both_jpeg_metadata_paths() {
+        let cancel=AtomicBool::new(false);let extent=[32,24];
+        for format in [GainMapFormat::Jpeg,GainMapFormat::Avif] {
+            let mut fallbacks=Vec::new();
+            for exposure in [0.,-1.] {
+                let rendition=SdrRendition{exposure,..Default::default()};
+                let read=|_:u32,row:&mut [[f32;4]]|{row.fill([2.,2.,2.,1.]);Ok(())};
+                let (_,hdr,base,stats)=preview_gainmap_rows(extent,extent,RgbSpace::Srgb,rendition,format,90,None,&cancel,read).unwrap();
+                assert_eq!(stats.clipped_channels,0);
+                let expected=rendition.map_rgb([2.;3],RgbSpace::Srgb);
+                for p in &hdr{for c in 0..3{assert!((p[c]-2.).abs()<0.035,"{format:?}: {p:?}");}}
+                for p in &base{for c in 0..3{assert!((p[c]-expected[c]).abs()<0.012,"{format:?}: {p:?} {expected:?}");}}
+                fallbacks.push(base[0][0]);
+                if let Some(directory)=std::env::var_os("LAYER_GAINMAP_OUTPUT") {
+                    let directory=std::path::PathBuf::from(directory);std::fs::create_dir_all(&directory).unwrap();
+                    let stem=format!("{}-{}",if format==GainMapFormat::Jpeg{"jpeg"}else{"avif"},if exposure==0.{"neutral"}else{"dark"});
+                    let mut file=Vec::new();write_gainmap_rows(&mut file,extent,RgbSpace::Srgb,rendition,format,90,None,None,false,&cancel,read).unwrap();
+                    std::fs::write(directory.join(format!("{stem}.{}",if format==GainMapFormat::Jpeg{"jpg"}else{"avif"})),file).unwrap();
+                    std::fs::write(directory.join(format!("{stem}.json")),serde_json::to_vec(&base[0].map(|v|(RgbSpace::Srgb.encode(v as f64)*255.).round() as u8)).unwrap()).unwrap();
+                }
+
+                if format==GainMapFormat::Jpeg {
+                    let mut file=Vec::new();write_gainmap_rows(&mut file,extent,RgbSpace::Srgb,rendition,format,90,None,None,false,&cancel,read).unwrap();
+                    let original=read_gainmap(std::io::Cursor::new(&file),format,DecodeLimits::default(),&cancel).unwrap();
+                    let mut original_row=vec![0;original.row_bytes()];original.rows().read(0,&mut original_row).unwrap();
+                    // Obscure one metadata signature without changing segment
+                    // lengths or MPF offsets. The remaining schema must suffice.
+                    for signature in [b"urn:iso:std:iso:ts:21496:-1".as_slice(),b"http://ns.adobe.com/xap/1.0/"] {
+                        let mut isolated=file.clone();let positions=isolated.windows(signature.len()).enumerate().filter_map(|(i,b)|(b==signature).then_some(i)).collect::<Vec<_>>();assert!(!positions.is_empty());
+                        for i in positions{isolated[i]=b'x';}
+                        let source=read_gainmap(std::io::Cursor::new(isolated),format,DecodeLimits::default(),&cancel).unwrap();
+                        let mut row=vec![0;source.row_bytes()];source.rows().read(0,&mut row).unwrap();
+                        for (a,b) in row.chunks_exact(2).zip(original_row.chunks_exact(2)){
+                            let a=half_value(a);let b=half_value(b);assert!((a-b).abs()<0.004,"metadata paths diverged: {a} {b}");
+                        }
+                    }
+                }
+            }
+            assert!(fallbacks[0]-fallbacks[1]>0.1,"SDR exposure must change the encoded base: {fallbacks:?}");
+        }
+        fn half_value(b:&[u8])->f32 {layer_core::color::hdr::decode_pixel([u16::from_le_bytes([b[0],b[1]]),0,0,0x3c00]).unwrap()[0]}
+    }
     #[cfg(all(feature = "heif", target_os = "linux"))]
     #[test]
     #[ignore = "requires pinned native HDR codec bundle"]

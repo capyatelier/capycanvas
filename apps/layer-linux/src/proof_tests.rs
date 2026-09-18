@@ -43,6 +43,7 @@ fn settled(w:&Rc<Workspace>){
     assert!(!error.is_visible(),"{}",error.text());
 }
 fn proof_choice(w:&Rc<Workspace>,name:&str)->gtk::DropDown{
+    if name=="proof-intent"{find_named(w.proof_panel.root.upcast_ref(),"proof-options").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true); }
     find_named(w.proof_panel.root.upcast_ref(),name).unwrap().downcast().unwrap()
 }
 
@@ -837,6 +838,17 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         std::fs::read(delivery).unwrap(),
         std::fs::read(expected).unwrap()
     );
+    invoke(&restored,CommandId::ExportDocument);
+    super::new_photo::export_page(&restored,"color");
+    let dialog=restored.window.visible_dialog().unwrap();
+    find_named(dialog.upcast_ref(),"export-print-profile").unwrap().downcast::<adw::ActionRow>().unwrap().emit_by_name::<()>("activated",&[]);
+    let deadline=Instant::now()+Duration::from_secs(30);
+    while !find_named(dialog.upcast_ref(),"export-print-profile").unwrap().is_sensitive(){pump(20);assert!(Instant::now()<deadline);}
+    assert_eq!(super::new_photo::profile_name(&restored,"export-space"),restored.gpu.borrow().as_ref().unwrap().session.engine().document().proof.as_ref().unwrap().name);
+    assert_eq!(combo(&restored,"export-format").selected(),1);
+    assert!(find_named(dialog.upcast_ref(),"export-bpc").unwrap().downcast::<adw::SwitchRow>().unwrap().is_active());
+    super::new_photo::capture_ui(&restored,&output,"print-profile-delivery.png");response(&restored,"cancel");finish(&restored);
+
     restored.window.destroy();
     w.window.destroy();
 }

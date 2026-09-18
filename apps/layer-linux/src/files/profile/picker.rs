@@ -121,8 +121,9 @@ impl State {
     ) -> Result<Option<ExportProfile>, String> {
         let purpose = self.purpose.clone();
         let working = self.working;
-        if let Some(value) = value {
+        if let Some(mut value) = value {
             return gio::spawn_blocking(move || {
+                value.channels=layer_color::profile_channels(&value.profile)?;
                 purpose.validate(&value, working)?;
                 Ok(Some(value))
             })
@@ -200,6 +201,12 @@ fn item(
 }
 
 impl ProfileChooser {
+    /// Reuse the bounded loader and its preset-generation arbitration for
+    /// programmatic selections such as the document's saved print profile.
+    pub fn validated_selection(&self)->Rc<dyn Fn(ColorProfile,String)> {
+        let state=self.state.clone();
+        Rc::new(move |profile,name|state.choose(Some(ExportProfile{profile,name,channels:ProfileChannels::Rgb}),None))
+    }
     pub fn is_pending(&self) -> bool { self.state.in_flight.get() || self.state.busy.get() }
     pub fn restore_document(&self, profile: ExportProfile) {
         *self.state.document.borrow_mut() =

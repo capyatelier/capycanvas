@@ -425,20 +425,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     color_group.add(&print_delivery);
     if let Some(proof)=snapshot.project.document.proof.clone(){
         print_delivery.set_subtitle(&proof.name);
-        let restore=profile.restore.clone();
-        print_delivery.connect_activated(glib::clone!(#[weak] print_delivery, #[weak] intent, #[weak] bpc, #[weak(rename_to=validation_error)] profile.error, move |_|{
-            print_delivery.set_sensitive(false);
-            let proof=proof.clone();let restore=restore.clone();let intent=intent.clone();let bpc=bpc.clone();let row=print_delivery.clone();let error=validation_error.clone();
-            glib::spawn_future_local(async move{
-                let result=gio::spawn_blocking(move || {
-                    let p=ExportProfile{channels:layer_color::profile_channels(&proof.profile)?,profile:proof.profile,name:proof.name};
-                    ProfilePurpose::Output.validate(&p,document.space)?;
-                    Ok::<_,String>((p,proof.conversion))
-                }).await.map_err(|_|"Print profile validation failed".to_string()).and_then(|r|r);
-                match result {Ok((p,conversion))=>{restore(p);intent.set_selected(match conversion.intent {RenderingIntent::RelativeColorimetric=>0,RenderingIntent::Perceptual=>1,RenderingIntent::Saturation=>2,RenderingIntent::AbsoluteColorimetric=>3});bpc.set_active(conversion.black_point_compensation);},Err(e)=>{error.set_label(&e);error.set_visible(true);}}
-                row.set_sensitive(true);
-            });
+        let choose=profile.validated_selection();
+        print_delivery.connect_activated(glib::clone!(#[weak] intent, #[weak] bpc, move |_|{
+            intent.set_selected(match proof.conversion.intent {RenderingIntent::RelativeColorimetric=>0,RenderingIntent::Perceptual=>1,RenderingIntent::Saturation=>2,RenderingIntent::AbsoluteColorimetric=>3});
+            bpc.set_active(proof.conversion.black_point_compensation);
+            choose(proof.profile.clone(),proof.name.clone());
         }));
+        space.connect_subtitle_notify(glib::clone!(#[weak] print_delivery,#[strong] selected_profile,move |_|print_delivery.set_sensitive(selected_profile().is_ok())));
     }
     let dither = adw::SwitchRow::builder()
         .title("Reduce banding")

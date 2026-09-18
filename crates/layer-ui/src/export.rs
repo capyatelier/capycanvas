@@ -381,11 +381,11 @@ mod tests {
     use super::*;
     #[test]
     fn hdr_choices_describe_only_the_fixed_delivery_contract() {
-        for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped] {
+        for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped] {
             let draft = ExportRecipe::web_share().draft(ExportDraftAction::Format(format));
-            assert_eq!(draft.formats, [ExportFormat::PngHdr]);
+            assert_eq!(draft.formats, [ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr]);
             assert_eq!(draft.depths, [SampleDepth::U16]);
-            assert_eq!(draft.backgrounds, [ExportBackground::Preserve]);
+            if format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg){assert_eq!(draft.backgrounds,[ExportBackground::Preserve,ExportBackground::White,ExportBackground::Black]);}else{assert_eq!(draft.backgrounds, [ExportBackground::Preserve]);}
             assert_eq!(draft.dithers, [layer_core::color::OutputDither::None]);
             assert_eq!(draft.recipe.format, format);
             draft.recipe.validate().unwrap();

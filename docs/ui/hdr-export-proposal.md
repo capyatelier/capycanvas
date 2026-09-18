@@ -34,7 +34,7 @@ On the main page show only:
    by default.
 4. Compact navigation rows for **Size**, **Color & transparency**, **Preset**.
    Their summaries show current values. Keep the existing slide-in detail pages.
-5. **Choose file** at the bottom.
+5. **Choose file** in the standard dialog header.
 
 Do not show a redundant Format selector for HDR JPEG. HDR with transparency has
 one qualified initial format too; show its extension in the selected output row.
@@ -54,8 +54,9 @@ another modal wizard or a second export command.
   source has an alpha channel. Use cached/bounded asynchronous analysis; unknown
   coverage is not permission to flatten.
 - Keep HDR JPEG discoverable when transparency exists. Selecting it shows one
-  concise inline **Flatten transparency** requirement and a background swatch,
-  initially white. Export remains unavailable until flattening is explicit.
+  concise inline **Flatten transparency** requirement, initially using white.
+  Background offers white or black; custom swatches are deferred. Export remains
+  unavailable until flattening is explicit.
   The same background setting is reachable in Color & transparency. Do not hide
   the option inside a disabled choice that gives no way to resolve the problem.
 - Hide background/flatten controls for alpha-preserving output. Preserve alpha

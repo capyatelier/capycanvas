@@ -214,6 +214,7 @@ impl Comparison {
         }
         self.after.set_paintable(None::<&gtk::gdk::Paintable>);
         self.status.set_label(message);
+        self.status.set_visible(!message.is_empty());
         self.mark_ready(false);
     }
     pub fn close(&self) {
@@ -247,8 +248,8 @@ impl Comparison {
     pub fn show_fallback(&self,show:bool){
         self.show_sdr.set(show);
         if let Some(texture)=&self.textures.borrow()[usize::from(show)]{self.after.set_paintable(Some(texture));}
-        if show {self.labels[1].set_label("SDR fallback");}
-        else {self.labels[1].set_label(if self.headroom.get()>1.{"HDR output"}else{"HDR output (SDR display)"});}
+        let label=if show{"SDR fallback"}else if self.headroom.get()>1.{"HDR output"}else{"HDR output (SDR display)"};
+        self.labels[1].set_label(label);self.after.set_alternative_text(Some(label));
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
         let hdr_document = snapshot.project.document.color.depth.is_float();
@@ -353,8 +354,9 @@ impl Comparison {
                             this.before.set_paintable(Some(&texture(before)));
                             this.before_ready.set(true);
                         }
-                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error);this.mark_ready(false);continue;}};
+                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error);this.status.set_visible(true);this.mark_ready(false);continue;}};
                         let ready = !after.range_blocked;
+                        let show_status=after.range_blocked || after.clipped.is_some_and(|count|count>0);
                         this.range_exceeded.set(after.range_blocked);
                         let description = if after.range_blocked { "Some colors exceed this format’s HDR range. Adjust the artwork or enable clipping below." } else if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
                             Some(0) => "Output preview",
@@ -366,12 +368,14 @@ impl Comparison {
                         let hdr=texture(after);
                         this.after.set_paintable(Some(if this.show_sdr.get(){fallback.as_ref().unwrap_or(&hdr)}else{&hdr}));
                         *this.textures.borrow_mut()=[Some(hdr),fallback];
-                        if this.show_sdr.get(){this.labels[1].set_label("SDR fallback");}
+                        if this.show_sdr.get(){this.labels[1].set_label("SDR fallback");this.after.set_alternative_text(Some("SDR fallback"));}
                         this.status.set_label(&format!("{description} · {viewing}"));
+                        this.status.set_visible(show_status);
                         this.mark_ready(ready);
                     }
                     Err(error) => {
                         this.status.set_label(&error);
+                        this.status.set_visible(true);
                         this.mark_ready(false);
                     }
                 }

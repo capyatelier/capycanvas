@@ -21,6 +21,13 @@ export function verifyPhotoCodecs(root) {
   }
   const lib = realpathSync(join(prefix, "lib"));
   const files = readdirSync(lib).filter(name => name.includes(".so"));
+  files.push("capy-hdr-codec", "hdr-codec-abi");
+  if (digest(join(lib,"capy-hdr-codec")) !== manifest.hdr_worker_sha256
+      || readFileSync(join(lib,"hdr-codec-abi"),"utf8") !== "1\n"
+      || digest(join(prefix,"share/doc/capycanvas-photo-codecs/hdr_codec.cpp")) !== digest(join(root,"crates/layer-color/src/photo/hdr_codec.cpp"))) {
+    throw new Error("The HDR codec worker is missing or stale; rebuild the bundle");
+  }
+  if (execFileSync(join(lib,"capy-hdr-codec"),["--version"],{encoding:"utf8"}).trim() !== "capy-hdr-codec 1") throw new Error("Unsupported HDR codec worker");
   for (const name of files) {
     if (!realpathSync(join(lib, name)).startsWith(lib + sep)) throw new Error("Photo codec symlink leaves the bundle");
   }
@@ -39,7 +46,7 @@ import ctypes, sys
 lib = ctypes.CDLL(sys.argv[1])
 lib.capy_photo_version.restype = ctypes.c_char_p
 lib.capy_photo_avif_version.restype = ctypes.c_char_p
-assert lib.capy_photo_abi() == 2
+assert lib.capy_photo_abi() == 3
 assert lib.capy_photo_version().decode() == sys.argv[2]
 assert lib.capy_photo_avif_version().decode() == sys.argv[3]
 assert lib.capy_photo_decoder(1) and lib.capy_photo_decoder(4)
