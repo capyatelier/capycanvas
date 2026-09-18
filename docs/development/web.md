@@ -250,3 +250,7 @@ Remove only the forwarding rules added for this session when finished:
 adb -s "$CAPY_ANDROID_SERIAL" forward --remove tcp:9228
 adb -s "$CAPY_ANDROID_SERIAL" reverse --remove tcp:4173
 ```
+
+The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
+records the shared source-probe texture reuse fix, tablet measurements, and
+remaining preview/display memory-budget work.

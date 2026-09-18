@@ -3,6 +3,7 @@ package art.capycanvas
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import android.view.WindowManager
@@ -711,6 +712,43 @@ class AndroidRasterTest {
             DocumentController.nativeFileJobsForTest = true
             for (uri in uris) resolver.delete(uri, null, null)
         }
+    }
+
+    @Test fun largePhotoFilterPreviews() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
+        val photo = File(activity.filesDir, "filter-memory-test.jpg")
+        assertTrue(photo.isFile)
+        open(photo)
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        fun storage() = native {
+            JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())).getLong("resident_bytes")
+        }
+        val tab = native { state(it).array("tabs").getJSONObject(0) }
+        assertEquals(9504, tab.getInt("width")); assertEquals(6336, tab.getInt("height"))
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        val before = storage()
+        val started = SystemClock.uptimeMillis()
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+        compose.waitUntil(60_000) { host.filterPreviewCache.images["curves"] != null }
+        val after = storage()
+        val image = host.filterPreviewCache.images.getValue("curves").image.toPixelMap()
+        assertTrue("The preview contains photo pixels", (0 until image.width).any { image[it, image.height / 2].alpha > .5f })
+        assertTrue("Pointwise previews retain bounded scratch", after - before < 96L * 1024 * 1024)
+        assertNull(host.failure)
+        val result = obj("before_bytes" to before, "after_bytes" to after,
+            "elapsed_ms" to (SystemClock.uptimeMillis() - started), "process_pss_kib" to android.os.Debug.getPss())
+        File(activity.getExternalFilesDir(null), "filter-memory.json").writeText(result.toString(2))
+        println("61 MP All filters: $result")
     }
 
     @Test fun largePhotoSustainedDrawing() {

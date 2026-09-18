@@ -161,3 +161,7 @@ This uses the real display clock and Android `FrameMetrics`, with typed native
 mouse/touch input over a visible Color wheel. It asserts retained UI models and
 matching placement. The benchmark variant enables measurement without making
 the app debuggable. Reinstall the debug APK afterward for ordinary development.
+
+The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
+records the shared source-probe texture reuse fix, tablet measurements, and
+remaining preview/display memory-budget work.

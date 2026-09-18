@@ -221,6 +221,17 @@ impl FilterPreviews {
         let extent = request.extent;
         let columns = extent[0].div_ceil(PAGE_SIZE);
         let count = columns * extent[1].div_ceil(PAGE_SIZE);
+        // Every tile uses the same queue-ordered window. Allocating a texture
+        // per tile leaves gigabytes awaiting browser GC on large documents,
+        // even though Rust retains only the most recent handle. Edge windows
+        // occupy the top-left prefix; probe samples stay inside the captured
+        // region (or outside the document, where the shader rejects them).
+        let size = std::array::from_fn(|i| extent[i].min(PAGE_SIZE + request.size[i]));
+        if self.source.as_ref().is_none_or(|(texture, _)| {
+            [texture.width(), texture.height()] != size
+        }) {
+            self.source = Some(create_color_target(&r.device, size, "filter probe window"));
+        }
         let winner = self.probe_winner.as_ref().unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(
             &r.device,
@@ -247,11 +258,6 @@ impl FilterPreviews {
                     .saturating_add(request.size[1] / 2)
                     .min(extent[1]),
             );
-            self.source = Some(create_color_target(
-                &r.device,
-                [region.width(), region.height()],
-                "filter probe window",
-            ));
             let (texture, view) = self.source.as_ref().unwrap();
             self.source_scene
                 .capture_filter_source(r, request, texture, region, &mut encoder)?;
@@ -893,6 +899,7 @@ mod tests {
         let p = r.filter_previews.as_ref().unwrap();
         assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
         assert!(p.request.is_some());
+        let probe_texture = p.source.as_ref().unwrap().0.clone();
         // A view-only frame must compare the caller's paper color, before the
         // compositor applies paper opacity. It must not cancel this scan.
         frame(&mut r, &layers);
@@ -907,6 +914,9 @@ mod tests {
             let result = r.take_filter_previews();
             let p = r.filter_previews.as_ref().unwrap();
             let (texture, _) = p.source.as_ref().unwrap();
+            if p.point.is_none() {
+                assert_eq!(texture, &probe_texture, "all probe chunks reuse one texture");
+            }
             assert!(texture.width() <= PAGE_SIZE + 200 && texture.height() <= PAGE_SIZE + 40);
             assert!(
                 p.source_scene.image_cache_bytes()
