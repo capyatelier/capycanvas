@@ -99,6 +99,14 @@ GTK `DropTarget` receivers are destinations, not additional pickup surfaces.
 
 ## Apple: macOS and iPadOS
 
+UIKit's common native reorder adapter cancels only for its owning window scene.
+A two-scene fixture reproduces the former application-wide cancellation and
+passes pending/held/dragging contacts, retained menus, late releases, resumed
+drops and reparenting with supplied lifecycle notifications. This scopes the
+adapter's cancellation across all rows/tiles/grips below; physical scene
+interruption remains separate. See the
+[qualification](../development/apple-handoff.md#ipad-scene-scoped-drag-cancellation).
+
 | Surface | Current source behavior | Required work |
 | --- | --- | --- |
 | Customize Title Bar: whole items, overflow rows and component-bank chips | [`EditorHeader.swift`](../../apps/layer-apple/Shared/Editor/EditorHeader.swift) and [`HeaderPresentation.swift`](../../apps/layer-apple/Shared/Bridge/HeaderPresentation.swift) use the shared native header protocol with AppKit/UIKit contact capture. | Immediate pickup after native slop for every device; bank clicks/holds are inert. Native Mac and iPad customization workflows pass. The cleanup removes the duplicate item-level context gesture, leaving the native root as the single contact/menu owner. AppKit mouse/pen checks cover all sizes, secondary click, held item menus, same-contact dragging, detach/re-entry, hidden-item overflow, cancellation and one-step history on both presets. Physical Pencil and iPad keyboard coverage remain open. |

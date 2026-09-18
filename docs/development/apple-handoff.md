@@ -112,6 +112,26 @@ main-thread responsiveness warning; these are workflow checks, not performance
 measurements. Artist review apps and the iPad are untouched. Provider delivery
 and the remaining physical lifecycle/window cases stay open.
 
+## iPad scene-scoped drag cancellation
+
+The two-window UIKit lifecycle regression reproduces cross-window cancellation:
+the native reorder adapter observes application-wide deactivation, so one scene
+losing activity also clears another scene's pending contact, held menu or drag.
+The adapter now observes deactivation only for its current window scene. UIKit
+[posts scene and application notifications](https://developer.apple.com/documentation/uikit/uiscenedelegate/scenewillresignactive(_:))
+when a scene resigns active; the scene notification supplies the required owner.
+No drag timing, drop rule or history implementation changes.
+
+The focused fixture uses two real UIKit scenes and supplied lifecycle/contact
+callbacks. It fails before the fix and passes 22 cases afterward: mouse, touch
+and pen policies, cancellation in both directions, late releases without a
+commit, an unaffected scene's drop, continued input and reparenting between
+scenes. Physical Pencil recognition and OS-delivered interruption remain separate.
+The existing UIKit row/scroll fixture also passes, and the iPad Release builds
+without compiler warnings. Disposable simulator fixtures are removed; the
+physical artist review and its drawings are unchanged.
+Private evidence is under `artifacts/apple-scene-input-v1/`.
+
 ## Retained Pencil sensor qualification
 
 The retained physical prediction recording contains 3,390 real contact samples
