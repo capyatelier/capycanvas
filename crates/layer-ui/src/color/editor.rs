@@ -72,6 +72,14 @@ impl ColorEditor {
         Ok(())
     }
     pub fn intensity(&self) -> Option<f32> { self.hdr.map(|p| p.stops) }
+    /// Current draft before its EV multiplier, including pending component edits.
+    pub fn base_color(&self) -> Result<RgbColor, String> {
+        let color = self.color()?;
+        match self.hdr {
+            Some(paint) => Ok(HdrPaint::at_intensity(color, self.document_space, paint.stops)?.base),
+            None => Ok(color),
+        }
+    }
     /// RGB fields describe the final color. EV multiplies its remembered base,
     /// while numeric RGB edits keep the explicitly selected EV.
     pub fn set_intensity(&mut self, stops: f32) -> Result<(), String> {
@@ -268,7 +276,11 @@ mod tests {
                 let untouched = state.clone();
                 state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Foreground, color: editor.color().unwrap(), stops: editor.intensity().unwrap() }).unwrap();
                 assert_eq!(state, untouched);
+                let base = editor.base_color().unwrap().linear_in(space).unwrap();
+                for c in 0..3 { assert!((base[c] - linear[c] / 4.).abs() < 1e-5); }
                 editor.set_intensity(3.).unwrap();
+                let next_base = editor.base_color().unwrap().linear_in(space).unwrap();
+                for c in 0..4 { assert!((base[c] - next_base[c]).abs() < 1e-5); }
                 let color = editor.color().unwrap().linear_in(space).unwrap();
                 for c in 0..3 { assert!((color[c] - linear[c] * 2.).abs() < 1e-5); }
                 assert_eq!(color[3], linear[3]);
@@ -283,6 +295,7 @@ mod tests {
                 state.validate().unwrap();
                 editor.set_model(ColorInputModel::LinearRgb).unwrap();
                 editor.set_field(0, "0.25".into()).unwrap();
+                assert!((editor.base_color().unwrap().linear_in(space).unwrap()[0] - 0.25 / 8.).abs() < 1e-5);
                 editor.set_intensity(4.).unwrap();
                 assert!((editor.color().unwrap().linear_in(space).unwrap()[0] - 0.5).abs() < 1e-5);
                 let accepted = editor.color().unwrap();

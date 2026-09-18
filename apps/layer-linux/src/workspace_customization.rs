@@ -278,7 +278,7 @@ impl ToolbarManagerUi {
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
     color_patches: RefCell<Vec<glib::WeakRef<crate::display_color::ColorPair>>>,
-    palette_colors: Cell<Option<([layer_core::color::RgbColor; 2], crate::display_color::ViewColor)>>,
+    palette_colors: Cell<Option<([layer_core::color::RgbColor; 2], crate::display_color::ViewColor, f32)>>,
     context: gtk::PopoverMenu,
     context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     popup: gtk::Popover,
@@ -903,19 +903,19 @@ impl Customization {
         let pair = crate::display_color::ColorPair::new(size);
         if let Some(g) = w.gpu.borrow().as_ref() {
             let colors = &g.session.state().colors;
-            pair.set_colors([colors.foreground, colors.background], w.view_color());
+            pair.set_colors([colors.foreground, colors.background], w.view_color(), w.picker_headroom());
         }
         let mut retained = self.color_patches.borrow_mut();
         retained.retain(|pair| pair.upgrade().is_some());
         retained.push(pair.downgrade());
         pair.upcast()
     }
-    fn refresh_color_palette(&self, colors: &layer_ui::ColorState, view: crate::display_color::ViewColor) {
-        let next = ([colors.foreground, colors.background], view);
+    fn refresh_color_palette(&self, colors: &layer_ui::ColorState, view: crate::display_color::ViewColor, headroom: f32) {
+        let next = ([colors.foreground, colors.background], view, headroom);
         if self.palette_colors.replace(Some(next)) == Some(next) { return; }
         self.color_patches.borrow_mut().retain(|pair| {
             let Some(pair) = pair.upgrade() else { return false; };
-            pair.set_colors([colors.foreground, colors.background], view);
+            pair.set_colors([colors.foreground, colors.background], view, headroom);
             true
         });
     }
@@ -923,7 +923,7 @@ impl Customization {
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
         let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
-            self.refresh_color_palette(&g.session.state().colors, w.view_color());
+            self.refresh_color_palette(&g.session.state().colors, w.view_color(), w.picker_headroom());
             (
                 g.session
                     .state()

@@ -502,12 +502,10 @@ mod wheel {
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if orientation == gtk::Orientation::Vertical {
-                (
-                    128 + if self.hdr.get() { ColorPanelLayout::HDR_FOOTER as i32 } else { 0 },
-                    (if for_size < 0 { 226 } else { for_size.max(128) }) + if self.hdr.get() { ColorPanelLayout::HDR_FOOTER as i32 } else { 0 },
-                    -1,
-                    -1,
-                )
+                let height = |size: i32| if self.hdr.get() {
+                    ColorPanelLayout::with_hdr(size as f32).unwrap().height().ceil() as i32
+                } else { size };
+                (height(128), height(if for_size < 0 { 226 } else { for_size.max(128) }), -1, -1)
             } else {
                 (128, 226, -1, -1)
             }
@@ -548,7 +546,7 @@ mod wheel {
                 );
             }
             if let Some(intensity) = self.intensity.borrow().as_ref().filter(|i| i.is_visible()) {
-                intensity.allocate(size.round() as i32, (size + ColorPanelLayout::HDR_FOOTER).round() as i32, baseline,
+                intensity.allocate(size.round() as i32, layout.height().ceil() as i32, baseline,
                     Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y))));
             }
             if let Some(menu) = self.menu.borrow().as_ref() {
@@ -641,8 +639,23 @@ glib::wrapper! {
 }
 impl ColorWheel {
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
-        let footer = if self.imp().hdr.get() { ColorPanelLayout::HDR_FOOTER } else { 0. };
-        let size = (self.width() as f32).min(self.height() as f32 - footer);
+        let mut size = self.width().min(self.height()).max(0);
+        let mut footer = 0.;
+        if self.imp().hdr.get() {
+            // Fit the shared, width-dependent footer when a short panel constrains height.
+            let (mut low, mut high) = (128, size);
+            size = 0;
+            while low <= high {
+                let candidate = low + (high - low) / 2;
+                let height = ColorPanelLayout::with_hdr(candidate as f32).unwrap().height().ceil() as i32;
+                if height <= self.height() { size = candidate; low = candidate + 1; }
+                else { high = candidate - 1; }
+            }
+            if let Some(layout) = ColorPanelLayout::with_hdr(size as f32) {
+                footer = layout.height().ceil() - size as f32;
+            }
+        }
+        let size = size as f32;
         (
             size,
             [
@@ -1071,7 +1084,7 @@ impl ColorPanel {
                 button.remove_css_class("selected-tool");
             }
             let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Transparent => layer_core::color::RgbColor { space: state.rgb_space(), rgba: [0.; 4] } };
-            sample.set_color(color, view);
+            sample.set_display_color(color, view, headroom);
         }
     }
 }
@@ -1222,7 +1235,7 @@ fn color_field_path(shape: ColorShape, g: &ColorWheelGeometry) -> gtk::gsk::Path
 fn draw_wheel(snapshot: &gtk::Snapshot, state: &ColorState, g: &ColorWheelGeometry, view: ViewColor, headroom: f32) {
     let hue = state.wheel_hue_color_in(state.wheel_components()[0], view.space());
     let color = state.preview_in(state.definition(), view.space());
-    let radius = (g.center[0] * 2. * 0.04).clamp(6., 10.);
+    let radius = g.marker_radius();
     for (index, (point, rgb)) in [
         (state.wheel_hue_marker(g, state.wheel_components()[0]), hue),
         (state.wheel_marker(g), [color[0], color[1], color[2]]),

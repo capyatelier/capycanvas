@@ -1,24 +1,37 @@
 //! Shared geometry for the intensity arc; hosts own input capture and timing.
-use super::ColorPanelLayout;
+use super::{ColorPanelLayout, ColorWheelGeometry};
 
 #[derive(Clone, Copy, Debug)]
 pub struct HdrIntensityArc {
     pub center: [f32; 2],
     pub radius: f32,
     pub width: f32,
+    pub marker_radius: f32,
+    end_angle: f32,
 }
 impl HdrIntensityArc {
     pub fn new(size: f32) -> Option<Self> {
         let layout = ColorPanelLayout::new(size)?;
-        let width = layout.wheel[2] * 0.11;
+        let wheel = ColorWheelGeometry::new(layout.wheel[2])?;
+        let width = wheel.outer - wheel.inner;
+        let gap = wheel.inner - wheel.disc_radius();
+        let radius = wheel.outer + gap + width * 0.5;
+        // Keep the round caps inside the panel at large widths as the gap grows.
+        let end_angle = 40f32
+            .to_radians()
+            .max(((size - width) * 0.5 / radius).clamp(0., 1.).acos());
         Some(Self {
             center: [size * 0.5; 2],
-            radius: layout.wheel[2] * 0.49 + 5. + width * 0.5,
+            radius,
             width,
+            marker_radius: wheel.marker_radius(),
+            end_angle,
         })
     }
     pub fn point(&self, fraction: f32) -> [f32; 2] {
-        let a = (145. - fraction.clamp(0., 1.) * 110.).to_radians();
+        let a = std::f32::consts::PI
+            - self.end_angle
+            - fraction.clamp(0., 1.) * (std::f32::consts::PI - self.end_angle * 2.);
         [
             self.center[0] + self.radius * a.cos(),
             self.center[1] + self.radius * a.sin(),
@@ -28,8 +41,9 @@ impl HdrIntensityArc {
     pub fn fraction(&self, point: [f32; 2]) -> f32 {
         let x = point[0] - self.center[0];
         let y = point[1] - self.center[1];
-        let a = y.max(0.).atan2(x).to_degrees();
-        ((145. - a) / 110.).clamp(0., 1.)
+        let a = y.max(0.).atan2(x);
+        ((std::f32::consts::PI - self.end_angle - a) / (std::f32::consts::PI - self.end_angle * 2.))
+            .clamp(0., 1.)
     }
     pub fn contains(&self, point: [f32; 2]) -> bool {
         let p = self.point(self.fraction(point));
@@ -41,17 +55,41 @@ mod tests {
     use super::*;
     #[test]
     fn arc_hits_follow_angles_and_leave_wheel_and_footer_controls_clear() {
-        for size in [128., 144., 226., 264., 400.] {
+        for size in [128., 144., 226., 264., 400., 1024.] {
             let arc = HdrIntensityArc::new(size).unwrap();
             let layout = ColorPanelLayout::with_hdr(size).unwrap();
-            assert!((arc.width - layout.wheel[2] * 0.11).abs() < 1e-5);
+            let sdr = ColorPanelLayout::new(size).unwrap();
+            let wheel = ColorWheelGeometry::new(sdr.wheel[2]).unwrap();
+            assert_eq!(arc.width, wheel.outer - wheel.inner);
+            assert!(
+                (arc.radius - arc.width * 0.5 - wheel.outer - (wheel.inner - wheel.disc_radius()))
+                    .abs()
+                    < 1e-4
+            );
+            assert_eq!(arc.marker_radius, wheel.marker_radius());
+            let clearance = |b: [f32; 4], outer: f32| {
+                (b[0] + b[2] * 0.5 - arc.center[0]).hypot(b[1] + b[3] * 0.5 - arc.center[1])
+                    - b[2] * 0.5
+                    - outer
+            };
+            for (old, new) in [sdr.foreground, sdr.background, sdr.transparent]
+                .into_iter()
+                .zip([layout.foreground, layout.background, layout.transparent])
+            {
+                assert!(
+                    (clearance(old, wheel.outer) - clearance(new, arc.radius + arc.width * 0.5))
+                        .abs()
+                        < 1e-4
+                );
+                assert!(new[1] + new[3] <= layout.height());
+            }
             assert!(!arc.contains(arc.center));
             for i in 0..=100 {
                 let t = i as f32 / 100.;
                 let p = arc.point(t);
                 assert!((arc.fraction(p) - t).abs() < 1e-5);
                 assert!(arc.contains(p));
-                assert!(p[0] >= arc.width / 2. && p[0] + arc.width / 2. <= size);
+                assert!(p[0] >= arc.width / 2. - 1e-4 && p[0] + arc.width / 2. <= size + 1e-4);
                 for b in [
                     layout.foreground,
                     layout.background,

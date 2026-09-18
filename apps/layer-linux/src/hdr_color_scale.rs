@@ -95,8 +95,9 @@ mod imp {
             snapshot.append_texture(&cache.as_ref().unwrap().4, &bounds);
             snapshot.pop();
             let [cx, cy] = g.point(((obj.value() - min) / (max - min)) as f32);
-            let radius = g.width * 0.5;
-            let thumb = gtk::graphene::Rect::new(cx - radius, cy - radius, g.width, g.width);
+            let radius = g.marker_radius;
+            let thumb =
+                gtk::graphene::Rect::new(cx - radius, cy - radius, radius * 2., radius * 2.);
             let mut p = base.linear_in(base.space).unwrap();
             for v in &mut p[..3] {
                 *v *= (obj.value() as f32).exp2();
@@ -139,6 +140,7 @@ mod imp {
                 );
                 let _ = cr.stroke();
             }
+            let radius = g.width * 0.5;
             let zero = g.point(((0. - min) / (max - min)) as f32);
             let dx = (zero[0] - g.center[0]) / g.radius;
             let dy = (zero[1] - g.center[1]) / g.radius;

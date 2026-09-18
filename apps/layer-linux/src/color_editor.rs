@@ -11,7 +11,7 @@ use std::{
     rc::Rc,
 };
 
-struct Form {
+pub(crate) struct Form {
     editor: RefCell<ColorEditor>,
     updating: Cell<bool>,
     dialog: adw::AlertDialog,
@@ -21,7 +21,9 @@ struct Form {
     description: gtk::Label,
     validation: gtk::Label,
     preview: ColorPatch,
-    view: ViewColor,
+    base_preview: ColorPatch,
+    view: Cell<ViewColor>,
+    headroom: Cell<f32>,
     space: RgbSpace,
     hdr: bool,
 }
@@ -47,7 +49,8 @@ impl Form {
         self.refresh_preview();
     }
     fn refresh_preview(&self) {
-        let color = (|| {
+        let view = self.view.get();
+        let color: Result<(RgbColor, RgbColor), String> = (|| {
             let editor = self.editor.borrow();
             if self.hdr {
                 let stops = self.intensity.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())?;
@@ -55,25 +58,26 @@ impl Form {
                     return Err("Enter an EV value within the color’s half-float range".into());
                 }
             }
-            editor.color()
+            Ok((editor.color()?, editor.base_color()?))
         })();
         match color {
-            Ok(color) => {
+            Ok((color, base)) => {
                 let mut text = format!("Defined in {}", color.space.name());
                 if !if self.hdr { color.in_hdr_gamut(self.space) } else { color.in_gamut(self.space) }.unwrap() {
                     text.push_str(" · Outside document gamut");
                 }
-                if !if self.hdr { color.in_hdr_gamut(self.view.space()) } else { color.in_gamut(self.view.space()) }.unwrap() {
+                if !if self.hdr { color.in_hdr_gamut(view.space()) } else { color.in_gamut(view.space()) }.unwrap() {
                     text.push_str(&format!(
                         " · Outside {} preview gamut",
-                        self.view.space().name()
+                        view.space().name()
                     ));
                 }
                 if self.hdr && color.brightness_ev(self.space).unwrap().is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
-                self.preview.set_color(color, self.view);
+                self.preview.set_display_color(color, view, self.headroom.get());
+                self.base_preview.set_display_color(base, view, self.headroom.get());
             }
             Err(error) => {
                 self.validation.add_css_class("error");
@@ -83,6 +87,19 @@ impl Form {
         }
         self.preview.queue_draw();
     }
+}
+
+/// Capability changes refresh live drafts without publishing a color edit.
+pub(crate) fn refresh_display(workspace: &Workspace) {
+    let view = workspace.view_color();
+    let headroom = workspace.picker_headroom();
+    workspace.color_editors.borrow_mut().retain(|weak| {
+        let Some(form) = weak.upgrade() else { return false; };
+        let previous_view = form.view.replace(view);
+        let previous_headroom = form.headroom.replace(headroom);
+        if previous_view != view || previous_headroom != headroom { form.refresh_preview(); }
+        true
+    });
 }
 
 pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
@@ -178,9 +195,31 @@ fn choose_with_intensity(
     let preview = ColorPatch::new(false);
     preview.set_height_request(48);
     preview.set_widget_name("edit-color-preview");
+    preview.update_property(&[gtk::accessible::Property::Label("EV-adjusted color")]);
+    let base_preview = ColorPatch::new(false);
+    base_preview.set_height_request(48);
+    base_preview.set_widget_name("edit-color-base-preview");
+    base_preview.update_property(&[gtk::accessible::Property::Label("Color before EV adjustment")]);
+    base_preview.set_visible(hdr);
+    let colors = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    colors.set_homogeneous(true);
+    colors.append(&base_preview);
+    colors.append(&preview);
+    let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    labels.set_homogeneous(true);
+    labels.add_css_class("caption");
+    labels.add_css_class("dim-label");
+    labels.append(&gtk::Label::new(Some("Base")));
+    labels.append(&gtk::Label::new(Some("Adjusted")));
+    labels.set_visible(hdr);
+    let comparison = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    comparison.set_widget_name("edit-color-comparison");
+    comparison.append(&labels);
+    comparison.append(&colors);
     content.append(&description);
+    if hdr { content.append(&comparison); }
     content.append(&group);
-    content.append(&preview);
+    if !hdr { content.append(&comparison); }
     content.append(&validation);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -200,10 +239,14 @@ fn choose_with_intensity(
         description,
         validation,
         preview,
-        view: workspace.view_color(),
+        base_preview,
+        view: Cell::new(workspace.view_color()),
+        headroom: Cell::new(workspace.picker_headroom()),
         space,
         hdr,
     });
+    workspace.color_editors.borrow_mut().push(Rc::downgrade(&form));
+    refresh_display(workspace);
     let weak = Rc::downgrade(&form);
     form.intensity.connect_changed(move |row| {
         let Some(form) = weak.upgrade() else { return; };
@@ -316,8 +359,11 @@ impl ColorButton {
         self.definition.get()
     }
     pub fn set_color(&self, color: RgbColor, view: ViewColor) {
+        self.set_display_color(color, view, 1.);
+    }
+    pub fn set_display_color(&self, color: RgbColor, view: ViewColor, headroom: f32) {
         self.definition.set(color);
-        self.patch.set_color(color, view);
+        self.patch.set_display_color(color, view, headroom);
     }
     pub fn bind(
         self: &Rc<Self>,

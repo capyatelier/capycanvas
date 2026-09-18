@@ -1,4 +1,4 @@
-//! One SDR presentation contract for the app-owned surface and GTK artwork.
+//! Managed SDR and HDR presentation for the app-owned surface and GTK artwork.
 //! Monitor conversion belongs to the compositor; document values stay unchanged.
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 use layer_core::color::{RgbColor, RgbSpace};
@@ -199,20 +199,15 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
     };
     if headroom > 1. {
         let to_srgb = document.linear_transform(RgbSpace::Srgb);
-        let to_2020 = layer_core::color::hdr::srgb_to_bt2020();
         let mut bytes = Vec::with_capacity(pixels.len() * 8);
         for &p in pixels {
-            let p = layer_core::color::hdr::map_display_premultiplied(document_pixel(p), headroom);
-            let rgb = layer_core::color::rgb::apply(to_2020,
-                layer_core::color::rgb::apply(to_srgb, [p[0],p[1],p[2]].map(f64::from)));
+            let p = document_pixel(p);
+            let rgb = hdr_display_rgb(p, headroom, to_srgb);
             for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([p[3]]) {
                 bytes.extend_from_slice(&half::f16::from_f32(v).to_bits().to_ne_bytes());
             }
         }
-        gdk::MemoryTextureBuilder::new().set_width(extent[0] as i32).set_height(extent[1] as i32)
-            .set_format(gdk::MemoryFormat::R16g16b16a16Float).set_stride(extent[0] as usize * 8)
-            .set_color_state(&gdk::ColorState::rec2100_linear())
-            .set_bytes(Some(&glib::Bytes::from_owned(bytes))).build()
+        hdr_texture(extent, bytes)
     } else {
         let rendition = if let ViewColor::Mapped { recipe, .. } = view {
             let [exposure, contrast, knee] = recipe.map(f32::from_bits);
@@ -229,6 +224,33 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
         }
         view.rgba8(extent, bytes)
     }
+}
+
+fn hdr_display_rgb(p: [f32; 4], headroom: f32, to_srgb: layer_core::color::rgb::Matrix3) -> [f64; 3] {
+    let p = layer_core::color::hdr::map_display_premultiplied(p, headroom);
+    layer_core::color::rgb::apply(layer_core::color::hdr::srgb_to_bt2020(),
+        layer_core::color::rgb::apply(to_srgb, [p[0], p[1], p[2]].map(f64::from)))
+}
+fn hdr_texture(extent: [u32; 2], bytes: Vec<u8>) -> gdk::Texture {
+    gdk::MemoryTextureBuilder::new().set_width(extent[0] as i32).set_height(extent[1] as i32)
+        .set_format(gdk::MemoryFormat::R16g16b16a16Float).set_stride(extent[0] as usize * 8)
+        .set_color_state(&gdk::ColorState::rec2100_linear())
+        .set_bytes(Some(&glib::Bytes::from_owned(bytes))).build()
+}
+/// Map straight artwork first, then composite it over the neutral checker in
+/// linear display light, matching the canvas. Alpha must not change the shoulder.
+pub(crate) fn checker_textures(color: RgbColor, view: ViewColor, headroom: f32) -> [gdk::Texture; 2] {
+    if let ViewColor::Mapped { document, .. } = view && headroom > 1. {
+        let mut p = color.linear_in(document).expect("validated artwork color");
+        let alpha = p[3] as f64;
+        p[3] = 1.;
+        let rgb = hdr_display_rgb(p, headroom, document.linear_transform(RgbSpace::Srgb));
+        [0.94, 0.80].map(|checker| {
+            let bytes = rgb.into_iter().map(|v| ((v * alpha + checker * (1. - alpha)).clamp(0., 10000. / 203.)) as f32)
+                .chain([1.]).flat_map(|v| half::f16::from_f32(v).to_bits().to_ne_bytes()).collect();
+            hdr_texture([1, 1], bytes)
+        })
+    } else { view.checker_colors(color).map(|rgba| view.solid(rgba)) }
 }
 
 #[path = "color_pair.rs"]
@@ -255,7 +277,7 @@ mod patch {
     #[derive(Default)]
     pub struct Patch {
         pub round: Cell<bool>,
-        pub key: Cell<Option<(RgbColor, ViewColor)>>,
+        pub key: Cell<Option<(RgbColor, ViewColor, f32)>>,
         pub textures: RefCell<Option<[gdk::Texture; 2]>>,
     }
     #[glib::object_subclass]
@@ -290,10 +312,13 @@ impl ColorPatch {
         obj
     }
     pub fn set_color(&self, color: RgbColor, view: ViewColor) {
-        if self.imp().key.replace(Some((color, view))) == Some((color, view)) {
+        self.set_display_color(color, view, 1.);
+    }
+    pub fn set_display_color(&self, color: RgbColor, view: ViewColor, headroom: f32) {
+        if self.imp().key.replace(Some((color, view, headroom))) == Some((color, view, headroom)) {
             return;
         }
-        let textures = view.checker_colors(color).map(|rgba| view.solid(rgba));
+        let textures = checker_textures(color, view, headroom);
         *self.imp().textures.borrow_mut() = Some(textures);
         self.queue_draw();
     }

@@ -832,6 +832,7 @@ pub struct Workspace {
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
     color: Rc<crate::color_editor::ColorButton>,
+    pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
     tool_settings: crate::tool_panels::ToolSettings,
     placement_actions: crate::tool_panels::PlacementActions,
     color_panel: crate::tool_panels::ColorPanel,
@@ -1038,6 +1039,7 @@ impl Workspace {
             size_number,
             opacity,
             color,
+            color_editors: RefCell::default(),
             tool_settings,
             placement_actions,
             color_panel,
@@ -1654,8 +1656,8 @@ impl Workspace {
     pub(crate) fn display_description(&self) -> String {
         let encoding = self.gpu.borrow().as_ref().and_then(|g| g.session.engine().backend().display_encoding);
         let mut description = match encoding {
-            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; the HDR picker uses the same display headroom. The hue guide and small swatches use SDR previews.".to_string(),
-            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; the HDR picker uses the same display headroom. The hue guide and small swatches use SDR previews.".to_string(),
+            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; the HDR picker and paint previews use the same display headroom. The hue guide stays an SDR reference.".to_string(),
+            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; the HDR picker and paint previews use the same display headroom. The hue guide stays an SDR reference.".to_string(),
             None => self.view_color().description().to_string(),
         };
         if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {
@@ -2164,11 +2166,12 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
             self.color_panel.refresh(&state.colors, self.view_color(), self.picker_headroom());
+            crate::color_editor::refresh_display(self);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
-            self.color.set_color(state.colors.definition(), self.view_color());
+            self.color.set_display_color(state.colors.definition(), self.view_color(), self.picker_headroom());
             self.toolbar.queue_draw();
             for (value, button) in self.size_buttons.borrow().iter() {
                 selected(button, *value == state.brush.diameter);

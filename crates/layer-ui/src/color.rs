@@ -1136,14 +1136,26 @@ pub struct ColorPanelLayout {
     pub readout_radius: f32,
 }
 impl ColorPanelLayout {
-    /// The SDR wheel stays square; HDR reserves a footer for its outer arc.
-    pub const HDR_FOOTER: f32 = 44.;
+    /// Preserve each swatch's SDR edge clearance from the new outer arc.
     pub fn with_hdr(size: f32) -> Option<Self> {
         let mut layout = Self::new(size)?;
-        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent, &mut layout.swap] {
-            b[1] += Self::HDR_FOOTER;
+        let wheel = ColorWheelGeometry::new(layout.wheel[2])?;
+        let arc = HdrIntensityArc::new(size)?;
+        let expansion = arc.radius + arc.width * 0.5 - wheel.outer;
+        let old_background_y = layout.background[1];
+        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent] {
+            let dx = b[0] + b[2] * 0.5 - arc.center[0];
+            let dy = b[1] + b[3] * 0.5 - arc.center[1];
+            let distance = dx.hypot(dy) + expansion;
+            b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
+        layout.swap[1] += layout.background[1] - old_background_y;
         Some(layout)
+    }
+    /// HDR footer height follows the swatches instead of a fixed vertical offset.
+    pub fn height(&self) -> f32 {
+        [self.foreground, self.background, self.transparent, self.swap]
+            .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
     }
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 128. {
@@ -1218,6 +1230,9 @@ impl ColorWheelGeometry {
                 [c + r, c],
             ],
         })
+    }
+    pub fn marker_radius(&self) -> f32 {
+        (self.center[0] * 2. * 0.04).clamp(6., 10.)
     }
     pub fn disc_radius(&self) -> f32 {
         self.disc_radius

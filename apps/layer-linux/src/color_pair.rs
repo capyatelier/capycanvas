@@ -9,7 +9,7 @@ mod imp {
     #[derive(Default)]
     pub struct Pair {
         pub size: Cell<i32>,
-        pub key: Cell<Option<([RgbColor; 2], ViewColor)>>,
+        pub key: Cell<Option<([RgbColor; 2], ViewColor, f32)>>,
         pub textures: RefCell<Option<[[gdk::Texture; 2]; 2]>>,
     }
     #[glib::object_subclass]
@@ -69,12 +69,12 @@ impl ColorPair {
         obj.set_widget_name("layer-colors-symbolic");
         obj
     }
-    pub fn set_colors(&self, colors: [RgbColor; 2], view: ViewColor) {
-        if self.imp().key.replace(Some((colors, view))) == Some((colors, view)) {
+    pub fn set_colors(&self, colors: [RgbColor; 2], view: ViewColor, headroom: f32) {
+        if self.imp().key.replace(Some((colors, view, headroom))) == Some((colors, view, headroom)) {
             return;
         }
         *self.imp().textures.borrow_mut() =
-            Some(colors.map(|color| view.checker_colors(color).map(|rgba| view.solid(rgba))));
+            Some(colors.map(|color| super::checker_textures(color, view, headroom)));
         self.queue_draw();
     }
 }

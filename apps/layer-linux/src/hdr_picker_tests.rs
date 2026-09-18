@@ -24,6 +24,13 @@ fn peak(texture: &gdk::Texture) -> f32 {
     }
     peak
 }
+fn patch_texture(widget: &gtk::Widget) -> gdk::Texture {
+    widget.downcast_ref::<crate::display_color::ColorPatch>().unwrap().imp().textures.borrow().as_ref().unwrap()[0].clone()
+}
+fn paint_patch(w: &Workspace, slot: ColorSlot) -> gtk::Widget {
+    find_named(w.color_panel.root.upcast_ref(), &format!("color-{slot:?}")).unwrap()
+        .downcast::<gtk::Button>().unwrap().child().unwrap()
+}
 #[test]
 #[ignore = "Wayland/GPU; optional private native input and LAYER_EXPECT_HDR=1"]
 fn native_hdr_picker_intensity_shape_and_input() {
@@ -129,8 +136,54 @@ fn native_hdr_picker_intensity_shape_and_input() {
         pencil.emit_clicked();
         pump(100);
         let dialog = w.window.visible_dialog().unwrap();
+        let base_preview = find_named(dialog.upcast_ref(), "edit-color-base-preview").unwrap();
+        let adjusted_preview = find_named(dialog.upcast_ref(), "edit-color-preview").unwrap();
+        let base_bounds = base_preview.compute_bounds(&dialog).unwrap();
+        let adjusted_bounds = adjusted_preview.compute_bounds(&dialog).unwrap();
+        assert!((base_bounds.width() - adjusted_bounds.width()).abs() <= 1., "Equal halves within native pixel rounding");
+        assert!((base_bounds.x() + base_bounds.width() - adjusted_bounds.x()).abs() < 0.01);
+        let base_peak = peak(&patch_texture(&base_preview));
+        let adjusted_peak = peak(&patch_texture(&adjusted_preview));
+        assert!(adjusted_peak > base_peak + 0.05, "EV comparison must show the different renditions");
+        assert!((peak(&patch_texture(&paint_patch(&w, ColorSlot::Foreground))) - adjusted_peak).abs() < 0.002, "Paint bubble matches adjusted dialog preview");
+        // Numerical alpha check above the display shoulder: alpha changes the
+        // checker blend, never the straight color's HDR mapping.
+        for alpha in [0., 0.25, 0.5, 1.] {
+            let color = RgbColor::from_linear(RgbSpace::Srgb, [8., 8., 8., alpha]).unwrap();
+            let textures = crate::display_color::checker_textures(color, w.view_color(), 4.);
+            for (texture, checker) in textures.iter().zip([0.94, 0.80]) {
+                let expected = (4. - 1. / 6.) * alpha + checker * (1. - alpha);
+                assert!((peak(texture) - expected).abs() < 0.005, "HDR alpha {alpha}: {} != {expected}", peak(texture));
+            }
+        }
         let entry = find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().downcast::<adw::EntryRow>().unwrap();
         assert_eq!(entry.text().parse::<f32>().unwrap(), 2.);
+        entry.set_text("3");
+        pump(60);
+        assert!((peak(&patch_texture(&base_preview)) - base_peak).abs() < 0.002, "EV keeps base preview stable");
+        assert!(peak(&patch_texture(&adjusted_preview)) > adjusted_peak + 0.01);
+        if std::env::var_os("LAYER_EXPECT_HDR").is_some() {
+            assert!(adjusted_peak > 1., "Adjusted preview retains HDR light");
+            assert_eq!(patch_texture(&adjusted_preview).color_state(), gdk::ColorState::rec2100_linear());
+            for widget in [&adjusted_preview, &paint_patch(&w, ColorSlot::Foreground)] {
+                let snapshot = gtk::Snapshot::new();
+                gtk::WidgetPaintable::new(Some(widget)).snapshot(&snapshot, widget.width() as f64, widget.height() as f64);
+                let texture = w.window.renderer().unwrap().render_texture(&snapshot.to_node().unwrap(), None);
+                assert!(peak(&texture) > 1., "GSK retains the HDR paint preview");
+                eprintln!("HDR_COLOR_PREVIEW {} gsk_peak={}", widget.widget_name(), peak(&texture));
+            }
+            let headroom = w.picker_headroom();
+            for h in [1., headroom] {
+                w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = h;
+                w.changed(Ok(layer_ui::UiChange { regions: layer_ui::regions::SETTINGS, ..Default::default() }));
+                pump(80);
+                assert_eq!(patch_texture(&adjusted_preview).color_state() == gdk::ColorState::rec2100_linear(), h > 1.);
+                assert_eq!(patch_texture(&paint_patch(&w, ColorSlot::Foreground)).color_state() == gdk::ColorState::rec2100_linear(), h > 1.);
+                assert_eq!(entry.text(), "3");
+                assert_eq!(state(&w).colors.definition(), original.definition());
+            }
+        }
+        entry.set_text("2");
         entry.set_text("NaN");
         assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
         let red = find_named(dialog.upcast_ref(), "edit-color-value-0").unwrap().downcast::<adw::EntryRow>().unwrap();
@@ -152,6 +205,14 @@ fn native_hdr_picker_intensity_shape_and_input() {
         assert_eq!(state(&w).colors.hdr_intensity(), 3.);
         scale.set_value(0.);
         let physical = std::env::var_os("LAYER_EXPECT_HDR").is_some();
+        w.dispatch(UiAction::Color { action: ColorAction::SetSlotIntensity {
+            slot: ColorSlot::Background,
+            color: RgbColor::from_linear(RgbSpace::Srgb, [4., 2., 1., 1.]).unwrap(), stops: 2.,
+        }});
+        w.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } });
+        let background = patch_texture(&paint_patch(&w, ColorSlot::Background));
+        if physical { assert!(peak(&background) > 3.5, "Secondary bubble retains adjusted HDR color"); }
+        else { assert!(peak(&background) <= 1.001); }
         if physical {
             assert!(w.picker_headroom() > 1.);
         }
