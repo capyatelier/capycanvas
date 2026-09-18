@@ -2660,6 +2660,7 @@ mod tests {
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
+                + Panel::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
         );
         assert!(native.iter().all(|c| !c.label.is_empty()
             && !c.description.is_empty()

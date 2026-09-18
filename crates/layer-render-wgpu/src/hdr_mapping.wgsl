@@ -1,38 +1,42 @@
-// Float32 counterpart of layer_core::color::hdr. Matrix/luminance constants are
-// compiled for the source and output RGB spaces; display state is never artwork.
-fn hdr_luma(rgb:vec3<f32>, y:vec3<f32>)->f32 {
-    return rgb.g+y.r*(rgb.r-rgb.g)+y.b*(rgb.b-rgb.g);
-}
-fn hdr_gamut(rgb:vec3<f32>, y:vec3<f32>)->vec3<f32> {
-    let light=clamp(hdr_luma(rgb,y),0.,1.);
-    if light<=0. || light>=1. {return vec3(light);}
-    let distance=select((vec3(light)-rgb)/light,(rgb-vec3(light))/(1.-light),rgb>vec3(light));
-    let extent=max(distance.r,max(distance.g,distance.b));
-    if extent<=.8 {return rgb;}
-    let compressed=1.-.04/(extent-.6);
-    return clamp(vec3(light)+(rgb-vec3(light))*(compressed/extent),vec3(0.),vec3(1.));
+// Float32 counterpart of layer_core::color::hdr::sdr. Default: Skia RWTMO.
+// Adapted from Skia (Copyright 2025 Google LLC, BSD-3-Clause).
+// See THIRD_PARTY_NOTICES.md. Artwork values and alpha remain unchanged.
+fn hdr_rwtmo(x:f32, headroom:f32)->f32 {
+    let peak=exp2(headroom);
+    if peak==1. {return min(x,1.);}
+    let white=1.-.5*min(headroom/2.3004484,1.);
+    if x<=1. {return x*white;}
+    if x>=peak {return 1.;}
+    let mid=vec2(.35+.65/white,.35*white+.65);
+    let a=vec2(1.,white)-2.*mid+vec2(peak,1.);
+    let b=2.*mid-2.*vec2(1.,white);
+    // Evaluate the underlying monotonic Bezier, avoiding the browser spline's
+    // overshoot at extreme HDR ranges. Same stable quadratic inversion as CPU.
+    let t=2.*(x-1.)/(b.x+sqrt(max(b.x*b.x+4.*a.x*(x-1.),0.)));
+    return white+t*(b.y+t*a.y);
 }
 fn hdr_tone_sdr(paint:vec4<f32>,options:vec4<f32>)->vec4<f32> {
     if options.w==0. || paint.a<=0. {return paint;}
     let rgb=paint.rgb/paint.a;
-    let light=max(hdr_luma(rgb,HDR_SOURCE_Y),0.);
-    if light<=0. {return vec4(vec3(0.),paint.a);}
-    let x=.18*exp2(clamp(options.y*(log2(light/.18)+options.x),-126.,120.));
-    let highlights=clamp((options.z-.75)/select(.2,.5,options.z<.75),-1.,1.);
-    let shape=exp2(highlights*2.);
+    let rec=hdr_to_rec2020(rgb);
+    let peak=max(0.,max(rec.r,max(rec.g,rec.b)));
+    if peak<=0. {return vec4(vec3(0.),paint.a);}
+    var x=peak*exp2(options.x);
+    if options.y!=1. {x=.18*exp2(clamp(options.y*log2(peak/.18)+options.x,-126.,120.));}
     var mapped=x;
-    if x>.18 {mapped=.18+.82*(1.-pow(1.+(x-.18)/(.82*shape),-shape));}
-    return vec4(rgb/light*mapped*paint.a,paint.a);
+    if options.w==1. {mapped=hdr_rwtmo(x,options.z);}
+    if options.w==2. {mapped=x/exp2(options.z);}
+    return vec4(rgb/peak*mapped*paint.a,paint.a);
 }
 fn hdr_map_sdr(paint:vec4<f32>,options:vec4<f32>)->vec4<f32> {
     let p=hdr_tone_sdr(paint,options);
     if options.w==0. || p.a<=0. {return p;}
-    return vec4(hdr_from_output(hdr_gamut(hdr_to_output(p.rgb/p.a),HDR_OUTPUT_Y))*p.a,p.a);
+    return vec4(hdr_from_output(clamp(hdr_to_output(p.rgb/p.a),vec3(0.),vec3(1.)))*p.a,p.a);
 }
-// Print LUTs are indexed by bounded working RGB; ICC delivery uses the same
-// source-gamut preparation before the profile transform.
+// Print LUTs have a bounded working-RGB input. ICC delivery uses the same
+// preparation before the profile transform; no perceptual desaturation stage.
 fn hdr_map_proof(paint:vec4<f32>,options:vec4<f32>)->vec4<f32> {
     let p=hdr_tone_sdr(paint,options);
     if options.w==0. || p.a<=0. {return p;}
-    return vec4(hdr_gamut(p.rgb/p.a,HDR_SOURCE_Y)*p.a,p.a);
+    return vec4(clamp(p.rgb/p.a,vec3(0.),vec3(1.))*p.a,p.a);
 }

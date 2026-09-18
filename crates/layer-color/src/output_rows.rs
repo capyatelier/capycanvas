@@ -19,7 +19,7 @@ pub fn encode_working_rows(
     ) -> Result<(), String>,
 ) -> Result<OutputStatistics, String> {
     if let Some(r) = rendition { r.validate().map_err(str::to_string)?; }
-    let encoder = WorkingEncoder::new(working, target, options)?.with_hdr_gamut_mapping(rendition.is_some());
+    let encoder = WorkingEncoder::new(working, target, options)?.with_hdr_proof_input(rendition.is_some());
     let mapper = rendition.map(|r| r.mapper(working, working));
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
@@ -76,18 +76,17 @@ mod tests {
     fn deliver(space: RgbSpace, profile: ColorProfile, pixels: &[[f32;4]], rendition: Option<SdrRendition>) -> Vec<u16> {
         let target=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U16,profile,profile_assumed:false};
         let mut bytes=vec![0;pixels.len()*8];
-        let stats=encode_working_rows(space,[pixels.len() as u32,1],[pixels.len() as u32,1],&target,Default::default(),None,rendition,
+        let _stats=encode_working_rows(space,[pixels.len() as u32,1],[pixels.len() as u32,1],&target,Default::default(),None,rendition,
             |_,row| {row.copy_from_slice(pixels);Ok(())},
             |_,_,read|read(0,&mut bytes)).unwrap();
-        assert_eq!(stats.clipped_channels,0,"HDR gamut rolloff should avoid hard output clipping");
         bytes.chunks_exact(2).map(|v|u16::from_le_bytes([v[0],v[1]])).collect()
     }
     #[test]
-    fn hdr_sdr_delivery_keeps_middle_gray_highlight_separation_and_coverage() {
+    fn hdr_sdr_delivery_matches_browser_curve_and_preserves_coverage() {
         let pixels=[[0.,0.,0.,1.],[0.18,0.18,0.18,1.],[1.,1.,1.,1.],[4.,4.,4.,1.],[16.,16.,16.,1.],[1.,1.,1.,0.25],[0.;4]];
         let output=deliver(RgbSpace::Srgb,ColorProfile::Builtin(RgbSpace::Srgb),&pixels,Some(SdrRendition::default()));
-        // Independent curve landmarks: black, unchanged middle gray, broad shoulder.
-        for (i,linear) in [0.,0.18,0.59,0.8550862069,0.9595913462].into_iter().enumerate() {
+        // Independent Float64 analytic RWTMO landmarks.
+        for (i,linear) in [0.,0.09,0.5,0.9439630011687752,1.].into_iter().enumerate() {
             let code=(RgbSpace::Srgb.encode(linear)*65535.).round() as u16;
             assert!(output[i*4].abs_diff(code)<=1,"{i}: {} vs {code}",output[i*4]);
         }

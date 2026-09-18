@@ -150,6 +150,12 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-panel .number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
 .dock-panel .number-inline scale { margin: 0; }
 .number-inline button.number-value, .number-inline entry.number-entry { padding: 2px 3px; }
+.proof-panel button { min-height: 24px; padding: 2px 8px; }
+.proof-panel .number-inline button.number-value { padding: 2px 3px; }
+.proof-panel row { min-height: 32px; }
+.proof-panel row .header { min-height: 32px; padding: 2px 8px; }
+.proof-panel row .title { font-size: var(--ui-text-size); }
+.proof-panel dropdown button { padding: 2px 6px; }
 .number-control.error entry { box-shadow: inset 0 0 0 1px #e55; }
 .number-preference { padding: 12px 14px; }
 .image-preference { padding: 12px 14px; }

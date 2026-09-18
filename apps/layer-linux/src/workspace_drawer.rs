@@ -68,6 +68,7 @@ enum Body {
     Layers(Rc<LayerPanel>),
     Effects(Panel, Rc<EffectPanels>),
     Navigator(crate::navigator::Navigator),
+    Proof(Rc<crate::files::proof::ProofPanel>),
 }
 struct ToolbarBody {
     panel: Panel,
@@ -147,6 +148,7 @@ impl Body {
             Self::Sizes(v) => v.root.clone().upcast(),
             Self::Layers(v) => v.root.clone().upcast(),
             Self::Navigator(v) => v.root.clone().upcast(),
+            Self::Proof(v) => v.root.clone().upcast(),
             Self::Effects(panel, v) => match panel {
                 Panel::Adjustments => v.adjustments.clone().upcast(),
                 Panel::Properties => v.properties.clone().upcast(),
@@ -162,6 +164,7 @@ impl Body {
             Self::Color(_) => regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS,
             Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
+            Self::Proof(_) => regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT,
             Self::Navigator(_) => {
                 regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS
             }
@@ -177,6 +180,7 @@ impl Body {
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
+            Self::Proof(v) => v.refresh(w, state),
             Self::Effects(_, v) => v.refresh(w, state),
         }
         true
@@ -256,6 +260,7 @@ impl View {
                         v.bind(w);
                         Body::Color(v)
                     }
+                    Panel::Proof => Body::Proof(w.proof_panel.duplicate(w)),
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
                         let v = crate::navigator::Navigator::new(&w.navigator_overviews);

@@ -887,7 +887,10 @@ fn components(rgba: [f32; 4], space: ColorSpace, previous_hue: f32) -> [f32; 3] 
                 h,
                 light * 100.,
                 if d > 1e-6 {
-                    d / (1. - (2. * light - 1.).abs()) * 100.
+                    // A normalized HDR base often reaches RGB 1 exactly.
+                    // Float32 cancellation can otherwise produce S=100.000015
+                    // and make a valid paint color impossible to save in a workspace.
+                    (d / (1. - (2. * light - 1.).abs()) * 100.).min(100.)
                 } else {
                     0.
                 },

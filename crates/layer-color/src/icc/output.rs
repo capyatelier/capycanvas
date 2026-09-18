@@ -15,9 +15,7 @@ pub struct WorkingEncoder {
     destination: SourceInterpretation,
     kind: OutputKind,
     dither: OutputDither,
-    hdr_gamut: bool,
-    source_y: [f32; 3],
-    destination_y: [f32; 3],
+    hdr_proof_input: bool,
 }
 enum OutputKind {
     Builtin {
@@ -85,24 +83,18 @@ impl WorkingEncoder {
                 }
             },
         };
-        let destination_y = layer_core::color::hdr::luminance(match &destination.profile {
-            ColorProfile::Builtin(space) => *space,
-            _ => source,
-        });
         Ok(Self {
             destination,
             kind,
             dither: encoding.dither,
-            hdr_gamut: false,
-            source_y: layer_core::color::hdr::luminance(source),
-            destination_y,
+            hdr_proof_input: false,
         })
     }
 
-    /// Only HDR-to-SDR delivery requests this perceptual gamut rolloff. Ordinary
-    /// SDR conversion and native backing retain their exact existing contract.
-    pub fn with_hdr_gamut_mapping(mut self, enabled: bool) -> Self {
-        self.hdr_gamut = enabled;
+    /// HDR print proof LUTs and ICC delivery share a bounded working-RGB input.
+    /// Ordinary SDR conversion and native backing keep their existing contract.
+    pub fn with_hdr_proof_input(mut self, enabled: bool) -> Self {
+        self.hdr_proof_input = enabled;
         self
     }
 
@@ -189,8 +181,11 @@ impl WorkingEncoder {
                 if rgb.iter().any(|v| !v.is_finite()) {
                     return Err("Working RGB exceeds finite output precision".into());
                 }
-                let rgb = if self.hdr_gamut && !matches!(self.kind, OutputKind::Builtin { .. }) {
-                    layer_core::color::hdr::gamut_map(rgb, self.source_y)
+                let rgb = if self.hdr_proof_input && !matches!(self.kind, OutputKind::Builtin { .. }) {
+                    {
+                        statistics.clipped_channels += rgb.iter().filter(|v| **v < 0. || **v > 1.).count() as u64;
+                        rgb.map(|v| v.clamp(0.,1.))
+                    }
                 } else { rgb };
                 values[i] = [rgb[0], rgb[1], rgb[2], alpha];
             }
@@ -217,9 +212,6 @@ impl WorkingEncoder {
                         } else {
                             layer_core::color::rgb::apply(*matrix, linear)
                         };
-                        let rgb = if self.hdr_gamut {
-                            layer_core::color::hdr::gamut_map(rgb.map(|v| v as f32), self.destination_y).map(f64::from)
-                        } else { rgb };
                         let rgb = rgb.map(|v| if destination.depth.is_float() { v } else { space.encode(v) });
                         [rgb[0], rgb[1], rgb[2], 0.]
                     }

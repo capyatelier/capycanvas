@@ -412,6 +412,7 @@ pub enum Panel {
     Properties,
     Stats,
     Navigator,
+    Proof,
     CustomToolbar(u32),
 }
 
@@ -430,6 +431,7 @@ impl From<Panel> for String {
             Panel::Properties => "properties".into(),
             Panel::Stats => "stats".into(),
             Panel::Navigator => "navigator".into(),
+            Panel::Proof => "proof".into(),
             Panel::CustomToolbar(id) => format!("toolbar:{id}"),
         }
     }
@@ -449,6 +451,7 @@ impl TryFrom<String> for Panel {
             "properties" => Self::Properties,
             "stats" => Self::Stats,
             "navigator" => Self::Navigator,
+            "proof" => Self::Proof,
             _ => {
                 let id: u32 = value
                     .strip_prefix("toolbar:")
@@ -480,12 +483,14 @@ impl Panel {
             Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
                 254.
             }
+            Self::Proof => 300.,
             Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => TILE_SIZE,
         }
     }
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
+        if self == Self::Proof { return matches!(platform, crate::Platform::Gtk | crate::Platform::Generic); }
         if matches!(
             self,
             Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
@@ -522,7 +527,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
@@ -534,6 +539,7 @@ impl Panel {
         Self::Properties,
         Self::Stats,
         Self::Navigator,
+        Self::Proof,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -548,6 +554,7 @@ impl Panel {
             Self::Properties => "Properties",
             Self::Stats => "Diagnostics",
             Self::Navigator => "Navigator",
+            Self::Proof => "Proof",
             Self::CustomToolbar(_) => "Toolbar",
         }
     }
@@ -564,6 +571,7 @@ impl Panel {
             Self::Properties => "properties",
             Self::Stats => "stats",
             Self::Navigator => "navigator",
+            Self::Proof => "image",
         }
     }
 }
@@ -815,6 +823,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::ToolSettings
                 | Panel::Color
                 | Panel::Navigator
+                | Panel::Proof
         ) && !panels.iter().any(|p| p.id == default.id)
         {
             panels.push(default);
@@ -1304,7 +1313,7 @@ impl DockLayout {
         }
     }
 
-    pub(crate) fn active_panel(&self, panel: Panel) -> Option<Panel> {
+    pub fn active_panel(&self, panel: Panel) -> Option<Panel> {
         self.bands
             .iter()
             .map(|b| &b.root)
@@ -1770,6 +1779,13 @@ impl DockLayout {
             self.detach(&[panel]);
             return Ok(());
         }
+        // Newly opened Proof belongs with Color in existing workspaces too;
+        // an already placed Proof tab keeps the user's own placement.
+        if panel == Panel::Proof {
+            if let Some(group) = self.panel_group(Panel::Color) {
+                return self.add_panel_to_group(panel, group);
+            }
+        }
         let mut next = self.clone();
         let group = next.allocate()?;
         let band = next.allocate()?;
@@ -1779,7 +1795,8 @@ impl DockLayout {
             | Panel::Adjustments
             | Panel::Properties
             | Panel::Stats
-            | Panel::Navigator => Edge::Right,
+            | Panel::Navigator
+            | Panel::Proof => Edge::Right,
             _ => Edge::Top,
         };
         next.bands.push(DockBand {

@@ -387,3 +387,25 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     s.state.soft_proof = false; s.set_hdr_display_available(false);
     assert!(!s.command(CommandId::PreviewSdr).enabled);
 }
+
+#[test]
+fn proof_panel_preview_can_compare_master_and_saved_without_touching_history() {
+    use layer_core::color::{SampleDepth, hdr::SdrRendition};
+    let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
+    let renderer=Recorder {color:document.color,..Default::default()};
+    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    let original=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+    let draft=SdrRendition { exposure:-1., contrast:1.2, headroom:3., ..Default::default() };
+    s.state.soft_proof=true;s.state.gamut_warning=true;
+    s.set_sdr_view(Some(draft),true).unwrap();
+    assert!(s.state.preview_sdr);assert!(!s.state.soft_proof);assert!(!s.state.gamut_warning);
+    assert_eq!(s.effective_sdr_rendition(),draft);
+    s.set_sdr_view(Some(draft),false).unwrap();
+    assert!(!s.state.preview_sdr);assert_eq!(s.state.sdr_appearance_preview,None);
+    s.set_sdr_view(None,true).unwrap();
+    assert_eq!(s.effective_sdr_rendition(),original.sdr_rendition);
+    assert_eq!(s.engine.document(),&original);assert_eq!(s.engine.checkpoint(),checkpoint);
+    assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition,original.sdr_rendition);
+    assert!(s.set_sdr_view(Some(SdrRendition {exposure:f32::NAN,..draft}),true).is_err());
+    assert_eq!(s.state.sdr_appearance_preview,None);
+}

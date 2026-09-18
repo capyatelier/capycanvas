@@ -785,7 +785,7 @@ impl CommandId {
         match self {
             Self::SdrRendition => "SDR Appearance…",
             Self::PreviewSdr => "Preview SDR",
-            Self::SoftProofSetup => "Proof Setup…",
+            Self::SoftProofSetup => "Print Proof…",
             Self::SoftProof => "Proof Colors",
             Self::GamutWarning => "Gamut Warning",
             Self::Histogram => "Histogram…",

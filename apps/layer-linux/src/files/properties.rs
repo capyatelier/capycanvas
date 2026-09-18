@@ -117,6 +117,6 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
     if color.depth.is_float() { dialog.add_response("appearance", "SDR Appearance…"); }
     dialog.set_close_response("done");
     dialog.set_default_response(Some("done"));
-    if crate::alert::choose(dialog, &w.window).await == "appearance" { crate::hdr::configure(w).await?; }
+    if crate::alert::choose(dialog, &w.window).await == "appearance" { crate::hdr::open(w)?; }
     Ok(true)
 }

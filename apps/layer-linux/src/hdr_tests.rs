@@ -38,15 +38,14 @@ fn effect(w: &Rc<Workspace>, name: &str, key: &str, value: layer_core::EffectVal
     ready(w);
 }
 
-fn appearance() -> gtk::Window {
+fn appearance(w: &Rc<Workspace>) -> gtk::Window {
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    while !w.proof_panel.root.is_mapped() {
         pump(20);
-        if let Some(window) = gtk::Window::list_toplevels().into_iter()
-            .filter_map(|w| w.downcast::<gtk::Window>().ok())
-            .find(|w| w.is_visible() && w.widget_name() == "sdr-appearance-window") { return window; }
-        assert!(Instant::now() < deadline, "SDR Appearance window");
+        assert!(Instant::now() < deadline, "Proof panel is visible");
     }
+    assert!(w.window.visible_dialog().is_none(), "Proof must leave the canvas operable");
+    w.window.clone().upcast()
 }
 fn appearance_button(window: &gtk::Window, name: &str) {
     find_named(window.upcast_ref(), &format!("sdr-appearance-{name}")).unwrap()
@@ -309,7 +308,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let default = project(&photo).document.sdr_rendition;
     let checkpoint = photo.gpu.borrow().as_ref().unwrap().session.engine().checkpoint();
     invoke(&photo, CommandId::SdrRendition);
-    let window = appearance();
+    let window = appearance(&photo);
     appearance_exposure(&window, -2.);
     assert_eq!(project(&photo).document.sdr_rendition, default);
     assert_eq!(photo.gpu.borrow().as_ref().unwrap().session.engine().checkpoint(), checkpoint);
@@ -319,6 +318,15 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(state(&photo).sdr_appearance_preview, Some(default));
     compare.set_active(false); pump(50);
     assert_eq!(state(&photo).sdr_appearance_preview.unwrap().exposure, -2.);
+    let method = find_named(window.upcast_ref(), "sdr-appearance-method").unwrap().downcast::<gtk::DropDown>().unwrap();
+    for (index, expected) in [(1,layer_core::color::hdr::SdrMethod::Scale),(2,layer_core::color::hdr::SdrMethod::Clip),(0,layer_core::color::hdr::SdrMethod::ToneMap)] {
+        method.set_selected(index); pump(50);
+        assert_eq!(state(&photo).sdr_appearance_preview.unwrap().method,expected);
+        assert_eq!(pixels(&photo),painted);
+    }
+    let headroom = find_named(window.upcast_ref(), "sdr-appearance-headroom").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    headroom.set_value(4.); headroom.emit_by_name::<()>("value-changed",&[]); pump(50);
+    assert_eq!(state(&photo).sdr_appearance_preview.unwrap().headroom,4.);
     appearance_button(&window, "reset");
     assert_eq!(state(&photo).sdr_appearance_preview, Some(default));
     appearance_exposure(&window, -1.);
@@ -326,7 +334,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     finish(&photo);
     assert_eq!(project(&photo).document.sdr_rendition, default);
     invoke(&photo, CommandId::SdrRendition);
-    let window = appearance();
+    let window = appearance(&photo);
     appearance_exposure(&window, -0.5);
     capture_ui(&photo, &directory, "sdr-appearance-canvas.png");
     crate::snapshot_window(&window, 1.).save_to_png(directory.join("sdr-appearance-controls.png")).unwrap();
@@ -412,7 +420,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&restored, CommandId::ExportDocument);
     combo(&restored, "export-range").set_selected(0);
     response(&restored, "appearance");
-    let window = appearance();
+    let window = appearance(&restored);
     appearance_exposure(&window, -0.75);
     appearance_button(&window, "apply");
     recipe.exposure = -0.75;
@@ -677,6 +685,14 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
 #[test]
 #[ignore = "Wayland/GPU and LAYER_HDR_LARGE_INPUT pointing to a retained 60 MP HDR fixture"]
 fn native_hdr_large_export_preview_and_cancellation() {
+    large_export_preview_and_cancellation(false);
+}
+#[test]
+#[ignore = "Wayland/GPU and LAYER_HDR_LARGE_INPUT pointing to a retained 60 MP HDR fixture"]
+fn native_hdr_large_sdr_export_preview_and_cancellation() {
+    large_export_preview_and_cancellation(true);
+}
+fn large_export_preview_and_cancellation(sdr:bool) {
     let path = std::env::var_os("LAYER_HDR_LARGE_INPUT").expect("60 MP fixture path");
     let p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
     assert_eq!(p.document.color.depth, SampleDepth::F16);
@@ -686,7 +702,7 @@ fn native_hdr_large_export_preview_and_cancellation() {
     w.window.present(); ready(&w);
     let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
     invoke(&w, CommandId::ExportDocument);
-    combo(&w, "export-range").set_selected(1);
+    combo(&w, "export-range").set_selected(u32::from(!sdr));
     let dialog = w.window.visible_dialog().unwrap();
     let after = find_named(dialog.upcast_ref(), "color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
     let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
@@ -705,7 +721,7 @@ fn native_hdr_large_export_preview_and_cancellation() {
         assert!(start.elapsed().as_secs() < 90, "60 MP preview: {}", status.text());
     }
     timer.remove();
-    eprintln!("HDR_LARGE_PREVIEW elapsed_ms={:.2} heartbeat_count={} max_heartbeat_gap_ms={:.2} status={}",
+    eprintln!("HDR_LARGE_PREVIEW sdr={sdr} elapsed_ms={:.2} heartbeat_count={} max_heartbeat_gap_ms={:.2} status={}",
         start.elapsed().as_secs_f64()*1000., heartbeat.borrow().1, heartbeat.borrow().2 as f64/1000., status.text());
     assert!(heartbeat.borrow().1 > 10, "no UI heartbeat while previewing");
     assert!(heartbeat.borrow().2 < 500_000, "main-thread stall during preview");

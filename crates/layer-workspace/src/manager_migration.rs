@@ -202,6 +202,7 @@ pub(super) fn updated_photographer_default(
     }
     let layout = WorkspacePreset::Photographer.layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
+    let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = previous_columns.clone();
     for panel in [Panel::Toolbar, Panel::Commands] {
         previous
@@ -212,7 +213,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary) {
         return None;
     }
     let mut content = entity.content.clone();

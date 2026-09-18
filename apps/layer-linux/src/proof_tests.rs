@@ -52,42 +52,17 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     assert!(!w.gpu.borrow().as_ref().unwrap().session.state().soft_proof);
     wait_proof(&w, "Normal");
     // Cancel at the worker publication boundary, even if a small LUT is fast.
-    let cancelled = Rc::new(Cell::new(false));
-    let observed = cancelled.clone();
-    let signal = w
-        .window
-        .connect_notify_local(Some("visible-dialog"), move |window, _| {
-            let Some(dialog) = window
-                .visible_dialog()
-                .filter(|d| d.widget_name() == "proof-progress")
-                .and_downcast::<adw::AlertDialog>()
-            else {
-                return;
-            };
-            let observed = observed.clone();
-            glib::idle_add_local_full(glib::Priority::HIGH, move || {
-                observed.set(true);
-                find_button(dialog.upcast_ref(), "Cancel")
-                    .unwrap()
-                    .emit_clicked();
-                glib::ControlFlow::Break
-            });
-        });
     invoke(&w, CommandId::SoftProofSetup);
     super::new_photo::profile_action(&w, "proof", "builtin-0");
-    click(&find_button(w.window.visible_dialog().unwrap().upcast_ref(), "Apply").unwrap());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !cancelled.get()
-        || w.window
-            .visible_dialog()
-            .is_none_or(|d| d.widget_name() != "soft-proof-setup")
-    {
-        pump(20);
-        assert!(Instant::now() < deadline);
-    }
-    response(&w, "cancel");
+    let root=w.proof_panel.root.upcast_ref();
+    find_named(root,"proof-apply").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
+    let cancel=find_named(root,"proof-cancel").unwrap().downcast::<gtk::Button>().unwrap();
+    assert!(cancel.is_visible());
+    cancel.emit_clicked();
+    let deadline=Instant::now()+Duration::from_secs(15);
+    while cancel.is_visible() {pump(20);assert!(Instant::now()<deadline);}
+    response(&w,"cancel");
     finish(&w);
-    w.window.disconnect(signal);
     assert_eq!(snapshot(&w), original);
     let apply = |recipe| {
         let change = w
@@ -140,14 +115,9 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
             .rendering_suspended()
     );
     invoke(&w, CommandId::SoftProofSetup);
-    let broken_setup = w
-        .window
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
-    assert!(!broken_setup.is_response_enabled("apply"));
-    assert!(!broken_setup.has_response("remove"));
+    pump(250);
+    assert!(!find_named(w.proof_panel.root.upcast_ref(),"proof-apply").unwrap().is_sensitive());
+    assert!(find_named(w.proof_panel.root.upcast_ref(),"proof-remove").is_none());
     response(&w, "cancel");
     finish(&w);
     assert_eq!(snapshot(&w), failed_document);
@@ -249,7 +219,7 @@ fn keyboard(w: &Rc<Workspace>, key: gdk::Key, modifiers: gdk::ModifierType) {
     pump(100);
 }
 fn toggle(w: &Rc<Workspace>, name: &str) -> adw::SwitchRow {
-    find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
+    find_named(&super::new_photo::controls_root(&w.window), name)
         .unwrap()
         .downcast()
         .unwrap()
@@ -273,23 +243,19 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     let expected =
         layer_color::profile_description(&ColorProfile::Icc(bytes.clone().into())).unwrap();
     invoke(&w, CommandId::SoftProofSetup);
-    let setup = w
-        .window
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
-    assert!(!setup.is_response_enabled("apply"));
+    let setup = w.proof_panel.root.clone();
+    assert!(w.window.visible_dialog().is_none());
+    assert!(!find_named(setup.upcast_ref(), "proof-apply").unwrap().is_sensitive());
     assert_eq!(
         combo(&w, "proof-intent").subtitle().as_deref(),
         Some("Relative colorimetric")
     );
     assert_eq!(
-        combo(&w, "proof-simulation").subtitle().as_deref(),
-        Some("Black ink")
+        combo(&w, "proof-simulation").selected_item().and_downcast::<gtk::StringObject>().unwrap().string().as_str(),
+        "Black ink"
     );
-    assert_eq!(setup.response_label("apply"), "Apply");
-    assert!(!setup.has_response("remove"));
+    assert_eq!(find_named(setup.upcast_ref(), "proof-apply").unwrap().downcast::<gtk::Button>().unwrap().label().as_deref(), Some("Apply"));
+    assert!(find_named(setup.upcast_ref(), "proof-remove").is_none());
     super::new_photo::capture_ui(&w, &output, "setup.png");
     for iteration in 0..2 {
         profile_action(&w, "proof", "add");
@@ -304,7 +270,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         pump(150);
         file.response(gtk::ResponseType::Accept);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !setup.is_response_enabled("apply") {
+        while !find_named(setup.upcast_ref(), "proof-apply").unwrap().is_sensitive() {
             pump(20);
             assert!(Instant::now() < deadline);
         }
@@ -313,7 +279,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     // Import selects immediately and duplicate imports occupy one saved entry.
     profile_action(&w, "proof", "manage");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.visible_dialog().unwrap().widget_name() != "profile-library-manager" {
+    while w.window.visible_dialog().is_none_or(|d| d.widget_name() != "profile-library-manager") {
         pump(20);
         assert!(Instant::now() < deadline);
     }
@@ -351,7 +317,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         "profile.current"
     ));
     assert_eq!(profile_name(&w, "proof-profile"), expected);
-    assert!(setup.is_response_enabled("apply"));
+    assert!(find_named(setup.upcast_ref(), "proof-apply").unwrap().is_sensitive());
     menu.popdown();
     profile_action(&w, "proof", "manage");
     pump(250);
@@ -400,7 +366,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     // Removing a library copy leaves the selected bytes usable and reusable.
     profile_action(&w, "proof", "manage");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while w.window.visible_dialog().unwrap().widget_name() != "profile-library-manager" {
+    while w.window.visible_dialog().is_none_or(|d| d.widget_name() != "profile-library-manager") {
         pump(20);
         assert!(Instant::now() < deadline);
     }
@@ -420,7 +386,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
     // Cancel adding a replacement leaves the current selection usable.
     profile_action(&w, "proof", "add");
     chooser().response(gtk::ResponseType::Cancel);
-    while !setup.is_response_enabled("apply") {
+    while !find_named(setup.upcast_ref(), "proof-apply").unwrap().is_sensitive() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
@@ -567,27 +533,14 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
     std::fs::rename(&library, &held_library).unwrap();
     std::fs::write(&library, b"not a directory").unwrap();
     // Failure reopens this same dialog, so wait for its error instead of dismissal.
-    click(&find_button(w.window.visible_dialog().unwrap().upcast_ref(), "Apply").unwrap());
+    find_named(w.proof_panel.root.upcast_ref(),"proof-apply").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         pump(20);
-        if let Some(dialog) = w
-            .window
-            .visible_dialog()
-            .filter(|d| d.widget_name() == "soft-proof-setup")
-        {
-            let issue = find_named(dialog.upcast_ref(), "proof-setup-error")
-                .unwrap()
-                .downcast::<gtk::Label>()
-                .unwrap();
-            if issue.is_visible() {
-                assert!(
-                    issue
-                        .text()
-                        .starts_with("Could not save the previous proof profile")
-                );
-                break;
-            }
+        let issue=find_named(w.proof_panel.root.upcast_ref(),"proof-setup-error").unwrap().downcast::<gtk::Label>().unwrap();
+        if issue.is_visible() {
+            assert!(issue.text().starts_with("Could not save the previous proof profile"));
+            break;
         }
         assert!(Instant::now() < deadline, "profile preservation error");
     }
@@ -680,10 +633,9 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         gdk::Key::p,
         gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK,
     );
-    assert_eq!(
-        w.window.visible_dialog().unwrap().widget_name(),
-        "soft-proof-setup"
-    );
+    assert!(w.window.visible_dialog().is_none());
+    assert!(w.proof_panel.root.is_mapped());
+    find_named(w.proof_panel.root.upcast_ref(),"proof-advanced").unwrap().downcast::<gtk::MenuButton>().unwrap().popup();
     combo(&w, "proof-intent").set_selected(3);
     assert!(!toggle(&w, "proof-bpc").is_active());
     assert!(!toggle(&w, "proof-bpc").is_sensitive());
@@ -697,7 +649,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         "proof-paper",
         "proof-manage-profiles",
     ] {
-        assert!(find_named(w.window.visible_dialog().unwrap().upcast_ref(), removed).is_none());
+        assert!(find_named(w.proof_panel.root.upcast_ref(), removed).is_none());
     }
     super::new_photo::profile_action(&w, "proof", "add");
     let file = chooser();
@@ -708,7 +660,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     loop {
         pump(20);
         let row: adw::ActionRow = find_named(
-            w.window.visible_dialog().unwrap().upcast_ref(),
+            w.proof_panel.root.upcast_ref(),
             "proof-profile",
         )
         .unwrap()
@@ -968,14 +920,10 @@ fn native_open_and_profile_pickers_remember_separate_folders() {
     file.set_file(&gtk::gio::File::for_path(&profile)).unwrap();
     pump(150);
     file.response(gtk::ResponseType::Accept);
-    let setup = w
-        .window
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
+    let setup = w.proof_panel.root.clone();
+    assert!(w.window.visible_dialog().is_none());
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !setup.is_response_enabled("apply") {
+    while !find_named(setup.upcast_ref(), "proof-apply").unwrap().is_sensitive() {
         pump(20);
         assert!(Instant::now() < deadline);
     }
@@ -1098,4 +1046,59 @@ fn native_desktop_file_picker_uses_portal() {
     }
     window.close();
     pump(100);
+}
+
+#[test]
+#[ignore = "isolated Wayland display and GPU"]
+fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
+    let output=std::path::Path::new("../../artifacts/color-m4/proof-panel-compact");
+    std::fs::create_dir_all(output).unwrap();
+    let app=native_test_app("art.capycanvas.ProofPanel");
+    let mut p=new_drawing(512,384).unwrap();p.document.color.depth=SampleDepth::F16;
+    let w=Workspace::with_project(&app,Some((p,None)));w.window.maximize();w.window.present();ready(&w);
+    for preset in [layer_ui::WorkspacePreset::Illustrator,layer_ui::WorkspacePreset::Photographer] {
+        let mut workspace=state(&w).workspace;
+        workspace.layout=preset.layout(layer_ui::Platform::Gtk);
+        w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});pump(200);
+        invoke(&w,CommandId::SdrRendition);pump(300);
+        assert_eq!(state(&w).workspace.layout.panel_group(Panel::Proof),state(&w).workspace.layout.panel_group(Panel::Color));
+        assert!(w.window.visible_dialog().is_none());
+        let viewport=w.proof_panel.root.parent().unwrap();
+        assert!(w.proof_panel.root.is_mapped());
+        assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
+        for name in ["sdr-appearance-exposure","sdr-appearance-contrast","sdr-appearance-headroom","sdr-appearance-apply"] {
+            let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
+            let b=widget.compute_bounds(&viewport).unwrap();
+            assert!(b.x()>=0. && b.x()+b.width()<=viewport.width() as f32+1.,"{name}: {b:?} vs {}",viewport.width());
+            assert!(b.y()>=0. && b.y()+b.height()<=viewport.height() as f32+1.,"{name} should fit without scrolling: {b:?} vs {}",viewport.height());
+        }
+        let before=snapshot(&w);
+        let control=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-exposure").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+        control.set_value(-1.);control.emit_by_name::<()>("value-changed",&[]);pump(50);
+        assert_eq!(snapshot(&w),before);
+        let preview=find_named(w.proof_panel.root.upcast_ref(),"proof-preview-sdr").unwrap().downcast::<gtk::CheckButton>().unwrap();
+        preview.set_active(false);pump(50);assert!(!state(&w).preview_sdr);assert!(state(&w).sdr_appearance_preview.is_none());
+        preview.set_active(true);pump(50);assert_eq!(state(&w).sdr_appearance_preview.unwrap().exposure,-1.);
+        super::new_photo::capture_ui(&w,output,&format!("{}-sdr.png",preset.name()));
+        invoke(&w,CommandId::SoftProofSetup);pump(300);
+        assert!(w.proof_panel.root.width()<=viewport.width(),"Print controls must fit {}",preset.name());
+        super::new_photo::capture_ui(&w,output,&format!("{}-print-compact.png",preset.name()));
+        let advanced=find_named(w.proof_panel.root.upcast_ref(),"proof-advanced").unwrap().downcast::<gtk::MenuButton>().unwrap();
+        advanced.popup();pump(100);
+        assert!(w.proof_panel.root.width()<=viewport.width(),"Advanced controls must fit {}",preset.name());
+        super::new_photo::capture_ui(&w,output,&format!("{}-print.png",preset.name()));
+        advanced.popdown();pump(100);
+        invoke(&w,CommandId::SdrRendition);
+        let tab=w.groups.borrow().iter().flat_map(|g| &g.tabs).find(|(p,_)| *p==Panel::Proof).unwrap().1.clone();
+        let drag=begin_workspace_drag(&w,tab.upcast_ref(),10.,10.);
+        let bounds=tab.compute_bounds(&w.surface).unwrap();
+        drag.update([f64::from(w.surface.width())*0.5-f64::from(bounds.x()+10.),150.]);
+        assert!(state(&w).workspace.layout.floating.iter().any(|f| matches!(&f.root, DockNode::Tabs {panels,..} if panels.contains(&Panel::Proof))),"Proof tab drags without a hold");
+        drag.end();pump(250);
+        assert_eq!(state(&w).sdr_appearance_preview.unwrap().exposure,-1.);
+        assert_eq!(snapshot(&w),before);
+        super::new_photo::capture_ui(&w,output,&format!("{}-floating.png",preset.name()));
+        find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-cancel").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();pump(100);
+    }
+    w.window.destroy();pump(100);
 }

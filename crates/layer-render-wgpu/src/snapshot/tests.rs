@@ -25,7 +25,7 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     effect.set("exposure", layer_core::EffectValue::Number(1.)).unwrap();
     layer.effect = Some(Arc::new(effect));
     document.layers.insert(0, layer);
-    document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., knee: 0.5 };
+    document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., headroom: 4., ..Default::default() };
     let mut renderer = SnapshotRenderer::new(Project { document, assets: Default::default() }, [0.; 4], 0., Default::default()).unwrap();
     let mut bytes = vec![0; 24];
     renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();

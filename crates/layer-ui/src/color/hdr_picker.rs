@@ -285,3 +285,20 @@ mod tests {
         assert_eq!(s.wheel_components(), legacy.wheel_components());
     }
 }
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn hdr_entry_at_half_limit_keeps_serializable_picker_coordinates() {
+        for space in RgbSpace::ALL {
+            let mut s=ColorState::default();s.set_rgb_space(space).unwrap();s.set_hdr_enabled(true).unwrap();
+            for p in [[8.,2.,1.,1.],[65504.,2.,1.,1.],[1.,65504.,2.,0.5]] {
+                s.set_color(RgbColor::from_linear(space,p).unwrap()).unwrap();
+                assert!(s.validate().is_ok(),"{space:?} {p:?}: {:?} {:?}",s.validate(),s.coordinates);
+                let recovered:ColorState=serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+                recovered.validate().unwrap();
+            }
+        }
+    }
+}

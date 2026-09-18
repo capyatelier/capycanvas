@@ -477,7 +477,7 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
             for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
-            for recipe in [SdrRendition::default(),SdrRendition{exposure:-2.,contrast:1.5,knee:0.65}] {
+            for recipe in [SdrRendition::default(),SdrRendition{exposure:-2.,contrast:1.5,headroom:4.,..Default::default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Scale, headroom:3., ..Default::default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Clip, exposure:-1., ..Default::default()}] {
                 for headroom in [1.,4.] {
                     for proof in [false,true] {
                         presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();

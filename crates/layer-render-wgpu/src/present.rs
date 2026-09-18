@@ -49,7 +49,7 @@ pub struct ViewportPresenter {
     proof_buffer: wgpu::Buffer,
     proof_uniform: wgpu::Buffer,
     hdr_uniform: wgpu::Buffer,
-    hdr_options: [f32; 4],
+    hdr_options: [f32; 8],
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
@@ -81,7 +81,7 @@ impl ViewportPresenter {
     pub fn set_hdr_view(&mut self, renderer: &WgpuRasterizer, rendition: Option<layer_core::color::hdr::SdrRendition>, headroom: f32) -> Result<(), GpuRasterError> {
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err(GpuRasterError::Color("Invalid display HDR headroom".into())); }
         if let Some(r) = rendition { r.validate().map_err(|e| GpuRasterError::Color(e.into()))?; }
-        let options = rendition.map_or([0.; 4], |r| [r.exposure, r.contrast, r.knee, headroom]);
+        let options = rendition.map_or([0.; 8], |r| { let p = r.parameters(); [p[0],p[1],p[2],p[3],headroom,0.,0.,0.] });
         if options != self.hdr_options {
             renderer.queue.write_buffer(&self.hdr_uniform, 0, options.map(f32::to_ne_bytes).as_flattened());
             self.hdr_options = options;
@@ -271,7 +271,7 @@ impl ViewportPresenter {
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: std::num::NonZeroU64::new(16) },
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: std::num::NonZeroU64::new(32) },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -390,8 +390,8 @@ impl ViewportPresenter {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor { label: Some("HDR viewing options"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
-            hdr_options: [0.; 4],
+            hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor { label: Some("HDR viewing options"), size: 32, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
+            hdr_options: [0.; 8],
             proof_options: [0; 4],
             proof_lut: None,
             bind_group: None,

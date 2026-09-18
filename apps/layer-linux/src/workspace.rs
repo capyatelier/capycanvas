@@ -806,6 +806,7 @@ pub struct Workspace {
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
+    pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
     pub(crate) hdr_status: gtk::Button,
     pub(crate) recovery: Rc<crate::recovery::Recovery>,
     pub input: Rc<crate::input::Input>,
@@ -930,6 +931,7 @@ impl Workspace {
         let view_info = gtk::Label::new(Some("100% · 0°"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
+        let proof_panel = crate::files::proof::ProofPanel::new();
         status_bar.append(&proof.label);
         let hdr_status=gtk::Button::builder().visible(false).build();
         hdr_status.add_css_class("flat");
@@ -1032,6 +1034,7 @@ impl Workspace {
                 (Panel::Properties, scroll(&effects.properties)),
                 (Panel::Stats, scroll(&effects.stats)),
                 (Panel::Navigator, navigator.root.clone().upcast()),
+                (Panel::Proof, proof_panel.root.clone().upcast()),
             ],
             commands: RefCell::new(Vec::new()),
             tool_set,
@@ -1043,6 +1046,7 @@ impl Workspace {
             tool_settings,
             placement_actions,
             color_panel,
+            proof_panel,
             navigator,
             navigator_overviews,
             layer_panel,
@@ -2148,6 +2152,9 @@ impl Workspace {
             return;
         };
         self.refreshing.set(true);
+        if regions & (regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT) != 0 {
+            self.proof_panel.refresh(self, &state);
+        }
         self.header.refresh(self, &state);
         self.view_info
             .set_visible(state.workspace.layout.canvas_info.visible);
@@ -3300,7 +3307,7 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
     widget.set_margin_top(value);
     widget.set_margin_bottom(value);
 }
-fn scroll(child: &impl IsA<gtk::Widget>) -> gtk::Widget {
+pub(crate) fn scroll(child: &impl IsA<gtk::Widget>) -> gtk::Widget {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)

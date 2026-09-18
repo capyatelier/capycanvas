@@ -180,7 +180,7 @@ layer exchange. Add separately scoped layered PSD interchange to the roadmap.
 
 **6. Preview a print and deliver what the lab requests — expected print support**
 
-**View → Soft Proof Setup → compare → make optional print edits → Export.**
+**Proof → Print → compare → make optional print edits → Export.**
 
 Select/import a printer/paper ICC profile and keep proof intent, BPC and paper/ink
 simulation together. **Soft Proof** and **Gamut Warning** are view toggles with
@@ -245,14 +245,36 @@ capability-unknown. Extend existing exposure/curves, picker and histogram contro
 above reference white; do not make HDR an unrelated editing application. Users
 can edit on an SDR monitor without silently losing HDR source data.
 
-**View → Preview SDR** is a temporary comparison, enabled only when the canvas
-can actually show HDR and a print proof is not active. **SDR Appearance…**,
-reached through Document Properties, Export or Proof Setup, previews the saved
-exposure/contrast/highlight mapping live. Cancel restores the view; Apply saves
-one undoable change used by SDR viewing, delivery and print proofing. HDR export offers at
-least one tested route, with an authored SDR base for gain-map delivery where
-supported. Pixel edits must update the gain map; an imported map is not reusable
-unchanged merely because its metadata was retained.
+**Proof** is a dockable panel with **SDR / Print** pages. In the Paint and Photo
+starting layouts it shares Color's tab group. Drag its tab to float or relocate
+it using the normal workspace controls. SDR documents use the Print page.
+
+For HDR artwork, **Proof → SDR** offers **Tone map / Scale / Clip**. Tone map
+uses the browser-derived reference-white curve; Scale divides by the chosen HDR
+range; Clip deliberately discards out-of-range SDR detail. **Exposure, Contrast
+and HDR range** use compact labeled slider/value rows. HDR range is hidden for
+Clip. It describes the input endpoint above reference white, not monitor peak.
+The default is 2.30 EV (1000 nits at the fixed 203-nit reference white).
+
+Preview compares with the master. Compare saved and Reset SDR settings are in
+the overflow menu. Apply stores one undoable document change; Revert restores
+the saved settings. These settings are shared by SDR viewing, delivery and mapped
+print proofing; they never change HDR artwork. The SDR appearance entry in Document
+Properties and SDR Export opens this panel. Export returns to its retained draft
+after Apply/Revert, or through Return to Export when there are no pending changes.
+**View → Preview SDR** remains a temporary comparison on capable HDR displays.
+
+**Proof → Print** chooses the printer/paper profile and ink/paper simulation.
+Rendering intent, black point compensation and gamut warning are in the Print
+options overflow menu. Apply prepares the proof asynchronously; Cancel preparation
+retains the previous proof. View and gamut-warning toggles never enter artwork
+or export. Preview, Apply and Revert stay at the bottom of the panel. A print
+profile remains separate from the export target. See the
+[browser mapping research and validation](../history/color-management-sdr-proof-update.md).
+
+HDR export offers at least one tested route. Gain-map delivery, if added, needs
+a newly generated map from the edited renditions; imported gain maps must never
+be reused unchanged after arbitrary edits.
 
 GTK's review implementation uses linear half-float storage with Float32
 processing and fixed reference white of 203 cd/m². It supports noninterlaced
@@ -260,14 +282,16 @@ processing and fixed reference white of 203 cd/m². It supports noninterlaced
 The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for display
 and reference-white details. New Drawing offers an **HDR drawing** preset.
 HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
-values. Only HDR documents show the **HDR** intensity ramp above the picker:
-a thick horizontal current-color gradient with a circular thumb and editable EV
-value. It multiplies the base color in linear light; +2 EV is ×4, including the
-circle/square/triangle field, while black stays black and alpha is unchanged.
-Hue and field edits retain the chosen intensity and EV edits retain the marker.
-The field and ramp use managed half-float display textures on a capable GTK
-display, or the document's SDR appearance on an SDR-only display. The hue guide
-stays a stable SDR reference. SDR documents retain the existing picker/layout.
+values. Only HDR documents show the colored intensity arc below the hue ring.
+Double-click resets it to 1× (0 EV); the angled EV caption is read-only. The
+upper-right pencil, or a double-click on either paint bubble, opens Edit Color,
+which includes editable EV and side-by-side Base / Adjusted previews. +2 EV
+multiplies the circle/square/triangle field and paint bubbles by four in linear
+light; black stays black and alpha is unchanged. Hue and field edits retain the
+chosen intensity, and EV edits retain the marker. The field, ramp and bubbles
+use managed half-float display textures on a capable GTK display, or the
+shared SDR appearance on an SDR-only display. The hue guide stays an SDR
+reference. SDR documents retain the existing picker/layout.
 Curves and the histogram mark SDR white; curve processing options are in Advanced.
 
 Export's overview chooses **Dynamic range: SDR or HDR** and format. Size,

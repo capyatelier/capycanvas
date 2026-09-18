@@ -23,6 +23,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         true
     }
 
+    /// A nonmodal proof panel can compare the master without losing its local
+    /// draft. The host owns that draft; only an enabled preview reaches viewing.
+    pub fn set_sdr_view(&mut self, recipe: Option<layer_core::color::hdr::SdrRendition>, enabled: bool) -> Result<UiChange, String> {
+        self.require_document_idle()?;
+        if !self.engine.document().color.depth.is_float() { return Err("SDR appearance requires HDR artwork".into()); }
+        if let Some(recipe) = recipe { recipe.validate().map_err(str::to_string)?; }
+        self.state.sdr_appearance_preview = if enabled { recipe } else { None };
+        self.state.preview_sdr = enabled;
+        if enabled { self.state.soft_proof = false; self.state.gamut_warning = false; }
+        self.refresh_commands();
+        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+    }
+
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
         self.require_document_idle()?;
         if !self.engine.document().color.depth.is_float() { return Err("SDR rendition settings require HDR artwork".into()); }

@@ -11,7 +11,7 @@ pub(crate) mod open;
 pub(crate) mod launch;
 mod properties;
 mod color;
-mod proof;
+pub(crate) mod proof;
 mod place;
 pub(crate) mod drop;
 pub(crate) mod profile;
@@ -126,8 +126,8 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
-                                HostRequestKind::SdrRendition => crate::hdr::configure(&w).await,
-                                HostRequestKind::SoftProofSetup => proof::run(&w).await,
+                                HostRequestKind::SdrRendition => crate::hdr::open(&w),
+                                HostRequestKind::SoftProofSetup => proof::run(&w),
                                 HostRequestKind::Histogram => {
                                     crate::histogram::show(&w);
                                     Ok(())

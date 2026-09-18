@@ -49,7 +49,7 @@ impl WgpuRasterizer {
         Ok(())
     }
     pub(super) fn ui_rendition_parameters(&self) -> [f32; 4] {
-        self.ui_rendition.map_or([0.; 4], |r| [r.exposure, r.contrast, r.knee, 1.])
+        self.ui_rendition.map_or([0.; 4], |r| r.parameters())
     }
 
     /// Configure the display-only byte outputs before requesting any previews.

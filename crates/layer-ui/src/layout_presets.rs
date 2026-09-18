@@ -34,13 +34,20 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
-        if self == Self::Photographer && platform != crate::Platform::Generic {
-            return Self::legacy_illustrator_primary_layout(platform);
+        let mut layout=if self == Self::Photographer && platform != crate::Platform::Generic {
+            Self::legacy_illustrator_primary_layout(platform)
+        } else {
+            self.layout_with_header_tools(platform,crate::CommandId::CustomizeWorkspaceUi.available_on(platform))
+        };
+        if self != Self::Painter && Panel::Proof.available_on(platform) {
+            if let Some(group)=layout.panel_group(Panel::Color) {
+                if let Some(DockNode::Tabs {panels,..})=layout.node_mut(group) {
+                    let index=panels.iter().position(|p| *p==Panel::Color).unwrap()+1;
+                    panels.insert(index,Panel::Proof);
+                }
+            }
         }
-        self.layout_with_header_tools(
-            platform,
-            crate::CommandId::CustomizeWorkspaceUi.available_on(platform),
-        )
+        layout
     }
 
     /// Exact pre-title-bar arrangement, retained for conservative default upgrades.
@@ -289,7 +296,7 @@ impl DockLayout {
                 | crate::Platform::Ios
         )
             && self.collapsed.len() == 1
-            && crate::durable_layout(self) == WorkspacePreset::legacy_illustrator_layout(platform)
+            && crate::durable_layout(self) == WorkspacePreset::Illustrator.layout(platform)
         {
             for stack in &mut self.column_stacks {
                 if self.collapsed.iter().any(|c| c.root == stack.column) {
@@ -408,7 +415,7 @@ mod tests {
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
                 [Edge::Left, Edge::Right, Edge::Right, Edge::Top]);
             for (id, expected) in [
-                (14, vec![Panel::Color, Panel::Stats]),
+                (14, if Panel::Proof.available_on(platform) {vec![Panel::Color, Panel::Proof, Panel::Stats]} else {vec![Panel::Color, Panel::Stats]}),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
                 (6, vec![Panel::Brushes]),
@@ -508,8 +515,16 @@ mod tests {
     #[test]
     fn photo_adopts_the_reviewed_layout_and_paint_restores_its_original_default() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
-            assert_eq!(WorkspacePreset::Photographer.layout(platform), WorkspacePreset::legacy_illustrator_primary_layout(platform));
-            assert_eq!(WorkspacePreset::Illustrator.layout(platform), WorkspacePreset::legacy_illustrator_layout(platform));
+            for (preset,mut previous) in [(WorkspacePreset::Photographer,WorkspacePreset::legacy_illustrator_primary_layout(platform)),(WorkspacePreset::Illustrator,WorkspacePreset::legacy_illustrator_layout(platform))] {
+                let current=preset.layout(platform);
+                if Panel::Proof.available_on(platform) {
+                    assert_eq!(current.panel_group(Panel::Proof),current.panel_group(Panel::Color));
+                    let group=previous.panel_group(Panel::Color).unwrap();
+                    let DockNode::Tabs {panels,..}=previous.node_mut(group).unwrap() else {panic!()};
+                    panels.insert(1,Panel::Proof);
+                }
+                assert_eq!(current,previous);
+            }
             assert_eq!(WorkspacePreset::Photographer.working_state().canvas_tool, crate::LayerCanvasTool::Move);
         }
     }

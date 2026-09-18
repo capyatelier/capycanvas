@@ -44,13 +44,13 @@ pub enum ViewColor {
     #[default]
     Srgb,
     DisplayP3,
-    Mapped { p3: bool, document: RgbSpace, recipe: [u32; 3] },
+    Mapped { p3: bool, document: RgbSpace, recipe: [u32; 4] },
 }
 impl ViewColor {
     pub fn with_rendition(self, document: layer_core::color::DocumentColor, rendition: layer_core::color::hdr::SdrRendition) -> Self {
         if !document.depth.is_float() { return self.base(); }
         Self::Mapped { p3: self.base() == Self::DisplayP3, document: document.space,
-            recipe: [rendition.exposure, rendition.contrast, rendition.knee].map(f32::to_bits) }
+            recipe: rendition.parameters().map(f32::to_bits) }
     }
     fn base(self) -> Self {
         match self { Self::Mapped { p3, .. } => if p3 { Self::DisplayP3 } else { Self::Srgb }, other => other }
@@ -151,8 +151,7 @@ impl ViewColor {
     /// Match the canvas: linear alpha-over-checker, then display encoding/clamp.
     pub fn checker_colors(self, color: RgbColor) -> [[f32; 4]; 2] {
         let linear = if let Self::Mapped { document, recipe, .. } = self {
-            let [exposure, contrast, knee] = recipe.map(f32::from_bits);
-            let rendition = layer_core::color::hdr::SdrRendition { exposure, contrast, knee };
+            let rendition = layer_core::color::hdr::SdrRendition::from_parameters(recipe.map(f32::from_bits)).expect("validated rendition");
             let p = color.linear_in(document).expect("validated artwork color");
             let rgb = rendition.mapper(document, self.space()).map_rgb([p[0], p[1], p[2]]);
             [rgb[0], rgb[1], rgb[2], p[3]]
@@ -209,8 +208,7 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
         hdr_texture(extent, bytes)
     } else {
         let rendition = if let ViewColor::Mapped { recipe, .. } = view {
-            let [exposure, contrast, knee] = recipe.map(f32::from_bits);
-            layer_core::color::hdr::SdrRendition { exposure, contrast, knee }
+            layer_core::color::hdr::SdrRendition::from_parameters(recipe.map(f32::from_bits)).expect("validated rendition")
         } else { Default::default() };
         let mapper = rendition.mapper(document, view.space());
         let mut bytes = Vec::with_capacity(pixels.len() * 4);
