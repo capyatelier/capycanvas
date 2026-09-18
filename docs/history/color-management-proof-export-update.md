@@ -7,7 +7,12 @@ this note is not hardware qualification.
 
 ## User flow
 
-View → Proof opens a dockable panel beside Color in Paint and Photo layouts.
+View → Proof (Ctrl+Alt+P) toggles Off and the last selected SDR/Print mode.
+Enabling it reveals/selects the dockable panel beside Color in Paint and Photo
+layouts; disabling leaves its visibility alone. A first use defaults to SDR for
+HDR artwork and Print setup for SDR artwork. Missing print profiles open setup
+without claiming a rendered proof. Mode memory is transient, per document
+session. First-profile preparation can be cancelled by the same toggle.
 The common native segmented control selects Off, SDR or Print (Off/Print for an
 SDR document). Off changes viewing only. No Apply, Revert, Preview checkbox or
 header ellipsis. SDR edits are document edits, saved with the master; dragging
@@ -98,6 +103,9 @@ memory, halo/edge qualification and a spatially consistent export/print path.
 They are not exposed as unqualified choices. Destination gamut limiting remains
 component limiting after conversion; hue-preserving perceptual gamut compression
 is still a limitation, particularly for highly saturated wide-gamut highlights.
+The subsequent [highlight-rendering audit](color-management-highlight-rendering.md)
+explains the brightness loss in saturated highlights and recommends photographic
+highlight color roll-off. That rendering change is not in the current build.
 
 ## Interchange and codec boundaries
 
@@ -261,3 +269,25 @@ checks, shared print-option round-trip/BPC tests, native compact Paint/Photo lay
 profile picker, print save/reopen/export, cancellation, source-profile repair and
 HDR/SDR editing workflows. Native layout
 checks confirm the five print controls are mapped and fit the panel width.
+
+## Proof toggle follow-up
+
+The GTK View menu exposes a checked **Proof** toggle using the existing
+Ctrl+Alt+P command. Shared Rust remembers the selected SDR/Print mode separately
+from Off, and distinguishes first-profile setup from an active print transform.
+Enabling reveals a hidden panel, selects its tab, or opens its collapsed drawer.
+Disabling does not reveal it. Pending print preparation is cancelled by Off and
+checks the current shared selection again before publishing. Document recipes,
+pixels and history are unchanged by comparison toggles.
+
+Evidence is in `artifacts/color-m4/proof-toggle/`: seven shared Proof tests,
+workspace and wasm32 checks, the release build, and native workflows for mode
+memory/hidden and collapsed panels, cancellation, Paint/Photo panel layout,
+print save/reopen/export, and HDR editing/SDR delivery. The old print test
+explicitly toggled Gamut Warning after switching print simulation off; that
+expectation was updated because unified Proof Off already disables it. The
+first failed expectation is retained as `*-old-expectation.log`.
+
+This follow-up changes viewing controls only. Earlier numerical, codec,
+large-document and hardware evidence remains applicable to the unchanged
+rendering pipeline; these measurements were not repeated for the toggle.

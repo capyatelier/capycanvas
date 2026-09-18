@@ -159,7 +159,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .copied()
                                 .filter(|id| id.available_on(self.state.platform))
                                 .filter(|id| !(menu == M::View && self.state.platform == Platform::Gtk
-                                    && matches!(id, CommandId::SoftProof | CommandId::GamutWarning | CommandId::PreviewSdr)))
+                                    && matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)))
                                 .filter(|id| !matches!(id, CommandId::SdrRendition | CommandId::PreviewSdr) || self.engine.document().color.depth.is_float())
                                 .filter(|id| {
                                     !(menu == M::View

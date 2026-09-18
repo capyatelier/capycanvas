@@ -147,7 +147,7 @@ impl ProofPanel {
             (
                 (s.state().document_file.epoch, s.engine().document().color),
                 s.engine().document().proof.clone(),
-                s.proof_mode(),
+                s.proof_panel_mode(),
             )
         }) else {
             return;
@@ -228,7 +228,6 @@ impl ProofPanel {
     }
     pub fn open(self: &Rc<Self>, w: &Rc<Workspace>, page: Page) -> Result<(), String> {
         self.ensure(w);
-        self.model.page.set(page);
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::SetPanelVisible {
                 panel: Panel::Proof,
@@ -279,27 +278,19 @@ impl ProofPanel {
                 c.cancel();
             }
         }
-        self.model.page.set(page);
+        if self.model.page.replace(page) != page {
+            self.model.serial.set(self.model.serial.get().wrapping_add(1));
+        }
         self.model.error.borrow_mut().clear();
         if page != Page::Print {
             self.cancel_job();
         }
-        let mode = if page == Page::Print
-            && w.gpu
-                .borrow()
-                .as_ref()
-                .is_some_and(|g| g.session.engine().document().proof.is_none())
-        {
-            ProofMode::Off
-        } else {
-            page.mode()
-        };
         let result = w
             .gpu
             .borrow_mut()
             .as_mut()
             .ok_or("Canvas unavailable".into())
-            .and_then(|g| g.session.set_proof_mode(mode));
+            .and_then(|g| g.session.select_proof_mode(page.mode()));
         w.changed(result);
         if page == Page::Print && self.model.print_dirty.get() {
             self.prepare_print(w);
@@ -544,6 +535,7 @@ impl ProofPanel {
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let change={let mut gpu=w.gpu.borrow_mut();let s=&mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
                     if (s.state().document_file.epoch,s.engine().document().color)!=identity{return Ok(None)}
+                    if s.proof_panel_mode()!=ProofMode::Print{return Ok(None)}
                     if s.engine().document().proof!=previous{return Err("Print settings changed while preparing the proof. Choose the profile again.".into())}
                     s.set_proof_recipe(Some(recipe.clone()))?};
                 w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,String>(Some(change))
@@ -590,26 +582,26 @@ impl ProofPanel {
                 s.engine().document().sdr_rendition,
                 s.state().gamut_warning,
                 s.engine().document().proof.is_some(),
-                s.proof_mode(),
+                s.proof_panel_mode(),
             )
         }) else {
             return;
         };
         f.updating.set(true);
-        // Menu shortcuts change the same transient viewing state. Keep the
-        // print page visible while choosing/preparing its first profile.
-        let pending_print = self.model.page.get() == Page::Print
-            && (!has_proof || self.model.busy.get() || self.model.print_dirty.get());
-        let page = if pending_print {
-            Page::Print
-        } else {
-            match mode {
-                ProofMode::Off => Page::Off,
-                ProofMode::Sdr => Page::Sdr,
-                ProofMode::Print => Page::Print,
-            }
+        // The shared selection includes first-profile setup. Menu Off must also
+        // cancel it, so a late worker cannot unexpectedly enable print proofing.
+        let page = match mode {
+            ProofMode::Off => Page::Off,
+            ProofMode::Sdr => Page::Sdr,
+            ProofMode::Print => Page::Print,
         };
-        self.model.page.set(page);
+        if self.model.page.replace(page) != page {
+            self.model.serial.set(self.model.serial.get().wrapping_add(1));
+        }
+        if page != Page::Print { self.cancel_job(); }
+        if page != Page::Sdr {
+            if let Some(c) = self.model.analysis.borrow().as_ref() { c.cancel(); }
+        }
         f.mode.set_active_name(Some(page.name()));
         f.stack.set_visible_child_name(page.name());
         for (c, v) in f
@@ -934,12 +926,12 @@ impl Form {
     }
 }
 pub(crate) fn run(w: &Rc<Workspace>) -> Result<(), String> {
-    // One menu entry opens the current Proof page without changing viewing.
+    // Reveal requests and Document Properties open the shared selection.
     let mode = w
         .gpu
         .borrow()
         .as_ref()
-        .map(|g| g.session.proof_mode())
+        .map(|g| g.session.proof_panel_mode())
         .unwrap_or_default();
     w.proof_panel.open(
         w,

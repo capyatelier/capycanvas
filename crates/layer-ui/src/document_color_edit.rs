@@ -14,6 +14,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         else if self.state.preview_sdr { ProofMode::Sdr }
         else { ProofMode::Off }
     }
+    /// The Print page can be selected before a profile is ready. It is not a
+    /// rendered proof until preparation succeeds; Off cancels that selection.
+    pub fn proof_panel_mode(&self) -> ProofMode {
+        if self.proof_setup_pending { ProofMode::Print } else { self.proof_mode() }
+    }
+    pub fn select_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, String> {
+        if mode == ProofMode::Print && self.engine.document().proof.is_none() {
+            let change = self.set_proof_mode(ProofMode::Off)?;
+            self.last_proof_mode = Some(ProofMode::Print);
+            self.proof_setup_pending = true;
+            return Ok(change);
+        }
+        self.set_proof_mode(mode)
+    }
+    /// Shared menu/shortcut policy; hosts reveal the panel only when enabling.
+    pub fn toggle_proof(&mut self) -> Result<UiChange, String> {
+        let mode = if self.proof_panel_mode() != ProofMode::Off {
+            ProofMode::Off
+        } else {
+            match self.last_proof_mode {
+                Some(ProofMode::Print) => ProofMode::Print,
+                _ if self.engine.document().color.depth.is_float() => ProofMode::Sdr,
+                _ => ProofMode::Print,
+            }
+        };
+        self.select_proof_mode(mode)
+    }
     pub fn set_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, String> {
         self.require_document_idle()?;
         if mode == ProofMode::Sdr && !self.engine.document().color.depth.is_float() {
@@ -22,6 +49,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if mode == ProofMode::Print && self.engine.document().proof.is_none() {
             return Err("Choose a print profile".into());
         }
+        self.proof_setup_pending = false;
+        if mode != ProofMode::Off { self.last_proof_mode = Some(mode); }
         self.state.preview_sdr = mode == ProofMode::Sdr;
         self.state.soft_proof = mode == ProofMode::Print;
         if mode != ProofMode::Print { self.state.gamut_warning = false; }
@@ -95,7 +124,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(recipe) = recipe { recipe.validate().map_err(str::to_string)?; }
         self.state.sdr_appearance_preview = if enabled { recipe } else { None };
         self.state.preview_sdr = enabled;
-        if enabled { self.state.soft_proof = false; self.state.gamut_warning = false; }
+        if enabled {
+            self.state.soft_proof = false;
+            self.state.gamut_warning = false;
+            self.proof_setup_pending = false;
+            self.last_proof_mode = Some(ProofMode::Sdr);
+        }
         self.refresh_commands();
         Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
     }
@@ -120,7 +154,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
         }
         self.state.soft_proof = self.engine.document().proof.is_some();
+        self.proof_setup_pending = false;
         if self.state.soft_proof {
+            self.last_proof_mode = Some(ProofMode::Print);
             self.state.preview_sdr = false;
             self.state.sdr_appearance_preview = None;
         }

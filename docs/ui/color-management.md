@@ -262,8 +262,10 @@ unchanged, until deliberately replaced.
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.
 These settings are shared by SDR viewing, delivery and mapped print proofing;
-they never change HDR artwork. **View → Proof**, Document Properties and Export
-open this panel. **Back to Export** returns to the retained export draft. There
+they never change HDR artwork. **View → Proof** (Ctrl+Alt+P) toggles Off and the
+last selected SDR/Print mode, revealing the panel when enabling. On first use,
+HDR artwork selects SDR; SDR artwork opens Print setup. Document Properties and
+Export can also open the panel. **Back to Export** returns to the retained export draft. There
 is no Apply/Revert, Preview checkbox or overflow menu beside the selector.
 
 **Proof → Print** has a compact **Profile** dropdown, **Simulate**, **Intent**,

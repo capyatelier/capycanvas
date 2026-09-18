@@ -62,7 +62,8 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     let original = snapshot(&w);
     invoke(&w, CommandId::SoftProofSetup);mode(&w,"print");
     super::new_photo::profile_action(&w, "proof", "builtin-0");
-    mode(&w,"off");settled(&w);
+    invoke(&w, CommandId::SoftProof);settled(&w);
+    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.proof_panel_mode(), layer_ui::ProofMode::Off);
     assert_eq!(snapshot(&w), original);
     assert!(!w.gpu.borrow().as_ref().unwrap().session.state().soft_proof);
     wait_proof(&w, "Normal");
@@ -90,7 +91,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     let cache = w.proof.cache_info();
     invoke(&w, CommandId::GamutWarning);
     invoke(&w, CommandId::SoftProof);
-    wait_proof(&w, "Gamut: Latest");
+    wait_proof(&w, "Normal");
     assert_eq!(w.proof.cache_info(), cache);
     assert_eq!(snapshot(&w), completed);
     // A damaged saved recipe may exist in a portable archive. Enabling it must
@@ -793,7 +794,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     assert!(!state(&restored).document_file.modified);
     // Compare the actual writer bytes with both viewing options disabled.
     invoke(&restored, CommandId::SoftProof);
-    invoke(&restored, CommandId::GamutWarning);
+    assert!(!state(&restored).gamut_warning, "Proof Off disables gamut warning too");
     wait_proof(&restored, "Normal");
     let snapshot = {
         let gpu = restored.gpu.borrow();
@@ -1059,4 +1060,77 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         assert_eq!(normalize(&snapshot(&w)),normalize(&before));
     }
     w.window.destroy();pump(100);
+}
+
+#[test]
+#[ignore = "isolated Wayland display and GPU"]
+fn native_proof_toggle_remembers_mode_and_reveals_hidden_panel() {
+    use layer_ui::ProofMode;
+    let app = native_test_app("art.capycanvas.ProofToggle");
+    let mut project = new_drawing(256, 192).unwrap();
+    project.document.color.depth = SampleDepth::F16;
+    let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.maximize();
+    w.window.present();
+    ready(&w);
+    let hide = || {
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetPanelVisible { panel: Panel::Proof, visible: false },
+        });
+        pump(100);
+        assert!(state(&w).workspace.layout.panel_group(Panel::Proof).is_none());
+        assert!(!w.proof_panel.root.is_mapped());
+    };
+    let check = |expected| {
+        let gpu = w.gpu.borrow();
+        let s = &gpu.as_ref().unwrap().session;
+        assert_eq!(s.proof_mode(), expected);
+        assert_eq!(s.command(CommandId::SoftProof).selected, expected != ProofMode::Off);
+        assert_eq!(s.proof_panel_mode(), expected);
+    };
+    let shortcut = || keyboard(&w, gdk::Key::p, gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK);
+    hide();
+    let original = snapshot(&w);
+    invoke(&w, CommandId::SoftProof);
+    pump(150);
+    check(ProofMode::Sdr);
+    assert!(w.proof_panel.root.is_mapped());
+    assert_eq!(snapshot(&w), original);
+    mode(&w, "print");
+    super::new_photo::profile_action(&w, "proof", "builtin-0");
+    settled(&w);
+    check(ProofMode::Print);
+    let saved = snapshot(&w);
+    for (name, expected) in [("print", ProofMode::Print), ("sdr", ProofMode::Sdr)] {
+        mode(&w, name);
+        pump(50);
+        hide();
+        shortcut();
+        check(ProofMode::Off);
+        assert!(state(&w).workspace.layout.panel_group(Panel::Proof).is_none(), "disabling leaves the panel hidden");
+        shortcut();
+        pump(150);
+        check(expected);
+        assert!(w.proof_panel.root.is_mapped(), "enabling reveals the active Proof tab");
+        let selector = find_named(w.proof_panel.root.upcast_ref(), "proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+        assert_eq!(selector.active_name().as_deref(), Some(name));
+        mode(&w, "off");
+        check(ProofMode::Off);
+        invoke(&w, CommandId::SoftProof);
+        check(expected);
+        assert_eq!(snapshot(&w), saved, "view changes never enter document history");
+    }
+    // A collapsed tab group must open its native drawer when enabling.
+    let group = state(&w).workspace.layout.panel_group(Panel::Proof).unwrap();
+    invoke(&w, CommandId::SoftProof);
+    w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnCollapsed { group, collapsed: true } });
+    let column = state(&w).workspace.layout.collapsed_column_for_group(group).unwrap();
+    w.dispatch(UiAction::Customize { action: CustomizationAction::SetColumnDrawers { column, drawers: true } });
+    shortcut();
+    pump(150);
+    check(ProofMode::Sdr);
+    assert!(state(&w).customization.column_drawers.iter().any(|d| matches!(d.anchor, layer_ui::DrawerAnchor::Column { group: g, origin: Panel::Proof, .. } if g == group)));
+    assert_eq!(snapshot(&w), saved);
+    w.window.destroy();
+    pump(100);
 }

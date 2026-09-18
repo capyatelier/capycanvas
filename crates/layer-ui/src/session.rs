@@ -92,6 +92,8 @@ pub struct UiSession<R: CanvasRenderer> {
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
     sdr_gesture: Option<layer_core::color::hdr::SdrRendition>,
+    last_proof_mode: Option<ProofMode>,
+    proof_setup_pending: bool,
     navigator_preview: crate::navigator::Preview,
     filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
@@ -160,6 +162,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             navigator_drag: None,
             effect_gesture: None,
             sdr_gesture: None,
+            last_proof_mode: None,
+            proof_setup_pending: false,
             navigator_preview: Default::default(),
             filter_previews: Default::default(),
             eyedropper: Default::default(),
@@ -1713,6 +1717,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (enabled, selected) = self.command_flags(id);
         let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
             "Restore Starting Layout…"
+        } else if id == CommandId::SoftProof && self.state.platform == Platform::Gtk {
+            "Proof"
         } else {
             id.label()
         };
@@ -1771,6 +1777,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SoftProof if self.state.platform == Platform::Gtk => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProof => document.proof.is_some()
                 || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
             CommandId::GamutWarning => document.proof.is_some(),
@@ -1877,7 +1884,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::PreviewSdr && self.state.preview_sdr)
-            || (id == CommandId::SoftProof && self.state.soft_proof)
+            || (id == CommandId::SoftProof && (self.state.soft_proof
+                || (self.state.platform == Platform::Gtk && self.state.preview_sdr)))
             || (id == CommandId::GamutWarning && self.state.gamut_warning)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
@@ -3437,11 +3445,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::PreviewSdr => {
                 self.state.preview_sdr = !self.state.preview_sdr;
+                if self.state.preview_sdr {
+                    self.last_proof_mode = Some(ProofMode::Sdr);
+                    self.proof_setup_pending = false;
+                }
                 Ok((COMMANDS, true))
             }
             CommandId::SoftProofSetup => {
                 self.request(HostRequestKind::SoftProofSetup)?;
                 Ok((HOST, false))
+            }
+            CommandId::SoftProof if self.state.platform == Platform::Gtk => {
+                let change = self.toggle_proof()?;
+                let mut regions = change.regions;
+                if self.proof_panel_mode() != ProofMode::Off {
+                    self.request(HostRequestKind::SoftProofSetup)?;
+                    regions |= HOST;
+                }
+                Ok((regions, change.canvas_wake))
             }
             CommandId::SoftProof if self.engine.document().proof.is_none() => {
                 self.request(HostRequestKind::SoftProofSetup)?;
@@ -4077,6 +4098,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             let icon = self.command_icon(id);
             let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
                 "Restore Starting Layout…"
+            } else if id == CommandId::SoftProof && self.state.platform == Platform::Gtk {
+                "Proof"
             } else {
                 id.label()
             };

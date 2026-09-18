@@ -100,6 +100,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.document_file.location = location;
         self.state.document_file.epoch = next;
         self.state.preview_sdr = false;
+        self.last_proof_mode = None;
+        self.proof_setup_pending = false;
         self.state.sdr_appearance_preview = None;
         self.state.hdr_display_available = false;
         self.state.soft_proof = false;

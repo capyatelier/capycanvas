@@ -69,7 +69,8 @@ fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
     let id = s.state.requests.first().unwrap().id;
     s.complete_document_request(id, Ok(false)).unwrap();
 
-    // Cancelling setup leaves the preview off and allows trying again.
+    // Leaving the setup page with Off allows trying again; completing the
+    // reveal request alone must not dismiss a nonmodal panel's selection.
     for _ in 0..2 {
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
         assert_eq!(s.state.requests.len(), 1);
@@ -79,6 +80,8 @@ fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
         assert!(!s.state.soft_proof && !s.state.gamut_warning);
         assert!(!s.command(CommandId::SoftProof).selected);
         s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+        assert_eq!(s.proof_panel_mode(), ProofMode::Print);
+        s.select_proof_mode(ProofMode::Off).unwrap();
         assert_eq!(s.engine.document(), &original);
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert!(s.command(CommandId::SoftProof).enabled);
@@ -514,6 +517,64 @@ fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
     }
     let menu=s.application_menu(ApplicationMenu::View);
     let labels=menu.sections.iter().flatten().map(|i|i.label.as_str()).collect::<Vec<_>>();
-    assert!(labels.contains(&"Proof…"));
+    assert!(labels.contains(&"Proof"));
+    assert!(!labels.contains(&"Proof…"));
     assert!(!labels.contains(&"Preview SDR"));assert!(!labels.contains(&"Soft Proof"));
+}
+
+#[test]
+fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering() {
+    use layer_core::color::{SampleDepth, ProofRecipe, ColorProfile};
+    let mut document = Document::new("HDR", 32, 32);
+    document.color.depth = SampleDepth::F16;
+    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
+    s.set_platform(Platform::Gtk);
+    let toggle = |s: &mut UiSession<Recorder>| {
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
+        // Only enabling asks the host to reveal the panel, including setup.
+        let reveals = s.state.requests.iter().filter(|r| matches!(r.kind, HostRequestKind::SoftProofSetup)).count();
+        assert_eq!(reveals, usize::from(s.proof_panel_mode() != ProofMode::Off));
+        for request in s.state.requests.clone() {
+            s.dispatch(UiAction::CompleteRequest { id: request.id, error: None }).unwrap();
+        }
+        let menu = s.application_menu(ApplicationMenu::View);
+        let item = menu.sections.iter().flatten().find(|i| i.label == "Proof").unwrap();
+        assert_eq!(item.selected, Some(s.proof_mode() != ProofMode::Off));
+        assert!(!item.hint.is_empty());
+    };
+    let checkpoint = s.engine.checkpoint();
+    for expected in [ProofMode::Sdr, ProofMode::Off, ProofMode::Sdr] {
+        toggle(&mut s);
+        assert_eq!(s.proof_mode(), expected);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+    s.select_proof_mode(ProofMode::Print).unwrap();
+    assert_eq!(s.proof_panel_mode(), ProofMode::Print);
+    assert_eq!(s.proof_mode(), ProofMode::Off, "no profile means no rendered print proof");
+    toggle(&mut s);
+    assert_eq!(s.proof_panel_mode(), ProofMode::Off, "Off cancels first-profile setup too");
+    toggle(&mut s);
+    assert_eq!(s.proof_panel_mode(), ProofMode::Print);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+    s.set_proof_recipe(Some(ProofRecipe::new("Printer".into(), ColorProfile::default()))).unwrap();
+    let saved = s.engine.document().clone();
+    let checkpoint = s.engine.checkpoint();
+    for expected in [ProofMode::Off, ProofMode::Print, ProofMode::Off] {
+        toggle(&mut s);
+        assert_eq!(s.proof_mode(), expected);
+    }
+    // Selection in the panel becomes the next menu toggle's remembered mode.
+    s.select_proof_mode(ProofMode::Sdr).unwrap();
+    s.select_proof_mode(ProofMode::Off).unwrap();
+    toggle(&mut s);
+    assert_eq!(s.proof_mode(), ProofMode::Sdr);
+    assert_eq!(s.engine.document(), &saved);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+
+    let mut s = session();
+    s.set_platform(Platform::Gtk);
+    toggle(&mut s);
+    assert_eq!(s.proof_panel_mode(), ProofMode::Print, "SDR artwork opens Print setup");
+    assert_eq!(s.proof_mode(), ProofMode::Off);
 }
