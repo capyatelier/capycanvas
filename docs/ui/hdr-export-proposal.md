@@ -1,8 +1,9 @@
 # HDR export: compact output choices
 
-Proposal for user review, 2026-09-18. This describes the next export expansion;
-HDR JPEG and gain-map AVIF/HEIF export are **not implemented** in the current
-Proof/tone-mapping review build.
+Implementation design, updated 2026-09-18. Linux now implements HDR JPEG and
+transparent gain-map AVIF with the pinned codec bundle. Qualification and known
+limits are recorded in [the implementation note](../history/color-management-proof-export-update.md)
+and the review README. HEIC encoding remains deferred.
 
 ## Main page
 
@@ -66,17 +67,13 @@ another modal wizard or a second export command.
   short compatibility sentence, not a warning block. The connected display does
   not determine file format, stored reference white or exported peak values.
 
-## What the repository actually supports
+## Implemented routes
 
-`layer-ui::export` and the GTK export navigator already provide SDR PNG/JPEG/TIFF,
-background choices and draft-preserving subpages. `photo/hdr_png.rs` supplies
-16-bit PQ PNG delivery. Current JPEG gain-map input is explicitly rejected in
-`photo/jpeg_markers.rs`; `photo/heif_io.rs` supplies SDR HEIF/AVIF decoding and
-rejects HDR. There is no completed gain-map export path to expose today.
-
-The new choices therefore require codec work and round-trip validation, not just
-new menu labels. Until ready, the review build keeps its functional SDR/PQ PNG
-choices; no clickable placeholders or disguised SDR exports.
+Shared Rust handles edited HDR and SDR rendition math, output-size policy and
+checked half-float reopening. GTK exposes gain-map choices only when the pinned
+Linux codec worker is installed. HDR native uses existing PQ PNG. SDR retains
+PNG/JPEG/TIFF. JPEG flattening currently offers white or black; a custom color
+swatch is deferred. Other hosts reject unsupported gain-map exports explicitly.
 
 ## Codec direction and evidence
 

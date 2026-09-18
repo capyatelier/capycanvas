@@ -12,6 +12,7 @@ mod art_layers;
 pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
 mod document_color_edit;
+pub use document_color_edit::ProofMode;
 #[path = "figures.rs"]
 pub(crate) mod figures;
 #[path = "operation.rs"]
@@ -90,6 +91,7 @@ pub struct UiSession<R: CanvasRenderer> {
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
+    sdr_gesture: Option<layer_core::color::hdr::SdrRendition>,
     navigator_preview: crate::navigator::Preview,
     filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
@@ -157,6 +159,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             touch: TouchGesture::default(),
             navigator_drag: None,
             effect_gesture: None,
+            sdr_gesture: None,
             navigator_preview: Default::default(),
             filter_previews: Default::default(),
             eyedropper: Default::default(),
@@ -3998,6 +4001,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn require_idle(&self) -> Result<(), String> {
         if self.input_pending
             || self.effect_gesture.is_some()
+            || self.sdr_gesture.is_some()
             || self.engine.has_active_stroke()
             || !self.layer_interaction.path.is_empty()
         {

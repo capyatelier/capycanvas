@@ -3,11 +3,31 @@ use super::*;
 use layer_core::color::RgbSpace;
 
 impl SnapshotRenderer {
+    pub fn write_gainmap(&mut self, output: impl std::io::Write, format: layer_color::photo::GainMapFormat, quality:u8, matte:Option<[f32;3]>, clip:bool) -> Result<layer_color::OutputStatistics,String> {
+        let rendition=self.sdr_rendition.ok_or("Gain-map delivery requires an HDR document")?;
+        let control=self.control.clone(); let resolution=self.output_resolution;
+        self.hdr_rows(|extent,space,read|layer_color::photo::write_gainmap_rows(output,extent,space,rendition,format,quality,resolution,matte,clip,control.cancellation_flag(),read))
+    }
     pub fn write_hdr_png(&mut self, output: impl std::io::Write, clip: bool) -> Result<layer_color::OutputStatistics, String> {
         let resolution = self.output_resolution;
         self.hdr_rows(|extent, space, read| layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read))
     }
 
+    /// Exact edited max-RGB in the same Rec.2020 domain as the SDR mapper.
+    /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
+    pub fn hdr_headroom(&mut self) -> Result<f32,String> {
+        let mut peak=1f32;
+        self.hdr_rows(|extent,space,read|{
+            let m=layer_core::color::hdr::to_bt2020(space);
+            let mut row=vec![[0.;4];extent[0] as usize];
+            for y in 0..extent[1]{read(y,&mut row)?;for p in &row{if p[3]>0.{
+                let v=layer_core::color::rgb::apply(m,[p[0] as f64/p[3] as f64,p[1] as f64/p[3] as f64,p[2] as f64/p[3] as f64]);
+                for c in v{if !c.is_finite(){return Err("Cannot measure non-finite HDR data".into());}peak=peak.max(c as f32);}
+            }}}
+            Ok(Default::default())
+        })?;
+        let headroom=peak.log2();if headroom>16.{return Err("Edited HDR range exceeds the SDR mapper's 16-stop range. Adjust exposure first.".into());}Ok(headroom)
+    }
     pub fn inspect_hdr_output(&mut self) -> Result<layer_color::OutputStatistics, String> {
         self.hdr_rows(|extent, space, read| layer_color::photo::inspect_hdr_rows(extent, space, read))
     }

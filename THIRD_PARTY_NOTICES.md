@@ -17,6 +17,16 @@ The narrow Capy Canvas C bridge uses the project's MIT OR Apache-2.0 terms.
 The libheif patch preserves source color metadata after RGB conversion and
 retains libheif's original license. See [codec provenance](vendor/README.md#heifavif-source-color-preservation).
 
+## Native HDR gain-map codecs
+
+The Linux photo-codec bundle also includes libultrahdr 2.0.0 (Apache-2.0),
+libaom 3.14.1 (BSD-2-Clause and the AOM patent license), and libjpeg-turbo 3.1.4.1
+(IJG, BSD-3-Clause and zlib licenses for the applicable components). The pinned
+manifest `tools/build/photo-codecs.json` lists exact archives, hashes and license
+files. The bundle copies those files and corresponding source archives into
+`share/doc/capycanvas-photo-codecs/`. The Capy codec process and bridge retain
+our MIT OR Apache-2.0 license; linking does not relicense the codec libraries.
+
 ## Oklab color conversion — MIT
 
 The `working_to_oklab` and `working_from_oklab` functions in

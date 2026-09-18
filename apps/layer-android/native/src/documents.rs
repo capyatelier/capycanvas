@@ -405,7 +405,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     let target = recipe.interpretation();
                     let mut out = BufWriter::new(input.ok_or("Missing export output")?);
                     match recipe.format {
-                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped => Err("HDR delivery is not enabled on this host".into()),
+                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped | layer_ui::ExportFormat::JpegHdr | layer_ui::ExportFormat::JpegHdrMapped | layer_ui::ExportFormat::AvifHdr | layer_ui::ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
                         layer_ui::ExportFormat::Png => renderer.write_png(
                             &mut out,
                             &target,

@@ -18,6 +18,8 @@ struct Image {
     hdr: bool,
     display_hdr: bool,
     range_blocked: bool,
+    transparent: Option<bool>,
+    fallback: Option<Box<Image>>,
 }
 fn thumbnail(
     gpu: &SnapshotGpu,
@@ -36,10 +38,17 @@ fn thumbnail(
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
     let mut range_blocked = false;
+    let mut transparent=None;
+    let mut fallback=None;
     let (preview, clipped) = if let Some(recipe) = output {
         recipe.validate()?;
         renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
-        if recipe.format.is_hdr() {
+        if let Some(format)=recipe.format.gainmap(){
+            let (preview,base,stats)=renderer.preview_gainmap_output([220,160],view.space(),headroom,format,recipe.jpeg_quality,recipe.background.matte())?;
+            range_blocked=stats.clipped_channels>0&&!recipe.format.maps_hdr_range();
+            fallback=Some(Box::new(present(base,false,false,None,false,None,None)));
+            (preview,Some(stats.clipped_channels))
+        } else if recipe.format.is_hdr() {
             let (preview, stats) = renderer.preview_hdr_output([220, 160], view.space(), headroom)?;
             range_blocked = stats.clipped_channels > 0 && !recipe.format.maps_hdr_range();
             (preview, Some(stats.clipped_channels))
@@ -50,8 +59,12 @@ fn thumbnail(
             (preview, Some(stats.clipped_channels))
         }
     } else {
-        (renderer.preview_document_for_display([220, 160], view.space(), headroom)?, None)
+        let (preview,alpha)=renderer.preview_document_with_coverage([220,160],view.space(),headroom)?;
+        transparent=Some(alpha);(preview,None)
     };
+    Ok(present(preview,display_hdr,hdr,clipped,range_blocked,transparent,fallback))
+}
+fn present(preview:layer_render_wgpu::snapshot::SnapshotPreview,display_hdr:bool,hdr:bool,clipped:Option<u64>,range_blocked:bool,transparent:Option<bool>,fallback:Option<Box<Image>>)->Image {
     let mut bytes = Vec::with_capacity(preview.pixels.len() * if display_hdr { 8 } else { 4 });
     // Match the canvas's linear alpha-over-checker. Opaque, tagged textures keep
     // GTK/theme composition from changing translucent artwork edges. HDR uses
@@ -73,14 +86,16 @@ fn thumbnail(
             bytes.push(255);
         }
     }
-    Ok(Image {
+    Image {
         extent: preview.extent,
         bytes,
         clipped,
         hdr,
         display_hdr,
         range_blocked,
-    })
+        transparent,
+        fallback,
+    }
 }
 
 struct Pending {
@@ -110,6 +125,9 @@ pub(super) struct Comparison {
     serial: Cell<u64>,
     pub ready: Cell<bool>,
     pub range_exceeded: Cell<bool>,
+    pub has_transparency: Cell<Option<bool>>,
+    show_sdr: Cell<bool>,
+    textures: RefCell<[Option<gtk::gdk::Texture>;2]>,
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
@@ -175,6 +193,9 @@ impl Comparison {
             serial: Cell::new(0),
             ready: Cell::new(false),
             range_exceeded: Cell::new(false),
+            has_transparency: Cell::new(None),
+            show_sdr: Cell::new(false),
+            textures: RefCell::new([None,None]),
             changed: RefCell::new(None),
         })
     }
@@ -222,6 +243,12 @@ impl Comparison {
                 glib::ControlFlow::Continue
             }
         ));
+    }
+    pub fn show_fallback(&self,show:bool){
+        self.show_sdr.set(show);
+        if let Some(texture)=&self.textures.borrow()[usize::from(show)]{self.after.set_paintable(Some(texture));}
+        if show {self.labels[1].set_label("SDR fallback");}
+        else {self.labels[1].set_label(if self.headroom.get()>1.{"HDR output"}else{"HDR output (SDR display)"});}
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
         let hdr_document = snapshot.project.document.color.depth.is_float();
@@ -299,7 +326,7 @@ impl Comparison {
                         view,
                         headroom,
                         next.output,
-                    )?;
+                    );
                     Ok::<_, String>((before, after))
                 })
                 .await
@@ -311,30 +338,35 @@ impl Comparison {
                 }
                 match result {
                     Ok((before, after)) => {
-                        let set = |picture: &gtk::Picture, image: Image| {
-                            let texture = if image.display_hdr {
+                        let texture = |image: Image| {
+                            if image.display_hdr {
                                 gtk::gdk::MemoryTextureBuilder::new()
                                     .set_width(image.extent[0] as i32).set_height(image.extent[1] as i32)
                                     .set_format(gtk::gdk::MemoryFormat::R16g16b16a16Float)
                                     .set_stride(image.extent[0] as usize * 8)
                                     .set_color_state(&gtk::gdk::ColorState::rec2100_linear())
                                     .set_bytes(Some(&glib::Bytes::from_owned(image.bytes))).build()
-                            } else { view.rgba8(image.extent, image.bytes) };
-                            picture.set_paintable(Some(&texture));
+                            } else { view.rgba8(image.extent, image.bytes) }
                         };
                         if let Some(before) = before {
-                            set(&this.before, before);
+                            this.has_transparency.set(before.transparent);
+                            this.before.set_paintable(Some(&texture(before)));
                             this.before_ready.set(true);
                         }
+                        let mut after=match after {Ok(after)=>after,Err(error)=>{this.status.set_label(&error);this.mark_ready(false);continue;}};
                         let ready = !after.range_blocked;
                         this.range_exceeded.set(after.range_blocked);
-                        let description = if after.range_blocked { "Some colors exceed HDR PNG’s range. Adjust the artwork or enable clipping below." } else if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
+                        let description = if after.range_blocked { "Some colors exceed this format’s HDR range. Adjust the artwork or enable clipping below." } else if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
                             Some(0) => "Output preview",
                             Some(_) => "Output preview · some colors exceed the output gamut",
                             None => "Complete canvas",
                         } };
                         let viewing = if after.display_hdr { "HDR view".to_string() } else { format!("{} view", view.space().name()) };
-                        set(&this.after, after);
+                        let fallback=after.fallback.take().map(|i|texture(*i));
+                        let hdr=texture(after);
+                        this.after.set_paintable(Some(if this.show_sdr.get(){fallback.as_ref().unwrap_or(&hdr)}else{&hdr}));
+                        *this.textures.borrow_mut()=[Some(hdr),fallback];
+                        if this.show_sdr.get(){this.labels[1].set_label("SDR fallback");}
                         this.status.set_label(&format!("{description} · {viewing}"));
                         this.mark_ready(ready);
                     }

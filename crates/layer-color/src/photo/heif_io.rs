@@ -65,6 +65,10 @@ pub(super) fn read(
         limits.dimension.min(32768),
         cancelled,
     )?;
+    if photo.info.gain_map != 0 {
+        let source=super::gainmap::read_gainmap(std::io::Cursor::new(photo.encoded()),GainMapFormat::Avif,limits,cancelled)?;
+        return Ok(DecodedPhoto {source,first_frame:false,primary_image:false});
+    }
     require_sdr(&photo.info)?;
     let extent = [photo.info.width, photo.info.height];
     super::raster_io::frame_bytes(

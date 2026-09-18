@@ -104,7 +104,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, PreparedWorkspace, UiSession};
+pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession};
 pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
@@ -786,9 +786,9 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::SdrRendition => "SDR Appearance…",
+            Self::SdrRendition => "Proof SDR",
             Self::PreviewSdr => "Preview SDR",
-            Self::SoftProofSetup => "Print Proof…",
+            Self::SoftProofSetup => "Proof…",
             Self::SoftProof => "Proof Colors",
             Self::GamutWarning => "Gamut Warning",
             Self::Histogram => "Histogram…",

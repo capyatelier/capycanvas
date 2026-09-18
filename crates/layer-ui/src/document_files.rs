@@ -491,7 +491,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
-        if self.operation.active()
+        if self.sdr_gesture.is_some()
+            || self.operation.active()
             || self.region_tools.busy()
             || !self.layer_interaction.path.is_empty()
             || self

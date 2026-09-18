@@ -35,6 +35,7 @@ pub(super) struct Info {
     pub plane_turns: u32,
     pub mirror: u32,
     pub first_frame: u32,
+    pub gain_map: u32,
 }
 pub(super) type Cancel = unsafe extern "C" fn(*mut c_void) -> c_int;
 struct Api {
@@ -95,7 +96,7 @@ fn api() -> Result<&'static Api, String> {
             let size = symbol!("capy_photo_info_size", unsafe extern "C" fn() -> usize);
             let decoder = symbol!("capy_photo_decoder", unsafe extern "C" fn(c_int) -> c_int);
             let version = symbol!("capy_photo_version", unsafe extern "C" fn() -> *const c_char);
-            if abi() != 2 || size() != std::mem::size_of::<Info>() {
+            if abi() != 3 || size() != std::mem::size_of::<Info>() {
                 return Err("The HEIF/AVIF codec bridge is incompatible".into());
             }
             let version = version();
@@ -149,6 +150,7 @@ unsafe extern "C" fn cancel(data: *mut c_void) -> c_int {
     )
 }
 impl Photo {
+    pub(super) fn encoded(&self) -> &[u8] { &self._encoded }
     pub fn open(
         encoded: Vec<u8>,
         budget: usize,

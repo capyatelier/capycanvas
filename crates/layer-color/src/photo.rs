@@ -17,6 +17,8 @@ mod metadata_tests;
 mod orientation;
 mod png_io;
 mod hdr_png;
+mod gainmap;
+pub use gainmap::{GainMapFormat, GainMapMetadata, gainmap_available, write_gainmap_rows, preview_gainmap_rows};
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
 mod tiff_io;
 mod raster_io;
@@ -163,7 +165,7 @@ fn read_photo_impl(
     let source = if signature == *b"\x89PNG\r\n\x1a\n" {
         png_io::read_with_cancel(input, limits, _cancelled)
     } else if signature[..2] == [0xff, 0xd8] {
-        read_jpeg(input, limits)
+        jpeg_io::read_jpeg_with_cancel(input, limits, _cancelled)
     } else if matches!(
         &signature[..4],
         b"II\x2a\x00" | b"MM\x00\x2a" | b"II\x2b\x00" | b"MM\x00\x2b"

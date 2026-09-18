@@ -122,7 +122,7 @@ fn native_hdr_delivery_failure_and_cancellation_preserve_destination() {
 #[allow(deprecated)]
 fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u32) {
     invoke(w, CommandId::ExportDocument);
-    combo(w, "export-range").set_selected(u32::from(format >= 3));
+    combo(w, "export-output").set_selected(u32::from(format >= 3));
     combo(w, "export-format").set_selected(format.min(2));
     if format >= 3 {
         assert!(!combo(w, "export-depth").is_visible());
@@ -304,54 +304,33 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo, CommandId::Redo);
     ready(&photo);
     assert_eq!(pixels(&photo), painted);
-    // Cancel is inert; applying the authored rendition is one reversible edit.
+    // Live Proof edits are saved immediately; Off changes viewing only.
     let default = project(&photo).document.sdr_rendition;
-    let checkpoint = photo.gpu.borrow().as_ref().unwrap().session.engine().checkpoint();
     invoke(&photo, CommandId::SdrRendition);
     let window = appearance(&photo);
-    appearance_exposure(&window, -2.);
-    assert_eq!(project(&photo).document.sdr_rendition, default);
-    assert_eq!(photo.gpu.borrow().as_ref().unwrap().session.engine().checkpoint(), checkpoint);
-    assert_eq!(state(&photo).sdr_appearance_preview.unwrap().exposure, -2.);
-    let compare = find_named(window.upcast_ref(), "sdr-appearance-compare").unwrap().downcast::<gtk::CheckButton>().unwrap();
-    compare.set_active(true); pump(50);
-    assert_eq!(state(&photo).sdr_appearance_preview, Some(default));
-    compare.set_active(false); pump(50);
-    assert_eq!(state(&photo).sdr_appearance_preview.unwrap().exposure, -2.);
-    let method = find_named(window.upcast_ref(), "sdr-appearance-method").unwrap().downcast::<gtk::DropDown>().unwrap();
-    for (index, expected) in [(1,layer_core::color::hdr::SdrMethod::Scale),(2,layer_core::color::hdr::SdrMethod::Clip),(0,layer_core::color::hdr::SdrMethod::ToneMap)] {
-        method.set_selected(index); pump(50);
-        assert_eq!(state(&photo).sdr_appearance_preview.unwrap().method,expected);
-        assert_eq!(pixels(&photo),painted);
+    for removed in ["sdr-appearance-apply","sdr-appearance-cancel","sdr-appearance-compare","proof-preview-sdr","proof-advanced"] {
+        assert!(find_named(photo.proof_panel.root.upcast_ref(),removed).is_none());
     }
-    let headroom = find_named(window.upcast_ref(), "sdr-appearance-headroom").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
-    headroom.set_value(4.); headroom.emit_by_name::<()>("value-changed",&[]); pump(50);
-    assert_eq!(state(&photo).sdr_appearance_preview.unwrap().headroom,4.);
-    appearance_button(&window, "reset");
-    assert_eq!(state(&photo).sdr_appearance_preview, Some(default));
-    appearance_exposure(&window, -1.);
-    appearance_button(&window, "cancel");
-    finish(&photo);
-    assert_eq!(project(&photo).document.sdr_rendition, default);
-    invoke(&photo, CommandId::SdrRendition);
-    let window = appearance(&photo);
-    appearance_exposure(&window, -0.5);
-    capture_ui(&photo, &directory, "sdr-appearance-canvas.png");
-    crate::snapshot_window(&window, 1.).save_to_png(directory.join("sdr-appearance-controls.png")).unwrap();
-    appearance_button(&window, "apply");
-    finish(&photo);
-    let mut recipe = SdrRendition {
-        exposure: -0.5,
-        ..default
-    };
-    assert_eq!(project(&photo).document.sdr_rendition, recipe);
-    assert_eq!(pixels(&photo), painted);
-    invoke(&photo, CommandId::Undo);
-    ready(&photo);
-    assert_eq!(project(&photo).document.sdr_rendition, default);
-    invoke(&photo, CommandId::Redo);
-    ready(&photo);
-    assert_eq!(project(&photo).document.sdr_rendition, recipe);
+    appearance_exposure(&window,-2.);
+    assert_eq!(project(&photo).document.sdr_rendition.exposure,-2.);
+    assert!(state(&photo).sdr_appearance_preview.is_none());
+    let mode=find_named(photo.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+    let saved=project(&photo).document.sdr_rendition;
+    mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
+    assert_eq!(project(&photo).document.sdr_rendition,saved);
+    mode.set_active_name(Some("sdr"));pump(50);
+    let method=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").unwrap().downcast::<gtk::DropDown>().unwrap();
+    for (index,expected) in [(1,layer_core::color::hdr::SdrMethod::ToneMap),(0,layer_core::color::hdr::SdrMethod::Bt2390)] {
+        method.set_selected(index);pump(50);assert_eq!(project(&photo).document.sdr_rendition.method,expected);assert_eq!(pixels(&photo),painted);
+    }
+    appearance_button(&window,"reset");assert_eq!(project(&photo).document.sdr_rendition,default);
+    appearance_exposure(&window,-0.5);
+    capture_ui(&photo,&directory,"sdr-appearance-canvas.png");
+    crate::snapshot_window(&window,1.).save_to_png(directory.join("sdr-appearance-controls.png")).unwrap();
+    let mut recipe=SdrRendition{exposure:-0.5,..default};
+    assert_eq!(project(&photo).document.sdr_rendition,recipe);assert_eq!(pixels(&photo),painted);
+    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
+    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,recipe);
     // The host eyedropper samples artwork, independent of mapped presentation.
     photo.dispatch(UiAction::Layer {
         action: LayerAction::Tool {
@@ -418,17 +397,17 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     ready(&restored);
     assert_eq!(pixels(&restored), painted);
     invoke(&restored, CommandId::ExportDocument);
-    combo(&restored, "export-range").set_selected(0);
+    combo(&restored, "export-output").set_selected(0);
     response(&restored, "appearance");
     let window = appearance(&restored);
     appearance_exposure(&window, -0.75);
-    appearance_button(&window, "apply");
+    find_named(restored.proof_panel.root.upcast_ref(),"proof-return-export").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
     recipe.exposure = -0.75;
     assert_eq!(project(&restored).document.sdr_rendition, recipe);
     let deadline = Instant::now() + Duration::from_secs(30);
     while restored.window.visible_dialog().is_none() { pump(20); assert!(Instant::now() < deadline); }
-    assert_eq!(combo(&restored, "export-range").selected(), 0);
-    combo(&restored, "export-range").set_selected(1);
+    assert_eq!(combo(&restored, "export-output").selected(), 0);
+    combo(&restored, "export-output").set_selected(1);
     pump(500);
     capture_ui(&restored, &directory, "hdr-export.png");
     response(&restored, "cancel"); finish(&restored);
@@ -491,7 +470,7 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     w.window.present(); ready(&w);
     let original = snapshot(&w);
     invoke(&w, CommandId::ExportDocument);
-    combo(&w, "export-range").set_selected(1);
+    combo(&w, "export-output").set_selected(1);
     let dialog = w.window.visible_dialog().unwrap();
     let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -580,7 +559,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     capture_ui(&w, &output, "export-presets.png");
     super::new_photo::export_page(&w, "main");
     assert_eq!(combo(&w, "export-depth").selected(), 1);
-    combo(&w, "export-range").set_selected(1);
+    combo(&w, "export-output").set_selected(1);
     let deadline = Instant::now() + Duration::from_secs(30);
     while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline); }
     assert!(!find_named(dialog.upcast_ref(), "export-open-color").unwrap().is_visible());
@@ -639,6 +618,7 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
         let index = texture.height() as usize / 2 * stride + texture.width() as usize / 2 * 16;
         std::array::from_fn::<_, 4, _>(|c| f32::from_ne_bytes(bytes[index+c*4..index+c*4+4].try_into().unwrap()))
     };
+    combo(&w,"export-output").set_selected(0);
     wait();
     pump(250); // Let GTK snapshot the newly published texture.
     let master = texture("color-preview-before");
@@ -659,7 +639,7 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
         assert_ne!(master.color_state(), gdk::ColorState::rec2100_linear());
         assert!(pixel(&master)[0] <= 1.);
     }
-    combo(&w, "export-range").set_selected(1); wait();
+    combo(&w, "export-output").set_selected(1); wait();
     if physical {
         let output = texture("color-preview-after");
         assert_eq!(output.color_state(), gdk::ColorState::rec2100_linear());
@@ -702,7 +682,7 @@ fn large_export_preview_and_cancellation(sdr:bool) {
     w.window.present(); ready(&w);
     let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
     invoke(&w, CommandId::ExportDocument);
-    combo(&w, "export-range").set_selected(u32::from(!sdr));
+    combo(&w, "export-output").set_selected(u32::from(!sdr));
     let dialog = w.window.visible_dialog().unwrap();
     let after = find_named(dialog.upcast_ref(), "color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
     let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
@@ -725,7 +705,7 @@ fn large_export_preview_and_cancellation(sdr:bool) {
         start.elapsed().as_secs_f64()*1000., heartbeat.borrow().1, heartbeat.borrow().2 as f64/1000., status.text());
     assert!(heartbeat.borrow().1 > 10, "no UI heartbeat while previewing");
     assert!(heartbeat.borrow().2 < 500_000, "main-thread stall during preview");
-    for _ in 0..8 { combo(&w, "export-range").set_selected(0); combo(&w, "export-range").set_selected(1); }
+    for _ in 0..8 { combo(&w, "export-output").set_selected(0); combo(&w, "export-output").set_selected(1); }
     pump(50);
     let cancel = Instant::now();
     response(&w, "cancel"); finish(&w);
@@ -733,4 +713,47 @@ fn large_export_preview_and_cancellation(sdr:bool) {
     assert!(cancel.elapsed().as_secs_f64() < 3.);
     assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().revision, revision);
     w.window.destroy(); pump(100);
+}
+
+#[test]
+#[ignore = "isolated Wayland display, GPU and pinned HDR codecs"]
+#[allow(deprecated)]
+fn native_gainmap_export_choices_preview_flatten_and_reopen() {
+    use layer_core::color::{ColorProfile, source::*};
+    assert!(layer_color::photo::gainmap_available());
+    let app=native_test_app("art.capycanvas.GainmapExport");
+    let output=std::path::Path::new("../../artifacts/color-m4/gainmap-ui");std::fs::create_dir_all(output).unwrap();let output=output.canonicalize().unwrap();
+    for transparent in [false,true] {
+        let mut p=new_drawing(64,48).unwrap();p.document.color.depth=SampleDepth::F16;p.document.layers[1].visible=false;
+        let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
+        for _ in 0..48{let mut row=Vec::new();for x in 0..64{let a=if transparent{x as f32/63.}else{1.};let v=layer_core::color::hdr::encode_pixel([4.,0.5,0.2,a]).unwrap();row.extend(v.into_iter().flat_map(u16::to_le_bytes));}source.push_row(&row).unwrap();}
+        p.document.layers[0].source=Some(std::sync::Arc::new(source.finish().unwrap()));
+        let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);
+        invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"auto");
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {pump(20);let b=find_named(panel.upcast_ref(),"sdr-appearance-auto").unwrap().downcast::<gtk::Button>().unwrap();if b.label().as_deref()==Some("Auto"){break;}assert!(Instant::now()<deadline);}
+        let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().fold(1f64,f64::max).log2();
+        assert!((project(&w).document.sdr_rendition.headroom as f64-expected_peak).abs()<0.002);
+        let original=snapshot(&w);
+        invoke(&w,CommandId::ExportDocument);
+        let wait=|| {let deadline=Instant::now()+Duration::from_secs(40);while !super::new_photo::export_enabled(&w){pump(20);assert!(Instant::now()<deadline,"encoded preview");}};
+        wait();pump(300);wait();
+        assert_eq!(combo(&w,"export-output").selected(),if transparent{3}else{2});
+        let dialog=w.window.visible_dialog().unwrap();
+        assert!(!find_named(dialog.upcast_ref(),"export-format").unwrap().is_visible());
+        let toggle=find_named(dialog.upcast_ref(),"export-rendition-view").unwrap().downcast::<adw::ToggleGroup>().unwrap();
+        let picture=find_named(dialog.upcast_ref(),"color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
+        let hdr=picture.paintable().unwrap();toggle.set_active_name(Some("sdr"));pump(30);assert_ne!(picture.paintable().unwrap(),hdr);toggle.set_active_name(Some("hdr"));pump(30);assert_eq!(picture.paintable().unwrap(),hdr);
+        capture_ui(&w,&output,if transparent{"avif-main.png"}else{"jpeg-main.png"});
+        let name=if transparent{"Transparent edited HDR.avif"}else{"Opaque edited HDR.jpg"};
+        response(&w,"export");let file=chooser();file.set_current_folder(Some(&gtk::gio::File::for_path(&output))).unwrap();file.set_current_name(name);pump(150);file.response(gtk::ResponseType::Accept);finish(&w);
+        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(name)).unwrap()),Default::default()).unwrap();assert_eq!(source.interpretation.depth,SampleDepth::F16);
+        let mut bytes=vec![0;source.row_bytes()];source.rows().read(0,&mut bytes).unwrap();let i=32*8;let p=layer_core::color::hdr::decode_pixel(std::array::from_fn(|c|u16::from_le_bytes([bytes[i+c*2],bytes[i+c*2+1]]))).unwrap();assert!(p[0]>3.7&&p[0]<4.3,"{p:?}");assert!((p[3]-if transparent{32./63.}else{1.}).abs()<0.001);
+        if transparent {
+            invoke(&w,CommandId::ExportDocument);combo(&w,"export-output").set_selected(2);
+            pump(700);assert!(!super::new_photo::export_enabled(&w));
+            let dialog=w.window.visible_dialog().unwrap();let flatten=find_named(dialog.upcast_ref(),"export-flatten").unwrap().downcast::<adw::SwitchRow>().unwrap();assert!(flatten.is_visible());flatten.set_active(true);wait();capture_ui(&w,&output,"jpeg-flatten.png");response(&w,"cancel");finish(&w);
+        }
+        assert_eq!(snapshot(&w),original);w.window.destroy();pump(100);
+    }
 }

@@ -1,5 +1,7 @@
 # HDR → SDR mapping and compact Proof panel
 
+**Superseded defaults/UI:** see [the live Proof/export update](color-management-proof-export-update.md). This note retains the browser research and earlier validation history.
+
 Review update, 2026-09-18. Source: `~/code/capycanvas3`, branch `capycanvas3`.
 Checkpoints are pushed to `origin/capycanvas3` for review; main is not updated.
 Launch `artifacts/color-m4/review/launch.sh` for user review.

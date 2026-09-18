@@ -101,7 +101,6 @@ pub(super) fn profile_action(w: &Rc<Workspace>, prefix: &str, action: &str) {
 }
 
 pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &str, action: &str) {
-    if let Some(menu) = find_named(window.upcast_ref(), "proof-advanced").and_then(|w| w.downcast::<gtk::MenuButton>().ok()) { menu.popdown(); }
 
     if prefix == "export" {
         let dialog = window.visible_dialog().unwrap();
@@ -170,26 +169,6 @@ pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
         .into()
 }
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
-    if w.window.visible_dialog().is_none() {
-        if let Some(menu) = find_named(w.proof_panel.root.upcast_ref(), "proof-advanced").and_then(|w| w.downcast::<gtk::MenuButton>().ok()) { menu.popdown(); }
-        let name = match id { "apply" => "proof-apply", "cancel" => "proof-revert", _ => panic!("unexpected Proof action: {id}") };
-        let b=find_named(w.proof_panel.root.upcast_ref(),name).unwrap().downcast::<gtk::Button>().unwrap();
-        if id=="apply" {assert!(b.is_sensitive());}
-        b.emit_clicked();
-        let deadline=Instant::now()+Duration::from_secs(40);
-        loop {
-            pump(20);
-            let busy=find_named(w.proof_panel.root.upcast_ref(),"proof-cancel").unwrap().is_visible();
-            if !busy {break;}
-            assert!(Instant::now()<deadline,"Proof preparation");
-        }
-        if id=="apply" {
-            let error=find_named(w.proof_panel.root.upcast_ref(),"proof-setup-error").unwrap().downcast::<gtk::Label>().unwrap();
-            assert!(!error.is_visible(),"{}",error.text());
-        }
-        pump(150);
-        return;
-    }
     if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {
         export_page(w, "main");
         let dialog = w.window.visible_dialog().unwrap();

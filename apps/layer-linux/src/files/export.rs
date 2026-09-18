@@ -94,6 +94,7 @@ pub(crate) fn write_snapshot(
             |file| {
                 let statistics = match recipe.format {
                     ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(file, recipe.format.maps_hdr_range()),
+                    ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => renderer.write_gainmap(file,recipe.format.gainmap().unwrap(),recipe.jpeg_quality,recipe.background.matte(),recipe.format.maps_hdr_range()),
                     ExportFormat::Png => renderer.write_png(
                         file,
                         &target,
@@ -173,8 +174,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     export.connect_clicked(glib::clone!(#[weak] dialog, #[strong] response, move |_| {
         response.set("export"); dialog.close();
     }));
-    let appearance = adw::ActionRow::builder().title("SDR Appearance")
-        .subtitle("Saved with this drawing").activatable(true).build();
+    let appearance = adw::ActionRow::builder().title("Proof")
+        .subtitle("SDR appearance").activatable(true).build();
     appearance.set_widget_name("export-appearance");
     appearance.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     appearance.connect_activated(glib::clone!(#[weak] dialog, #[strong] response, move |_| {
@@ -343,13 +344,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     });
     refresh_size();
     let delivery_group = adw::PreferencesGroup::new();
-    let range = combo(&delivery_group, "Dynamic range", "export-range", &["SDR", "HDR"]);
+    let gainmaps=layer_color::photo::gainmap_available();
+    let range = combo(&delivery_group, "Output", "export-output", if gainmaps { &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF"] } else { &["SDR", "HDR native · PNG"] });
     range.set_visible(document.depth.is_float());
     let format = combo(&delivery_group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
-    let hdr_format = adw::ActionRow::builder().title("PNG · HDR")
-        .subtitle("BT.2020 PQ · 16-bit · transparency retained").visible(false).build();
-    hdr_format.set_widget_name("export-hdr-format");
-    delivery_group.add(&hdr_format);
+    let output_hint=gtk::Label::builder().wrap(true).xalign(0.).build();
+    output_hint.add_css_class("dim-label");
+    let flatten=adw::SwitchRow::builder().title("Flatten transparency").visible(false).build();
+    flatten.set_widget_name("export-flatten");delivery_group.add(&flatten);
+    let rendition_view=crate::panel_controls::segmented("export-rendition-view",&[("hdr","HDR"),("sdr","SDR")]);
+    rendition_view.set_visible(false);
     let color_group = adw::PreferencesGroup::new();
     let profile = ProfileChooser::new(w, "Delivery profile", "export-space", document.space, ProfilePurpose::Output);
     let space = profile.row.clone();
@@ -386,7 +390,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         }
     ));
     let quality = adw::SpinRow::with_range(1., 100., 1.);
-    quality.set_title("JPEG quality");
+    quality.set_title("Quality");
     quality.set_widget_name("export-jpeg-quality");
     quality.set_value(90.);
     quality.set_snap_to_ticks(true);
@@ -412,6 +416,30 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         ],
     );
     advanced.add_row(&intent);
+    let bpc=adw::SwitchRow::builder().title("Black point compensation").build();
+    bpc.set_widget_name("export-bpc");advanced.add_row(&bpc);
+    intent.connect_selected_notify(glib::clone!(#[weak] bpc,move |intent|{bpc.set_sensitive(intent.selected()!=3);if intent.selected()==3{bpc.set_active(false);}}));
+    let print_delivery=adw::ActionRow::builder().title("Use print profile").activatable(true).visible(snapshot.project.document.proof.is_some()).build();
+    print_delivery.set_widget_name("export-print-profile");
+    print_delivery.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    color_group.add(&print_delivery);
+    if let Some(proof)=snapshot.project.document.proof.clone(){
+        print_delivery.set_subtitle(&proof.name);
+        let restore=profile.restore.clone();
+        print_delivery.connect_activated(glib::clone!(#[weak] print_delivery, #[weak] intent, #[weak] bpc, #[weak(rename_to=validation_error)] profile.error, move |_|{
+            print_delivery.set_sensitive(false);
+            let proof=proof.clone();let restore=restore.clone();let intent=intent.clone();let bpc=bpc.clone();let row=print_delivery.clone();let error=validation_error.clone();
+            glib::spawn_future_local(async move{
+                let result=gio::spawn_blocking(move || {
+                    let p=ExportProfile{channels:layer_color::profile_channels(&proof.profile)?,profile:proof.profile,name:proof.name};
+                    ProfilePurpose::Output.validate(&p,document.space)?;
+                    Ok::<_,String>((p,proof.conversion))
+                }).await.map_err(|_|"Print profile validation failed".to_string()).and_then(|r|r);
+                match result {Ok((p,conversion))=>{restore(p);intent.set_selected(match conversion.intent {RenderingIntent::RelativeColorimetric=>0,RenderingIntent::Perceptual=>1,RenderingIntent::Saturation=>2,RenderingIntent::AbsoluteColorimetric=>3});bpc.set_active(conversion.black_point_compensation);},Err(e)=>{error.set_label(&e);error.set_visible(true);}}
+                row.set_sensitive(true);
+            });
+        }));
+    }
     let dither = adw::SwitchRow::builder()
         .title("Reduce banding")
         .subtitle("Dither 8-bit gradients")
@@ -456,18 +484,24 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         }
     ));
     let sync_range: Rc<dyn Fn()> = Rc::new(glib::clone!(
-        #[weak] range, #[weak] format, #[weak] hdr_format, #[weak] space,
+        #[weak] range, #[weak] format, #[weak] output_hint, #[weak] flatten, #[weak] rendition_view, #[weak] space,
         #[weak] depth, #[weak] background, #[weak] quality, #[weak] jpeg_hint,
-        #[weak] intent, #[weak] dither, #[weak] appearance, #[weak] color_link,
+        #[weak] intent, #[weak] dither, #[weak] appearance, #[weak] color_link, #[weak] advanced_group, #[weak] print_delivery,
         move || {
-            let hdr = range.selected() == 1;
+            let choice=range.selected();
+            let hdr = choice != 0;
+            advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && print_delivery.subtitle().is_some());
             for widget in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), depth.upcast_ref(), background.upcast_ref(), intent.upcast_ref()] { widget.set_visible(!hdr); }
-            hdr_format.set_visible(hdr);
-            appearance.set_visible(document.depth.is_float() && !hdr);
-            color_link.set_visible(!hdr);
+            output_hint.set_label(match choice {1=>"HDR pixels for HDR-aware software.",2=>"HDR on supported devices; SDR on older viewers.",3=>"Keeps HDR and transparency. Requires a compatible viewer.",_=>"Standard image for everyday use."});
+            output_hint.set_visible(document.depth.is_float());
+            rendition_view.set_visible(choice>=2);
+            flatten.set_visible(choice==2);
+            appearance.set_visible(document.depth.is_float() && choice!=1);
+            color_link.set_visible(!hdr || choice==2);
+            background.set_visible(!hdr || choice==2);
             depth.set_visible(!hdr && format.selected() != 2);
             dither.set_visible(!hdr && depth.selected() == 0);
-            quality.set_visible(!hdr && format.selected() == 2);
+            quality.set_visible(choice>=2 || (!hdr && format.selected() == 2));
             jpeg_hint.set_visible(!hdr && format.selected() == 2);
         }
     ));
@@ -525,6 +559,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
             #[weak]
             clip_hdr,
             #[weak]
+            flatten,
+            #[weak]
             size,
             #[weak]
             depth,
@@ -535,23 +571,26 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
             #[weak]
             dither,
             #[weak]
+            bpc,
+            #[weak]
             enlarge,
             #[strong]
             updating,
             #[strong] apply_background,
             move |recipe: &ExportRecipe| {
                 updating.set(true);
-                range.set_selected(u32::from(recipe.format.is_hdr()));
+                range.set_selected(match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())});
+                flatten.set_active(recipe.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg)&&recipe.background!=ExportBackground::Preserve);
                 clip_hdr.set_active(recipe.format.maps_hdr_range());
                 format.set_selected(match recipe.format {
                     ExportFormat::Png => 0,
                     ExportFormat::Tiff => 1,
                     ExportFormat::Jpeg => 2,
-                    ExportFormat::PngHdr | ExportFormat::PngHdrMapped => 0,
+                    ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => 0,
                 });
                 restore_profile(recipe.profile.clone());
                 depth.set_selected(u32::from(recipe.depth == SampleDepth::U16));
-                if !recipe.format.is_hdr() { apply_background(&recipe.clone().draft(ExportDraftAction::Refresh)); }
+                if !recipe.format.is_hdr() || recipe.format.gainmap().is_some() { apply_background(&recipe.clone().draft(ExportDraftAction::Refresh)); }
                 quality.set_value(f64::from(recipe.jpeg_quality));
                 match recipe.resolution {
                     ExportResolution::Master => resolution.set_selected(0),
@@ -568,6 +607,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
                     RenderingIntent::AbsoluteColorimetric => 3,
                 });
                 dither.set_active(recipe.encoding.dither != OutputDither::None);
+                bpc.set_active(recipe.encoding.conversion.black_point_compensation);
                 match recipe.size {
                     ExportSize::Original => size.set_selected(0),
                     ExportSize::Fit {
@@ -633,7 +673,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     space.connect_subtitle_notify(glib::clone!(#[weak] preset, #[strong] updating, move |_| {
         if !updating.get() { updating.set(true); preset.set_selected(3); updating.set(false); }
     }));
-    for row in [&dither, &enlarge, &clip_hdr] {
+    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify(glib::clone!(
             #[weak]
             preset,
@@ -699,6 +739,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         #[weak]
         clip_hdr,
         #[weak]
+        flatten,
+        #[weak]
         depth,
         #[weak]
         quality,
@@ -706,6 +748,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         intent,
         #[weak]
         dither,
+        #[weak]
+        bpc,
         #[strong]
         selected_profile,
         #[strong]
@@ -719,14 +763,19 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
             let recipe = ExportRecipe {
                 size: output_size(),
                 resolution: chosen_resolution(),
-                format: if range.selected() == 1 { if clip_hdr.is_active() { ExportFormat::PngHdrMapped } else { ExportFormat::PngHdr } } else { FORMATS[format.selected().min(2) as usize] },
-                profile: if range.selected() == 1 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
+                format: match (range.selected(),clip_hdr.is_active()) {
+                    (1,false)=>ExportFormat::PngHdr,(1,true)=>ExportFormat::PngHdrMapped,
+                    (2,false)=>ExportFormat::JpegHdr,(2,true)=>ExportFormat::JpegHdrMapped,
+                    (3,false)=>ExportFormat::AvifHdr,(3,true)=>ExportFormat::AvifHdrMapped,
+                    _=>FORMATS[format.selected().min(2) as usize],
+                },
+                profile: if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
                 depth: if depth.selected() == 0 {
                     SampleDepth::U8
                 } else {
                     SampleDepth::U16
                 },
-                background: read_background(),
+                background: if range.selected()==2 {if flatten.is_active(){match read_background(){ExportBackground::Preserve=>ExportBackground::White,b=>b}}else{ExportBackground::Preserve}} else {read_background()},
                 jpeg_quality: quality.value() as u8,
                 encoding: OutputEncoding {
                     conversion: ConversionOptions {
@@ -736,7 +785,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
                             3 => RenderingIntent::AbsoluteColorimetric,
                             _ => RenderingIntent::RelativeColorimetric,
                         },
-                        black_point_compensation: false,
+                        black_point_compensation: bpc.is_active(),
                     },
                     dither: if depth.selected() == 0 && dither.is_active() {
                         OutputDither::Stochastic8
@@ -757,6 +806,12 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     let comparison =
         super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color());
     comparison.set_headroom(super::preview::display_headroom(w));
+    rendition_view.connect_active_name_notify(glib::clone!(#[weak] comparison, move |group| comparison.show_fallback(group.active_name().as_deref()==Some("sdr"))));
+    let recommend=Rc::new(std::cell::Cell::new(false));
+    range.connect_selected_notify(glib::clone!(#[strong] recommend, move |_| recommend.set(false)));
+    range.connect_selected_notify(glib::clone!(#[weak] rendition_view, #[weak] comparison, move |range| {
+        if range.selected()<2 {rendition_view.set_active_name(Some("hdr"));comparison.show_fallback(false);}
+    }));
     let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[weak]
         export,
@@ -773,9 +828,14 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         }
     ));
     *comparison.changed.borrow_mut() = Some(Box::new(glib::clone!(
-        #[strong] validate, #[weak] comparison, #[weak] clip_hdr, #[weak] range,
+        #[strong] validate, #[strong] recommend, #[weak] comparison, #[weak] clip_hdr, #[weak] range, #[weak] flatten, #[weak] color_link,
         move |_| {
-            clip_hdr.set_visible(range.selected() == 1 && (clip_hdr.is_active() || comparison.range_exceeded.get()));
+            if let Some(transparent)=comparison.has_transparency.get(){
+                if recommend.replace(false) && gainmaps {range.set_selected(if transparent{3}else{2});}
+                flatten.set_visible(range.selected()==2&&(transparent||flatten.is_active()));
+                color_link.set_visible(range.selected()==0||(range.selected()==2&&(transparent||flatten.is_active())));
+            }
+            clip_hdr.set_visible(range.selected() != 0 && (clip_hdr.is_active() || comparison.range_exceeded.get()));
             validate();
         }
     )));
@@ -794,7 +854,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         });
     }
     space.connect_subtitle_notify({ let validate = validate.clone(); move |_| validate() });
-    for row in [&dither, &enlarge, &clip_hdr] {
+    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify({
             let validate = validate.clone();
             move |_| validate()
@@ -810,7 +870,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     compression_note.set_widget_name("export-preview-compression");
     compression_note.add_css_class("dim-label");
     let preview_note = glib::clone!(#[weak] range, #[weak] format, #[weak] compression_note, #[weak] note, move || {
-        let hdr = range.selected() == 1;
+        let hdr = range.selected() != 0;
         compression_note.set_label("JPEG compression artifacts are not previewed.");
         compression_note.set_visible(!hdr && format.selected() == 2);
         note.set_visible(!hdr && !note.text().is_empty());
@@ -853,14 +913,14 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         });
     }
     space.connect_subtitle_notify({ let refresh = refresh_preview.clone(); move |_| refresh() });
-    for row in [&dither, &enlarge, &clip_hdr] {
+    for row in [&dither, &bpc, &enlarge, &clip_hdr, &flatten] {
         row.connect_active_notify({
             let refresh = refresh_preview.clone();
             move |_| refresh()
         });
     }
-    // Quality affects excluded JPEG compression, so it cannot change these pixels.
-    for row in &dimensions {
+    // Gain-map previews decode the actual selected quality.
+    for row in dimensions.iter().chain([&quality]) {
         row.connect_value_notify({
             let refresh = refresh_preview.clone();
             move |_| refresh()
@@ -875,9 +935,11 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     );
     // One draft survives Back navigation; only the main page delivers it.
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.append(&comparison.widget);
-    content.append(&compression_note);
     content.append(&delivery_group);
+    content.append(&output_hint);
+    content.append(&comparison.widget);
+    content.append(&rendition_view);
+    content.append(&compression_note);
     content.append(&links);
     content.append(&clipping_group);
     content.append(&validation);
@@ -906,13 +968,15 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     preset.connect_selected_notify(glib::clone!(#[weak] preset_link, move |preset| {
         if let Some(value) = preset.selected_item().and_downcast::<gtk::StringObject>() { preset_link.set_subtitle(&value.string()); }
     }));
-    let summarize_color = glib::clone!(#[weak] color_link, #[weak] depth, #[strong] read_background, #[strong] selected_profile, move || {
+    let summarize_color = glib::clone!(#[weak] color_link, #[weak] depth, #[weak] range, #[weak] flatten, #[strong] read_background, #[strong] selected_profile, move || {
+        if range.selected()==2 {color_link.set_title("Background"); color_link.set_subtitle(if flatten.is_active(){match read_background(){ExportBackground::Black=>"Black",_=>"White"}}else{"No flattening"});return;}
+        color_link.set_title("Color & transparency");
         if let Ok(profile) = selected_profile() {
             color_link.set_subtitle(&format!("{} · {}-bit · {}", profile.name, if depth.selected() == 0 { 8 } else { 16 },
                 match read_background() { ExportBackground::Preserve => "Transparent", ExportBackground::White => "White", ExportBackground::Black => "Black" }));
         }
     });
-    for row in [&depth, &background] { let update = summarize_color.clone(); row.connect_selected_notify(move |_| update()); }
+    for row in [&depth, &background, &range] { let update = summarize_color.clone(); row.connect_selected_notify(move |_| update()); }
     space.connect_subtitle_notify(move |_| summarize_color());
     presets::install(
         &w.window,
@@ -927,6 +991,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     // Loading the destination follows the same control and preview path as a click.
     preset.notify("selected");
     if let Some(recipe) = initial { apply_recipe(recipe); updating.set(true); preset.set_selected(3); updating.set(false); }
+    else if document.depth.is_float() && preset.selected()==0 { range.set_selected(1); recommend.set(true); }
     refresh_preview();
     let response = navigation::choose(&dialog, &w.window, &response).await;
     comparison.close();
@@ -942,6 +1007,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
 }
 
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
+    w.proof_panel.finish_pending(w).await?;
     // The preview and final file share one immutable artwork revision and time.
     let mut snapshot = w
         .gpu

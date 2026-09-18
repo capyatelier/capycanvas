@@ -2,7 +2,71 @@
 use super::*;
 use layer_core::{ColorTransition, PreparedColorTransition, Project};
 
+/// Viewing mode is transient. Saved SDR and print recipes are document data,
+/// independently of whether either simulation is currently visible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofMode { #[default] Off, Sdr, Print }
+
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn proof_mode(&self) -> ProofMode {
+        if self.state.soft_proof { ProofMode::Print }
+        else if self.state.preview_sdr { ProofMode::Sdr }
+        else { ProofMode::Off }
+    }
+    pub fn set_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, String> {
+        self.require_document_idle()?;
+        if mode == ProofMode::Sdr && !self.engine.document().color.depth.is_float() {
+            return Err("This drawing is already SDR".into());
+        }
+        if mode == ProofMode::Print && self.engine.document().proof.is_none() {
+            return Err("Choose a print profile".into());
+        }
+        self.state.preview_sdr = mode == ProofMode::Sdr;
+        self.state.soft_proof = mode == ProofMode::Print;
+        if mode != ProofMode::Print { self.state.gamut_warning = false; }
+        self.state.sdr_appearance_preview = None;
+        self.refresh_commands();
+        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+    }
+    pub(super) fn cancel_sdr_gesture(&mut self) -> Result<bool, String> {
+        let Some(original) = self.sdr_gesture.take() else { return Ok(false) };
+        self.engine.preview_edit(layer_core::Edit::SetSdrRendition(original)).map_err(error)?;
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(true)
+    }
+    /// Live panel editing follows the same one-contact/one-undo contract as
+    /// effect controls. Autosave/export waits until the contact finishes.
+    pub fn edit_sdr_rendition(&mut self, phase: ContactPhase, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange, String> {
+        if phase == ContactPhase::Down {
+            self.require_document_idle()?;
+            if !self.engine.document().color.depth.is_float() {
+                return Err("SDR rendition settings require HDR artwork".into());
+            }
+            self.sdr_gesture = Some(self.engine.document().sdr_rendition);
+        } else if self.sdr_gesture.is_none() {
+            return Ok(self.changed(0, false));
+        }
+        if phase == ContactPhase::Cancel || self.workspace_read_only || self.workspace_transition || self.rendering_suspended {
+            self.cancel_sdr_gesture()?;
+        } else {
+            if let Err(e) = recipe.validate() {
+                self.cancel_sdr_gesture()?;
+                return Err(e.into());
+            }
+            if phase == ContactPhase::Up {
+                let original = self.sdr_gesture.take().unwrap();
+                self.engine.preview_edit(layer_core::Edit::SetSdrRendition(original)).map_err(error)?;
+                if recipe != original { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
+            } else {
+                self.engine.preview_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?;
+            }
+        }
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
+    }
     pub fn effective_sdr_rendition(&self) -> layer_core::color::hdr::SdrRendition {
         self.state.sdr_appearance_preview.unwrap_or(self.engine.document().sdr_rendition)
     }
@@ -56,6 +120,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
         }
         self.state.soft_proof = self.engine.document().proof.is_some();
+        if self.state.soft_proof {
+            self.state.preview_sdr = false;
+            self.state.sdr_appearance_preview = None;
+        }
         if !self.state.soft_proof { self.state.gamut_warning = false; }
         self.refresh_document();
         self.refresh_commands();

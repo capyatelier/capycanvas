@@ -104,7 +104,7 @@ impl Task {
         let mut output = std::io::BufWriter::new(stream);
         let target = recipe.interpretation();
         let statistics = match recipe.format {
-            ExportFormat::PngHdr | ExportFormat::PngHdrMapped => {
+            ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
                 return Err("HDR export is not supported on Windows yet".into());
             }
             ExportFormat::Png => renderer.write_png(

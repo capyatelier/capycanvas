@@ -18,7 +18,7 @@ typedef struct {
   // libavif leaves display geometry unapplied. Rust gathers oriented rows into
   // source tiles without allocating another full-frame pixel buffer.
   uint32_t plane_width, plane_height, crop_x, crop_y, crop_width, crop_height;
-  uint32_t plane_turns, mirror, first_frame;
+  uint32_t plane_turns, mirror, first_frame, gain_map;
 } CapyPhotoInfo;
 
 typedef struct {
@@ -37,7 +37,7 @@ typedef struct {
   uint32_t dimension, profile_limit;
 } CapyPhoto;
 
-uint32_t capy_photo_abi(void) { return 2; }
+uint32_t capy_photo_abi(void) { return 3; }
 size_t capy_photo_info_size(void) { return sizeof(CapyPhotoInfo); }
 const char* capy_photo_version(void) { return heif_get_version(); }
 const char* capy_photo_avif_version(void) { return avifVersion(); }
@@ -121,6 +121,7 @@ static int avif_info(CapyPhoto* photo, char* message) {
   info->height = info->plane_turns % 2 ? crop.width : crop.height;
   info->bits = image->depth;
   info->alpha = photo->avif->alphaPresent;
+  info->gain_map = image->gainMap != NULL;
   info->premultiplied = 0; // RGB conversion explicitly requests straight alpha.
   info->images = photo->avif->imageCount;
   info->nclx = 1;

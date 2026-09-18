@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn hdr_sdr_delivery_matches_browser_curve_and_preserves_coverage() {
         let pixels=[[0.,0.,0.,1.],[0.18,0.18,0.18,1.],[1.,1.,1.,1.],[4.,4.,4.,1.],[16.,16.,16.,1.],[1.,1.,1.,0.25],[0.;4]];
-        let output=deliver(RgbSpace::Srgb,ColorProfile::Builtin(RgbSpace::Srgb),&pixels,Some(SdrRendition::default()));
+        let output=deliver(RgbSpace::Srgb,ColorProfile::Builtin(RgbSpace::Srgb),&pixels,Some(SdrRendition{method:layer_core::color::hdr::SdrMethod::ToneMap,..Default::default()}));
         // Independent Float64 analytic RWTMO landmarks.
         for (i,linear) in [0.,0.09,0.5,0.9439630011687752,1.].into_iter().enumerate() {
             let code=(RgbSpace::Srgb.encode(linear)*65535.).round() as u16;

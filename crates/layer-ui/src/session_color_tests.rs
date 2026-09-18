@@ -463,3 +463,57 @@ fn proof_panel_preview_can_compare_master_and_saved_without_touching_history() {
     assert!(s.set_sdr_view(Some(SdrRendition {exposure:f32::NAN,..draft}),true).is_err());
     assert_eq!(s.state.sdr_appearance_preview,None);
 }
+
+#[test]
+fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
+    use layer_core::color::{SampleDepth,hdr::SdrRendition};
+    let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
+    let renderer=Recorder{color:document.color,..Default::default()};
+    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    let original=s.engine.document().sdr_rendition;
+    let changed=SdrRendition{exposure:1.5,..original};
+    s.set_proof_mode(ProofMode::Sdr).unwrap();
+    let checkpoint=s.engine.checkpoint();
+    s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
+    for exposure in [0.2,0.8,1.5]{s.edit_sdr_rendition(ContactPhase::Move,SdrRendition{exposure,..original}).unwrap();}
+    assert_eq!(s.engine.document().sdr_rendition,changed);
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    assert!(s.capture_project_recovery().is_err(),"Recovery must not capture an unfinished contact");
+    assert!(!s.command(CommandId::ExportDocument).enabled);
+    s.edit_sdr_rendition(ContactPhase::Up,changed).unwrap();
+    assert!(s.state.document_file.modified);
+    assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition,changed);
+    s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
+    assert_eq!(s.engine.document().sdr_rendition,original);
+    s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
+    s.edit_sdr_rendition(ContactPhase::Move,changed).unwrap();
+    s.edit_sdr_rendition(ContactPhase::Cancel,changed).unwrap();
+    assert_eq!(s.engine.document().sdr_rendition,original);
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    s.dispatch(UiAction::Invoke{command:CommandId::Redo}).unwrap();
+    assert_eq!(s.engine.document().sdr_rendition,changed);
+    let checkpoint=s.engine.checkpoint();
+    s.set_proof_mode(ProofMode::Off).unwrap();
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    assert_eq!(s.engine.document().sdr_rendition,changed);
+    assert!(!s.state.preview_sdr && !s.state.soft_proof);
+}
+
+#[test]
+fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
+    use layer_core::color::{SampleDepth,ProofRecipe,ColorProfile,RgbSpace};
+    let mut document=Document::new("HDR",32,32);document.color.depth=SampleDepth::F16;
+    let renderer=Recorder{color:document.color,..Default::default()};
+    let mut s=UiSession::new(renderer,document,[32,32]).unwrap();s.set_platform(Platform::Gtk);
+    assert!(s.set_proof_mode(ProofMode::Print).is_err());
+    s.set_proof_recipe(Some(ProofRecipe::new("Printer".into(),ColorProfile::Builtin(RgbSpace::Srgb)))).unwrap();
+    let original=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+    for mode in [ProofMode::Sdr,ProofMode::Print,ProofMode::Off]{
+        s.set_proof_mode(mode).unwrap();assert_eq!(s.proof_mode(),mode);
+        assert_eq!(s.engine.document(),&original);assert_eq!(s.engine.checkpoint(),checkpoint);
+    }
+    let menu=s.application_menu(ApplicationMenu::View);
+    let labels=menu.sections.iter().flatten().map(|i|i.label.as_str()).collect::<Vec<_>>();
+    assert!(labels.contains(&"Proof…"));
+    assert!(!labels.contains(&"Preview SDR"));assert!(!labels.contains(&"Soft Proof"));
+}

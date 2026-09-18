@@ -200,6 +200,7 @@ fn item(
 }
 
 impl ProfileChooser {
+    pub fn is_pending(&self) -> bool { self.state.in_flight.get() || self.state.busy.get() }
     pub fn restore_document(&self, profile: ExportProfile) {
         *self.state.document.borrow_mut() =
             matches!(profile.profile, ColorProfile::Icc(_)).then(|| profile.clone());

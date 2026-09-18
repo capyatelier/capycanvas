@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import sys
 import subprocess
 import tarfile
 import urllib.request
@@ -60,7 +61,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
     parser.add_argument("--cmake", default="cmake")
     args = parser.parse_args()
-    if platform.system() != "Linux" or args.jobs < 1:
+    if platform.system() != "Linux" or sys.byteorder != "little" or args.jobs < 1:
         parser.error("This bundle targets Linux and requires a positive job count")
     for tool in [args.cmake, "ninja", "meson", "pkg-config", "c++", "patch"]:
         if not shutil.which(tool):
@@ -104,11 +105,20 @@ def main():
          "-Denable_tools=false", "-Denable_tests=false"], env=env)
     run(["meson", "compile", "-C", dav1d, "-j", args.jobs], env=env)
     run(["meson", "install", "-C", dav1d, "--no-rebuild", "--strip"], env=env)
+    cmake("libaom", ["-DCONFIG_PIC=1", "-DENABLE_DOCS=OFF", "-DENABLE_EXAMPLES=OFF",
+                     "-DENABLE_TESTDATA=OFF", "-DENABLE_TESTS=OFF", "-DENABLE_TOOLS=OFF"])
+    cmake("libjpeg-turbo", ["-DENABLE_STATIC=OFF", "-DWITH_TURBOJPEG=OFF", "-DWITH_TOOLS=OFF",
+                           "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"])
+    cmake("libultrahdr", [f"-DCMAKE_PREFIX_PATH={prefix}", "-DUHDR_BUILD_DEPS=OFF",
+                         "-DUHDR_BUILD_EXAMPLES=OFF", "-DUHDR_BUILD_TESTS=OFF",
+                         "-DUHDR_ENABLE_HEIF=OFF", "-DUHDR_ENABLE_INSTALL=ON",
+                         "-DUHDR_ENABLE_GLES=OFF", "-DUHDR_WRITE_XMP=ON", "-DUHDR_WRITE_ISO=ON",
+                         "-DUHDR_MAX_DIMENSION=32768"])
     cmake("libavif", [f"-DCMAKE_PREFIX_PATH={prefix}", "-DAVIF_CODEC_DAV1D=SYSTEM",
-                      "-DAVIF_LIBYUV=OFF", "-DAVIF_LIBSHARPYUV=OFF",
+                      "-DAVIF_CODEC_AOM=SYSTEM", "-DAVIF_LIBYUV=OFF", "-DAVIF_LIBSHARPYUV=OFF",
                       "-DAVIF_LIBXML2=OFF", "-DAVIF_BUILD_APPS=OFF",
                       "-DAVIF_BUILD_TESTS=OFF", "-DAVIF_BUILD_EXAMPLES=OFF",
-                      *[f"-DAVIF_CODEC_{name}=OFF" for name in ("AOM", "LIBGAV1", "RAV1E", "SVT", "AVM")]])
+                      *[f"-DAVIF_CODEC_{name}=OFF" for name in ("LIBGAV1", "RAV1E", "SVT", "AVM")]])
     disabled = ["X265", "KVAZAAR", "UVG266", "VVDEC", "VVENC", "X264",
                 "OpenH264_DECODER", "AOM_DECODER", "AOM_ENCODER", "SvtEnc", "RAV1E",
                 "JPEG_DECODER", "JPEG_ENCODER", "OpenJPEG_ENCODER", "OpenJPEG_DECODER",
@@ -137,10 +147,20 @@ def main():
          "-o", prefix / "lib/libcapy_photo.so.1"])
     bridge_lib = ctypes.CDLL(str(prefix / "lib/libcapy_photo.so.1"))
     bridge_lib.capy_photo_avif_version.restype = ctypes.c_char_p
-    if bridge_lib.capy_photo_abi() != 2 or bridge_lib.capy_photo_avif_version().decode() != dependencies["libavif"]["version"]:
+    if bridge_lib.capy_photo_abi() != 3 or bridge_lib.capy_photo_avif_version().decode() != dependencies["libavif"]["version"]:
         raise RuntimeError("Unexpected photo bridge ABI or libavif version")
     if not all(bridge_lib.capy_photo_decoder(format) for format in (1, 4)):
         raise RuntimeError("The bridge requires both HEVC and AV1 decoders")
+    hdr_worker = HERE / "hdr_codec.cpp"
+    if not hdr_worker.exists():
+        hdr_worker = HERE.parents[1] / "crates/layer-color/src/photo/hdr_codec.cpp"
+    run(["c++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
+         "-I", prefix / "include", hdr_worker, "-L", prefix / "lib",
+         "-Wl,-rpath,$ORIGIN", "-luhdr", "-lavif", "-ljpeg",
+         "-o", prefix / "lib/capy-hdr-codec"])
+    if subprocess.check_output([prefix / "lib/capy-hdr-codec", "--version"]).strip() != b"capy-hdr-codec 1":
+        raise RuntimeError("Unexpected HDR codec protocol")
+    (prefix / "lib/hdr-codec-abi").write_text("1\n")
     docs = prefix / "share/doc/capycanvas-photo-codecs"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "sources").mkdir(exist_ok=True)
@@ -150,12 +170,14 @@ def main():
         shutil.copy2(archive, docs / "sources")
         for license in dependencies[name]["licenses"]:
             shutil.copy2(directory / license, dest)
-    for path in (LOCK, Path(__file__), bridge, patch):
+    for path in (LOCK, Path(__file__), bridge, patch, hdr_worker):
         shutil.copy2(path, docs)
     libraries = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in (prefix / "lib").glob("*.so.*") if not p.is_symlink()}
     manifest = {"dependencies": dependencies, "libraries": libraries,
                 "machine": platform.machine(), "decoders": ["HEIF/libheif/libde265", "AVIF/libavif/dav1d"],
+                "hdr_codecs": ["JPEG/libultrahdr", "AVIF/libavif/libaom"],
+                "hdr_worker_sha256": hashlib.sha256((prefix / "lib/capy-hdr-codec").read_bytes()).hexdigest(),
                 "dynamic_plugins": False, "recipe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "bridge_sha256": hashlib.sha256(bridge.read_bytes()).hexdigest(),
                 "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest()}

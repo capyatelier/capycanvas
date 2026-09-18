@@ -1,6 +1,6 @@
 //! SDR delivery, independent of editing data and the connected monitor.
-//! The default is Skia's reference-white tone mapping operator (RWTMO),
-//! evaluated analytically in linear Rec.2020. The analytic Bezier avoids the
+//! Default: BT.2390's PQ-domain Hermite shoulder. Browser matching retains
+//! Skia's reference-white operator (RWTMO) in linear Rec.2020. Its Bezier avoids the
 //! reversals/overshoot of the eight-point approximation at extreme HDR ranges.
 //! See docs/history/color-management-sdr-proof-update.md and THIRD_PARTY_NOTICES.md.
 use super::super::{RgbSpace, rgb::Matrix3};
@@ -15,6 +15,7 @@ pub enum SdrMethod {
     ToneMap,
     Scale,
     Clip,
+    Bt2390,
 }
 
 /// An authored SDR rendition. Exposure is in stops, contrast pivots around
@@ -33,7 +34,7 @@ impl Default for SdrRendition {
             exposure: 0.,
             contrast: 1.,
             headroom: DEFAULT_HEADROOM,
-            method: SdrMethod::ToneMap,
+            method: SdrMethod::Bt2390,
         }
     }
 }
@@ -101,6 +102,7 @@ impl SdrRendition {
                 SdrMethod::ToneMap => 1.,
                 SdrMethod::Scale => 2.,
                 SdrMethod::Clip => 3.,
+                SdrMethod::Bt2390 => 4.,
             },
         ]
     }
@@ -109,6 +111,7 @@ impl SdrRendition {
             1. => SdrMethod::ToneMap,
             2. => SdrMethod::Scale,
             3. => SdrMethod::Clip,
+            4. => SdrMethod::Bt2390,
             _ => return Err("Invalid SDR mapping method"),
         };
         let r = Self {
@@ -127,6 +130,7 @@ impl SdrRendition {
             gain: self.exposure.exp2(),
             peak: self.headroom.exp2(),
             curve: Rwtmo::new(self.headroom),
+            perceptual: Bt2390::new(self.headroom),
             to_rec2020: to_bt2020(source).map(|r| r.map(|v| v as f32)),
             to_output: source
                 .linear_transform(destination)
@@ -155,6 +159,7 @@ pub struct SdrMapper {
     gain: f32,
     peak: f32,
     curve: Rwtmo,
+    perceptual: Bt2390,
     to_rec2020: [[f32; 3]; 3],
     to_output: [[f32; 3]; 3],
 }
@@ -178,6 +183,7 @@ impl SdrMapper {
             SdrMethod::ToneMap => self.curve.map(x),
             SdrMethod::Scale => x / self.peak,
             SdrMethod::Clip => x,
+            SdrMethod::Bt2390 => self.perceptual.map(x),
         };
         rgb.map(|v| v / peak * mapped)
     }
@@ -197,6 +203,45 @@ impl SdrMapper {
         }
         let rgb = self.map_rgb([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
         [rgb[0] * p[3], rgb[1] * p[3], rgb[2] * p[3], p[3]]
+    }
+}
+
+/// ITU-R BT.2390 (2016), section 5.4: normalized PQ with a Hermite shoulder
+/// with knee offset 1 (the libplacebo default), KS = 2 * maxLum - 1.
+/// This starts the shoulder earlier than the report’s offset 0.5 to retain more
+/// bright detail. Clamp the knee to zero for extended (>10,000 nit) masters
+/// so the shoulder cannot produce negative PQ codes. Zero black stays zero.
+/// Independently implemented from the report's equations, not libplacebo code.
+/// RGB 1 is always 203 cd/m²; the destination white is the same reference white.
+#[derive(Clone, Copy)]
+struct Bt2390 { peak: f32, pq_peak: f32, output: f32, knee: f32 }
+fn pq_encode(nits: f32) -> f32 {
+    let p = (nits / 10000.).powf(2610. / 16384.);
+    ((3424. / 4096. + 2413. / 128. * p) / (1. + 2392. / 128. * p)).powf(2523. / 32.)
+}
+fn pq_decode(code: f32) -> f32 {
+    let p = code.powf(32. / 2523.);
+    10000. * ((p - 3424. / 4096.).max(0.) / (2413. / 128. - 2392. / 128. * p)).powf(16384. / 2610.)
+}
+impl Bt2390 {
+    fn new(headroom: f32) -> Self {
+        let peak = headroom.exp2();
+        let pq_peak = pq_encode(peak * super::REFERENCE_WHITE_NITS);
+        let output = pq_encode(super::REFERENCE_WHITE_NITS) / pq_peak;
+        Self { peak, pq_peak, output, knee: (2. * output - 1.).max(0.) }
+    }
+    fn map(self, x: f32) -> f32 {
+        if x <= 0. { return 0.; }
+        if self.peak == 1. || x >= self.peak { return x.min(1.); }
+        let q = pq_encode(x * super::REFERENCE_WHITE_NITS) / self.pq_peak;
+        if q <= self.knee { return x; }
+        let t = (q - self.knee) / (1. - self.knee);
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let q = (2. * t3 - 3. * t2 + 1.) * self.knee
+            + (t3 - 2. * t2 + t) * (1. - self.knee)
+            + (-2. * t3 + 3. * t2) * self.output;
+        (pq_decode(q * self.pq_peak) / super::REFERENCE_WHITE_NITS).clamp(0., 1.)
     }
 }
 
@@ -249,6 +294,38 @@ impl Rwtmo {
 mod tests {
     use super::super::super::rgb;
     use super::*;
+
+    #[test]
+    fn perceptual_shoulder_matches_itu_float64_reference_and_retains_midtones() {
+        // Independent Float64 evaluation of the report's E1/E2 and Hermite
+        // equations. Tolerance includes Float32 PQ powers and inverse powers.
+        let reference=|headroom:f64,x:f64|{
+            if headroom==0. {return x.min(1.);}
+            if x>=headroom.exp2(){return 1.;}
+            let pq=super::super::pq_encode;
+            let span=pq(203.*headroom.exp2());let white=pq(203.)/span;
+            let knee=(2.*white-1.).max(0.);let input=pq(x*203.)/span;
+            if input<=knee{return x;}
+            let t=(input-knee)/(1.-knee);
+            let h=[2.*t.powi(3)-3.*t*t+1.,t.powi(3)-2.*t*t+t,-2.*t.powi(3)+3.*t*t];
+            super::super::pq_decode((h[0]*knee+h[1]*(1.-knee)+h[2]*white)*span)/203.
+        };
+        for h in [0.,0.0001,0.25,1.,2.3004484,4.,8.,16.] {
+            let curve=Bt2390::new(h);let mut previous=0.;
+            for i in 0..2048{
+                let x=(-16f32+(h+18.)*i as f32/2047.).exp2();let y=curve.map(x);
+                assert!((y as f64-reference(h as f64,x as f64)).abs()<0.00015,"{h} {x} {y}");
+                assert!(y>=previous-0.0001&&y.is_finite()&&y<=1.);previous=y;
+            }
+        }
+        let r=SdrRendition::default();assert_eq!(r.method,SdrMethod::Bt2390);
+        let m=|r:SdrRendition,x|r.map_rgb([x;3],RgbSpace::Srgb)[0];
+        assert!((m(r,0.18)-0.18).abs()<0.00002);
+        assert!((m(r,1.)-0.661213).abs()<0.00015);
+        assert!(m(SdrRendition{exposure:1.,..r},0.18)>m(r,0.18)*1.8);
+        assert!(m(SdrRendition{headroom:4.,..r},4.)<m(r,4.)-0.1);
+        assert!(m(SdrRendition{contrast:1.5,..r},0.02)<m(r,0.02)*0.5);
+    }
 
     #[test]
     fn browser_reference_sweep() {
@@ -306,7 +383,7 @@ mod tests {
     }
     #[test]
     fn knobs_change_distinct_parts_of_the_rendition() {
-        let r = SdrRendition::default();
+        let r = SdrRendition { method: SdrMethod::ToneMap, ..Default::default() };
         let m = |r: SdrRendition, x| r.map_rgb([x; 3], RgbSpace::Srgb)[0];
         // Exposure raises shadows and highlights; range only changes highlights
         // once the source endpoint is above the 1000-nit default.
@@ -334,7 +411,7 @@ mod tests {
     }
     #[test]
     fn no_desaturation_before_output_gamut_and_alpha_is_coverage() {
-        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip] {
+        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip, SdrMethod::Bt2390] {
             let r = SdrRendition {
                 method,
                 ..Default::default()
@@ -363,7 +440,7 @@ mod tests {
     }
     #[test]
     fn equivalent_colors_across_working_and_delivery_primaries() {
-        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip] {
+        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip, SdrMethod::Bt2390] {
             let r = SdrRendition {
                 method,
                 ..Default::default()
@@ -390,7 +467,7 @@ mod tests {
     }
     #[test]
     fn saved_recipes_and_previous_review_settings_validate() {
-        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip] {
+        for method in [SdrMethod::ToneMap, SdrMethod::Scale, SdrMethod::Clip, SdrMethod::Bt2390] {
             let r = SdrRendition {
                 method,
                 exposure: -1.,
@@ -407,7 +484,7 @@ mod tests {
                 serde_json::json!({"exposure":0.,"contrast":1.,"knee":knee}),
             )
         };
-        assert_eq!(legacy(0.75).unwrap(), SdrRendition::default());
+        assert_eq!(legacy(0.75).unwrap(), SdrRendition { method: SdrMethod::ToneMap, ..Default::default() });
         assert!(legacy(0.25).unwrap().headroom > DEFAULT_HEADROOM);
         assert!(legacy(0.95).unwrap().headroom < DEFAULT_HEADROOM);
         assert!(legacy(0.).is_err());

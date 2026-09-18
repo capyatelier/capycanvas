@@ -18,6 +18,7 @@ mod input;
 mod layers;
 mod navigator;
 mod number_control;
+mod panel_controls;
 mod preferences;
 mod previews;
 mod recovery;

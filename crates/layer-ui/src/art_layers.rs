@@ -1802,12 +1802,13 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
         let effect = self.cancel_effect_gesture()?;
+        let sdr = self.cancel_sdr_gesture()?;
         let transform = self.cancel_transform()?;
         self.cancel_ruler_gesture();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(region || transform || effect);
+            return Ok(region || transform || effect || sdr);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine

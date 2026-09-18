@@ -6,6 +6,7 @@ use std::io::BufRead;
 
 #[derive(Default)]
 pub(super) struct Metadata {
+    pub gain_map: bool,
     pub adobe_transform: Option<u8>,
     pub profile: Option<Vec<u8>>,
     pub orientation: Option<u16>,
@@ -19,7 +20,10 @@ fn byte(input: &mut impl BufRead) -> Result<u8, String> {
         .map_err(|_| "Incomplete JPEG marker stream")?;
     Ok(byte[0])
 }
-pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
+#[cfg(test)]
+pub(super) fn read(input: impl BufRead) -> Result<Metadata, String> { read_impl(input, false) }
+pub(super) fn read_source(input: impl BufRead) -> Result<Metadata, String> { read_impl(input, true) }
+fn read_impl(mut input: impl BufRead, allow_hdr: bool) -> Result<Metadata, String> {
     if [byte(&mut input)?, byte(&mut input)?] != [0xff, 0xd8] {
         return Err("Invalid JPEG signature".into());
     }
@@ -30,6 +34,7 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
     let mut entropy = false;
     let mut result = Metadata::default();
     let mut jfif_resolution = None;
+    let mut mpf_error = None;
     loop {
         if entropy {
             loop {
@@ -138,11 +143,13 @@ pub(super) fn read(mut input: impl BufRead) -> Result<Metadata, String> {
                 .iter()
                 .any(|signature| segment.windows(signature.len()).any(|w| w == *signature))
         {
-            return Err("This JPEG contains an HDR gain map. Gain-map import is not supported; export a PQ PNG or SDR image from another editor.".into());
+            if !allow_hdr { return Err("This JPEG contains an HDR gain map; use the HDR reader".into()); }
+            result.gain_map = true;
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
-            super::jpeg_mpf::validate_previews(&segment)?;
+            mpf_error = super::jpeg_mpf::validate_previews(&segment).err();
         }
     }
+    if !result.gain_map { if let Some(error) = mpf_error { return Err(error); } }
     if let Some(count) = total {
         if chunks.len() != usize::from(count) {
             return Err("JPEG ICC profile is incomplete".into());
