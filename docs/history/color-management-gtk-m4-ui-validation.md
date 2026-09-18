@@ -1,5 +1,9 @@
 # Phase 4 GTK UI corrections
 
+Superseded display/export behavior and startup diagnosis are corrected in the
+[user-feedback follow-up](color-management-gtk-m4-feedback.md). This record
+retains the earlier milestone’s evidence.
+
 This follows the [UI audit](../development/color-management-m4-ui-review.md),
 after the user requested implementation before another review. Work lives in
 `~/code/capycanvas3`, branch `capycanvas3`; nothing is pushed.

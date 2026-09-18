@@ -264,14 +264,23 @@ values. The color panel adds peak-channel **Brightness (EV)**; hue changes retai
 above-white brightness, while field/value picking chooses a new brightness.
 Curves and the histogram mark SDR white; curve processing options are in Advanced.
 
-Export chooses **Dynamic range: SDR or HDR** separately from format. HDR exposes
-its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract and an
-explicit **Advanced → Clip out-of-range colors** switch. Its images are labeled
-SDR previews; a cancellable full-size range check gates export, and the writer
-checks again. SDR files use the saved SDR appearance. Other hosts explicitly
-reject HDR masters for now.
-See [the GTK validation and limits](../history/color-management-gtk-m4-validation.md)
-for the qualified workflow and outstanding physical-display/device evidence.
+Export's overview chooses **Dynamic range: SDR or HDR** and format. Size,
+Color & transparency and Presets open focused panels with a Back action and
+summaries on the overview. SDR Appearance is reachable for SDR delivery. Native
+preset actions use standard rows and name their target; unavailable controls
+are absent. JPEG offers opaque backgrounds and hides its fixed 8-bit depth.
+
+HDR exposes its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract.
+Its image is an SDR preview. A cancellable full-size range check gates export;
+when it finds unsupported values, **Clip out-of-range colors** appears beside
+the warning. The writer checks again. SDR files use the saved SDR appearance.
+
+GTK negotiates scRGB or parametric BT.2020 PQ on a floating surface and responds
+to compositor feedback even while idle. Promoting an existing SDR drawing does
+not require reopening it. The displayed headroom is a compositor hint, not a
+measurement of monitor luminance. Other hosts explicitly reject HDR masters.
+See [the feedback validation](../history/color-management-gtk-m4-feedback.md)
+for the current workflow, review runtime and remaining hardware qualifications.
 
 “16-bit float” is not a promise that all HDR workflows or 32-bit source values fit. Full 32-bit float, scene-based
 VFX/OCIO and specialist EXR processing remain separately scoped.
