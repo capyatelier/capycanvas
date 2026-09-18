@@ -171,6 +171,26 @@ similar G-Pen size. This reopens no document blocker; the next performance work
 must separate brush evaluation from composition/submission and fix the measured
 cause in shared code where possible.
 
+## Source reuse without cache expansion — 2026-09-18
+
+The [source-reuse correction](apple-drawing-performance-review.md#source-reuse-within-the-existing-budget--2026-09-18)
+alternates independent composition-tile traversal, preserving the preceding
+sweep's cached sources without changing per-tile layer order or memory limits.
+Measured cache misses fall 131 → 100.5 per update. Reversed-order physical pairs
+improve typical completion by 5–6% on Mac and 3–5% on iPad, with exact native
+artwork/history, nominal iPad thermals and unchanged cached zoom. The improvement
+is modest and does not establish a hardware floor or full Pencil acceptance.
+The old traversal fails the new reuse regression; all 31 focused checks, both
+Release builds and Web compilation now pass without compiler warnings.
+
+The updated normal iPad Release is open at Recovered Drawings. All 14 complete
+recoveries and 148 original support/document files are preserved exactly; other
+editor apps and the Mac review are unchanged. The current physical question asks
+whether full-pressure 2048 px drawing still visibly falls behind the Pencil.
+Keep that acceptance pending until answered; do not infer it from p99 alone.
+Evidence and process ownership are under `artifacts/apple-source-reuse-v1/`.
+Earlier review ownership and pending-test references below are historical.
+
 ## Full-pressure wide-brush follow-up — 2026-09-18
 
 The user completed the preceding 2000 px Pencil retest and still reports visible
@@ -185,6 +205,17 @@ preserved; the Mac review is untouched. The user reports improved drawing with r
 pressure, and requests further algorithmic assessment; no physical floor is established. See the [current analysis](apple-drawing-performance-review.md#current-full-pressure-drawing-correction--2026-09-18)
 and `artifacts/apple-large-brush-attribution-v1/` for attribution, rejected probes
 and measurement limits. This supersedes the pending retest below; R6 remains open.
+
+The qualified correction is published as `ab6d9370`. The subsequent
+[headroom assessment](apple-drawing-performance-review.md#remaining-algorithmic-headroom--2026-09-18)
+finds measurable avoidable source work: a private larger-cache control reduces
+current Mac replay medians by 14% with exact output, at an unacceptable additional
+192 MiB. It is removed; a grouped display-reduction probe is also removed because
+typical improvement is small and inconsistent. No new runtime candidate or iPad
+retest is pending. Source reuse within the existing budget is the next measured
+target; its achievable gain and an iPad physical floor remain unproved. The iPad
+review and drawings are untouched by this assessment. Private evidence is
+`artifacts/apple-mip-reduction-v1/`.
 
 ## Shared G-Pen preparation and prediction — 2026-09-17
 

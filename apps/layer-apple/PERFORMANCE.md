@@ -70,6 +70,30 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Wide-brush source reuse — 2026-09-18
+
+Alternating independent composition-tile traversal retains more decoded sources
+within the existing 64-slot cache. A captured access model and both hardware
+replays agree on median misses **131 → 100.5**. Reversed-order Mac pairs improve
+median completion **39.378 → 37.418 ms** and **39.169 → 36.900 ms**; physical iPad
+pairs improve **41.559 → 40.355 ms** and **41.803 → 39.890 ms**. Physical p99 changes
+**65.786 → 63.611 ms** and **65.930 → 63.296 ms**, with nominal thermals and cached
+zoom still about 1.80 ms. Native artwork and Undo/Redo are exact. No cache expansion,
+precision change or new brush path ships.
+
+Ordinary two-sample 2000 px Mac pairs improve medians 31.281 → 27.562 ms and
+31.720 → 27.049 ms. Their p99 results vary in direction (42.587 → 49.099 ms,
+then 43.996 → 36.849 ms); do not claim uniform tail improvement. The 96 px control
+also preserves exact pixels/history, with median 4.030 → 3.851 ms.
+
+This is the same bounded 180-update full-pressure workload described below,
+not a Pencil-to-display latency measurement. The [algorithm review](../../docs/development/apple-drawing-performance-review.md#source-reuse-within-the-existing-budget--2026-09-18)
+records the model, failed-before/passing-after regression and remaining limits.
+Thirty-one focused checks, both Release builds and Web compilation pass.
+The updated normal iPad app preserves all 14 recoveries and 148 original files;
+live full-pressure acceptance remains pending. Evidence is
+`artifacts/apple-source-reuse-v1/`, based on `ab6d9370` plus the correction.
+
 ## Full-pressure 2000 px G-Pen — 2026-09-18
 
 The user reports continued visible iPad lag after the earlier footprint correction,

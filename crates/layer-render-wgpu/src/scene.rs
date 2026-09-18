@@ -57,6 +57,7 @@ pub(super) struct Scene {
     placement_display: bool,
     placement_mips: std::collections::HashMap<LayerId, placement::Mip>,
     source_tiles: sources::DecodedTiles,
+    reverse_composition_tiles: bool,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
     jobs: Vec<Job>,
@@ -346,6 +347,7 @@ impl Scene {
                 paint_transform::PaintTransforms::placement_pass,
             ),
             source_tiles: sources::DecodedTiles::new(r.document_color().space),
+            reverse_composition_tiles: false,
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
@@ -1496,7 +1498,14 @@ impl Scene {
         let mut composited = 0;
         let mut display_tiles = 0;
         let mut submitted = None;
-        for tile in page_coordinates(dirty) {
+        // Adjacent compositions revisit unchanged sources. Start from the end
+        // retained by the preceding sweep instead of evicting it before reuse.
+        // Only independent output tiles reverse; each tile's layer/job order
+        // and the bounded, queue-ordered source-cache ownership are unchanged.
+        let reverse = self.reverse_composition_tiles;
+        self.reverse_composition_tiles = !reverse;
+        let mut coordinates = page_coordinates(dirty);
+        while let Some(tile) = if reverse { coordinates.next_back() } else { coordinates.next() } {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
             }
