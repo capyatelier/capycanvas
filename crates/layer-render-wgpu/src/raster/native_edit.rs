@@ -94,6 +94,14 @@ impl NativeEdit {
             validator: validate::Validator::new(&r.device, r.document_color().depth.is_float()),
         }
     }
+    pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
+        self.color
+            .pipelines
+            .iter()
+            .chain(&self.scalar.pipelines)
+            .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
+            .chain(&self.validator.pipelines)
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.promoter
             .as_ref()
@@ -239,7 +247,13 @@ impl WgpuRasterizer {
         self.ui_rendition = color.depth.is_float().then_some(Default::default());
         self.scene = None;
         let transfer = self.prepare_native_transfer(color.space)?;
-        self.native_edit = Some(NativeEdit::new(self, transfer));
+        let native = NativeEdit::new(self, transfer);
+        if self.startup.is_none() {
+            for pipeline in native.pipelines() {
+                pipeline.compile();
+            }
+        }
+        self.native_edit = Some(native);
         Ok(())
     }
 

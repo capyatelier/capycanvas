@@ -431,8 +431,15 @@ fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
             let target_view = target.create_view(&Default::default());
             for surface in [SdrSurfaceColor::Srgb, SdrSurfaceColor::DisplayP3] {
                 let mut presenter = ViewportPresenter::for_surface(&r, format, surface).unwrap();
+                // Exercise every tetrahedral order, tied fractions, endpoints
+                // and coverage. The shader deliberately avoids dynamic indices.
                 for codes in [[63124, 2917, 23000, 0], [32768, 23111, 11300, 1],
-                    [432, 893, 200, 17000], [61111, 51222, 9999, 65535], [30000; 4]] {
+                    [432, 893, 200, 17000], [61111, 51222, 9999, 65535], [30000; 4],
+                    [1234, 23456, 54321, 65535], [1234, 54321, 23456, 65535],
+                    [23456, 1234, 54321, 65535], [23456, 54321, 1234, 65535],
+                    [54321, 1234, 23456, 65535], [54321, 23456, 1234, 65535],
+                    [1234, 1234, 54321, 65535], [1234, 54321, 1234, 65535],
+                    [54321, 1234, 1234, 65535], [0, 0, 0, 65535], [65535; 4]] {
                     frame(&mut r, &source(space, codes));
                     let raw = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
                     let exported = r.readback_srgb_rgba8().unwrap();
@@ -477,12 +484,16 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
             for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
+            let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{exposure:-2.,contrast:1.5,headroom:4.,..Default::default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Scale, headroom:3., ..Default::default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Clip, exposure:-1., ..Default::default()}] {
                 for headroom in [1.,4.] {
                     for proof in [false,true] {
                         presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
                         presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
-                        presenter.present(&r,&output,view(),[0.;4]).unwrap();
+                        // Retained captures share proof buffers. HDR uniforms must
+                        // still update when the proof inheritance shortcut applies.
+                        capture.inherit_proof(&r,&presenter);
+                        capture.present(&r,&output,view(),[0.;4]).unwrap();
                         let mut expected=if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
                         else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
                         if proof {expected=lut.apply_premultiplied(expected,true,false);}

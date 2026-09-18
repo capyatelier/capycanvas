@@ -18,23 +18,48 @@ fn proof_artwork(original: vec4<f32>) -> vec4<f32> {
     var bounded = clamp(encoded, vec3(0.), vec3(1.));
     if (proof_options.y & 256u) != 0u { bounded = sqrt(bounded); }
     let coordinate = bounded * f32(proof_options.x - 1u);
-    var low = min(vec3<u32>(coordinate), vec3(proof_options.x - 2u));
+    let low = min(vec3<u32>(coordinate), vec3(proof_options.x - 2u));
     let t = coordinate - vec3<f32>(low);
-    var axes = vec3<u32>(0u, 1u, 2u);
-    if t[axes.x] < t[axes.y] { axes = axes.yxz; }
-    if t[axes.y] < t[axes.z] { axes = axes.xzy; }
-    if t[axes.x] < t[axes.y] { axes = axes.yxz; }
-    var previous = proof_at(low);
-    var rgb = previous.rgb;
-    var distances = previous.distances;
-    for (var i = 0u; i < 3u; i += 1u) {
-        let axis = axes[i];
-        low[axis] += 1u;
-        let next = proof_at(low);
-        rgb += t[axis] * (next.rgb - previous.rgb);
-        distances += t[axis] * (next.distances - previous.distances);
-        previous = next;
+    // Spell out the six tetrahedra. Dynamically indexing and updating vectors
+    // in the three-step loop is substantially slower on Android Chrome/Dawn.
+    // Also avoid dynamic vector l-values, which Windows FXC cannot address.
+    // Keep the CPU interpolation's stable x/y/z tie order and accumulation.
+    var first = vec3<u32>(1u, 0u, 0u);
+    var second = vec3<u32>(0u, 1u, 0u);
+    var a = t.x;
+    var b = t.y;
+    var c = t.z;
+    if t.x >= t.y {
+        if t.y >= t.z { }
+        else if t.x >= t.z {
+            second = vec3<u32>(0u, 0u, 1u);
+            b = t.z; c = t.y;
+        } else {
+            first = vec3<u32>(0u, 0u, 1u);
+            second = vec3<u32>(1u, 0u, 0u);
+            a = t.z; b = t.x; c = t.y;
+        }
+    } else {
+        if t.x >= t.z {
+            first = vec3<u32>(0u, 1u, 0u);
+            second = vec3<u32>(1u, 0u, 0u);
+            a = t.y; b = t.x;
+        } else if t.y >= t.z {
+            first = vec3<u32>(0u, 1u, 0u);
+            second = vec3<u32>(0u, 0u, 1u);
+            a = t.y; b = t.z; c = t.x;
+        } else {
+            first = vec3<u32>(0u, 0u, 1u);
+            a = t.z; c = t.x;
+        }
     }
+    let p0 = proof_at(low);
+    let p1 = proof_at(low + first);
+    let p2 = proof_at(low + first + second);
+    let p3 = proof_at(low + vec3<u32>(1u));
+    var rgb = p0.rgb + a * (p1.rgb - p0.rgb) + b * (p2.rgb - p1.rgb) + c * (p3.rgb - p2.rgb);
+    let distances = p0.distances + a * (p1.distances - p0.distances)
+        + b * (p2.distances - p1.distances) + c * (p3.distances - p2.distances);
     if proof_options.z == 0u { rgb = paint.rgb / paint.a; }
     let score = select(distances.x / max(distances.y, 0.000001), distances.x, distances.y < 5.);
     if proof_options.w != 0u && (outside || score > 5.) { rgb = vec3(0.5); }

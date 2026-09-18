@@ -1,5 +1,6 @@
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdrLimits} from "./hdr-limits.test.mjs";
+import {checkProof} from "./proof.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
@@ -236,6 +237,8 @@ try {
   } else if (process.argv.includes("--photo-paint")) {
     await checkPhotoPaint({call,evaluate,settle});
     checkRasterErrors();
+  } else if (process.argv.includes("--proof")) {
+    await checkProof({call,evaluate,settle});
   } else if (process.argv.includes("--shared-workflows")) {
     await checkSdrColor({call,evaluate,settle});
     await checkColorEdits({call,evaluate,settle});

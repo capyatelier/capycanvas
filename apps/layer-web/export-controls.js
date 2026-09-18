@@ -137,6 +137,7 @@ export function chooseProfileLibrary({app,element,button,manage=false}) {
         const row=element("section","profile-entry"),actions=element("div","document-size");
         row.append(element("h3","",entry.name),element("p","",entry.issue??`${entry.channels} · ${entry.bytes} bytes · ${entry.id.slice(0,12)}`));
         if(!manage&&!entry.issue)actions.append(button("Use Profile",()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
+        actions.append(button(entry.visible===false?"Show in Profile Menus":"Hide from Profile Menus",()=>run(async()=>{await app.profile_library(entry.visible===false?"show":"hide",entry.id);await refresh();})));
         actions.append(button("Remove",()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));row.append(actions);list.append(row);
       }
     };

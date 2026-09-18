@@ -430,7 +430,6 @@ impl ImageTransformState {
                     .unwrap_or_else(|| r.create_page(c, "transformed paint page"));
                 page.coordinate = c;
                 page.active_secondary = false;
-                page.secondary_needs_clear = page.secondary.is_some();
                 r.encode_clear(encoder, &page.primary.view, "initialize transformed paint");
                 page.primary_needs_clear = false;
                 r.paint_layers[index].pages.push(page);

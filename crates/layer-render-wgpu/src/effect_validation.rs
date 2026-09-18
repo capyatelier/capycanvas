@@ -76,9 +76,8 @@ impl WgpuRasterizer {
                     queue: self.queue.clone(),
                 };
                 let state = state.clone();
-                startup.compiler.enqueue(startup::OTHER, move || {
-                    let mut state = state.lock().unwrap();
-                    let candidate = state.effects.take().unwrap();
+                let work = move || {
+                    let candidate = state.lock().unwrap().effects.take().unwrap();
                     let value = compile_candidate(
                         &gpu,
                         candidate,
@@ -88,13 +87,36 @@ impl WgpuRasterizer {
                             namespace: Vec::new(),
                         },
                     );
-                    state.effects = Some(value.effects);
-                    state.errors.push(value.result);
-                    if state.error.is_none() {
-                        state.error = value.error;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut state = state.lock().unwrap();
+                        state.effects = Some(value.effects);
+                        state.errors.push(value.result);
+                        if state.error.is_none() {
+                            state.error = value.error;
+                        }
+                        Ok(())
                     }
-                    Ok(())
-                });
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        Box::pin(async move {
+                            let error = value.result.await;
+                            let mut state = state.lock().unwrap();
+                            state.effects = Some(value.effects);
+                            if state.error.is_none() {
+                                state.error = value.error.or(error);
+                            }
+                            // Invalid imported programs reject the candidate, not
+                            // the working renderer or the rest of its shader queue.
+                            Ok(())
+                        })
+                            as Pin<Box<dyn Future<Output = Result<(), String>>>>
+                    }
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                startup.compiler.enqueue(startup::OTHER, work);
+                #[cfg(target_arch = "wasm32")]
+                startup.compiler.enqueue_async(startup::OTHER, work);
             }
             let (tx, rx) = mpsc::channel();
             startup.compiler.enqueue(startup::OTHER, move || {
@@ -196,6 +218,10 @@ fn compile_candidate(
         }
         Ok::<_, GpuRasterError>(())
     })();
+    #[cfg(not(target_arch = "wasm32"))]
+    candidate.compile();
+    #[cfg(target_arch = "wasm32")]
+    let compilation = candidate.compile_async();
     // Drop !Send scope guards here, on the thread which pushed them.
     let validation = validation.pop();
     let memory = memory.pop();
@@ -205,10 +231,14 @@ fn compile_candidate(
         effects: candidate,
         error: result.err().map(|e| e.to_string()),
         result: Box::pin(async move {
+            #[cfg(target_arch = "wasm32")]
+            let compilation_error = compilation.await.err();
+            #[cfg(not(target_arch = "wasm32"))]
+            let compilation_error = None;
             let a = validation.await;
             let b = memory.await;
             let c = internal.await;
-            a.or(b).or(c).map(|e| e.to_string())
+            compilation_error.or_else(|| a.or(b).or(c).map(|e| e.to_string()))
         }),
         namespace: request.namespace,
     }

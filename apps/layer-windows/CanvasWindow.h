@@ -51,6 +51,7 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
+    winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
     // Captured together under mutex; never pair a new DPI with an old camera.
     float inputScale=1;
     uint64_t revision=0;

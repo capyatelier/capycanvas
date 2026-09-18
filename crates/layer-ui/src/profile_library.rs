@@ -130,6 +130,11 @@ pub fn prepare_profile_import(
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProfileLibraryAction {
     Limits,
+    Visibility {
+        hidden: Vec<String>,
+        id: Option<String>,
+        visible: Option<bool>,
+    },
     Inventory {
         entries: Vec<ProfileRecord>,
     },
@@ -152,6 +157,17 @@ impl ProfileLibraryAction {
         use serde_json::json;
         Ok(match self {
             Self::Limits => json!({"read_bytes": PROFILE_READ_LIMIT}),
+            Self::Visibility { mut hidden, id, visible } => {
+                hidden.retain(|id| valid_profile_id(id));
+                hidden.sort(); hidden.dedup();
+                if let Some(id) = id {
+                    if !valid_profile_id(&id) { return Err("Select an imported profile".into()); }
+                    hidden.retain(|key| key != &id);
+                    if visible == Some(false) { hidden.push(id); }
+                }
+                if hidden.len() > PROFILE_LIBRARY_ENTRIES { return Err("Too many hidden profiles; show or remove unused entries".into()); }
+                json!(hidden)
+            }
             Self::Inventory { entries } => json!(profile_inventory(entries)),
             Self::Import { entries } => json!(prepare_profile_import(entries, bytes)?),
             Self::Get { id } => json!(read_library_profile(&id, bytes, true)?),

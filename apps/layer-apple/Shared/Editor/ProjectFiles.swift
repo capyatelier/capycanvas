@@ -29,6 +29,8 @@ import UIKit
     private weak var store: EditorStore?
     private var requestID: UInt64?
     private var approved: (UInt64, UInt64)?
+    // Keep the native picker's URL, including its security scope. The shared
+    // location string identifies the document but cannot recreate file access.
     private var destination: URL?
     var closeWindow: (() -> Void)?
     private var handledClose = false
@@ -83,8 +85,7 @@ import UIKit
         blocksEditor = action != "save" || closeCompletion != nil
         switch action {
         case "save":
-            destination = URL(string: document["location"]["uri"].string)
-            save(as: document["location"].isNull) { [weak self] saved in self?.finish(saved) }
+            save(to: document["location"]["uri"].string) { [weak self] saved in self?.finish(saved) }
         case "new":
             let completed: (JSON?) -> Void = { [weak self] options in
                 guard let self else { return }
@@ -241,8 +242,8 @@ import UIKit
             if error == nil { complete(choice.options) }
         }
     }
-    private func save(as copy: Bool, completion: @escaping (Bool) -> Void) {
-        if !copy, let destination { write(destination, completion: completion); return }
+    private func save(to uri: String, completion: @escaping (Bool) -> Void) {
+        if let destination, destination.absoluteString == uri { write(destination, completion: completion); return }
         task(opening: false) { [weak self] task in
             guard let self else { return }
             deliver(task, name: title, type: .capyProject) { [weak self] url in
@@ -418,7 +419,10 @@ import UIKit
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error { self.report(error) }
-                            else if let recovery { self.store?.recovery.didRestore(recovery) }
+                            else {
+                                self.destination = recovery == nil ? url : nil
+                                if let recovery { self.store?.recovery.didRestore(recovery) }
+                            }
                             self.recovering = nil
                             self.finish(error == nil)
                         }

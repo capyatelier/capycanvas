@@ -73,6 +73,16 @@ internal object Native {
     @JvmStatic external fun colorWriteCopy(task: Long, fd: Int)
     @JvmStatic external fun colorFree(task: Long)
     @JvmStatic external fun captureControl(): Long
+    @JvmStatic external fun proofStatus(handle: Long): String
+    @JvmStatic external fun proofForm(handle: Long): String
+    @JvmStatic external fun presentationTimings(handle: Long, enabled: Boolean): String
+    @JvmStatic external fun proofTask(handle: Long, id: Int, recipe: String, control: Long): Long
+    @JvmStatic external fun proofWork(task: Long)
+    @JvmStatic external fun proofCheck(handle: Long, task: Long)
+    @JvmStatic external fun proofPreservation(task: Long): ByteArray?
+    @JvmStatic external fun proofApply(handle: Long, task: Long, preserved: Boolean)
+    @JvmStatic external fun proofFailed(handle: Long, task: Long, error: String)
+    @JvmStatic external fun proofRelease(task: Long)
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)
     @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long

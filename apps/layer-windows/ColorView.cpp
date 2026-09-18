@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "ColorLibraryView.h"
 #include "ColorView.h"
 #include "NativeMenus.h"
 #include <d2d1_3.h>
@@ -24,18 +25,11 @@ Paint paint(A const& value){
     return {float(value.GetNumberAt(0)),float(value.GetNumberAt(1)),float(value.GetNumberAt(2)),
         value.Size()>3?float(value.GetNumberAt(3)):1.f};
 }
-Paint mix(Paint a,Paint b,float t){return {a.r+(b.r-a.r)*t,a.g+(b.g-a.g)*t,a.b+(b.b-a.b)*t,1.f};}
 winrt::Windows::UI::Color rgba(A const& value){
     auto p=paint(value);return {uint8_t(std::round(p.a*255)),uint8_t(std::round(p.r*255)),
         uint8_t(std::round(p.g*255)),uint8_t(std::round(p.b*255))};
 }
 Point2 point(A const& value){return {float(value.GetNumberAt(0)),float(value.GetNumberAt(1))};}
-D2D1_GRADIENT_MESH_PATCH patch(std::array<Point2,16> const& p,std::array<Paint,4> const& c){
-    return {p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],
-        p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15],
-        c[0],c[1],c[2],c[3],D2D1_PATCH_EDGE_MODE_ANTIALIASED,D2D1_PATCH_EDGE_MODE_ANTIALIASED,
-        D2D1_PATCH_EDGE_MODE_ANTIALIASED,D2D1_PATCH_EDGE_MODE_ANTIALIASED};
-}
 
 // Rasterize at the final glyph transform. The shared browser uses a grayscale
 // reduction of DirectWrite's three-channel mask, with sRGB text correction.
@@ -159,13 +153,12 @@ struct WheelImage {
     int pixels=0;
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
-    com_ptr<ID2D1BitmapBrush> disc;
     hstring ringShape,fieldKey;
     void draw(Image const& image,J const& model,double size,double scale,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
         if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
-            device=Device::get();pixels=next;ring=nullptr;field=nullptr;disc=nullptr;
+            device=Device::get();pixels=next;ring=nullptr;field=nullptr;
             surface=Imaging::SurfaceImageSource(pixels,pixels,false);
             check_hresult(surface.as<ISurfaceImageSourceNativeWithD2D>()->SetDevice(device->d2d.get()));
             image.Source(surface);
@@ -187,88 +180,35 @@ struct WheelImage {
             auto center=point(array(geometry,L"center"));
             float inner=float(num(geometry,L"inner")),outer=float(num(geometry,L"outer"));
             auto shape=str(model,L"shape");uint32_t projection=shape==L"circle"?2:shape==L"triangle"?1:0;
-            if(!ring||ringShape!=shape){
-                auto raw=capy_color_hue_stops(projection);
-                if(!raw)throw hresult_invalid_argument(L"Invalid shared hue guide");
-                std::unique_ptr<char,decltype(&capy_string_free)> owned(raw,capy_string_free);
-                auto stops=A::Parse(to_hstring(raw));
-                std::vector<D2D1_GRADIENT_MESH_PATCH> patches;
-                float start=float(num(model,L"wheel_hue_start_degrees")*3.141592653589793/180.);
-                for(uint32_t stop=0;stop+1<stops.Size();stop++){
-                    auto firstStop=stops.GetObjectAt(stop),lastStop=stops.GetObjectAt(stop+1);
-                    float from=float(num(firstStop,L"offset")),to=float(num(lastStop,L"offset"));
-                    auto firstColor=paint(array(firstStop,L"color")),lastColor=paint(array(lastStop,L"color"));
-                    int segments=std::max(1,int(std::ceil((to-from)*48)));
-                    for(int segment=0;segment<segments;segment++){
-                        float t=float(segment)/segments,u=float(segment+1)/segments;
-                        float a=start+(from+(to-from)*t)*2.f*3.141592653589793f;
-                        float b=start+(from+(to-from)*u)*2.f*3.141592653589793f;
-                        float tangent=4.f/3.f*std::tan((b-a)/4.f);
-                        std::array<Point2,16> p;
-                        for(int row=0;row<4;row++){
-                            float apron=2.f/pixels;
-                            float radius=inner-apron+(outer-inner+2*apron)*row/3.f;
-                            Point2 first{center.x+radius*std::cos(a),center.y+radius*std::sin(a)};
-                            Point2 last{center.x+radius*std::cos(b),center.y+radius*std::sin(b)};
-                            p[row*4]=first;p[row*4+1]={first.x-radius*tangent*std::sin(a),first.y+radius*tangent*std::cos(a)};
-                            p[row*4+2]={last.x+radius*tangent*std::sin(b),last.y-radius*tangent*std::cos(b)};p[row*4+3]=last;
-                        }
-                        auto c0=mix(firstColor,lastColor,t),c1=mix(firstColor,lastColor,u);
-                        auto piece=patch(p,{c0,c1,c0,c1});
-                        piece.topEdgeMode=piece.bottomEdgeMode=piece.leftEdgeMode=piece.rightEdgeMode=D2D1_PATCH_EDGE_MODE_ALIASED;patches.push_back(piece);
-                    }
-                }
-                com_ptr<ID2D1GradientMesh> mesh;
-                check_hresult(context->CreateGradientMesh(patches.data(),uint32_t(patches.size()),mesh.put()));
-                com_ptr<ID2D1Image> target;context->GetTarget(target.put());
-                D2D1_MATRIX_3X2_F transform;context->GetTransform(&transform);
-                com_ptr<ID2D1CommandList> commands;check_hresult(context->CreateCommandList(commands.put()));
-                context->SetTarget(commands.get());context->SetTransform(D2D1::Matrix3x2F::Identity());
-                context->DrawGradientMesh(mesh.get());
-                context->SetTarget(target.get());context->SetTransform(transform);
-                check_hresult(commands->Close());
-                ring=nullptr;
-                check_hresult(context->CreateImageBrush(commands.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,1,1)),ring.put()));
-                ringShape=shape;
+            auto working=str(model,L"rgb_space",L"Srgb");uint32_t rgbSpace=working==L"DisplayP3"?1:working==L"AdobeRgb"?2:working==L"ProPhoto"?3:0;
+            auto ringKey=shape+L"/"+working+L"/"+to_hstring(pixels);
+            if(!ring||ringShape!=ringKey){
+                std::vector<uint8_t> bytes(size_t(pixels)*pixels*4);
+                if(!capy_color_raster(pixels,0,projection,rgbSpace,true,bytes.data(),bytes.size()))throw hresult_invalid_argument(L"Invalid shared hue guide");
+                com_ptr<ID2D1Bitmap> bitmap;check_hresult(context->CreateBitmap(D2D1::SizeU(pixels,pixels),bytes.data(),pixels*4,
+                    D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),bitmap.put()));
+                ring=nullptr;check_hresult(context->CreateImageBrush(bitmap.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,float(pixels),float(pixels))),
+                    D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1.f/pixels,1.f/pixels)),ring.put()));ringShape=ringKey;
             }
-            Paint white{1,1,1,1},black{0,0,0,1},hue=paint(array(model,L"wheel_hue_color"));
-            com_ptr<ID2D1Factory> factory;context->GetFactory(factory.put());
-            if(projection==0){
-                auto s=array(geometry,L"square");float x=float(s.GetNumberAt(0)),y=float(s.GetNumberAt(1)),w=float(s.GetNumberAt(2));
-                com_ptr<ID2D1RoundedRectangleGeometry> clip;
-                float radius=float(std::min(6.,size*.02)/size);
-                check_hresult(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(x,y,x+w,y+w),radius,radius),clip.put()));
-                context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
-                auto gradient=[&](Point2 from,Point2 to,Paint first,Paint last){
-                    D2D1_GRADIENT_STOP stops[]={{0,first},{1,last}};
-                    com_ptr<ID2D1GradientStopCollection> collection;
-                    check_hresult(context->CreateGradientStopCollection(stops,2,D2D1_GAMMA_2_2,D2D1_EXTEND_MODE_CLAMP,collection.put()));
-                    com_ptr<ID2D1LinearGradientBrush> brush;
-                    check_hresult(context->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(from,to),collection.get(),brush.put()));
-                    context->FillRectangle(D2D1::RectF(x,y,x+w,y+w),brush.get());
-                };
-                gradient({x,y},{x+w,y},white,hue);gradient({x,y},{x,y+w},Paint{0,0,0,0},black);
-                context->PopLayer();
-            }else{
-                uint32_t fieldPixels=uint32_t(projection==2?std::ceil(size):pixels);
-                float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
-                auto wanted=shape+L"/"+to_hstring(fieldPixels)+L"/"+to_hstring(hueValue);
-                if(!field||fieldKey!=wanted){
-                    std::vector<uint8_t> bytes(size_t(fieldPixels)*fieldPixels*4);
-                    if(!capy_color_field(fieldPixels,hueValue,projection,bytes.data(),bytes.size()))
-                        throw hresult_invalid_argument(L"Invalid shared color field");
-                    field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
-                        D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
-                    disc=nullptr;
-                    if(projection==2)check_hresult(context->CreateBitmapBrush(field.get(),D2D1::BitmapBrushProperties(),
-                        D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1.f/fieldPixels,1.f/fieldPixels)),disc.put()));
-                    fieldKey=wanted;
-                }
-                if(projection==2){
-                    float radius=float(num(geometry,L"disc_radius"));
-                    context->FillEllipse(D2D1::Ellipse(center,radius,radius),disc.get());
-                }else context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            Paint white{1,1,1,1};
+            uint32_t fieldPixels=uint32_t(pixels);float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
+            auto wanted=ringKey+L"/"+to_hstring(hueValue);
+            if(!field||fieldKey!=wanted){
+                std::vector<uint8_t> bytes(size_t(fieldPixels)*fieldPixels*4);
+                if(!capy_color_raster(fieldPixels,hueValue,projection,rgbSpace,false,bytes.data(),bytes.size()))throw hresult_invalid_argument(L"Invalid shared color field");
+                field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
+                    D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
+                fieldKey=wanted;
             }
+            com_ptr<ID2D1Factory> factory;context->GetFactory(factory.put());com_ptr<ID2D1Geometry> clip;
+            if(projection==0){auto square=array(geometry,L"square");float x=float(square.GetNumberAt(0)),y=float(square.GetNumberAt(1)),w=float(square.GetNumberAt(2));
+                float radius=float(std::min(6.,size*.02)/size);com_ptr<ID2D1RoundedRectangleGeometry> rounded;
+                check_hresult(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(x,y,x+w,y+w),radius,radius),rounded.put()));clip=rounded;
+            }else if(projection==2){com_ptr<ID2D1EllipseGeometry> ellipse;float radius=float(num(geometry,L"disc_radius"));
+                check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,radius,radius),ellipse.put()));clip=ellipse;}
+            if(clip)context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
+            context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            if(clip)context->PopLayer();
             // Stroke one ellipse, as in the reference canvas, to keep both rims consistent.
             context->DrawEllipse(D2D1::Ellipse(center,(inner+outer)/2,(inner+outer)/2),ring.get(),outer-inner);
             float radius=float(std::clamp(size*.04,6.,10.)/size);
@@ -330,6 +270,13 @@ struct View:std::enable_shared_from_this<View>{
     XamlRoot::Changed_revoker scaleChanged;
     CompositionTarget::SurfaceContentsLost_revoker contentsLost;
     explicit View(std::shared_ptr<WorkspaceData> source,bool fit):data(std::move(source)),fitHeight(fit){}
+    std::shared_ptr<ColorLibraryView> libraryView;
+    Flyout colorFlyout;
+    void editColor(){
+        libraryView=std::make_shared<ColorLibraryView>();libraryView->data=data;libraryView->init();
+        ScrollViewer scroll;scroll.Content(libraryView->root);scroll.MaxHeight(std::max(200.,root.XamlRoot().Size().Height-100.));
+        colorFlyout.Content(scroll);colorFlyout.ShowAt(readout);
+    }
     J model()const{return object(data->model,L"color_panel");}
     hstring editingContext()const{return str(model(),L"shape")+L"/"+str(object(data->state,L"colors"),L"paint_slot");}
     void send(J const& action){data->dispatch(O({{L"type",S(L"color")},{L"action",action}}));}
@@ -428,7 +375,10 @@ struct View:std::enable_shared_from_this<View>{
         swapContent.Children().Append(swapFill);swapContent.Children().Append(swapGlyph);swap.Content(swapContent);
         swap.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->swapHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         swap.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swapHovered=false;self->refresh();}});
-        readout=control(L"Color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
+        readout=control(L"Switch color readout",[weak]{if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_readout")}}));});
+        MenuFlyout editMenu;MenuFlyoutItem edit;edit.Text(L"Edit color and palettes…");
+        AutomationProperties::SetAutomationId(edit,L"edit-color-palettes");edit.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->editColor();});
+        editMenu.Items().Append(edit);TrackPopup(editMenu,data);readout.ContextFlyout(editMenu);
         AutomationProperties::SetAutomationId(readout,L"color-readout");stage.Children().Append(readout);
         readoutHit.Fill(clear());readoutBody.Children().Append(readoutHit);
         labelMetrics.UseLayoutRounding(false);labelMetrics.FontFamily(FontFamily(L"Segoe UI"));labelMetrics.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());labelMetrics.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(labelMetrics,Automation::Peers::AccessibilityView::Raw);
@@ -524,6 +474,7 @@ struct View:std::enable_shared_from_this<View>{
     }
     void refresh(){
         auto view=model();if(!view.Size()||!root.XamlRoot())return;
+        if(libraryView&&libraryView->root.IsLoaded())libraryView->refresh();
         auto nextContext=editingContext();if(context!=nextContext){cancel();context=nextContext;}
         double scale=root.XamlRoot().RasterizationScale();
         double extent=fitHeight?std::min(root.ActualWidth(),root.ActualHeight()):root.ActualWidth();

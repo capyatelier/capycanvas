@@ -38,6 +38,9 @@ struct EditorView<Canvas: View>: View {
                 }
             }
             HistogramPresentation(model: store.histogram, palette: palette)
+            ProofIndicator(model: store.proof, palette: palette)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(12).placed(store.snapshot["layout"]["viewport"])
             if let failure = store.failure ?? (store.snapshot["error"].isNull ? nil : store.snapshot["error"].string) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Canvas error").font(.headline)
@@ -95,6 +98,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
         .modifier(OptionalWorkspaceManager(store: store))
         .modifier(ProjectFilesModifier(files: store.projectFiles))
+        .modifier(ProofPresentation(model: store.proof))
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } }), onDismiss: { store.focusCanvas?() }) {

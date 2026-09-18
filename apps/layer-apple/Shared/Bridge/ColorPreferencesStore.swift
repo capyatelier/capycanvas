@@ -87,6 +87,10 @@ final class ColorPreferencesStore: @unchecked Sendable {
     }
     func importProfile(_ url: URL) throws -> JSON {
         let data = try ProjectFileIO.coordinate(url, writing: false) { try self.read($0) }
+        return try importProfile(data)
+    }
+    func importProfile(_ data: Data, requireSaved: Bool = false) throws -> JSON {
+        if requireSaved && !canSave { throw HostFailure(message: "Saving color preferences is disabled") }
         let entry = try library(JSON(["type": "import", "entries": inventory().map(\.raw)]), bytes: data)
         if let directory {
             try prepare(directory)
@@ -97,7 +101,8 @@ final class ColorPreferencesStore: @unchecked Sendable {
         return exportProfile(entry)
     }
     func profiles() throws -> [JSON] {
-        try inventory().map { entry in
+        let hidden = Set(try visibility())
+        return try inventory().map { entry in
             var data = Data(), failure: String?
             if entry["issue"].isNull {
                 do { data = try read(location(entry["id"].string)) }
@@ -105,6 +110,7 @@ final class ColorPreferencesStore: @unchecked Sendable {
             }
             return try library(JSON(["type": "inspect", "entry": entry.raw,
                 "error": failure.map { $0 as Any } ?? NSNull()]), bytes: data)
+                .replacing("visible", with: JSON(!hidden.contains(entry["id"].string)))
         }.sorted { $0["name"].string.localizedStandardCompare($1["name"].string) == .orderedAscending }
     }
     func profile(_ id: String) throws -> JSON {
@@ -115,5 +121,21 @@ final class ColorPreferencesStore: @unchecked Sendable {
     }
     func removeProfile(_ id: String) throws {
         try FileManager.default.removeItem(at: location(id))
+        _ = try visibility(id: id, visible: true)
+    }
+    func showProfile(_ id: String, visible: Bool) throws {
+        _ = try visibility(id: id, visible: visible)
+    }
+    private func visibility(id: String? = nil, visible: Bool? = nil) throws -> [String] {
+        let url = directory?.appendingPathComponent("menus.json")
+        let data = try url.flatMap { try AtomicJSONFile.read($0) }
+        let hidden = try data.map { try JSONSerialization.jsonObject(with: $0) } ?? []
+        let next = try library(JSON(["type": "visibility", "hidden": hidden,
+            "id": id as Any? ?? NSNull(), "visible": visible as Any? ?? NSNull()]))
+        if id != nil {
+            guard let url else { throw HostFailure(message: "Saving color preferences is disabled") }
+            try AtomicJSONFile.write(JSONSerialization.data(withJSONObject: next.raw), to: url)
+        }
+        return next.array.map(\.string)
     }
 }

@@ -69,7 +69,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         if !matches!(
             self.state.platform,
-            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
         ) {
             return Err("Document color changes are unavailable on this host".into());
         }
@@ -89,7 +89,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         if !matches!(
             self.state.platform,
-            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+            Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
         ) {
             return Err("Document color changes are unavailable on this host".into());
         }

@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-@Composable private fun ProfileFileButton(onProfile: (JSONObject) -> Unit) {
+@Composable internal fun ProfileFileButton(label:String="Import ICC Profile…",onProfile: (JSONObject) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -39,7 +39,7 @@ import org.json.JSONObject
         }
     }
     Column {
-        TextButton(enabled = !busy, onClick = { picker.launch(arrayOf("*/*")) }) { Text(if (busy) "Reading profile…" else "Import ICC Profile…") }
+        TextButton(enabled = !busy, onClick = { picker.launch(arrayOf("*/*")) }) { Text(if (busy) "Reading profile…" else label) }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 }
@@ -60,7 +60,7 @@ import org.json.JSONObject
 
 @Composable internal fun ImportProfileButton(onProfile:(JSONObject)->Unit) {
     var library by remember {mutableStateOf(false)}
-    Row {ProfileFileButton(onProfile);TextButton({library=true}){Text("Saved Profiles…")}}
+    Row {ProfileFileButton(onProfile=onProfile);TextButton({library=true}){Text("Saved Profiles…")}}
     if(library)ProfileLibraryDialog({library=false}){profile->onProfile(profile);library=false}
 }
 
@@ -83,6 +83,7 @@ import org.json.JSONObject
                     if(onProfile!=null)TextButton(enabled=!busy&&!entry.has("issue"),onClick={busy=true;scope.launch{try{onProfile(ProfileStore.get(context,entry.getString("id")))}catch(e:Exception){error=e.message}finally{busy=false}}}){Text("Use Profile")}
                     TextButton(enabled=!busy,onClick={busy=true;scope.launch{try{ProfileStore.remove(context,entry.getString("id"));refresh++}catch(e:Exception){error=e.message}finally{busy=false}}}){Text("Remove")}
                 }
+                TextButton(enabled=!busy,onClick={busy=true;scope.launch{try{ProfileStore.show(context,entry.getString("id"),!entry.optBoolean("visible",true));refresh++}catch(e:Exception){error=e.message}finally{busy=false}}}){Text(if(entry.optBoolean("visible",true))"Hide from Profile Menus" else "Show in Profile Menus")}
             }
             if(entries.isEmpty()&&!busy)Text("No imported profiles")
             ProfileFileButton {if(onProfile!=null)onProfile(it)else refresh++}

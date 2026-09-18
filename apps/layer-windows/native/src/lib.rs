@@ -1,12 +1,19 @@
 //! Windows application adapter. After UI-thread surface initialization, the
 //! canvas thread exclusively owns this object; UI callbacks only enqueue work.
 #![deny(unsafe_op_in_unsafe_fn)]
+#![recursion_limit = "256"]
 #[cfg(any(target_os = "windows", test))]
 mod actions;
 #[cfg(any(target_os = "windows", test))]
 mod document_io;
 #[cfg(any(target_os = "windows", test))]
 mod documents;
+#[cfg(any(target_os = "windows", test))]
+mod document_workflows;
+#[cfg(any(target_os = "windows", test))]
+mod color_storage;
+#[cfg(any(target_os = "windows", test))]
+mod recovery;
 mod events;
 #[cfg(any(target_os = "windows", test))]
 mod filter_packages;

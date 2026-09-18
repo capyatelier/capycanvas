@@ -5,6 +5,7 @@ mod image_import;
 mod color_edit;
 mod source_edit;
 mod color_preferences;
+mod proof;
 mod output;
 mod editor;
 mod header;
@@ -22,6 +23,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
@@ -85,7 +87,12 @@ impl CanvasRenderer for WebRenderer {
         self.0.as_ref().map(|gpu| gpu.renderer.document_color()).unwrap_or_default()
     }
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
-        self.renderer()?.adopt_prepared_color(color)
+        let changed = self.renderer()?.adopt_prepared_color(color)?;
+        if changed {
+            let gpu = self.0.as_mut().unwrap();
+            gpu.presenter = ViewportPresenter::for_renderer(&gpu.renderer, gpu.config.format);
+        }
+        Ok(changed)
     }
     fn supports_tiled_sources(&self) -> bool {
         self.0.as_ref().is_some_and(|gpu| gpu.renderer.supports_tiled_sources())
@@ -164,6 +171,9 @@ impl CanvasRenderer for WebRenderer {
         &mut self,
     ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
         self.0.as_mut()?.renderer.take_filter_previews()
+    }
+    fn cancel_filter_previews(&mut self) {
+        if let Some(gpu) = &mut self.0 { gpu.renderer.cancel_filter_previews(); }
     }
     fn request_thumbnail(
         &mut self,
@@ -256,57 +266,43 @@ impl WebApp {
         modules: JsValue,
         mode: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
-            serde_wasm_bindgen::from_value(modules).map_err(js)?;
-        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
-        let change = self
-            .session
-            .load_effect_package(
-                manifest,
-                |name| {
-                    modules
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| format!("Missing filter module: {name}"))
-                },
-                mode,
-            )
-            .map_err(js)?;
-        serialize(&change)
+        self.install_filters(manifest, modules, mode, false)
     }
-    pub fn filter_preview_revision(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.filter_preview_revision())
-    }
-    pub fn request_filter_previews(
+    /// Startup refresh owns only the library. It must not block workspace
+    /// adoption/input or migrate programs embedded in a reopened document.
+    pub fn load_filter_library(
         &mut self,
-        request: u64,
+        manifest: &str,
+        modules: JsValue,
+        mode: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        self.install_filters(manifest, modules, mode, true)
+    }
+    pub fn poll_filter_previews(
+        &mut self,
         filters: JsValue,
+        cache: JsValue,
         width: u32,
         height: u32,
-    ) -> Result<bool, JsValue> {
-        if !self.gpu_ready() {
-            return Ok(false);
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let filters = if self.gpu_ready() {
+            serde_wasm_bindgen::from_value(filters).map_err(js)?
+        } else { Vec::new() };
+        let cache = serde_wasm_bindgen::from_value(cache).map_err(js)?;
+        let update = self.session.poll_filter_previews(
+            (now_ms.max(0.) * 1_000_000.) as u64, filters, [width, height],
+            cache,
+        ).map_err(js)?;
+        let result = serialize(&update.status)?;
+        if let Some(atlas) = update.image {
+            let image = atlas.image;
+            let header = serialize(&(image.request_id, image.width, image.height, atlas.filters))?;
+            js_sys::Reflect::set(&result, &JsValue::from_str("atlas"), &header)?;
+            js_sys::Reflect::set(&result, &JsValue::from_str("bytes"),
+                &js_sys::Uint8Array::from(image.bytes.as_slice()))?;
         }
-        let filters = serde_wasm_bindgen::from_value(filters).map_err(js)?;
-        self.session
-            .request_filter_previews(request, filters, [width, height])
-            .map_err(js)
-    }
-    pub fn take_filter_previews(&mut self) -> Result<JsValue, JsValue> {
-        let Some(result) = self.session.renderer_mut().take_filter_previews() else {
-            return Ok(JsValue::NULL);
-        };
-        let result = result.map_err(js)?;
-        let image = result.image;
-        // One typed byte transfer, not a JavaScript number/object per channel.
-        // Views of the returned atlas share this array in the browser.
-        let header = serialize(&(image.request_id, image.width, image.height, result.filters))?;
-        js_sys::Reflect::set(
-            &header,
-            &JsValue::from_str("bytes"),
-            &js_sys::Uint8Array::from(image.bytes.as_slice()),
-        )?;
-        Ok(header)
+        Ok(result)
     }
     pub fn action_tooltip(&self, label: &str, action: JsValue) -> Result<String, JsValue> {
         let action = serde_wasm_bindgen::from_value(action).map_err(js)?;
@@ -404,6 +400,7 @@ impl WebApp {
             })
             .map_err(js)?;
         Ok(Self {
+            proof: Default::default(),
             session,
             workspaces: None,
             canvas,
@@ -516,7 +513,9 @@ impl WebApp {
             gpu.renderer.device().destroy();
         }
         self.deferred_contacts.clear();
-        self.overviews.clear();
+        // Retained DOM navigators keep their registration and geometry through
+        // device replacement; only resources owned by the retired GPU expire.
+        for slot in self.overviews.values_mut() { slot.gpu = None; }
         serialize(&change)
     }
     pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
@@ -590,9 +589,9 @@ impl WebGpu {
             web_sys::console::error_1(&js(error))
         }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let presenter = ViewportPresenter::new(&device, config.format);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
+        let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
         if let Some(error) = validation.pop().await {
@@ -611,6 +610,31 @@ impl WebGpu {
 }
 
 impl WebApp {
+    fn install_filters(
+        &mut self,
+        manifest: &str,
+        modules: JsValue,
+        mode: JsValue,
+        library_only: bool,
+    ) -> Result<JsValue, JsValue> {
+        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
+            serde_wasm_bindgen::from_value(modules).map_err(js)?;
+        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
+        let read = |name: &str| {
+            modules
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("Missing filter module: {name}"))
+        };
+        let change = if library_only {
+            self.session.load_effect_library(manifest, read, mode)
+        } else {
+            self.session.load_effect_package(manifest, read, mode)
+        }
+        .map_err(js)?;
+        serialize(&change)
+    }
+
     fn prepare_startup(&mut self) -> Result<(), JsValue> {
         let engine = self.session.engine();
         let Some(gpu) = &engine.backend().0 else {
@@ -985,6 +1009,11 @@ impl WebApp {
             }
         }
         change.canvas_wake |= !self.startup.complete;
+        let lut = self.proof.lut(&self.session);
+        let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
+        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
+        }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
         let mut overlay = Vec::new();

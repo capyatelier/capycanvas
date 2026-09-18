@@ -66,6 +66,7 @@ fn source_neighborhood_brushes_match_materialized_pixels_across_cache_and_predic
         max: Point { x: 2304., y: 512. },
     };
     for execution in [
+        BrushExecution::Dry,
         BrushExecution::Smudge,
         BrushExecution::Wet,
         BrushExecution::Liquify,

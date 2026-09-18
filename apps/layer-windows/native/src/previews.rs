@@ -1,6 +1,5 @@
 //! Bounded binary UI queries. No GPU wait or pixel JSON.
 use layer_host::NativeHost;
-use layer_render::CanvasRenderer;
 use serde::Deserialize;
 use std::{
     ffi::{CString, c_char},
@@ -10,78 +9,27 @@ use std::{
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Query {
-    request: String,
-    revision: Option<String>,
     filters: Vec<Arc<str>>,
     size: [u32; 2],
+    cache: layer_ui::FilterPreviewCache,
 }
 pub struct CapyPreview {
     metadata: CString,
     bytes: Vec<u8>,
 }
-fn token(epoch: u64, revision: (u64, u64, u64)) -> String {
-    format!("{epoch}:{}:{}:{}", revision.0, revision.1, revision.2)
-}
-fn validate(query: &Query) -> Result<u64, String> {
-    if query.filters.len() > 8
-        || query.filters.iter().any(|id| id.len() > 256)
-        || query.size.contains(&0)
-        || query.size[0] > 512
-        || query.size[1] > 128
-    {
-        return Err("Invalid filter preview bounds".into());
-    }
-    query
-        .request
-        .parse()
-        .map_err(|_| "Invalid preview request".into())
-}
 pub fn query(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
     let query: Query = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    let request = validate(&query)?;
-    let revision = host.session.filter_preview_revision();
-    let current = token(host.session.state().document_file.epoch, revision);
-    let matched = query.revision.as_deref() == Some(current.as_str());
-    let status = host.query(serde_json::json!({
-        "type":"filter_previews", "request":request,
-        "revision":if matched {Some(revision)} else {None},
-        "filters":query.filters, "size":query.size
-    }))?;
-    let renderer = host.session.renderer_mut();
-    if let Some(gpu) = &renderer.0 {
-        gpu.device()
-            .poll(wgpu::PollType::Poll)
-            .map_err(|e| e.to_string())?;
-    }
-    let mut metadata = serde_json::json!({"revision":current,"accepted":status["accepted"]});
-    let bytes = if let Some(atlas) = renderer.take_filter_previews() {
-        let atlas = atlas.map_err(|e| e.to_string())?;
+    let update = host.poll_filter_previews(query.filters, query.size, query.cache)?;
+    let mut metadata = serde_json::to_value(update.status).map_err(|e| e.to_string())?;
+    let bytes = if let Some(atlas) = update.image {
         let image = atlas.image;
-        let count = atlas.filters.len();
-        if count == 0
-            || count > 8
-            || image.width == 0
-            || image.width > 512
-            || image.height == 0
-            || !(image.height as usize).is_multiple_of(count)
-            || image.height as usize / count > 128
-            || image.stride != image.width * 4
-            || image.bytes.len() != image.stride as usize * image.height as usize
-        {
-            return Err("Invalid filter preview atlas".into());
-        }
         metadata["atlas"] = serde_json::json!({
             "request":image.request_id.to_string(), "width":image.width,
             "height":image.height, "stride":image.stride, "filters":atlas.filters
         });
         image.bytes
-    } else {
-        Vec::new()
-    };
-    Ok(CapyPreview {
-        metadata: CString::new(metadata.to_string()).map_err(|e| e.to_string())?,
-        bytes,
-    })
+    } else { Vec::new() };
+    CapyPreview::packet(metadata, bytes)
 }
 /// # Safety
 /// The packet must be null or a live uniquely owned result of a canvas UI query.
@@ -225,28 +173,26 @@ fn pack_layer_thumbnails(
 mod tests {
     use super::*;
     #[test]
-    fn identity_preserves_large_revisions_and_document_replacement() {
-        let a = token(0, (u64::MAX, u64::MAX - 1, 1));
-        assert_ne!(a, token(1, (u64::MAX, u64::MAX - 1, 1)));
-        assert_ne!(a, token(0, (u64::MAX - 1, u64::MAX - 1, 1)));
-        assert!(a.contains(&u64::MAX.to_string()));
+    fn preview_transport_uses_shared_identity_and_cache_bounds() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let epoch = host.session.state().document_file.epoch;
+        let request = |filters: Vec<&str>, rows: Vec<&str>| serde_json::json!({
+            "filters": filters, "size": [512, 128],
+            "cache": {"key": null, "rows": rows}
+        }).to_string();
+        let json = request(vec!["curves"], vec![]);
+        let packet = query(&mut host, &json).unwrap();
+        let before: serde_json::Value = serde_json::from_str(packet.metadata.to_str().unwrap()).unwrap();
+        assert!(before["key"].as_str().unwrap().starts_with(&format!("{epoch}:")));
+        host.session.reset_filter_previews();
+        let packet = query(&mut host, &json).unwrap();
+        let after: serde_json::Value = serde_json::from_str(packet.metadata.to_str().unwrap()).unwrap();
+        assert_ne!(before["key"], after["key"]);
+        assert!(query(&mut host, &request(vec![], vec!["curves"; 65])).is_err());
+        assert!(query(&mut host, r#"{"filters":[],"size":[512,128],"request":"1"}"#).is_err());
     }
     #[test]
-    fn transport_bounds_and_owned_binary_lifetime() {
-        let mut q = Query {
-            request: u64::MAX.to_string(),
-            revision: None,
-            filters: vec!["curves".into(); 8],
-            size: [512, 128],
-        };
-        assert_eq!(validate(&q).unwrap(), u64::MAX);
-        q.filters.push("curves".into());
-        assert!(validate(&q).is_err());
-        q.filters.pop();
-        for size in [[0, 1], [513, 128], [512, 129]] {
-            q.size = size;
-            assert!(validate(&q).is_err());
-        }
+    fn owned_binary_lifetime() {
         let p = Box::into_raw(Box::new(CapyPreview {
             metadata: CString::new("{}").unwrap(),
             bytes: vec![1, 2, 3, 4],

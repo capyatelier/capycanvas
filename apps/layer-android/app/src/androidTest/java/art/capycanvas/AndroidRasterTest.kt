@@ -3,6 +3,7 @@ package art.capycanvas
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import android.view.WindowManager
@@ -175,6 +176,134 @@ class AndroidRasterTest {
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+
+    @Test fun proofSetupCompareEditPortabilityExportAndRecovery() {
+        val profilePath=InstrumentationRegistry.getArguments().getString("proofProfile")
+        Assume.assumeTrue("Supply -e proofProfile /data/local/tmp/capy-proof-cmyk.icc",profilePath!=null)
+        val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
+        val target=runBlocking{ProfileStore.import(activity,targetBytes)}
+        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun setup(command:String="soft_proof_setup") {
+            action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isNotEmpty()}
+            compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile").fetchSemanticsNodes().isNotEmpty()}
+        }
+        fun pick(name:String){
+            compose.onNodeWithTag("proof-profile").performClick()
+            compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).onFirst().performScrollTo().performClick()
+            compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile-picker").fetchSemanticsNodes().isEmpty()}
+            compose.onNodeWithTag("proof-profile").assertTextContains(name)
+        }
+        fun apply(){compose.onNodeWithText("Apply").performClick();compose.waitUntil(120_000){!host.proof.busy&&compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty()};assertNull(host.proof.error)}
+        fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
+        fun status()=native{JSONObject(Native.proofStatus(it))}
+        fun hist():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        // Real first-use dialog, cancellation, sensible defaults.
+        setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
+        compose.onNodeWithText("Black ink").assertExists()
+        compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
+        // Obtain a portable RGB ICC through the real profiled file pipeline.
+        val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
+        png("proof-original.png",wide);open(File(files,"proof-original.png"))
+        val profiles=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("profiles")}
+        val original=profiles.objects().first{it.getJSONObject("profile").has("Icc")}
+        val array=original.getJSONObject("profile").getJSONArray("Icc")
+        val originalBytes=ByteArray(array.length()){array.getInt(it).toByte()}
+        val embedded=runBlocking{ProfileStore.import(activity,originalBytes)}
+        compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        setup();pick(embedded.getString("name"));apply()
+        assertTrue("The saved ICC, not the same-named builtin, must be selected",current().getJSONObject("profile").has("Icc"))
+        val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
+        runBlocking{ProfileStore.remove(activity,originalEntry.getString("id"))}
+        val baseline=manifest(save("proof-original.capy"))
+        setup();pick(target.getString("name"));compose.onNodeWithTag("proof-profile").performClick()
+        compose.onNodeWithText("Document Profile").assertExists()
+        compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
+        compose.onNodeWithText("Done").performClick();compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
+        assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
+        // An unwritable library path fails before document/history publication.
+        setup();pick(target.getString("name"))
+        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
+        println("Preparing replacement with blocked local profile storage")
+        val oldDirectory=ColorPreferencesStore.directoryForTest
+        val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
+        ColorPreferencesStore.directoryForTest=blocked
+        compose.onNodeWithText("Apply").performClick()
+        compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty())}
+        assertNotNull("Preservation must fail before replacing ${current().getString("name")}",host.proof.error)
+        assertEquals(embedded.getString("name"),current().getString("name"))
+        ColorPreferencesStore.directoryForTest=oldDirectory
+        apply()
+        val preserved=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
+        assertEquals(array.toString(),runBlocking{ProfileStore.get(activity,preserved.getString("id"))}.getJSONObject("profile").getJSONArray("Icc").toString())
+        val replacement=manifest(save("proof-replacement.capy"))
+        assertEquals(target.getString("name"),replacement.getJSONObject("tiled_sources").getJSONObject("proof").getString("name"))
+        assertEquals(baseline.getJSONArray("blobs").toString(),replacement.getJSONArray("blobs").toString())
+        println("Proof UI first use, cancel, Document Profile retention, preservation failure/retry and exact original ICC copy passed")
+        native{Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(it,obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1.0,0.0,.7,1.0))).toString())}
+        val before=hist();stroke(0.0);val painted=hist();assertNotEquals(before,painted)
+        action("undo");tick();assertEquals(before,hist());action("redo");tick();assertEquals(painted,hist())
+        val master=save("proof-painted.capy")
+        val on=png("proof-on.png")
+        action("gamut_warning");action("soft_proof");tick()
+        assertFalse(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        assertEquals(painted,hist());assertEquals(hash(on),hash(png("proof-warning.png")))
+        action("gamut_warning");tick();assertEquals("",status().getString("text"));assertEquals(hash(on),hash(png("proof-off.png")))
+        // Removing both local entries models moving the file to another machine.
+        runBlocking{ProfileStore.list(activity).forEach{ProfileStore.remove(activity,it.getString("id"))}}
+        open(File(files,"proof-painted.capy"));compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        assertFalse(native{state(it).getBoolean("soft_proof")||state(it).getBoolean("gamut_warning")})
+        assertEquals("",status().getString("text"));assertEquals(target.getString("name"),current().getString("name"))
+        assertEquals(manifest(master).getJSONArray("blobs").toString(),manifest(save("proof-reopened.capy")).getJSONArray("blobs").toString())
+        action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
+        assertEquals(painted,hist())
+        compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.snapshot?.optBoolean("brush_ready")==true&&host.failure==null}
+        tick();assertEquals(painted,hist());assertEquals(hash(on),hash(png("proof-recovered.png")))
+        scenario.recreate();scenario.onActivity{activity=it};compose.waitUntil(60_000){host.snapshot?.optBoolean("brush_ready")==true};tick()
+        assertEquals(target.getString("name"),current().getString("name"));assertEquals(painted,hist())
+        assertNull(host.failure);assertNull(host.actionError)
+        println("Proofed editing/history, clean viewing toggles, exact histogram/export, portable save/reopen and GPU/Activity replacement passed")
+        // Cancel while the native CPU worker is preparing, then reject a fully
+        // prepared result whose dialog request has been dismissed.
+        val retained=current().toString()
+        repeat(2){case->
+            setup()
+            val flag=Native.captureControl()
+            val task=native{h->val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
+            try{
+                if(case==0){
+                    val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+                    val started=java.util.concurrent.CountDownLatch(1)
+                    val worker=kotlin.concurrent.thread{started.countDown();try{Native.proofWork(task)}catch(e:Throwable){failure.set(e)}}
+                    assertTrue(started.await(5,java.util.concurrent.TimeUnit.SECONDS))
+                    SystemClock.sleep(20);Native.captureCancel(flag);worker.join(30_000)
+                    assertFalse("Cancelled proof worker must stop",worker.isAlive)
+                    assertNotNull("Cancellation must reject preparation",failure.get())
+                }else Native.proofWork(task)
+                compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+                assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
+                assertEquals(retained,current().toString())
+                assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
+            }finally{Native.proofRelease(task);Native.captureFree(flag)}
+        }
+        println("Native preparation cancellation and stale-result rejection passed")
+        InstrumentationRegistry.getArguments().getString("proofPortableFile")?.let{path->
+            val bytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")).use{it.readBytes()}
+            val portable=File(files,"proof-from-web.capy").apply{writeBytes(bytes)}
+            open(portable);compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+            assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
+            assertEquals(target.getJSONObject("profile").toString(),current().getJSONObject("profile").toString())
+            assertEquals("",status().getString("text"))
+            val plain=png("web-portable-normal.png");val exact=hist()
+            action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
+            assertEquals(exact,hist());assertEquals(hash(plain),hash(png("web-portable-proof.png")))
+            val archive=manifest(save("proof-from-web-resaved.capy"))
+            assertEquals(1,archive.getJSONObject("tiled_sources").getJSONArray("profiles").length())
+            assertEquals("DisplayP3",archive.getJSONObject("document").getJSONObject("color").getString("space"))
+            println("Web-created P3/U16 file opened, proofed, resaved and exported on Android without installed profiles")
+        }
+    }
 
     private fun summary(values: org.json.JSONArray): JSONObject? {
         if(values.length()==0)return null
@@ -583,6 +712,191 @@ class AndroidRasterTest {
             DocumentController.nativeFileJobsForTest = true
             for (uri in uris) resolver.delete(uri, null, null)
         }
+    }
+
+    @Test fun largePhotoFilterPreviews() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
+        val photo = File(activity.filesDir, "filter-memory-test.jpg")
+        assertTrue(photo.isFile)
+        open(photo)
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        fun storage() = native {
+            JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())).getLong("resident_bytes")
+        }
+        val tab = native { state(it).array("tabs").getJSONObject(0) }
+        assertEquals(9504, tab.getInt("width")); assertEquals(6336, tab.getInt("height"))
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        val before = storage()
+        val started = SystemClock.uptimeMillis()
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+        compose.waitUntil(60_000) { host.filterPreviewCache.images["curves"] != null }
+        val after = storage()
+        val image = host.filterPreviewCache.images.getValue("curves").image.toPixelMap()
+        assertTrue("The preview contains photo pixels", (0 until image.width).any { image[it, image.height / 2].alpha > .5f })
+        assertTrue("Pointwise previews retain bounded scratch", after - before < 96L * 1024 * 1024)
+        assertNull(host.failure)
+        val result = obj("before_bytes" to before, "after_bytes" to after,
+            "elapsed_ms" to (SystemClock.uptimeMillis() - started), "process_pss_kib" to android.os.Debug.getPss())
+        File(activity.getExternalFilesDir(null), "filter-memory.json").writeText(result.toString(2))
+        println("61 MP All filters: $result")
+    }
+
+    @Test fun largePhotoFilterPreviewDrawing() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterDrawing") == "true")
+        open(File(activity.filesDir, "filter-memory-test.jpg"))
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        if (host.snapshot!!.getJSONObject("state").getJSONObject("workspace").optBoolean("zen_mode")) {
+            action(obj("type" to "invoke", "command" to "zen_mode"))
+        }
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, .5))))
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        fun panel(visible: Boolean) {
+            action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to !visible)))
+            if (visible) {
+                val current = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { it.getInt("id") == group }
+                if (current.optString("active") != "adjustments") action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+                // Selecting an already-active tab expands its controls. That
+                // consumes the next canvas contact as dismissal, not painting.
+                action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+            }
+        }
+        panel(false)
+        // Warm the brush/source before comparing timed strokes. Motion uses real
+        // OS stylus events and the host's real Choreographer; no manual frames.
+        motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 60, 4752.0 to 3168.0)
+        val runs = org.json.JSONArray()
+        val output = File(activity.getExternalFilesDir(null), "filter-preview-drawing.json")
+        for (visible in listOf(false, true, true, false)) {
+            panel(visible)
+            if (visible) {
+                // Invalidate the source without changing its geometry, then
+                // start drawing while the large-photo probe is still pending.
+                action(obj("type" to "set_layer_opacity", "opacity" to if (runs.length() % 2 == 0) .99 else 1.0))
+                compose.waitUntil(10_000) { host.filterPreviewCache.pending }
+            }
+            val previous = host.filterPreviewCache.images["curves"]?.key
+            val beforeRevision = native { state(it).getJSONObject("document_file").getLong("revision") }
+            val result = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0)
+            result.put("filters_visible", visible)
+            val afterRevision = native { state(it).getJSONObject("document_file").getLong("revision") }
+            assertTrue("The timed stylus contact must paint, not dismiss UI", afterRevision > beforeRevision)
+            result.put("before_revision", beforeRevision).put("after_revision", afterRevision)
+            if (visible) {
+                val released = SystemClock.uptimeMillis()
+                compose.waitUntil(60_000) {
+                    host.filterPreviewCache.images["curves"]?.let { it.key != previous } == true
+                }
+                result.put("preview_after_release_ms", SystemClock.uptimeMillis() - released)
+                assertNull(host.failure)
+            }
+            runs.put(result)
+            output.writeText(obj("runs" to runs).toString(2))
+        }
+        println("Filter preview drawing results: ${output.absolutePath}")
+        fun p95(values: List<Double>) = values.sorted()[((values.size - 1) * .95).toInt()]
+        fun metric(run: JSONObject, field: String): Double {
+            val timeline = run.getJSONObject("timeline")
+            val frames = timeline.array("frames").values().map { it as org.json.JSONArray }
+            return when (field) {
+                "queue" -> p95(timeline.array("inputs").values().map { it as org.json.JSONArray }
+                    .map { (it.getLong(2) - it.getLong(1)) / 1e6 })
+                "cpu" -> p95(frames.map { it.getLong(10) / 1e6 })
+                else -> p95(frames.zipWithNext { a, b -> (b.getLong(0) - a.getLong(0)) / 1e6 })
+            }
+        }
+        val controls = runs.objects().filter { !it.getBoolean("filters_visible") }
+        for (run in runs.objects().filter { it.getBoolean("filters_visible") }) {
+            for ((field, tolerance) in listOf("queue" to 2.0, "cpu" to 2.0, "gap" to .5)) {
+                assertTrue("Preview $field p95 must stay within $tolerance ms of the drawing control",
+                    metric(run, field) <= controls.maxOf { metric(it, field) } + tolerance)
+            }
+            assertTrue("Preview must resume promptly after drawing", run.getLong("preview_after_release_ms") < 20_000)
+        }
+    }
+
+    @Test fun largePhotoFilterPreviewLifecycle() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("filterPhoto") == "true")
+        open(File(activity.filesDir, "filter-memory-test.jpg"))
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle()
+        }
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "adjustments", "visible" to true)))
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { "adjustments" in it.array("panels").values() }.getInt("id")
+        fun collapsed(value: Boolean) = action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to value)))
+        collapsed(false)
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "adjustments"))
+        action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+        fun pending() = compose.waitUntil(10_000) { host.filterPreviewCache.pending }
+        fun completed(previous: String? = null) {
+            compose.waitUntil(20_000) { host.filterPreviewCache.images["curves"]?.let { it.key != previous } == true }
+            assertNull(host.failure)
+        }
+        pending(); collapsed(true)
+        compose.waitUntil(5000) { !host.filterPreviewCache.pending }
+        val idleRequests = host.filterPreviewCache.request
+        SystemClock.sleep(300)
+        assertEquals("Hidden previews admit no new work", idleRequests, host.filterPreviewCache.request)
+        collapsed(false); completed()
+
+        var old = host.filterPreviewCache.images.getValue("curves").key
+        action(obj("type" to "set_layer_opacity", "opacity" to .98)); pending()
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        SystemClock.sleep(300)
+        assertFalse("Background work stopped", host.filterPreviewCache.pending)
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        completed(old)
+
+        old = host.filterPreviewCache.images.getValue("curves").key
+        action(obj("type" to "set_layer_opacity", "opacity" to .97)); pending()
+        scenario.onActivity { host.restartCanvas() }
+        compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("shaders_ready") == true }
+        completed(old)
+
+        action(obj("type" to "set_layer_opacity", "opacity" to .96)); pending()
+        val replacement = File(files, "filter-replacement.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.GREEN)
+        replacement.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        old = host.filterPreviewCache.images["curves"]?.key ?: ""
+        val previousEpoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+        open(replacement); scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch") != previousEpoch }
+        completed(old)
+        val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+        val tile = host.filterPreviewCache.images.getValue("curves")
+        assertTrue("Only the replacement document is presented", tile.key.startsWith("$epoch:"))
+        val image = tile.image.toPixelMap()
+        assertTrue("Replacement pixels reached the native bitmap", (0 until image.width).any {
+            val p = image[it, image.height / 2]; p.green > p.red + .5f && p.green > p.blue + .5f
+        })
+        assertNull(host.failure)
     }
 
     @Test fun largePhotoSustainedDrawing() {

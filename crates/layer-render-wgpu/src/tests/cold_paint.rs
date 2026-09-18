@@ -333,6 +333,7 @@ fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions
 #[test]
 fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
     for execution in [
+        BrushExecution::Dry,
         BrushExecution::Smudge,
         BrushExecution::Wet,
         BrushExecution::Liquify,

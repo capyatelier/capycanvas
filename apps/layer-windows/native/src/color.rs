@@ -4,6 +4,53 @@ use layer_ui::{
 };
 use std::ffi::{CString, c_char};
 
+/// Stateless shared numeric parsing and display projection. No document host is accessed.
+/// # Safety
+/// The input must be a readable, NUL-terminated UTF-8 JSON string for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_color_ui(input: *const c_char) -> *mut c_char {
+    if input.is_null() { return std::ptr::null_mut(); }
+    let result = std::panic::catch_unwind(|| {
+        let input = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
+        if input.len() > 256 * 1024 { return Err("Color request is too large".into()); }
+        layer_ui::color_ui(serde_json::from_str(input).map_err(|e| e.to_string())?)
+    }).unwrap_or_else(|_| Err("Color request failed".into()));
+    json(match result { Ok(value) => value, Err(error) => serde_json::json!({"error": error}) })
+}
+
+/// Shared export form normalization; file validation happens on the worker.
+/// # Safety
+/// input is a readable NUL-terminated UTF-8 JSON string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_export_draft(input: *const c_char) -> *mut c_char {
+    if input.is_null() { return std::ptr::null_mut(); }
+    let result = std::panic::catch_unwind(|| -> Result<serde_json::Value, String> {
+        #[derive(serde::Deserialize)]
+        struct Request { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction, #[serde(default)] validate: bool, extent: Option<[u32;2]> }
+        let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
+        let request: Request = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let draft=request.recipe.draft(request.action);
+        if request.validate {
+            draft.recipe.validate()?;
+            draft.recipe.size.extent(request.extent.ok_or("Export extent is missing")?)?;
+            draft.recipe.output_resolution(None)?;
+        }
+        serde_json::to_value(draft).map_err(|e| e.to_string())
+    }).unwrap_or_else(|_| Err("Export form failed".into()));
+    json(result.unwrap_or_else(|error| serde_json::json!({"error":error})))
+}
+/// Shared picker pixels in the document's RGB coordinates, projected to sRGB.
+/// # Safety
+/// output is writable for length bytes for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_color_raster(side: u32, hue: f32, projection: u32, space: u32, guide: bool, output: *mut u8, length: usize) -> bool {
+    use layer_core::color::RgbSpace;
+    let (Some(shape), Some(space)) = (shape(projection), RgbSpace::ALL.get(space as usize).copied()) else { return false; };
+    if !(1..=2048).contains(&side) || !hue.is_finite() || output.is_null() || length != side as usize * side as usize * 4 { return false; }
+    let bytes = unsafe { std::slice::from_raw_parts_mut(output, length) };
+    if guide { layer_ui::render_hue_guide_in(side, shape, space, RgbSpace::Srgb, bytes) }
+    else { layer_ui::render_color_field(side, shape, hue, space, RgbSpace::Srgb, bytes) }
+}
 fn shape(value: u32) -> Option<ColorShape> {
     match value {
         0 => Some(ColorShape::Square),

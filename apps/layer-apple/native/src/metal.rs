@@ -26,6 +26,7 @@ struct Surface {
 
 #[derive(Default)]
 pub struct MetalHost {
+    pub(crate) proof: layer_ui::proof_workflow::ProofView,
     surface: Option<Surface>,
     instance: Option<wgpu::Instance>,
     cursor: CanvasCursor,
@@ -322,6 +323,8 @@ impl MetalHost {
         } else {
             Vec::new()
         };
+        let proof = self.proof.lut(&host.session);
+        let (proof_enabled, gamut) = (host.session.state().soft_proof, host.session.state().gamut_warning);
         let surface = self.surface.as_mut().unwrap();
         let gpu = host
             .session
@@ -364,6 +367,7 @@ impl MetalHost {
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
         surface.presenter.set_overviews(gpu, &overviews);
+        surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),

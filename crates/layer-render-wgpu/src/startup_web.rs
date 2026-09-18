@@ -1,13 +1,16 @@
-//! One bounded job per browser task. Futures own GPU handles, never a borrow of
-//! the live renderer/session. The host yields a frame between compilation jobs.
+//! Bounded jobs per browser task. Futures own GPU handles, never a borrow of
+//! the live renderer/session. Batch up to four same-priority pipeline promises;
+//! CPU recipes and effect transactions keep their individual task boundaries.
 use super::*;
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-type Work = Box<dyn FnOnce() -> Result<(), String>>;
+type Completion = Pin<Box<dyn Future<Output = Result<(), String>>>>;
+type Work = Box<dyn FnOnce() -> Completion>;
 struct Job {
     priority: u8,
     work: Work,
     complete: Option<Box<dyn FnOnce()>>,
+    batchable: bool,
 }
 #[derive(Default)]
 struct Queue {
@@ -28,10 +31,14 @@ impl Compiler {
         })
     }
     pub fn enqueue(&self, priority: u8, work: impl FnOnce() -> Result<(), String> + 'static) {
+        self.enqueue_async(priority, move || Box::pin(std::future::ready(work())));
+    }
+    pub fn enqueue_async(&self, priority: u8, work: impl FnOnce() -> Completion + 'static) {
         self.queue.borrow_mut().jobs.push_back(Job {
             priority,
             work: Box::new(work),
             complete: None,
+            batchable: false,
         });
     }
     pub fn pipeline<T: 'static>(&self, pipeline: &Deferred<T>, priority: u8) {
@@ -42,10 +49,10 @@ impl Compiler {
                 priority,
                 work: Box::new(move || {
                     work.validating(true);
-                    work.compile();
-                    Ok(())
+                    work.compile_async()
                 }),
                 complete: Some(Box::new(move || done.validating(false))),
+                batchable: pipeline.async_pipeline(),
             });
         }
     }
@@ -72,7 +79,7 @@ impl Compiler {
         let device = self.device.clone();
         let shared = self.queue.clone();
         Box::pin(async move {
-            let job = {
+            let jobs = {
                 let mut queue = shared.borrow_mut();
                 if queue.busy.is_some() || !queue.started || queue.jobs.is_empty() {
                     return Ok(());
@@ -86,22 +93,46 @@ impl Compiler {
                     .0;
                 let job = queue.jobs.remove(index).unwrap();
                 queue.busy = Some(job.priority);
-                job
+                let mut jobs = vec![job];
+                if jobs[0].batchable {
+                    while jobs.len() < 4 {
+                        let Some(index) = queue
+                            .jobs
+                            .iter()
+                            .position(|job| job.batchable && job.priority == jobs[0].priority)
+                        else {
+                            break;
+                        };
+                        jobs.push(queue.jobs.remove(index).unwrap());
+                    }
+                }
+                jobs
             };
             let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
             let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
             let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let result = (job.work)();
+            let work: Vec<_> = jobs
+                .into_iter()
+                .map(|job| ((job.work)(), job.complete))
+                .collect();
             // Pop in this task before yielding so unrelated rendering never
             // lands inside the compiler's scopes. Await only owned futures.
             let validation = validation.pop();
             let memory = memory.pop();
             let internal = internal.pop();
+            let mut result = Ok(());
+            let mut completed = Vec::new();
+            for (future, complete) in work {
+                // All promises have started. Drain every result even on failure,
+                // keeping handles private until this batch's scopes resolve.
+                result = result.and(future.await);
+                completed.push(complete);
+            }
             let a = validation.await;
             let b = memory.await;
             let c = internal.await;
             let result = result.and_then(|()| a.or(b).or(c).map_or(Ok(()), |e| Err(e.to_string())));
-            if let Some(done) = job.complete {
+            for done in completed.into_iter().flatten() {
                 done();
             }
             let mut queue = shared.borrow_mut();

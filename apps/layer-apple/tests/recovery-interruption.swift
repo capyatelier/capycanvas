@@ -57,7 +57,23 @@ import Darwin
             let job = try task(platform, edits: mode == "seed" ? 1 : 2)
             let expected = root.appendingPathComponent(mode == "seed" ? "expected-old.capy" : "expected-new.capy")
             try job.write(to: expected)
-            if mode == "write" {
+            if mode == "archive" {
+                // Hold an actual partial project in the production atomic
+                // writer. Foundation's replacement directory is outside the
+                // recovery folder, and small writes finish too fast to sample.
+                let folder = root.appendingPathComponent("recovery/\(scene.uuidString)")
+                let destination = folder.appendingPathComponent("\(UUID()).capy")
+                let bytes = try Data(contentsOf: expected)
+                try ProjectFileIO.coordinate(destination, writing: true) { location in
+                    try ProjectFileIO.atomicWrite(to: location) { descriptor in
+                        let count = bytes.count / 2
+                        try require(bytes.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, count) } == count,
+                            "Stage an incomplete project")
+                        print("READY"); _ = readLine()
+                        while true { pause() }
+                    }
+                }
+            } else if mode == "write" {
                 print("READY"); _ = readLine()
                 for generation in 0..<2000 { try files.write(job, scene: scene, title: "Candidate \(generation)") }
                 print("FINISHED")

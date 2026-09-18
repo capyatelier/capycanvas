@@ -14,6 +14,10 @@ does not qualify all of those new contracts.
 Ship complete, visually consistent native iPadOS and macOS apps with fast,
 readable workflows, shared maintainable code, and validated drawing performance.
 
+The user now defers physical iPad hardware-keyboard and second-Mac-display
+acceptance for this release. Preserve their unverified status without keeping
+them as release blockers or requesting the absent hardware again.
+
 The 2026-09-16 user confirmations close the XP-Pen manual-prediction check:
 64 ms visibly leads farther than 0 ms in the fixed Mac review app. The user also
 accepts the native iPadOS window control for full-screen parity. Preserve the
@@ -77,6 +81,167 @@ now closes AppKit rejection/retry acceptance. The original fixture limitation
 is retained in `artifacts/apple-settings-links-v1/`. Physical UIKit/OS delivery
 remains separate. The installed prediction review apps are retained with the
 user's drawings; the XP-Pen check now passes.
+
+## Filter-preview cancellation — 2026-09-17
+
+Follow-up: [shared preview scheduling](../history/filter-preview-scheduling-2026-09-17.md)
+moves this lifecycle into Rust. The current ABI transfers an already validated
+atlas; shared status replaces the former cancellation flag and Swift pending
+request state described below. Apple qualification at `aeb2a5c4` passes six shared
+scheduler tests, four Metal preview tests (the opt-in benchmark stays ignored),
+two Apple preview ABI tests and the mounted Swift/Metal owner on both Apple
+policies. The latter covers cancellation, genuine failures, automatic retry
+during repeated edits, local Save As/reopen, continued drawing and exact Undo.
+Both Release builds pass without compiler warnings. Private evidence is under
+`artifacts/apple-preview-scheduler-v1/`; the initial GPU test selector matched
+zero tests, and the corrected module selector supplies the four-test result.
+The scheduler defers optional preview work during active input; these checks do
+not establish physical drawing latency. The installed iPad review remains the
+shared G-Pen runtime qualified as `e350a585`, with its Pencil retest pending.
+
+The user reports `effect shader: Filter preview cancelled because its source
+changed`, blocking further drawing, large-photo Save As/reopen and performance
+acceptance. Drawing or editing can legitimately invalidate a pending Filters
+thumbnail. The shared renderer previously labeled that cancellation as an effect
+shader failure, and Apple's background preview controller raised a modal editor
+error. The fix gives cancellation a distinct renderer result and passes it through
+the Apple ABI as a completion flag. The controller releases the stale request and
+retries current visible previews; genuine errors still follow error reporting.
+No artwork, shader, file-storage or performance algorithm is changed.
+
+The deterministic Metal regression reproduces the exact reported error before
+the fix. Both Apple policies then pass cancellation, fresh retry pixels,
+unchanged artwork, new ink and exact Undo. The shared chunked-probe regression
+passes. The production Swift/Metal controller passes cancellation, genuine error
+reporting, repeated edits, automatic retry, local Save As/reopen and subsequent
+editing/Undo on both policies. Both Release builds pass without warnings.
+The corrected iPad Release is installed and open at Recovered Drawings. All
+13 complete recoveries, saved files and settings remain byte-identical across
+installation; other installed editor app descriptors are unchanged.
+Private evidence is under `artifacts/apple-preview-cancellation-v1/`. The initial
+Swift fixture needed to wait for the newly created document's shader readiness;
+its failed setup run is retained. The subsequent user confirmations of Save As
+and ordinary Save close the reported blocking workflow; drawing performance
+acceptance remains separate. The unqualified source-upload staging experiment is parked
+in `artifacts/apple-source-staging-v1/`; it is not part of this device build.
+
+## Save access after Save As — 2026-09-17
+
+The user confirms Save As now works, but ordinary Save reports “Operation not
+permitted.” A real App Sandbox fixture reproduces that exact error with a valid
+read/write grant to one disposable file: coordination enters, but creating a
+sibling temporary file fails. The writer now uses Foundation's replacement
+directory on the destination volume and its atomic replacement/move operation.
+It continues streaming and syncing the archive before publication, without a
+second full-size data copy or broader folder permission.
+
+The native coordinator also retains the actual picker URL instead of rebuilding
+it from the shared URI. Successful Open updates that destination; failed Open and
+cancelled Save As preserve it. This follows Apple's
+[security-scoped URL contract](https://developer.apple.com/documentation/foundation/nsurl)
+and [file replacement API](https://developer.apple.com/documentation/foundation/filemanager/replaceitemat(_:withitemat:backupitemname:options:)).
+
+The permanent file-only sandbox regression passes three successive replacements,
+exact reads, failed/cancelled write preservation, denied sibling access and
+balanced scopes. The file workflow suite covers both Apple policies. Recovery
+qualification now includes two deliberate partial-archive kills and six observed
+manifest/publication/discard kills; complete old/new recovery, retry and stale
+removal all pass. The initial polling fixture missed the brief archive-writing
+phase after replacement files moved out of the recovery folder; that failed
+observation is retained, and the revised fixture holds a partial real archive
+inside the production writer before killing its owned process. No timing hook was
+added to production. Private evidence is `artifacts/apple-save-access-v1/`.
+Both final Release builds pass without warnings. The corrected iPad app is
+installed and open at Recovered Drawings, with all 13 complete recoveries, saved
+files and settings byte-identical across installation. The user now confirms ordinary Save works after the fix. This closes the
+reported Save-permission blocker; iCloud remains deferred.
+
+The two document-blocker fixes form one milestone. Main's `bc9593b2` shared
+shader-startup changes are integrated and pass all 72 active Apple native tests
+(one explicit 61 MP hardware fixture remains ignored). The subsequent `1724e5c6`
+filter-probe texture reuse also integrates cleanly; its shared chunk/probe test
+and both Apple preview tests pass. Both final Release builds pass without warnings.
+Evidence and publication verification are under
+`artifacts/apple-document-milestone-v1/`. The physically confirmed iPad app remains
+the Save-access build on `7beb55b7` with these same document fixes; it has not been
+replaced solely for upstream startup integration. No new physical performance
+result is inferred from the builds or native suite. After the Save confirmation,
+the user reports drawing still feels laggy relative to Clip Studio Paint with a
+similar G-Pen size. This reopens no document blocker; the next performance work
+must separate brush evaluation from composition/submission and fix the measured
+cause in shared code where possible.
+
+## Full-pressure wide-brush follow-up — 2026-09-18
+
+The user completed the preceding 2000 px Pencil retest and still reports visible
+lag, rising to roughly 100 ms p99 at full pressure. Shared capsule tile culling,
+sparse prediction retirement and batched Float32 dry-brush dispatch now reduce
+the physical iPad replay median/p99 from 65.595/96.308 to 41.976/65.862 ms.
+Retained artwork and Undo/Redo are exact, omitted tiles are verified empty,
+zoom timing is unchanged and thermals stay nominal. Thirty focused checks,
+both Release builds and Web compilation pass. The new iPad Release is open at
+Recovered Drawings with all 14 recoveries and 147 original support/document files
+preserved; the Mac review is untouched. The user reports improved drawing with roughly 60 ms p99 at maximum
+pressure, and requests further algorithmic assessment; no physical floor is established. See the [current analysis](apple-drawing-performance-review.md#current-full-pressure-drawing-correction--2026-09-18)
+and `artifacts/apple-large-brush-attribution-v1/` for attribution, rejected probes
+and measurement limits. This supersedes the pending retest below; R6 remains open.
+
+## Shared G-Pen preparation and prediction — 2026-09-17
+
+The latest user clarification is approximately **2000 px**, with visible lag and
+roughly 54 ms Diagnostics p99 on the preceding review. The new shared correction
+removes the generic 50% radius halo from dry-contact planning when the shader's
+actual edge parameters need less area; prediction uses the same bounds. In the
+2000 px replay, median recomposition falls from 17.15 to 10.13 million pixels per
+update. Reversed-order Mac medians improve 42–43%; physical iPad synthetic
+median/p99 improve 112.569/133.916 → 65.399/94.970 ms. All retained artwork tiles
+match exactly, omitted tiles are verified zero, and Undo/Redo passes. Thirteen
+focused checks and both Release builds pass. The corrected normal iPad app is
+installed with all 14 recoveries and 145 original files preserved. Physical
+Pencil responsiveness is pending; the full-pressure replay does not predict the
+user's live p99. See the [current 2000 px analysis](apple-drawing-performance-review.md#current-2000-px-footprint-correction).
+This supersedes installed-build and pending-test references in the older
+570 px records below. Evidence is `artifacts/apple-wide-gpen-v1/`.
+
+The visible large-brush lag follow-up removes two unnecessary costs in the shared
+renderer: dry paint no longer decodes/binds eight unread neighboring source tiles,
+and native dry/wet prediction reuses the existing direct committed-color/coverage
+path instead of copying private state. Watercolor and multiple preview batches
+retain their required state. No brush arithmetic, fidelity, cache policy or
+platform-specific path changes.
+
+Four reversed-order Mac workloads improve median completed-update time by 6–12%
+with exact final artwork and Undo/Redo. A physical iPad 570.7 px comparison improves
+median/p99 from 32.094/52.151 ms to 28.781/42.757 ms, again with exact native artwork
+and history. This is a synthetic offscreen comparison, not Pencil-to-display
+latency or perceptual acceptance. The earlier CPU/GPU attribution identifies
+command materialization and copies as substantial costs; it does not prove a
+hardware floor or G-Pen arithmetic bottleneck. See the
+[current algorithm review](apple-drawing-performance-review.md#current-g-pen-follow-up)
+for measurements, fixture failures and limits.
+
+The source/cold-native brush regressions, native/legacy prediction transitions,
+material specialization and native G-Pen checks pass. Both final Release builds
+and Web compilation pass. The normal updated iPad Release is restored with all
+14 recoveries and 144 original files preserved exactly. Private fixture output is
+removed after retention; other installed editors and the running Mac review are
+unchanged. The iPad binary is built at `02be7ad1` with the two shared runtime
+changes, recorded in `artifacts/apple-gpen-cost-v1/`. The physical Pencil retest
+is pending; the overall performance gate stays open. An unqualified staging-pool
+experiment is removed and is not part of this milestone.
+
+The subsequent dry-paint preservation change folds committed color/coverage
+copies into the existing full-tile material draw, passing through pixels outside
+the planned damage. Sixteen reversed-order Mac replays preserve exact artwork
+and history: 570.7 px eight-sample median completion improves by 5.6–8.1%,
+1024 px by 5.6–7.3%, and two-sample input by about 2.2%. Small-brush medians
+change little; some control p99 values regress. Twelve focused Metal checks,
+including byte-exact untouched extended-color pixels, and both Apple Release
+builds plus Web compilation pass. See the
+[measurements and limits](apple-drawing-performance-review.md#dry-paint-tile-preservation).
+Private evidence is `artifacts/apple-paint-copy-v1/`. Both review apps remain
+unchanged; the iPad still runs the earlier `e350a585` runtime pending the requested
+Pencil comparison. No physical speedup is claimed for this additional change.
 
 ## Shared workflow adoption — 2026-09-17
 
@@ -213,6 +378,18 @@ probe is removed, and final runtime hashes match both Release builds.
 Physical UIKit provider/placement acceptance remains open, with artist apps and
 drawings preserved. This milestone adds no device performance claim.
 
+The later native Mac clipboard workflow at `4c4e7fa5` also passes through the
+actual Edit menu and system pasteboard. Two encoded images support Cancel/Apply
+and exact sampled artwork through Undo/Redo; an invalid second image inserts
+nothing and preserves history; a subsequent local file-URL paste succeeds and
+cancels cleanly without changing the original file. One XCTest passes with no
+failures or skips, and its final capture is reviewed. The fixture keeps synthetic
+clipboard contents local to this Mac and restores the original from memory unless
+a newer user copy intervenes. Both existing Mac review processes remain running;
+the isolated app is torn down and the iPad is untouched. Evidence is under
+`artifacts/apple-native-clipboard-v1/`. No application runtime change is needed;
+physical UIKit clipboard/provider acceptance remains separate.
+
 ## Shared color/source transactions — 2026-09-17
 
 Apple now uses `ColorWorkflow`, `SourceWorkflow` and the shared color remapping
@@ -278,7 +455,56 @@ This migration has not been installed in either artist app; the pending iPad
 performance/save retest remains on the preceding combined review. Physical OS interruption, background expiration
 and the remaining scene transitions stay open in R4.
 
+## Shared print proofing — 2026-09-17
+
+Proof Setup, Proof Colors and Gamut Warning now use the shared workflow on both
+Apple hosts, closing the implementation gap introduced by main's Web/Android
+proof milestone. Native controls expose saved/embedded/builtin profiles, rendering
+intent, black-point compensation and paper/ink simulation. A cancellable CPU
+worker prepares the shared LUT; the owner rejects stale results and applies one
+history step. Replaced embedded ICC bytes are saved atomically before publication.
+Library visibility uses shared policy. Proof and warning affect viewport display,
+including the Navigator, without modifying paint, sampling or export.
+
+All 454 shared UI and 71 active Apple bridge tests pass; the separate 61 MP
+stress case stays ignored. Both-policy Swift/Metal checks pass RGB and actual
+CMYK preparation, invalid-profile retry, cancellation, exact ICC preservation,
+visibility persistence, history, local save/reopen and pause/resume. The mounted
+Mac form accepts its native default Apply action. Both Release builds finish
+without warnings. The current catalog retains 76 commands in 19 groups; only
+iPad's accepted native full-screen boundary remains unavailable.
+
+The physical iPad fixture passes actual preparation, Metal presentation, error/
+retry/cancel and history, with six reviewed light/dark and narrow/wide UIKit form
+captures. This is programmatic native qualification, not a physical touch,
+ICC-provider or print-color accuracy claim. The normal proof Release is restored
+at Recovered Drawings with all eleven recovery records, saved files and settings
+preserved; the Mac artist app is unchanged. Evidence is under
+`artifacts/apple-proof-v1/`. Remaining provider/display and performance gates
+stay open. In particular, proof integration does not resolve the reported
+approximately 60 ms large-brush tail or requalify sustained iPad cadence.
+
 ## Large-photo composition review — 2026-09-17
+
+The latest [physical replay and algorithm review](apple-drawing-performance-review.md#physical-ipad-reproduction-without-another-pencil-retry)
+reproduces the user's approximately 60 ms tail without another Pencil retry:
+unprofiled completion median/p99 is 30.966/55.964 ms. A successful CPU/Metal trace
+finds substantial command preparation cost, not an established bandwidth floor.
+The direct-buffer source-decoder candidate produces no meaningful large-brush
+median gain on Mac or iPad and is reverted; all 404 qualified runtime source
+hashes match the published baseline after that removal. Preserve the sparse
+architecture and use the existing replay for any further shared command-batching
+investigation.
+Evidence is `artifacts/apple-photo-ipad-replay-v1/` and
+`artifacts/apple-photo-buffer-decode-v1/`. Ordinary iPad review is restored with
+all eleven recoveries, saved files and settings intact. Perceptual large-brush
+acceptance remains open. These review notes accompany the proof milestone;
+the paragraphs below record earlier implemented improvements and their scope.
+Main subsequently fast-forwards to `a1150ece` for shared proof-rendering and
+Web/Android proofing changes. The timing evidence retains its `56c19fc8` source
+scope, and the ordinary review app stays on its qualified runtime. All 454 shared
+UI tests, the focused Metal proof regression and the Apple bridge compile check
+pass after this integration; no new Release/device qualification is inferred.
 
 The [first-principles review](apple-drawing-performance-review.md#composition-attribution-and-finalization-overlap)
 does not establish the user's roughly 50 ms iPad p99 as a hardware floor.
@@ -333,6 +559,16 @@ changing production code. The owned app is closed and artist processes remain
 unchanged. This closes one recorder-off recovery/idle case, not overhead, cadence,
 GPU power or iPad acceptance. Evidence is `artifacts/apple-recorder-off-v1/`.
 
+A follow-up on the same Release closes native mouse resumption with recording
+disabled: after foreground idle and after native Hide/return, new strokes commit
+and each Undo/Redo restores exact document metadata and every color/watercolor
+tile digest through the production recovery reader. Canvas/Navigator captures
+are reviewed. The existing workload and app run only once; correcting direct
+mouse injection and the external hide helper does not change product code.
+The isolated app is closed and artist processes remain unchanged. Evidence is
+`artifacts/apple-idle-resume-v1/`, held for the next milestone. This supplies one
+Mac sRGB/U8 idle/return case, not physical pen, iPad or latency acceptance.
+
 ## Current iPad sustained watercolor — 2026-09-17
 
 The physical Release now has runtime hashes matching `eafd1d51`, including the
@@ -348,6 +584,102 @@ This closes missing current sustained evidence, not the remaining cadence or
 physical large-photo acceptance. No renderer code changes, extra app slot or
 artist-app uninstall is needed. The user’s 570 px G-Pen case remains separate;
 the watercolor run cannot establish its performance floor.
+
+The following physical large-photo retest reports roughly 60 ms p99, so the
+remaining drawing cost is unresolved. A subsequent read-only capture shows
+CPU p99 82.16 ms and GPU p99 70.35 ms; perceptual impact remains unconfirmed.
+A five-minute trace on the existing review process
+contains no target GPU/encoder activity and cannot attribute this result.
+Recording has ended, and the same app remains open. Coordinate a fresh short
+capture with user readiness. Do not treat local replay gains or watercolor
+cadence as closure of this separate case. Evidence: `artifacts/apple-photo-cost-v4/`.
+
+The focused local follow-up corrects the replay's mostly off-canvas path and
+uses the latest saved drawing. It identifies a redundant composition pass:
+source decoding separated a scratch clear from its first draw. Moving that
+independent decode before the clear preserves the existing pass merge. Reversed
+paired runs reduce heavier-batch completion medians by 8–12%, with identical
+paint roots, work counts and exact history. Eight-sample p99 still exceeds 51 ms
+on Mac; this does not close the iPad tail. Both final Release builds pass without
+warnings. The iPad review now includes the correction, with all eleven recoveries,
+saved files and settings byte-identical through installation. Ordinary review is
+open with recording disabled. The user repeats the roughly 60 ms result; whether
+drawing still visibly lags remains unconfirmed. Mac artist apps remain untouched. The small shared correction and replay
+fix join the following qualification milestone; main was current at `173f760f`
+when these measurements were frozen.
+Deployment evidence is `artifacts/apple-clear-pass-device-v1/`. See the
+[updated algorithm review](apple-drawing-performance-review.md#corrected-workload-and-remaining-avoidable-passes).
+
+A further local pass-timing review identifies redundant initialization of inactive
+paint surfaces before their full-page copy or edge pass. Removing that clear and
+its flag simplifies shared code. Sixteen reversed-order replays across 96, 571
+and 1024 px brushes preserve exact artwork/history and work counts, with 3–7.5%
+lower completion medians. The 571 px eight-sample p99 still approaches 55 ms on
+Mac; this is no iPad closure claim. Temporary probes are removed and both artist
+apps remain untouched. See the [pass review](apple-drawing-performance-review.md#pass-attribution-and-redundant-paint-initialization)
+and `artifacts/apple-photo-pass-v5/`. Group this small correction with the next
+milestone instead of requiring a separate device installation/retest.
+
+The ordinary iPad review subsequently receives the complete published
+`1f96d5a6` milestone during grouped qualification. All eleven recoveries, saved
+files and settings remain byte-identical, and its Recovered Drawings screen is
+reviewed with recording disabled. A private populated-form fixture fails before
+capture and is replaced by the ordinary Release; no physical form pass is
+claimed. Restoration evidence is `artifacts/apple-ipad-final-qualification-v1/`.
+A separate four-run Mac comparison finds no repeatable renderer timestamp
+penalty for the same saved photo and 570.7 px circles; exact artwork/history and
+work counts match. Existing replay tails cluster near startup and pen-up.
+Neither result closes physical iPad drawing performance. See the
+[Diagnostics review](apple-drawing-performance-review.md#diagnostics-overhead-and-interpretation-of-the-repeated-60-ms-report).
+
+The corresponding Mac Release now passes a native large-photo file journey in
+isolated storage: Open the saved 9504×6336 sRGB/U8 drawing, select 570.7 px G-Pen,
+draw through native mouse events, Undo/Redo, Save As a new local file, Save,
+reopen, draw and save again, then Quit. Production project reads compare exact
+paint and retained-source tile descriptors/digests plus document metadata,
+excluding only monotonic revision/stroke counters. Undo to the clean opened
+file correctly retires recovery; a new saved copy verifies that exact state.
+Canvas, Navigator and layer-preview captures match the expected strokes before
+and after reopen. The input copy and every pre-existing artist process remain
+unchanged; the isolated app is closed. Evidence is
+`artifacts/apple-clear-pass-mac-v1/mac-photo/qualification.json`. This closes
+current Mac native file/history correctness for this large drawing, not physical
+tablet input, memory pressure, cadence or the pending iPad performance result.
+
+The grouped follow-up now also qualifies current Mac ProPhoto/U16 sustained
+watercolor. The existing workload accepts shared document color options and
+records the requested format; the saved archive verifies actual 16-bit ProPhoto
+artwork. A short preflight and ten measured minutes pass, with 0.916% long active
+intervals at 90 Hz, 11.111 ms presentation p99, 5.761 ms CPU owner p99, nominal
+thermals and no late memory growth. Artwork/previews and production recovery
+validation pass. Both current Release builds are warning-free. The isolated Mac
+apps close and all artist sessions, including iPad, remain unchanged. See
+[Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-prophoto-16-bit-watercolor--2026-09-17)
+and `artifacts/apple-prophoto-sustained-v1/`. This closes one remaining format
+qualification, not the iPad tail, physical latency or imposed memory-pressure
+cases. The shared render cleanup, corrected replay and native photo/16-bit
+qualification are grouped as one milestone; remaining release gates stay open.
+
+The physical iPad follow-up now completes the same ProPhoto/U16 watercolor
+preflight and ten-minute run at `1f96d5a6`. Artwork/previews and both production
+recovery reads pass, with nine layers and 1,930 native 16-bit color tiles.
+The long run has 4.003% long active intervals at 120 Hz, 16.667 ms presentation
+p99, 9.124 ms CPU owner p99, nominal thermals and declining late memory.
+Cadence acceptance remains open, as does the separate 570 px large-photo case.
+See [Performance](../../apps/layer-apple/PERFORMANCE.md#sustained-ipad-prophoto-16-bit-watercolor--2026-09-17)
+and `artifacts/apple-ipad-prophoto-sustained-v1/`.
+
+Main then incorporates Windows integration `20cecad7`. Apple host sources and
+the drawing workload/render paths are unchanged; Windows joins existing shared
+feature predicates, and the equivalent proof-shader indexing passes its Metal
+CPU-reference comparison. All 453 shared UI tests and both Release builds pass
+without compiler diagnostics. The separate licensed CMYK shadow-grid test stays
+ignored. Evidence is `artifacts/apple-ipad-qualification-integration-v1/`;
+physical timing remains tied to its measured revision, rather than relabeled as
+a new-build performance run. The ordinary iPad review is then updated in place
+to this integrated Release and inspected at Recovered Drawings. All eleven
+recoveries, saved files and settings are preserved; recording is disabled.
+The other editor installations are unchanged.
 
 The approved review bundle is updated in place without consuming another app
 slot. All eleven normal recoveries, saved files and settings remain byte-identical
@@ -1084,6 +1416,18 @@ can be produced. It is removed after the failed run; no UIKit preview pass is
 claimed and no simulator-specific renderer path is added. Physical UIKit
 preview/form acceptance remains open. Both artist apps and their drawings are
 untouched, including the pending physical iPad performance/save review.
+
+The physical UIKit follow-up at `1f96d5a6` now supplies and passes normal-size
+review of all forty equivalent captures: both themes, both form sizes, complete
+preview access through top/bottom scrolling, export/ICC errors and pinned
+actions. Exact viewport/scroll bounds and both worker previews are verified.
+Cancellation preserves the document-file model. The fixture uses the ordinary
+SwiftUI window lifecycle after its custom UIKit wrappers fail before capture;
+no product workaround is added. All eleven artist recoveries, saved files and
+settings remain byte-identical, and the ordinary Release is restored and reviewed.
+Evidence is `artifacts/apple-ipad-form-qualification-v3/`. This closes populated
+UIKit form appearance on hardware; physical touch/menu/typing, actual narrow
+iPad window management and performance remain separate.
 
 ## Settings-link rejection and retry — 2026-09-17
 

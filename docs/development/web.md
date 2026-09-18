@@ -44,7 +44,11 @@ vary by browser and OS; a desktop browser test cannot establish mobile behavior.
 GPU startup is staged so controls can appear before the complete shader catalog
 is ready. The app reports unavailable GPU access rather than switching painting
 to a CPU renderer. The [startup record](../history/web-staged-startup.md) describes
-the scheduling work and its measured limits.
+the scheduling work and its measured limits. The later
+[tablet startup investigation](../history/web-startup-tablet-2026-09-17.md)
+separates workspace input readiness from canvas/brush readiness, records the
+startup-library input-lock fix, and records asynchronous pipeline compilation,
+storage-completion wakeups and the restored first-canvas staging boundary.
 
 The client also persists its workspace in browser storage and connects shared
 project requests to browser file access and downloads through
@@ -228,6 +232,9 @@ LAYER_DEVICE_CDP=http://127.0.0.1:9228 \
   node apps/layer-web/device.test.mjs --drawer-style
 ```
 
+Use `--staged-startup` on that dedicated origin to verify workspace input,
+mouse/touch/pen Settings activation and painting while shader validation is held.
+
 [`device.test.mjs`](../../apps/layer-web/device.test.mjs) finds the tab by its exact
 URL, including the trailing slash, connects to its CDP WebSocket and reloads it.
 It supports a subset of desktop scenarios; check its dispatch before choosing a
@@ -243,3 +250,23 @@ Remove only the forwarding rules added for this session when finished:
 adb -s "$CAPY_ANDROID_SERIAL" forward --remove tcp:9228
 adb -s "$CAPY_ANDROID_SERIAL" reverse --remove tcp:4173
 ```
+
+The [61 MP Filters memory investigation](../history/filter-preview-tablet-memory-2026-09-17.md)
+records the shared source-probe texture reuse fix, tablet measurements, and
+remaining preview/display memory-budget work.
+
+The [shared filter preview scheduling record](../history/filter-preview-scheduling-2026-09-17.md)
+records the Rust lifecycle, 61 MP latency and drawing responsiveness measurements,
+platform handoff and remaining memory work.
+
+For preview pixels and lifecycle on an attached Android browser, use the existing
+CDP forwarding workflow and an isolated test origin, then run:
+
+```bash
+LAYER_DEVICE_CDP=http://127.0.0.1:9230 LAYER_WEB_URL=http://127.0.0.1:8136/ \
+  node apps/layer-web/device.test.mjs --filter-previews
+```
+
+This covers cached reopening, source/category changes and GPU replacement; it
+writes `web-preview-lifecycle.json` and a capture under `artifacts/filter-memory/`.
+The check modifies its test document and must not target a user's working tab.

@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     #[test]
     fn future_document_policies_validate_and_round_trip_independently() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
             let mut settings = Settings::default();
             let existing = settings.new_document.defaults.project().unwrap();
             for (id, value) in [
@@ -176,7 +176,7 @@ mod tests {
                     .edit(
                         PreferenceId::PhotoDepth,
                         PreferenceValue::Choice(0),
-                        Platform::Windows
+                        Platform::Generic
                     )
                     .is_err()
             );

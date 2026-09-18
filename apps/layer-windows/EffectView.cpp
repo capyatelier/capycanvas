@@ -10,22 +10,18 @@ Windows::UI::Color rgba(A const& a){
 }
 struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     std::shared_ptr<Property> property;
-    std::function<A()> get;
-    std::function<void(A)> set;
+    std::function<J()> get;
+    std::function<void(J)> set;
     std::function<hstring()> context;
     StackPanel root,fields;
     Bindings numbers;
     SolidColorBrush sample{Windows::UI::Color{}};
     hstring editingContext;
+    std::shared_ptr<ColorForm> form;
     void rebuild(){
-        numbers.clear();fields.Children().Clear();
-        auto weak=weak_from_this();
-        std::array<hstring,4> labels{L"Red",L"Green",L"Blue",L"Alpha"};
-        for(int i=0;i<4;i++)fields.Children().Append(number(property->data,labels[i],object(property->data->catalog,L"opacity"),
-            [weak,i]{if(auto self=weak.lock()){auto a=self->get();if(a.Size()==4)return a.GetNumberAt(i);}return 0.;},
-            [weak,i,expected=editingContext](double value){if(auto self=weak.lock();self&&(!self->context||self->context()==expected)){
-                auto a=A::Parse(self->get().Stringify());if(a.Size()==4){a.SetAt(i,N(value));self->set(a);}
-            }},numbers,nullptr,false,property->id()+L"-color-"+to_hstring(i)));
+        fields.Children().Clear();form=std::make_shared<ColorForm>();auto weak=weak_from_this();
+        form->init([weak,expected=editingContext](J value){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},property->id()+L"-color");
+        fields.Children().Append(form->root);
     }
     void init(hstring const& title){
         root.Spacing(6);fields.Spacing(6);fields.Visibility(Visibility::Collapsed);
@@ -46,8 +42,9 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     void refresh(){
         auto next=context?context():L"";
         if(next!=editingContext){editingContext=next;rebuild();}
-        sample.Color(rgba(get()));
-        for(auto const& update:numbers)update();
+        auto space=str(object(property->data->model,L"color_panel"),L"rgb_space",L"Srgb");
+        form->load(get(),space);
+        sample.Color(displayColor(object(form->view,L"preview")));
     }
 };
 struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
@@ -112,8 +109,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                     check.Click([property,weak=make_weak(check)](auto&&,auto&&){if(auto c=weak.get())property->set(B(c.IsChecked().Value()));});
                     fields.emplace_back([property,check]{check.IsChecked(flag(object(property->model(),L"value"),L"value"));});body.Children().Append(check);
                 }else if(type==L"color"){
-                    body.Children().Append(ColorField(property,name,[property]{return array(object(property->model(),L"value"),L"value");},
-                        [property](A a){property->set(a);},fields));
+                    body.Children().Append(ColorField(property,name,[property]{return object(object(property->model(),L"value"),L"value");},
+                        [property](J a){property->set(a);},fields));
                 }else if(type==L"curve"){
                     curves.emplace_back(name,CurveField(property,fields));
                 }else if(type==L"gradient"){
@@ -138,7 +135,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
 };
 }
 FrameworkElement CapyEffects::ColorField(std::shared_ptr<Property> const& property,hstring const& title,
-    std::function<A()> get,std::function<void(A)> set,Bindings& bindings,std::function<hstring()> context){
+    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context){
     auto editor=std::make_shared<ColorEditor>();editor->property=property;editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
     editor->init(title);bindings.emplace_back([editor]{editor->refresh();});return editor->root;
 }

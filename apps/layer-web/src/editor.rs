@@ -9,10 +9,11 @@ pub(super) struct NavigatorSurface {
     size: [f32; 2],
     scale: f32,
     capacity: [u32; 2],
-    gpu: Option<(
+    pub(super) gpu: Option<(
         wgpu::Surface<'static>,
         ViewportPresenter,
         wgpu::SurfaceConfiguration,
+        layer_core::color::RgbSpace,
     )>,
 }
 
@@ -209,6 +210,7 @@ impl WebApp {
         let document = self.session.engine().document();
         let extent = [document.width, document.height];
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
+        let space = gpu.renderer.document_color().space;
         let mut retry = false;
         for slot in self.overviews.values_mut() {
             let Some(g) = layer_ui::NavigatorGeometry::new(&camera, extent, slot.size) else {
@@ -229,9 +231,16 @@ impl WebApp {
                 slot.canvas.set_height(height);
                 surface.configure(gpu.renderer.device(), &config);
                 let presenter = ViewportPresenter::for_overviews(&gpu.renderer, config.format);
-                slot.gpu = Some((surface, presenter, config));
+                slot.gpu = Some((surface, presenter, config, space));
             }
-            let (surface, presenter, config) = slot.gpu.as_mut().unwrap();
+            let (surface, presenter, config, presented_space) = slot.gpu.as_mut().unwrap();
+            // Retained DOM canvases can outlive document/color adoption. Their
+            // display transform must follow the new renderer, including undo.
+            if *presented_space != space {
+                *presenter = ViewportPresenter::for_overviews(&gpu.renderer, config.format);
+                *presented_space = space;
+            }
+            presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
             if config.width != width || config.height != height {
                 config.width = width;
                 config.height = height;

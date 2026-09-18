@@ -58,9 +58,29 @@ pub struct NativeHost {
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
     service_changes: u32,
     header_drag: Option<layer_ui::HeaderDrag>,
+    preview_clock: std::time::Instant,
+    filter_preview_image: Option<layer_render::FilterPreviewImage>,
 }
 
 impl NativeHost {
+    /// Native adapters transfer only metadata and the completed packed atlas.
+    pub fn poll_filter_previews(
+        &mut self,
+        filters: Vec<std::sync::Arc<str>>,
+        size: [u32; 2],
+        cache: layer_ui::FilterPreviewCache,
+    ) -> Result<layer_ui::FilterPreviewUpdate, String> {
+        let ready = self.session.engine().backend().0.is_some();
+        self.session.poll_filter_previews(
+            self.preview_clock.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            if ready { filters } else { Vec::new() },
+            size,
+            cache,
+        )
+    }
+    pub fn take_filter_preview_image(&mut self) -> Option<layer_render::FilterPreviewImage> {
+        self.filter_preview_image.take()
+    }
     pub fn new(platform: layer_ui::Platform) -> Result<Self, String> {
         let mut session = UiSession::blank(Renderer::default(), [1, 1])?;
         session.set_platform(platform);
@@ -91,6 +111,8 @@ impl NativeHost {
             last_durable_workspace: None,
             service_changes: 0,
             header_drag: None,
+            preview_clock: std::time::Instant::now(),
+            filter_preview_image: None,
         })
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -611,10 +633,10 @@ impl NativeHost {
             },
             RendererStats,
             FilterPreviews {
-                request: u64,
-                revision: Option<(u64, u64, u64)>,
                 filters: Vec<std::sync::Arc<str>>,
                 size: [u32; 2],
+                #[serde(default)]
+                cache: layer_ui::FilterPreviewCache,
             },
             ActionTooltip {
                 label: String,
@@ -714,18 +736,13 @@ impl NativeHost {
             Query::ExportValidate { recipe } => { recipe.validate()?; json!(recipe) },
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
-                request,
-                revision,
                 filters,
                 size,
+                cache,
             } => {
-                let current = self.session.filter_preview_revision();
-                let accepted = revision == Some(current)
-                    && !filters.is_empty()
-                    && self
-                        .session
-                        .request_filter_previews(request, filters, size)?;
-                json!({ "revision": current, "accepted": accepted })
+                let update = self.poll_filter_previews(filters, size, cache)?;
+                self.filter_preview_image = update.image;
+                json!(update.status)
             }
             Query::ActionTooltip { label, action } => {
                 let state = self.session.state();
@@ -1199,17 +1216,16 @@ mod tests {
         );
     }
     #[test]
-    fn stale_filter_preview_requests_do_not_touch_the_renderer() {
+    fn filter_preview_geometry_before_gpu_attachment_is_optional() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         let response = app
-            .query(json!({"type":"filter_previews", "request":1,
-            "revision":null, "filters":["curves"], "size":[240,40]}))
+            .query(json!({"type":"filter_previews",
+            "filters":["curves"], "size":[240,40]}))
             .unwrap();
-        assert_eq!(response["accepted"], false);
-        assert_eq!(
-            response["revision"],
-            json!(app.session.filter_preview_revision())
-        );
+        assert_eq!(response["pending"], false);
+        assert_eq!(response["requests"], 0);
+        assert!(response["error"].is_null());
+        assert!(app.take_filter_preview_image().is_none());
         assert!(app.session.renderer_mut().0.is_none());
     }
     #[test]

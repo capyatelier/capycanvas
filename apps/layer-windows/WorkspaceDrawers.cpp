@@ -401,3 +401,15 @@ FrameworkElement WorkspaceDrawers::Anchor(std::wstring const& control)const{
     }
     return nullptr;
 }
+
+A WorkspaceDrawers::PanelMeasurements()const{
+    A result;
+    for(auto const& [id,drawer]:impl->drawers)if(!drawer->closing&&!drawer->disposed&&drawer->frame.IsLoaded())
+        for(auto const& column:drawer->columns)for(auto const& panel:column.panels){
+            auto const& body=drawer->bodies.at(panel).view;if(!body||!body->Root().IsLoaded())continue;
+            auto height=body->ContentHeight();if(!std::isfinite(height)||height<0)continue;
+            auto scroll=body->ScrollMetrics();result.Append(O({{L"panel",S(hstring(panel))},
+                {L"content_height",N(height)},{L"scroll",scroll.Size()?V(scroll):JsonValue::CreateNullValue()}}));
+        }
+    return result;
+}

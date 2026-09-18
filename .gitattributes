@@ -4,3 +4,4 @@ vendor/wgpu/** -text -whitespace
 vendor/wgpu-hal/** -text -whitespace
 vendor/wgpu-types/** -text -whitespace
 vendor/wgpu-color-passthrough.patch -whitespace
+vendor/wgpu-webgpu-async-pipelines.patch -whitespace

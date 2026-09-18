@@ -1,5 +1,7 @@
 # Windows acceptance status
 
+2026-09-17 implementation update: see the [Windows feature parity port](windows-feature-parity-progress.md) for the current shared-core integration and validation. The historical acceptance below is not automatically extended to the new workflows.
+
 The [phase 2 color-management handoff](color-management-m2-windows-handoff.md)
 records new shared color/control and native-project integration requirements.
 The earlier Windows acceptance below does not qualify those new contracts.

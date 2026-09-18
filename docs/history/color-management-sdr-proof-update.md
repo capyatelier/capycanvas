@@ -1,7 +1,8 @@
 # HDR → SDR mapping and compact Proof panel
 
 Review update, 2026-09-18. Source: `~/code/capycanvas3`, branch `capycanvas3`.
-Nothing is pushed. Launch `artifacts/color-m4/review/launch.sh` for user review.
+Checkpoints are pushed to `origin/capycanvas3` for review; main is not updated.
+Launch `artifacts/color-m4/review/launch.sh` for user review.
 [Float32 layers are separately scoped](../development/float32-hdr-scope.md).
 This update does not implement Float32 documents, RAW, PSD, CMYK layers or OCIO.
 
@@ -258,3 +259,70 @@ new UI complete the entire phase-4 hardware gate.
 The proposed gain-map export expansion is documented separately in
 [HDR export proposal](../ui/hdr-export-proposal.md). It is not implemented by this
 review build.
+
+
+## Integration with origin/main (2026-09-18)
+
+Merged `origin/main` at `ab6d93700ba51d15dd709637a9daf95bb8caf1dd` into
+`capycanvas3`. This brings in the shared proof workflows on other hosts, the
+shared filter-preview scheduler, and upstream renderer optimizations. The
+review branch is pushed to `origin/capycanvas3`; neither main nor master is
+updated. The two local handoff-document edits are excluded from the merge.
+
+Conflict resolutions preserve dynamic HDR rasterization memory limits,
+generation-tagged preview cancellation, display-headroom updates, and the
+new platform command availability. Retained viewport captures now update HDR
+uniforms before the upstream shared-proof-buffer shortcut; a GPU regression
+exercises changes to the rendition and display headroom on that path. The Web
+Navigator uses the updated inheritance API. Windows keeps its new import and
+recovery workflows and explicitly rejects unsupported HDR documents/exports.
+Incoming Windows tests were updated for `SampleDepth` and the shared preview
+scheduler API; the native transport still checks cache bounds and packet lifetime.
+
+Post-merge evidence under `artifacts/color-m4/`:
+
+- `main-merge-workspace-check.log`: all-target workspace check passed.
+- `main-merge-shared-tests.log`: core 94, color 82, shared UI 469 passed;
+  seven existing color fixture tests ignored. This first combined run also
+  records a Windows test assertion that assumed a GPU was attached. The final
+  `main-merge-windows-tests.log` passes all 104 tests, with the real D3D12 journey
+  still ignored on this Linux host.
+- `main-merge-gpu-view.log`: six presentation/color/proof tests passed, one
+  local-profile test ignored. `main-merge-gpu-hdr.log`: four tests passed for
+  half-float publication, flattened storage, exposure/curves and HDR presentation.
+- `main-merge-hdr.log`, `main-merge-hdr-journey/`: native HDR input/edit,
+  rendition controls, undo, save/reopen and HDR/SDR delivery passed.
+- `main-merge-layout.log`, `main-merge-print.log`, `main-merge-cancel.log`:
+  compact panel placement/dragging, print/history/save/reopen/export and
+  cancellation/supersession passed. The refreshed `proof-panel-compact/` captures
+  show the merged build; the Photo SDR panel was visually inspected.
+- `main-merge-desktop/test.log`: actual HDR desktop export master preview and
+  capability changes passed. Master red remains 4.470145 linear (GSK capture
+  4.444563 with checker interpolation). This is not luminance calibration.
+- `main-merge-web-build.log`: runnable Wasm/browser build passed.
+  `main-merge-web-unit.log`: workspace storage wake-up regression passed.
+  `main-merge-web-hdr-wayland.log`: real Chrome rejects HDR photos/masters while
+  preserving the active SDR drawing. `main-merge-web-proof-wayland.log`: profile
+  preservation, proof viewing/Canvas/Navigator, editing/history, save/reopen,
+  unchanged exported PNG bytes, GPU replacement and cancellation passed.
+- Headless Chrome failed with the already-recorded NVIDIA/Dawn external-instance
+  error and a CDP timeout (`main-merge-web-hdr.log`). The successful browser runs
+  used a private Wayland desktop and GTK 3 Chrome; headless presentation remains
+  unqualified. These are isolated profiles, with no user browser state changed.
+- `main-merge-native-build.log`, `main-merge-release-build.log`: native test and
+  runnable GTK release builds passed. `review/build-manifest.json` identifies
+  the packaged binary and source commit.
+
+The post-merge 60 MP checks ran sequentially after all other test GPU workloads
+finished, with the same retained fixture, private Mutter display and time/RSS
+instrumentation as the earlier comparison:
+
+| Export preview | Worker wait | Largest UI heartbeat gap | Cancel | Peak process RSS |
+| --- | ---: | ---: | ---: | ---: |
+| HDR | 9.52 s | 18.20 ms | 145.37 ms | 1,364,184 KiB |
+| SDR | 8.91 s | 19.56 ms | 152.44 ms | 1,313,440 KiB |
+
+Both passed (`main-merge-large-hdr*`, `main-merge-large-sdr*`). These remain single
+runs with uncontrolled power/thermal conditions, not performance acceptance or
+a claim of improvement over the earlier baseline. GPU residency was not sampled
+again. The hardware and calibration limitations above remain open.

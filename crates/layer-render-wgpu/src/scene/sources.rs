@@ -643,12 +643,13 @@ impl Pipelines {
             immediate_size: 0,
         });
         let device = device.clone();
-        let pipeline = Deferred::new(move || {
+        let pipeline = Deferred::pipeline(move |mode| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("integer SDR to Float32"),
                 source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("../native_tiles/validity.wgsl"), include_str!("source_decode.wgsl")).into()),
             });
-            fullscreen_pipeline(
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &pipeline_layout,
                 &shader,

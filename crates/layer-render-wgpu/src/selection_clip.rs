@@ -52,34 +52,40 @@ impl SelectionClip {
         let pipeline = |entry| {
             let (device, pipeline_layout, shader) =
                 (device.clone(), pipeline_layout.clone(), shader.clone());
-            Deferred::new(move || {
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("rasterize packed selection"),
-                    layout: Some(&pipeline_layout),
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
+            Deferred::pipeline(move |mode| {
+                mode.compute(
+                    &device,
+                    &wgpu::ComputePipelineDescriptor {
+                        label: Some("rasterize packed selection"),
+                        layout: Some(&pipeline_layout),
+                        module: &shader,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    },
+                )
             })
         };
         let resample = {
             let (device, layout) = (device.clone(), pipeline_layout.clone());
-            Deferred::new(move || {
+            Deferred::pipeline(move |mode| {
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("affine selection coverage"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("selection_resample.wgsl").into(),
                     ),
                 });
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("resample packed selection"),
-                    layout: Some(&layout),
-                    module: &shader,
-                    entry_point: Some("resample"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
+                mode.compute(
+                    &device,
+                    &wgpu::ComputePipelineDescriptor {
+                        label: Some("resample packed selection"),
+                        layout: Some(&layout),
+                        module: &shader,
+                        entry_point: Some("resample"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    },
+                )
             })
         };
         Self {

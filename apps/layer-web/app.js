@@ -1441,7 +1441,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
-  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js")), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
+  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js"), { onSettled: () => workspaceManager?.wake() }), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);
   systemStatus.sync();
@@ -1489,7 +1489,10 @@ async function startGpu() {
     notice.hidden = true;
     wake();
     // Resource loading failure never disables the canvas or the working catalog.
-    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`))
+    // A catalog refresh cannot change the document. Explicit package imports
+    // still use the migrating path; making startup use it locks workspace
+    // adoption and consumes all input until the entire catalog has compiled.
+    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`), true)
       .catch(error=>console.warn("Using bundled filters:",error))
       .finally(() => { app.startup_catalog_submitted(); wake(); });
   } catch (error) {
@@ -1520,8 +1523,8 @@ async function gpuOperation(operation) {
   }
 }
 
-async function loadFilters(url, mode="add", moduleUrl) {
-  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl);
+async function loadFilters(url, mode="add", moduleUrl, libraryOnly=false) {
+  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl,libraryOnly);
   update(change.regions);
   if(change.canvas_wake)wake();
   return app.state().filter_load.request_id;

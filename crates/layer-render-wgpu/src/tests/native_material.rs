@@ -129,7 +129,23 @@ fn native_brush_blends_preserve_extended_color_and_tiny_locked_coverage() {
                         style.rendering.blend_mode = mode;
                         style.rendering.accumulation = BrushAccumulation::Uniform;
                         let dab = test_dab([128., 128.], s, 0.3);
-                        frame(&mut r, &layer, dab, &batch(style), false);
+                        let mut stroke = batch(style);
+                        stroke.damage = Rect {
+                            min: Point { x: 100., y: 100. },
+                            max: Point { x: 156., y: 156. },
+                        };
+                        frame(&mut r, &layer, dab, &stroke, false);
+                        let pixels = crate::layer_tests::page_bytes(
+                            &r, &r.paint_layers[0].pages[0].active().texture,
+                        );
+                        let original: Vec<_> = [d[0] * alpha, d[1] * alpha, d[2] * alpha, alpha]
+                            .into_iter().flat_map(f32::to_le_bytes).collect();
+                        for (index, pixel) in pixels.chunks_exact(16).enumerate() {
+                            let [x, y] = [index % 256, index / 256];
+                            if !(100..156).contains(&x) || !(100..156).contains(&y) {
+                                assert_eq!(pixel, original, "untouched pixel {x},{y}");
+                            }
+                        }
                         let da = f64::from(alpha);
                         let sa = f64::from(s[3]) * f64::from(dab.flow);
                         let out_alpha = if locked { da } else { sa + da * (1. - sa) };
@@ -144,7 +160,10 @@ fn native_brush_blends_preserve_extended_color_and_tiny_locked_coverage() {
                             }
                         });
                         close(
-                            pixel(&r),
+                            std::array::from_fn(|c| {
+                                let offset = (128 * 256 + 128) * 16 + c * 4;
+                                f32::from_le_bytes(pixels[offset..offset + 4].try_into().unwrap())
+                            }),
                             rgb,
                             out_alpha,
                             2e-6,

@@ -5,7 +5,111 @@ import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 
+/// Keep user clipboard data in memory and never overwrite a newer user copy.
+@MainActor private final class NativePhotoPasteboard {
+    let board = NSPasteboard.general
+    let saved: [NSPasteboardItem]
+    var changeCount: Int
+    var replaced = false
+
+    init() throws {
+        changeCount = board.changeCount
+        saved = try (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                let data = try XCTUnwrap(item.data(forType: type), "Preserve clipboard before testing")
+                XCTAssertTrue(copy.setData(data, forType: type))
+            }
+            return copy
+        }
+        XCTAssertEqual(board.changeCount, changeCount)
+    }
+    func replace(_ items: [NSPasteboardItem]) throws {
+        guard board.changeCount == changeCount else {
+            throw NSError(domain: "PhotoClipboardCheck", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Clipboard changed during the test"])
+        }
+        board.prepareForNewContents(with: .currentHostOnly)
+        replaced = true
+        let written = board.writeObjects(items)
+        changeCount = board.changeCount
+        XCTAssertTrue(written)
+    }
+    func restore() {
+        guard replaced && board.changeCount == changeCount else { return }
+        board.prepareForNewContents(with: .currentHostOnly)
+        if !saved.isEmpty { XCTAssertTrue(board.writeObjects(saved)) }
+    }
+}
+
 extension XCTestCase {
+    @MainActor func checkNativeImagePaste(in app: XCUIApplication) throws {
+        let clipboard = try NativePhotoPasteboard()
+        addTeardownBlock { await MainActor.run { clipboard.restore() } }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Paste " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let photo = root.appendingPathComponent("Clipboard blue.png")
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let title = app.staticTexts["document-title"]
+        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
+        let size = extent.components(separatedBy: " × ").compactMap(Int.init)
+        XCTAssertEqual(size.count, 2)
+        let context = try XCTUnwrap(CGContext(data: nil, width: size[0], height: size[1], bitsPerComponent: 8,
+            bytesPerRow: size[0] * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size[0], height: size[1]))
+        let output = try XCTUnwrap(CGImageDestinationCreateWithURL(photo as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(output))
+        let original = try Data(contentsOf: photo)
+        func item(_ data: Data, type: NSPasteboard.PasteboardType = .png) -> NSPasteboardItem {
+            let item = NSPasteboardItem(); XCTAssertTrue(item.setData(data, forType: type)); return item
+        }
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let apply = app.buttons["photo-placement-apply"]
+        func paste() { editorMenu(in: app, menu: "Edit", id: "paste_image", label: "Paste Image as Layer") }
+        func expect(_ count: Int, _ pixels: Data) {
+            expectation(for: NSPredicate { _, _ in
+                rows.count == count && self.editorPixels(in: app) == pixels
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        let paper = editorPixels(in: app)
+        for cancel in [true, false] {
+            try clipboard.replace([item(original), item(original)])
+            paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 4)
+            workspaceActivate(cancel ? app.buttons["photo-placement-cancel"] : apply)
+            XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
+            if cancel { expect(2, paper) }
+        }
+        let painted = editorPixels(in: app)
+        XCTAssertGreaterThan(Int(painted[2]), Int(painted[0]) + 100)
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
+            editorHistory(command, in: app); expect(count, pixels)
+        }
+        try clipboard.replace([item(original), item(Data("invalid PNG".utf8))])
+        paste()
+        let failure = app.sheets.firstMatch
+        XCTAssertTrue(failure.waitForExistence(timeout: 20))
+        workspaceActivate(failure.buttons["OK"])
+        XCTAssertTrue(failure.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(apply.exists); expect(4, painted)
+        // A failed batch must not insert its first valid member or add history.
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
+            editorHistory(command, in: app); expect(count, pixels)
+        }
+        try clipboard.replace([item(photo.dataRepresentation, type: .fileURL)])
+        paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 5)
+        workspaceActivate(app.buttons["photo-placement-cancel"])
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); expect(4, painted)
+        XCTAssertEqual(try Data(contentsOf: photo), original)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        attachEditor(in: app, name: "native-clipboard-batch-history-and-failure-retry")
+    }
+
     @MainActor func checkNativeImageDrop(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Drop " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

@@ -143,6 +143,17 @@ impl<P> ExportRecipe<P> {
     }
 }
 impl ExportRecipe {
+    /// Validate the complete delivery transform and size on a file worker.
+    pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
+        self.validate()?;
+        if layer_color::profile_channels(&self.profile.profile)? != self.profile.channels {
+            return Err("Profile channels do not match the ICC data".into());
+        }
+        layer_color::WorkingEncoder::new(document.color.space, &self.interpretation(), self.encoding)?;
+        self.size.extent([document.width, document.height])?;
+        self.output_resolution(document.resolution)?;
+        Ok(())
+    }
     pub fn web_share() -> Self {
         Self {
             format: ExportFormat::Png,

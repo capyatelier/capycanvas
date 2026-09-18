@@ -37,6 +37,7 @@ struct ProfileImportButton: View {
 struct ProfileChooserButtons: View {
     let preferences: ColorPreferencesStore
     @Binding var busy: Bool
+    var onLibraryDismiss: (() -> Void)? = nil
     let onProfile: (JSON) -> Void
     @State private var library = false
     var body: some View {
@@ -44,7 +45,7 @@ struct ProfileChooserButtons: View {
             ProfileImportButton(preferences: preferences, busy: $busy, onProfile: onProfile)
             Button("Saved Profiles…") { library = true }.disabled(busy)
                 .accessibilityIdentifier("color-profile-library")
-        }.sheet(isPresented: $library) {
+        }.sheet(isPresented: $library, onDismiss: { onLibraryDismiss?() }) {
             ColorProfileLibrary(preferences: preferences) { profile in onProfile(profile); library = false }
                 .modifier(EditorPopupPresentation())
         }
@@ -77,6 +78,9 @@ struct ColorProfileLibrary: View {
                                 Button("Remove", role: .destructive) { remove(entry["id"].string) }
                                     .accessibilityIdentifier("profile-remove-" + entry["id"].string)
                             }
+                            Toggle("Show in profile menus", isOn: Binding(get: { entry["visible"].bool }, set: {
+                                reload(showing: (entry["id"].string, $0))
+                            })).accessibilityIdentifier("profile-visible-" + entry["id"].string)
                         }
                         Divider()
                     }
@@ -97,12 +101,13 @@ struct ColorProfileLibrary: View {
         }.padding(24).frame(minWidth: 340, idealWidth: 540, maxWidth: 620, minHeight: 300, idealHeight: 560, maxHeight: 720)
             .interactiveDismissDisabled(busy).task { reload() }
     }
-    private func reload(removing id: String? = nil) {
+    private func reload(removing id: String? = nil, showing: (String, Bool)? = nil) {
         guard !busy else { return }
         busy = true; error = nil
         NativeProjectTask.io.async {
             let result = Result {
                 if let id { try preferences.removeProfile(id) }
+                if let showing { try preferences.showProfile(showing.0, visible: showing.1) }
                 return try preferences.profiles()
             }
             DispatchQueue.main.async {

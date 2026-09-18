@@ -16,25 +16,23 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     struct PreviewRow {hstring id;Button button{nullptr};Image image{nullptr};};
     std::vector<PreviewRow> previews;
-    ~FiltersView(){if(timer)timer.Stop();}
+    ~FiltersView(){if(timer)timer.Stop();RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));}
     void preview(){
-        if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;
+        if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0){RemoveFilterPreviewView(data->previews,reinterpret_cast<uint64_t>(this));return;}
         double density=root.XamlRoot().RasterizationScale();
         int width=std::clamp(int(std::round((list.ActualWidth()-12)*density)),80,512);
         int height=std::clamp(int(std::round(40*density)),1,128);
         auto file=object(data->state,L"document_file");
-        auto context=O({{L"epoch",file.GetNamedValue(L"epoch")},{L"revision",file.GetNamedValue(L"revision")},
-            {L"layer",object(data->state,L"layer_properties").GetNamedValue(L"layer")},
-            {L"catalog",data->state.GetNamedValue(L"filter_catalog_revision")}}).Stringify();
+        auto context=file.GetNamedValue(L"epoch").Stringify();
         std::vector<hstring> visible;
         for(auto const& row:previews){
             auto rect=row.button.TransformToVisual(list).TransformBounds({0,0,float(row.button.ActualWidth()),float(row.button.ActualHeight())});
             if(rect.Y+rect.Height>0&&rect.Y<list.ActualHeight())visible.push_back(row.id);
-            auto source=FilterPreviewSource(data->previews,context,width,height,row.id);
+            auto source=FilterPreviewSource(data->previews,context,row.id);
             if(row.image.Source()!=source)row.image.Source(source);
             AutomationProperties::SetItemStatus(row.image,source?L"Ready":L"Pending");
         }
-        RefreshFilterPreviews(data->previews,context,width,height,visible);
+        RefreshFilterPreviews(data->previews,reinterpret_cast<uint64_t>(this),context,width,height,visible);
     }
     hstring catalogKey,listKey;
     std::optional<hstring> searchDraft;
@@ -78,7 +76,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(200));
         timer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->preview();});
         root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->timer.Start();self->preview();}});
-        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->timer.Stop();});
+        root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->timer.Stop();RemoveFilterPreviewView(self->data->previews,reinterpret_cast<uint64_t>(self.get()));}});
     }
     void refresh(){
         Updating updating(data);auto picker=object(data->state,L"filter_picker");auto categories=array(data->state,L"filter_categories");
@@ -129,8 +127,14 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
     }
 };
 }
-FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
+FrameworkElement FiltersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<FiltersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
+    if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
+        if(auto view=weak.lock()){
+            double unit=0;for(auto const& row:view->previews)if(row.button.IsLoaded()&&row.button.ActualHeight()>0){auto margin=row.button.Margin();unit=row.button.ActualHeight()+margin.Top+margin.Bottom+view->rows.Spacing();break;}
+            return O({{L"fixed_height",N(18.+view->header.ActualHeight())},{L"unit_height",N(unit)}});
+        }return J{};
+    };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock())return 18.+view->header.ActualHeight()+view->list.ExtentHeight();
         return -1.;

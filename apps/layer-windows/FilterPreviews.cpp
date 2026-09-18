@@ -11,16 +11,20 @@ struct FilterPreviewCache : std::enable_shared_from_this<FilterPreviewCache> {
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher{Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread()};
     struct Tile {hstring key;Imaging::WriteableBitmap image{nullptr};};
     std::map<hstring,Tile> images;
-    hstring context,revision,pendingKey;
-    uint64_t serial=0,pending=0;
+    hstring context,key;
+    struct Geometry {int width,height;std::vector<hstring> ids;};
+    std::map<uint64_t,Geometry> views;
     bool busy=false;
-    std::chrono::steady_clock::time_point last{};
-    hstring key(hstring const& state,int width,int height) const {
-        return state+L":"+revision+L":"+to_hstring(width)+L"x"+to_hstring(height);
+    Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
+    ~FilterPreviewCache(){if(timer)timer.Stop();}
+    void start(){
+        if(!timer){timer=dispatcher.CreateTimer();timer.Interval(std::chrono::milliseconds(200));
+            auto weak=weak_from_this();timer.Tick([weak](auto&&,auto&&){if(auto self=weak.lock())self->poll();});}
+        if(!timer.IsRunning())timer.Start();
     }
     struct Pixels {hstring id;std::vector<uint8_t> bytes;};
     static fire_and_forget Convert(std::weak_ptr<FilterPreviewCache> weak,
-        Microsoft::UI::Dispatching::DispatcherQueue queue,PreviewPacket packet,hstring acceptedKey,
+        Microsoft::UI::Dispatching::DispatcherQueue queue,PreviewPacket packet,hstring acceptedKey,hstring acceptedContext,
         int width,int height,std::vector<hstring> ids) {
         // No XAML objects or strong UI owners cross onto this worker.
         co_await resume_background();
@@ -44,10 +48,10 @@ struct FilterPreviewCache : std::enable_shared_from_this<FilterPreviewCache> {
             }
         }catch(...){valid=false;}
         packet.reset();
-        queue.TryEnqueue([weak,converted=std::move(converted),valid,acceptedKey,width,height]{
+        queue.TryEnqueue([weak,converted=std::move(converted),valid,acceptedKey,acceptedContext,width,height]{
         if(auto self=weak.lock()){
             self->busy=false;
-            if(!valid||!acceptedKey.starts_with(self->context+L":"+self->revision+L":"))return;
+            if(!valid||acceptedContext!=self->context||acceptedKey!=self->key)return;
             try {
                 for(auto& tile:converted){
                     Imaging::WriteableBitmap bitmap(width,height);
@@ -55,67 +59,72 @@ struct FilterPreviewCache : std::enable_shared_from_this<FilterPreviewCache> {
                     check_hresult(buffer.as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&destination));
                     if(buffer.Capacity()!=tile.bytes.size())throw hresult_invalid_argument();
                     memcpy(destination,tile.bytes.data(),tile.bytes.size());bitmap.Invalidate();
-                    // Retain at most 64 catalog rows (16 MiB at maximum size).
-                    if(!self->images.contains(tile.id)&&self->images.size()>=64)self->images.erase(self->images.begin());
                     self->images.insert_or_assign(tile.id,Tile{acceptedKey,bitmap});
                 }
             }catch(hresult_error const& e){OutputDebugStringW(e.message().c_str());}
         }
         });
     }
-    void receive(PreviewPacket packet,uint64_t request,hstring const& requestedKey){
-        busy=false;if(!packet)return;
+    void receive(PreviewPacket packet,hstring const& requestedContext,bool hadVisible){
+        busy=false;
+        if(!packet){timer.Interval(std::chrono::milliseconds(1000));return;}
+        if(requestedContext!=context)return;
         try {
             auto status=J::Parse(to_hstring(capy_preview_metadata(packet.get())));
-            auto next=str(status,L"revision");
-            if(revision!=next){revision=next;images.clear();}
-            if(flag(status,L"accepted")&&requestedKey.starts_with(context+L":"+revision+L":")){pending=request;pendingKey=requestedKey;}
-            auto atlas=object(status,L"atlas");if(!atlas.Size())return;
-            auto returned=str(atlas,L"request");
-            if(!pending||returned!=to_hstring(pending))return;
-            pending=0;
-            auto acceptedKey=std::exchange(pendingKey,L"");
-            if(!acceptedKey.starts_with(context+L":"+revision+L":"))return;
-            auto filters=array(atlas,L"filters");std::vector<hstring> ids;
-            for(auto id:filters)ids.push_back(id.GetString());
-            if(ids.empty()||ids.size()>8)return;
-            int width=int(num(atlas,L"width")),height=int(num(atlas,L"height"))/int(ids.size());
-            busy=true;Convert(weak_from_this(),dispatcher,std::move(packet),acceptedKey,width,height,std::move(ids));
-        }catch(hresult_error const& e){OutputDebugStringW(e.message().c_str());}
+            if(status.GetNamedValue(L"epoch").Stringify()!=context)return;
+            auto next=str(status,L"key");
+            if(key!=next){key=next;images.clear();}
+            std::vector<hstring> retained;
+            for(auto id:array(status,L"retained"))retained.push_back(id.GetString());
+            std::erase_if(images,[&](auto const& row){return std::find(retained.begin(),retained.end(),row.first)==retained.end();});
+            timer.Interval(std::chrono::milliseconds(std::max(8,int(num(status,L"wait_ms")))));
+            if(!hadVisible&&views.empty())timer.Stop();
+            auto atlas=object(status,L"atlas");
+            if(atlas.Size()){
+                auto filters=array(atlas,L"filters");std::vector<hstring> ids;
+                for(auto id:filters)ids.push_back(id.GetString());
+                if(ids.empty()||ids.size()>8)return;
+                int width=int(num(atlas,L"width")),height=int(num(atlas,L"height"))/int(ids.size());
+                busy=true;Convert(weak_from_this(),dispatcher,std::move(packet),key,context,width,height,std::move(ids));
+            }else if(hadVisible&&views.empty())poll();
+        }catch(hresult_error const& e){OutputDebugStringW(e.message().c_str());timer.Interval(std::chrono::milliseconds(1000));}
     }
-    void refresh(hstring const& state,int width,int height,std::vector<hstring> const& visible){
-        // A replacement can destroy the old renderer and its pending readback.
-        // Abandon that request; any late atlas is discarded by its request id.
-        if(context!=state){context=state;revision=L"";pending=0;pendingKey=L"";images.clear();}
-        auto now=std::chrono::steady_clock::now();
-        if(busy||now-last<std::chrono::milliseconds(200))return;
-        auto requestedKey=key(state,width,height);A missing;
-        if(!pending)for(auto const& id:visible){
-            auto item=images.find(id);
-            if(item==images.end()||item->second.key!=requestedKey){missing.Append(S(id));if(missing.Size()==8)break;}
+    void poll(){
+        if(busy)return;
+        A ids,cached;int width=80,height=1;std::vector<hstring> unique;
+        for(auto const& [view,geometry]:views){
+            width=std::max(width,geometry.width);height=std::max(height,geometry.height);
+            for(auto const& id:geometry.ids)if(std::find(unique.begin(),unique.end(),id)==unique.end()){
+                unique.push_back(id);ids.Append(S(id));
+            }
         }
-        if(!pending&&!missing.Size()&&!revision.empty())return;
-        auto request=++serial;
+        for(auto const& [id,tile]:images)cached.Append(S(id));
         A size;size.Append(N(width));size.Append(N(height));
-        auto query=O({{L"request",S(to_hstring(request))},{L"revision",S(revision)},{L"filters",missing},{L"size",size}});
-        auto weak=weak_from_this();auto queue=dispatcher;busy=true;
-        bool sent=transport(CanvasQueryKind::Filters,to_string(query.Stringify()),[weak,queue,request,requestedKey](PreviewPacket packet){
-            queue.TryEnqueue([weak,packet=std::move(packet),request,requestedKey]{
-                if(auto self=weak.lock())self->receive(packet,request,requestedKey);
+        auto query=O({{L"filters",ids},{L"size",size},{L"cache",O({{L"key",S(key)},{L"rows",cached}})}});
+        auto weak=weak_from_this();auto queue=dispatcher;auto requestedContext=context;bool hadVisible=ids.Size()>0;busy=true;
+        if(!transport(CanvasQueryKind::Filters,to_string(query.Stringify()),[weak,queue,requestedContext,hadVisible](PreviewPacket packet){
+            queue.TryEnqueue([weak,packet=std::move(packet),requestedContext,hadVisible]{
+                if(auto self=weak.lock())self->receive(packet,requestedContext,hadVisible);
             });
-        });
-        if(sent)last=now;else busy=false;
+        }))busy=false;
     }
+    void refresh(uint64_t view,hstring const& epoch,int width,int height,std::vector<hstring> const& visible){
+        // A queued native image conversion must not reach a replacement document.
+        if(context!=epoch){context=epoch;key=L"";images.clear();}
+        views.insert_or_assign(view,Geometry{width,height,visible});start();
+    }
+    void remove(uint64_t view){if(views.erase(view)){start();poll();}}
+
 };
 std::shared_ptr<FilterPreviewCache> CreateFilterPreviewCache(PreviewTransport transport){
     auto cache=std::make_shared<FilterPreviewCache>();cache->transport=std::move(transport);return cache;
 }
-void RefreshFilterPreviews(std::shared_ptr<FilterPreviewCache> const& cache,hstring const& context,
-    int width,int height,std::vector<hstring> const& visible){if(cache)cache->refresh(context,width,height,visible);}
-ImageSource FilterPreviewSource(std::shared_ptr<FilterPreviewCache> const& cache,hstring const& context,
-    int width,int height,hstring const& id){
-    if(cache){auto found=cache->images.find(id);
-        if(found!=cache->images.end()&&found->second.key==cache->key(context,width,height))return found->second.image;
+void RefreshFilterPreviews(std::shared_ptr<FilterPreviewCache> const& cache,uint64_t view,hstring const& epoch,
+    int width,int height,std::vector<hstring> const& visible){if(cache)cache->refresh(view,epoch,width,height,visible);}
+void RemoveFilterPreviewView(std::shared_ptr<FilterPreviewCache> const& cache,uint64_t view){if(cache)cache->remove(view);}
+ImageSource FilterPreviewSource(std::shared_ptr<FilterPreviewCache> const& cache,hstring const& epoch,hstring const& id){
+    if(cache&&cache->context==epoch){auto found=cache->images.find(id);
+        if(found!=cache->images.end()&&found->second.key==cache->key)return found->second.image;
     }return nullptr;
 }
 }

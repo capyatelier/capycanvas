@@ -1,4 +1,6 @@
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkStagedStartup} from "./startup.test.mjs";
+import {checkFilterPreviews} from "./filter-previews.test.mjs";
 import {checkTitleBarFeedback} from "./title-bar-feedback.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkWorkspaceStore} from "./workspace-store.test.mjs";
@@ -58,6 +60,9 @@ try {
   // Runtime.enable replays errors from the previous navigation. This run
   // validates the page loaded below, including any startup errors it produces.
   errors.length=0;
+  // A previous automation-only drawing may not have sticky user activation.
+  // Allow its ordinary beforeunload confirmation, which this harness accepts.
+  await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
   await workspaceIdle();
@@ -70,7 +75,13 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--image-placement")) {
+  if (process.argv.includes("--filter-previews")) {
+    await checkFilterPreviews({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--staged-startup")) {
+    await checkStagedStartup({call,evaluate,settle,canvasPixels});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--image-placement")) {
     await checkDeviceImagePlacement({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--title-bar-feedback")) {

@@ -272,13 +272,13 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         dabs: &[Dab],
         coordinate: [u32; 2],
+        local: PixelRect,
         dab_range: std::ops::Range<u32>,
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let timing = self.telemetry.enabled;
         let started = timing.then(web_time::Instant::now);
-        let plan = BrushPassPlan::for_style(&batch.style);
         let operation = match batch.style.execution {
             BrushExecution::Liquify => Some(0),
             BrushExecution::Smudge => Some(1),
@@ -301,24 +301,18 @@ impl WgpuRasterizer {
         self.metrics.material_cpu_ms[0] += elapsed(started);
         if !distant {
             let started = timing.then(web_time::Instant::now);
-            let result = self.material_bind_group(
-                batch.layer_id,
-                coordinate,
-                batch.stroke_id,
-                plan.state.watercolor_wetness,
-                preview,
-                None,
-                encoder,
-            );
-            // Keep the original contact order, but do not evaluate a whole
-            // fast stroke at every pixel of every touched tile. Only dry
-            // contacts are local; smudge/liquify/wet updates retain their full
-            // dependency sequence. Use the same swept bounds as allocation.
-            if batch.style.contact.is_some() && batch.style.execution == BrushExecution::Dry {
-                let header = [0u32, 0, dab_range.start, dab_range.len() as u32];
-                let bytes: Vec<_> = header.into_iter().flat_map(u32::to_le_bytes).collect();
-                self.uploads.write(encoder, &self.queue, &self.material_source_meta, &bytes)?;
-            }
+            let metadata = (batch.style.execution == BrushExecution::Dry).then(|| {
+                let header = [0u32, 0, dab_range.start, dab_range.len() as u32,
+                    local.min_x(), local.min_y(), local.max_x(), local.max_y()];
+                let mut bytes = [0u8; 160];
+                for (destination, word) in bytes.chunks_exact_mut(4).zip(header) {
+                    destination.copy_from_slice(&word.to_le_bytes());
+                }
+                self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("dry material page contacts"), contents: &bytes, usage: wgpu::BufferUsages::UNIFORM,
+                })
+            });
+            let result = self.material_bind_group(batch, coordinate, preview, None, metadata.as_ref(), encoder);
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }
@@ -433,12 +427,11 @@ impl WgpuRasterizer {
         let (samples, meta) = (gather.fields[current].1.clone(), gather.complete.clone());
         let started = timing.then(web_time::Instant::now);
         let result = self.material_bind_group(
-            batch.layer_id,
+            batch,
             coordinate,
-            batch.stroke_id,
-            plan.state.watercolor_wetness,
             preview,
             Some((&samples, &meta)),
+            None,
             encoder,
         );
         self.metrics.material_cpu_ms[4] += elapsed(started);

@@ -50,6 +50,12 @@ impl<T: Read> Read for Stream<'_, T> {
         self.inner.read(bytes)
     }
 }
+impl<T: std::io::Seek> std::io::Seek for Stream<'_, T> {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        check_cancelled(self.cancel).map_err(std::io::Error::other)?;
+        self.inner.seek(position)
+    }
+}
 impl<T: Write> Write for Stream<'_, T> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         check_cancelled(self.cancel).map_err(std::io::Error::other)?;
@@ -66,10 +72,15 @@ impl Drop for Temporary {
         let _ = fs::remove_file(&self.0);
     }
 }
-pub(crate) fn atomic_write(
+pub(crate) trait WriteSeek: Write + std::io::Seek {}
+impl<T: Write + std::io::Seek> WriteSeek for T {}
+pub(crate) fn atomic_write(path: &Path, cancel: &AtomicBool, write: impl FnOnce(&mut dyn Write) -> Result<(), String>) -> Result<(), String> {
+    atomic_write_seek(path, cancel, |stream| write(stream))
+}
+pub(crate) fn atomic_write_seek(
     path: &Path,
     cancel: &AtomicBool,
-    write: impl FnOnce(&mut dyn Write) -> Result<(), String>,
+    write: impl FnOnce(&mut dyn WriteSeek) -> Result<(), String>,
 ) -> Result<(), String> {
     check_cancelled(cancel)?;
     let parent = fs::canonicalize(path.parent().ok_or("Choose a destination folder")?)

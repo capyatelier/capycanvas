@@ -31,7 +31,7 @@ impl NativePromotionBatch {
 
 pub struct NativePromoter {
     layouts: Vec<wgpu::BindGroupLayout>,
-    pipelines: Vec<wgpu::ComputePipeline>,
+    pub(crate) pipelines: Vec<crate::Deferred<wgpu::ComputePipeline>>,
     tiles_per_dispatch: usize,
     full_region: wgpu::Buffer,
 }
@@ -43,7 +43,11 @@ impl NativePromoter {
     /// Prepare with native encoding pipelines before interaction. Working
     /// destinations require write-only storage access in their Float32 format.
     pub fn new(device: &wgpu::Device) -> Self {
-        Self::with_device(&device.clone().into())
+        let encoder = Self::with_device(&device.clone().into());
+        for pipeline in &encoder.pipelines {
+            pipeline.compile();
+        }
+        encoder
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         let formats = [
@@ -112,26 +116,32 @@ impl NativePromoter {
                     .replace("COPY_TILES", &copies)
                     .replace("STATUS_BINDING", &status_binding.to_string())
                     .replace("REGION_BINDING", &(status_binding + 1).to_string());
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("native canonical promotion"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
                 let pipeline_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("native canonical promotion"),
                         bind_group_layouts: &[Some(&layout)],
                         immediate_size: 0,
                     });
-                pipelines.push(
-                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                        label: Some("native canonical promotion"),
-                        layout: Some(&pipeline_layout),
-                        module: &shader,
-                        entry_point: Some("main"),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    }),
-                );
+                pipelines.push({
+                    let (device, pipeline_layout) = (device.clone(), pipeline_layout.clone());
+                    crate::Deferred::pipeline(move |mode| {
+                        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                            label: Some("native canonical promotion"),
+                            source: wgpu::ShaderSource::Wgsl(source.into()),
+                        });
+                        mode.compute(
+                            &device,
+                            &wgpu::ComputePipelineDescriptor {
+                                label: Some("native canonical promotion"),
+                                layout: Some(&pipeline_layout),
+                                module: &shader,
+                                entry_point: Some("main"),
+                                compilation_options: Default::default(),
+                                cache: None,
+                            },
+                        )
+                    })
+                });
                 layouts.push(layout);
             }
         }
