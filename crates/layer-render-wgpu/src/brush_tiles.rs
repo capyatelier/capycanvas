@@ -21,9 +21,8 @@ fn contact_radius(dab: Dab, contact: &layer_core::BrushContact) -> f32 {
     maximum * expansion + 1.0
 }
 
-fn contact_bounds(dab: Dab, contact: &layer_core::BrushContact) -> layer_core::Rect {
+fn contact_bounds(dab: Dab, radius: f32) -> layer_core::Rect {
     if dab.previous[0] <= 0.0 { return dab.bounds(); }
-    let radius = contact_radius(dab, contact);
     let start = [dab.center.x - dab.motion[0], dab.center.y - dab.motion[1]];
     layer_core::Rect {
         min: layer_core::Point {
@@ -93,7 +92,8 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     let inverse = batch.style.brush_to_layer.inverse();
     let mut tiles = std::collections::BTreeMap::<_, BrushTile>::new();
     for (index, dab) in dabs.iter().enumerate() {
-        let bounds = pixel_rect(batch.style.brush_to_layer.bounds(contact_bounds(*dab, contact)), extent)
+        let radius = contact_radius(*dab, contact);
+        let bounds = pixel_rect(batch.style.brush_to_layer.bounds(contact_bounds(*dab, radius)), extent)
             .intersect(damage);
         if bounds.is_empty() { continue; }
         let index = batch.first_dab + index as u32;
@@ -104,7 +104,7 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
                     min: layer_core::Point { x: tile.min_x() as f32, y: tile.min_y() as f32 },
                     max: layer_core::Point { x: tile.max_x() as f32, y: tile.max_y() as f32 },
                 });
-                if !capsule_touches_rect(*dab, contact_radius(*dab, contact), rect) { continue; }
+                if !capsule_touches_rect(*dab, radius, rect) { continue; }
             }
             let local = bounds.intersect(page_rect(coordinate)).page_local(coordinate);
             // Match page_coordinates' row-major order without a second sort.
@@ -152,7 +152,8 @@ mod tests {
             dab.previous[..2].copy_from_slice(&axes[2..]);
             for (roughness, pooling) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
                 let contact = layer_core::BrushContact { edge_roughness: roughness, pooling, ..Default::default() };
-                let bounds = contact_bounds(dab, &contact);
+                let radius = contact_radius(dab, &contact);
+                let bounds = contact_bounds(dab, radius);
                 for step in 0..=32 {
                     let t = step as f32 / 32.;
                     let axes = std::array::from_fn::<_, 2, _>(|i| (dab.previous[i] * (1. - t) + dab.radii[i] * t).max(0.005));
@@ -181,7 +182,7 @@ mod tests {
                                     min: layer_core::Point { x: origin[0], y: origin[1] },
                                     max: layer_core::Point { x: origin[0] + 256., y: origin[1] + 256. },
                                 };
-                                assert!(capsule_touches_rect(dab, contact_radius(dab, &contact), transform.inverse().unwrap().bounds(tile)));
+                                assert!(capsule_touches_rect(dab, radius, transform.inverse().unwrap().bounds(tile)));
                             }
                         }
                     }

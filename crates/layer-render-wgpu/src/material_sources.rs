@@ -347,7 +347,7 @@ impl WgpuRasterizer {
             let started = timing.then(web_time::Instant::now);
             self.metrics.material_sample_passes += 1;
             let offsets = std::array::from_fn::<_, 9, _>(|i| {
-                pages.get(i).map_or([-1_000_000; 2], |p| {
+                pages.get(i).map(|p| {
                     [
                         p[0] as i32 - coordinate[0] as i32,
                         p[1] as i32 - coordinate[1] as i32,

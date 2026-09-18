@@ -1723,9 +1723,9 @@ impl WgpuRasterizer {
                 // Dry paint reads only its destination pixel. Completed gather
                 // fields already contain nonlocal smudge/liquify samples.
                 // Neither needs to decode or bind surrounding source tiles.
-                [-1_000_000; 2]
+                None
             } else {
-                [i as i32 % 3 - 1, i as i32 / 3 - 1]
+                Some([i as i32 % 3 - 1, i as i32 / 3 - 1])
             }
         });
         self.prepare_raw_neighborhood(batch.layer_id, coordinate, offsets, preview, encoder)?;
@@ -2994,13 +2994,13 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]];
-        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
+        self.prepare_raw_neighborhood(layer_id, coordinate, offsets.map(Some), preview, encoder)?;
         let layer = self
             .paint_layers
             .iter()
             .find(|l| l.id == layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
-        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets.map(Some), preview);
         let wetness_pages = if preview {
             &self.preview_watercolor_wetness_pages
         } else {
