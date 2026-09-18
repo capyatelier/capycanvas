@@ -55,14 +55,6 @@ impl NumberControl {
         }
         control
     }
-    /// A labeled editable value above a separately supplied custom track.
-    pub fn value_header(spec: NumericControl, title: &str) -> Self {
-        let control = Self::build(spec, title, "", false);
-        if control.imp().steps.get().is_some() {
-            control.last_child().unwrap().set_visible(false);
-        }
-        control
-    }
     fn build(spec: NumericControl, title: &str, description: &str, inline: bool) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();

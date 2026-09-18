@@ -51,6 +51,7 @@ pub struct ColorEditor {
     model: ColorInputModel,
     fields: [String; 4],
     initial: [String; 4],
+    hdr: Option<HdrPaint>,
 }
 impl ColorEditor {
     pub fn new(definition: RgbColor, document_space: RgbSpace) -> Result<Self, String> {
@@ -61,9 +62,31 @@ impl ColorEditor {
             model: ColorInputModel::DocumentRgb,
             fields: Default::default(),
             initial: Default::default(),
+            hdr: None,
         };
         editor.populate();
         Ok(editor)
+    }
+    pub fn enable_hdr(&mut self, stops: f32) -> Result<(), String> {
+        self.hdr = Some(HdrPaint::at_intensity(self.color()?, self.document_space, stops)?);
+        Ok(())
+    }
+    pub fn intensity(&self) -> Option<f32> { self.hdr.map(|p| p.stops) }
+    /// RGB fields describe the final color. EV multiplies its remembered base,
+    /// while numeric RGB edits keep the explicitly selected EV.
+    pub fn set_intensity(&mut self, stops: f32) -> Result<(), String> {
+        HdrPaint::validate_stops(stops)?;
+        let mut paint = self.hdr.ok_or("Intensity requires an HDR color draft")?;
+        if paint.stops == stops { self.color()?; return Ok(()); }
+        let color = self.color()?;
+        if color != self.definition { paint = HdrPaint::at_intensity(color, self.document_space, paint.stops)?; }
+        paint.stops = stops;
+        let color = paint.color(self.document_space)?;
+        ColorState::validate_definition(color)?;
+        self.hdr = Some(paint);
+        self.definition = color;
+        self.populate();
+        Ok(())
     }
     pub fn model(&self) -> ColorInputModel {
         self.model
@@ -83,6 +106,9 @@ impl ColorEditor {
     }
     pub fn set_model(&mut self, model: ColorInputModel) -> Result<(), String> {
         let color = self.color()?;
+        if color != self.definition && let Some(paint) = self.hdr {
+            self.hdr = Some(HdrPaint::at_intensity(color, self.document_space, paint.stops)?);
+        }
         self.definition = color;
         self.model = model;
         self.populate();
@@ -223,6 +249,51 @@ impl ColorEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hdr_numeric_draft_retains_exact_color_ev_black_and_alpha() {
+        for space in RgbSpace::ALL {
+            for linear in [[0.08, 0.02, 0.04, 0.37], [0., 0., 0., 0.25], [4., -0.2, 2., 0.8]] {
+                let original = RgbColor::from_linear(space, linear).unwrap();
+                let mut state = ColorState::default();
+                state.set_rgb_space(space).unwrap();
+                state.set_hdr_enabled(true).unwrap();
+                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Foreground, color: original, stops: 2. }).unwrap();
+                let mut editor = ColorEditor::new(original, space).unwrap();
+                editor.enable_hdr(2.).unwrap();
+                for model in ColorInputModel::ALL {
+                    editor.set_model(model).unwrap();
+                    assert_eq!(editor.color().unwrap(), original);
+                    assert_eq!(editor.intensity(), Some(2.));
+                }
+                let untouched = state.clone();
+                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Foreground, color: editor.color().unwrap(), stops: editor.intensity().unwrap() }).unwrap();
+                assert_eq!(state, untouched);
+                editor.set_intensity(3.).unwrap();
+                let color = editor.color().unwrap().linear_in(space).unwrap();
+                for c in 0..3 { assert!((color[c] - linear[c] * 2.).abs() < 1e-5); }
+                assert_eq!(color[3], linear[3]);
+                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Background, color: editor.color().unwrap(), stops: 3. }).unwrap();
+                state.validate().unwrap();
+                assert_eq!(state.hdr_intensity(), 3.);
+                assert_eq!(state.foreground, original);
+                state.apply(ColorAction::Select { slot: ColorSlot::Foreground }).unwrap();
+                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Background, color: editor.color().unwrap(), stops: 3. }).unwrap();
+                assert_eq!(state.slot, ColorSlot::Background);
+                assert_eq!(state.hdr_intensity(), 3.);
+                state.validate().unwrap();
+                editor.set_model(ColorInputModel::LinearRgb).unwrap();
+                editor.set_field(0, "0.25".into()).unwrap();
+                editor.set_intensity(4.).unwrap();
+                assert!((editor.color().unwrap().linear_in(space).unwrap()[0] - 0.5).abs() < 1e-5);
+                let accepted = editor.color().unwrap();
+                for invalid in [f32::NAN, f32::INFINITY, -17., 17.] { assert!(editor.set_intensity(invalid).is_err()); }
+                assert_eq!(editor.color().unwrap(), accepted);
+                editor.set_field(0, "65504".into()).unwrap();
+                assert!(editor.set_intensity(5.).is_err());
+                assert_eq!(editor.intensity(), Some(4.));
+            }
+        }
+    }
     #[test]
     fn model_changes_and_alpha_do_not_quantize_definitions() {
         for space in RgbSpace::ALL {

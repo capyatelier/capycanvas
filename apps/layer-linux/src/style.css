@@ -234,10 +234,5 @@ window, label, text { font-size: var(--ui-text-size); }
 #workspace-layout-history dimming,
 #workspace-manager dimming { background-color: rgb(0 0 0 / 12%); }
 
-/* The native scale owns input and accessibility; its subclass paints managed
- * HDR textures. Geometry also defines the input track and circular thumb. */
-.number-control scale.hdr-color-scale { padding: 8px; margin: 0; min-height: 28px; }
-.number-control scale.hdr-color-scale trough { min-height: 20px; border: 0; }
-.number-control scale.hdr-color-scale slider { min-width: 20px; min-height: 20px; margin: 0; border: 0; padding: 0; opacity: 1; }
-.hdr-color-control .number-labels { padding-left: 0; }
-.hdr-color-control button.number-value { padding-left: 0; padding-right: 0; }
+/* Custom angular input and rendering share coordinates without CSS insets. */
+scale.hdr-color-scale { padding: 0; margin: 0; min-width: 0; min-height: 0; }

@@ -22,7 +22,19 @@ impl HdrPaint {
             stops,
         })
     }
-    fn color(self, space: RgbSpace) -> Result<RgbColor, String> {
+    pub fn at_intensity(color: RgbColor, space: RgbSpace, stops: f32) -> Result<Self, String> {
+        Self::validate_stops(stops)?;
+        let mut p = color.linear_in(space)?;
+        for v in &mut p[..3] { *v /= stops.exp2(); }
+        Ok(Self { base: if stops == 0. { color } else { RgbColor::from_linear(space, p)? }, stops })
+    }
+    pub fn validate_stops(stops: f32) -> Result<(), String> {
+        if !stops.is_finite() || !(-16. ..=65504f32.log2()).contains(&stops) {
+            return Err("Intensity must be between −16 and +16 EV (half-float limit)".into());
+        }
+        Ok(())
+    }
+    pub fn color(self, space: RgbSpace) -> Result<RgbColor, String> {
         let mut p = self.base.linear_in(space)?;
         for v in &mut p[..3] {
             *v *= self.stops.exp2();
@@ -55,9 +67,7 @@ impl ColorState {
             .map_or(self.definition(), |p| p[self.index()].base)
     }
     pub(super) fn set_hdr_intensity(&mut self, stops: f32) -> Result<(), String> {
-        if !stops.is_finite() || !(-16. ..=65504f32.log2()).contains(&stops) {
-            return Err("HDR intensity must be between −16 and +16 EV (half-float limit)".into());
-        }
+        HdrPaint::validate_stops(stops)?;
         let mut paint = self
             .hdr_picker
             .ok_or("HDR intensity requires an HDR drawing")?[self.index()];

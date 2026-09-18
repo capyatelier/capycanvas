@@ -413,7 +413,7 @@ fn body() -> gtk::Box {
     root
 }
 
-// All controls share one square; shared allocations reserve the curved readout band.
+// Shared allocations reserve the curved readout band and the optional HDR footer.
 // Four 36px tiles (144px panel, 128px content) is the smallest supported width.
 mod wheel_button {
     use super::*;
@@ -467,6 +467,8 @@ mod wheel {
     #[derive(Default)]
     pub struct Wheel {
         pub color: RefCell<ColorState>,
+        pub intensity: RefCell<Option<crate::hdr_color_scale::HdrColorScale>>,
+        pub hdr: Cell<bool>,
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
         pub menu: RefCell<Option<gtk::Popover>>,
@@ -485,6 +487,7 @@ mod wheel {
     }
     impl ObjectImpl for Wheel {
         fn dispose(&self) {
+            if let Some(intensity) = self.intensity.take() { intensity.unparent(); }
             if let Some(menu) = self.menu.take() {
                 menu.unparent();
             }
@@ -500,8 +503,8 @@ mod wheel {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if orientation == gtk::Orientation::Vertical {
                 (
-                    128,
-                    if for_size < 0 { 226 } else { for_size.max(128) },
+                    128 + if self.hdr.get() { ColorPanelLayout::HDR_FOOTER as i32 } else { 0 },
+                    (if for_size < 0 { 226 } else { for_size.max(128) }) + if self.hdr.get() { ColorPanelLayout::HDR_FOOTER as i32 } else { 0 },
                     -1,
                     -1,
                 )
@@ -511,7 +514,7 @@ mod wheel {
         }
         fn size_allocate(&self, _width: i32, _height: i32, baseline: i32) {
             let (size, [x, y]) = self.obj().stage_bounds();
-            let Some(layout) = ColorPanelLayout::new(size) else {
+            let Some(layout) = (if self.hdr.get() { ColorPanelLayout::with_hdr(size) } else { ColorPanelLayout::new(size) }) else {
                 return;
             };
             let boxes = [
@@ -522,6 +525,7 @@ mod wheel {
                 layout.shapes[1],
                 layout.swap,
                 layout.readout,
+                layout.edit,
             ];
             for (button, rotation) in self
                 .corners
@@ -542,6 +546,10 @@ mod wheel {
                             .translate(&gtk::graphene::Point::new(x + bx.round(), y + by.round())),
                     ),
                 );
+            }
+            if let Some(intensity) = self.intensity.borrow().as_ref().filter(|i| i.is_visible()) {
+                intensity.allocate(size.round() as i32, (size + ColorPanelLayout::HDR_FOOTER).round() as i32, baseline,
+                    Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x, y))));
             }
             if let Some(menu) = self.menu.borrow().as_ref() {
                 menu.present();
@@ -615,6 +623,9 @@ mod wheel {
                 draw_wheel(snapshot, &state, &geometry, view, self.headroom.get());
                 snapshot.restore();
             }
+            if let Some(intensity) = self.intensity.borrow().as_ref().filter(|i| i.is_visible()) {
+                self.obj().snapshot_child(intensity, snapshot);
+            }
             for button in self.corners.borrow().iter() {
                 self.obj().snapshot_child(button, snapshot);
             }
@@ -630,12 +641,13 @@ glib::wrapper! {
 }
 impl ColorWheel {
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
-        let size = self.width().min(self.height()) as f32;
+        let footer = if self.imp().hdr.get() { ColorPanelLayout::HDR_FOOTER } else { 0. };
+        let size = (self.width() as f32).min(self.height() as f32 - footer);
         (
             size,
             [
                 (self.width() as f32 - size) * 0.5,
-                (self.height() as f32 - size) * 0.5,
+                (self.height() as f32 - size - footer) * 0.5,
             ],
         )
     }
@@ -659,9 +671,8 @@ pub struct ColorPanel {
     menu_swap: gtk::Button,
     menu_edit: gtk::Button,
     menu_library: gtk::Button,
-    brightness: crate::number_control::NumberControl,
     intensity: crate::hdr_color_scale::HdrColorScale,
-    edit_color: gtk::Button,
+    edit_color: WheelButton,
 }
 impl ColorPanel {
     pub fn new() -> Self {
@@ -672,22 +683,17 @@ impl ColorPanel {
         wheel.set_valign(gtk::Align::Fill);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
-        let mut spec = layer_ui::NumericControl::number(-16., f64::from(65504f32.log2()), 0.1, 2).unit("EV");
-        spec.kind = layer_ui::NumericKind::Slider;
-        let brightness = crate::number_control::NumberControl::value_header(spec, "HDR");
-        brightness.add_css_class("hdr-color-control");
         let intensity = crate::hdr_color_scale::HdrColorScale::new();
-        brightness.append(&intensity);
-        brightness.set_widget_name("color-hdr-brightness");
-        root.append(&brightness);
-        let edit_color = gtk::Button::from_icon_name("document-edit-symbolic");
+        intensity.set_parent(&wheel);
+        *wheel.imp().intensity.borrow_mut() = Some(intensity.clone());
+        let edit_color: WheelButton = glib::Object::new();
+        edit_color.set_icon_name("document-edit-symbolic");
         edit_color.set_tooltip_text(Some("Edit Color…"));
         edit_color.update_property(&[gtk::accessible::Property::Label("Edit Color")]);
         edit_color.add_css_class("flat");
+        edit_color.add_css_class("color-utility");
+        edit_color.add_css_class("color-swap");
         edit_color.set_widget_name("color-edit-button");
-        let header = brightness.first_child().unwrap().downcast::<gtk::Box>().unwrap();
-        header.set_spacing(2);
-        header.append(&edit_color);
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Background, "Background color"),
@@ -700,9 +706,9 @@ impl ColorPanel {
             button.set_tooltip_text(Some(if slot == ColorSlot::Transparent {
                 label
             } else if slot == ColorSlot::Foreground {
-                "Foreground color · Right-click or hold for Edit Color and swap"
+                "Foreground color · Double-click to edit"
             } else {
-                "Background color · Right-click or hold for Edit Color and swap"
+                "Background color · Double-click to edit"
             }));
             button.update_property(&[gtk::accessible::Property::Label(label)]);
             button.set_widget_name(&format!("color-{slot:?}"));
@@ -756,6 +762,8 @@ impl ColorPanel {
         readout.set_child(Some(&readout_drawing));
         readout.set_parent(&wheel);
         wheel.imp().corners.borrow_mut().push(readout.clone());
+        edit_color.set_parent(&wheel);
+        wheel.imp().corners.borrow_mut().push(edit_color.clone());
         let menu = gtk::Popover::new();
         menu.set_parent(&wheel);
 
@@ -793,16 +801,11 @@ impl ColorPanel {
             menu_swap,
             menu_edit,
             menu_library,
-            brightness,
             intensity,
             edit_color,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
-        self.brightness.connect_value_changed(glib::clone!(#[weak] workspace, move |i| {
-            workspace.dispatch(UiAction::Color { action: ColorAction::HdrIntensity { stops: i.value() as f32 } });
-            if let Some(g) = workspace.gpu.borrow().as_ref() { i.set_value(f64::from(g.session.state().colors.hdr_intensity())); }
-        }));
         self.intensity.connect_value_changed(glib::clone!(#[weak] workspace, move |i| {
             if i.updating() { return; }
             workspace.dispatch(UiAction::Color { action: ColorAction::HdrIntensity { stops: i.value() as f32 } });
@@ -828,6 +831,16 @@ impl ColorPanel {
             if slot == ColorSlot::Transparent {
                 continue;
             }
+            let edit = gtk::GestureClick::new();
+            edit.set_button(1);
+            edit.set_propagation_phase(gtk::PropagationPhase::Capture);
+            edit.connect_pressed(glib::clone!(#[weak] workspace, move |g, count, _, _| {
+                if count == 2 {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    crate::color_editor::show(&workspace, slot);
+                }
+            }));
+            button.add_controller(edit);
             // This target owns its menu; the enclosing panel's customization
             // capture controller must leave its secondary clicks and holds alone.
             button.add_css_class("customizable-target");
@@ -1015,15 +1028,12 @@ impl ColorPanel {
     pub fn headroom(&self) -> f32 { self.wheel.imp().headroom.get() }
     pub fn refresh(&self, state: &ColorState, view: ViewColor, headroom: f32) {
         let hdr = matches!(view, ViewColor::Mapped { .. });
-        self.brightness.set_visible(hdr);
+        self.intensity.set_visible(hdr);
+        if self.wheel.imp().hdr.replace(hdr) != hdr { self.wheel.queue_resize(); }
         if !hdr { self.wheel.imp().linear_field.borrow_mut().take(); }
-        if hdr { self.root.reorder_child_after(&self.brightness, None::<&gtk::Widget>); }
-        else { self.root.reorder_child_after(&self.wheel, None::<&gtk::Widget>); }
-        self.edit_color.set_visible(hdr);
         self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
         let ev = state.definition().brightness_ev(state.rgb_space()).ok().flatten();
-        self.brightness.set_sensitive(state.slot != ColorSlot::Transparent);
-        self.brightness.set_value(f64::from(state.hdr_intensity()));
+        self.intensity.set_sensitive(state.slot != ColorSlot::Transparent);
         if hdr { self.intensity.refresh(state, view, headroom); }
         let previous_headroom = self.wheel.imp().headroom.replace(headroom);
         let previous_view = self.wheel.imp().view.replace(view);

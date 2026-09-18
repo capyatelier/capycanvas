@@ -1,5 +1,5 @@
 //! Native HDR picker transport and real input on the isolated Mutter display.
-use super::new_photo::{capture_ui, ready};
+use super::new_photo::{capture_ui, ready, response};
 use super::*;
 use gtk::subclass::prelude::*;
 use layer_core::color::{RgbColor, RgbSpace, SampleDepth};
@@ -82,7 +82,6 @@ fn native_hdr_picker_intensity_shape_and_input() {
         });
         pump(200);
         let root = &w.color_panel.root;
-        let control = find_named(root.upcast_ref(), "color-hdr-brightness").unwrap();
         let scale = find_named(root.upcast_ref(), "color-hdr-intensity-ramp")
             .unwrap()
             .downcast::<crate::hdr_color_scale::HdrColorScale>()
@@ -91,7 +90,19 @@ fn native_hdr_picker_intensity_shape_and_input() {
             .unwrap()
             .downcast::<crate::tool_panels::ColorWheel>()
             .unwrap();
-        assert_eq!(control.is_visible(), hdr);
+        assert_eq!(scale.is_visible(), hdr);
+        let pencil = find_named(root.upcast_ref(), "color-edit-button").unwrap().downcast::<gtk::Button>().unwrap();
+        let swap = find_named(root.upcast_ref(), "color-swap").unwrap();
+        assert_eq!([pencil.width(), pencil.height()], [swap.width(), swap.height()]);
+        let pencil_bounds = pencil.compute_bounds(root).unwrap();
+        let label_bounds = find_named(root.upcast_ref(), "color-readout").unwrap().compute_bounds(root).unwrap();
+        assert_eq!(pencil_bounds.y(), label_bounds.y());
+        assert!(pencil_bounds.x() > label_bounds.x() + label_bounds.width());
+        pencil.emit_clicked();
+        pump(100);
+        let entry = find_named(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").unwrap();
+        assert_eq!(entry.is_visible(), hdr);
+        response(&w, "cancel");
         if !hdr {
             assert_eq!(
                 root.first_child().unwrap(),
@@ -103,20 +114,43 @@ fn native_hdr_picker_intensity_shape_and_input() {
             pump(100);
             continue;
         }
-        assert_eq!(root.first_child().unwrap(), control);
-        assert!(scale.compute_bounds(root).unwrap().y() < wheel.compute_bounds(root).unwrap().y());
-        assert!(
-            scale.range_rect().height() >= 20,
-            "thick track: {:?}",
-            scale.range_rect()
-        );
+        assert_eq!(root.first_child().unwrap(), wheel.clone().upcast::<gtk::Widget>());
+        let arc = scale.geometry().unwrap();
+        assert!((arc.width - wheel.drawing_bounds().0 * 0.11).abs() < 0.01);
+        assert!(!scale.contains(arc.center[0] as f64, arc.center[1] as f64));
+        assert!(find_named(root.upcast_ref(), "color-hdr-brightness").is_none());
         capture_ui(&w, &output, "hdr-picker-start.png");
-        let (start, end) = scale.slider_range();
-        assert!(end - start >= 20, "native circular thumb has area");
         assert!(
             scale.imp().texture.borrow().is_some(),
             "the custom ramp was painted"
         );
+        scale.set_value(2.);
+        let original = state(&w).colors;
+        pencil.emit_clicked();
+        pump(100);
+        let dialog = w.window.visible_dialog().unwrap();
+        let entry = find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().downcast::<adw::EntryRow>().unwrap();
+        assert_eq!(entry.text().parse::<f32>().unwrap(), 2.);
+        entry.set_text("NaN");
+        assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
+        let red = find_named(dialog.upcast_ref(), "edit-color-value-0").unwrap().downcast::<adw::EntryRow>().unwrap();
+        red.set_text("1");
+        assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
+        entry.set_text("3");
+        assert!((red.text().parse::<f32>().unwrap() - 2.).abs() < 1e-5);
+        capture_ui(&w, &output, "hdr-edit-ev.png");
+        response(&w, "cancel");
+        assert_eq!(state(&w).colors, original, "Cancel never changes paint or EV");
+        pencil.emit_clicked();
+        pump(100);
+        response(&w, "apply");
+        assert_eq!(state(&w).colors, original, "Untouched Edit Color retains exact state");
+        pencil.emit_clicked();
+        pump(100);
+        find_named(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").unwrap().downcast::<adw::EntryRow>().unwrap().set_text("3");
+        response(&w, "apply");
+        assert_eq!(state(&w).colors.hdr_intensity(), 3.);
+        scale.set_value(0.);
         let physical = std::env::var_os("LAYER_EXPECT_HDR").is_some();
         if physical {
             assert!(w.picker_headroom() > 1.);
@@ -263,19 +297,9 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 pump(150);
             };
             let locate = |value: f32| {
-                let r = scale.range_rect();
-                let (a, z) = scale.slider_range();
-                let radius = (z - a) as f32 * 0.5;
-                let p = scale
-                    .compute_point(
-                        &w.window,
-                        &gtk::graphene::Point::new(
-                            r.x() as f32
-                                + radius
-                                + (r.width() as f32 - 2. * radius) * (value + 2.) / 8.,
-                            r.y() as f32 + r.height() as f32 * 0.5,
-                        ),
-                    )
+                let arc = scale.geometry().unwrap();
+                let [x, y] = arc.point((value + 2.) / 8.);
+                let p = scale.compute_point(&w.window, &gtk::graphene::Point::new(x, y))
                     .unwrap();
                 [p.x(), p.y()]
             };
@@ -302,6 +326,34 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 (scale.value() - before - 0.1).abs() < 0.02,
                 "keyboard arrow"
             );
+            perform(serde_json::json!([{"wait_ms":500},{"point":locate(3.)},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
+            assert_eq!(state(&w).colors.hdr_intensity(), 0., "Double-click resets to 1×, not +1 EV");
+            let arc = scale.geometry().unwrap();
+            let radius = arc.radius + arc.width * 0.5 + 10.;
+            let angle = 76f32.to_radians();
+            let point = scale.compute_point(&w.window, &gtk::graphene::Point::new(arc.center[0] + radius * angle.cos(), arc.center[1] + radius * angle.sin())).unwrap();
+            let original = state(&w).colors;
+            perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
+            assert!(w.window.visible_dialog().is_none(), "EV caption is read-only");
+            assert_eq!(state(&w).colors, original, "EV caption does not pick through to the wheel");
+            let point = pencil.compute_point(&w.window, &gtk::graphene::Point::new(pencil.width() as f32 * 0.5, pencil.height() as f32 * 0.5)).unwrap();
+            perform(serde_json::json!([{"point":[point.x(),point.y()]},{"down":true},{"down":false}]));
+            assert_eq!(w.window.visible_dialog().unwrap().widget_name(), "edit-color-dialog");
+            response(&w, "cancel");
+            for slot in [ColorSlot::Foreground, ColorSlot::Background] {
+                let swatch = find_named(root.upcast_ref(), &format!("color-{slot:?}")).unwrap();
+                let point = swatch.compute_point(&w.window, &gtk::graphene::Point::new(swatch.width() as f32 * 0.7, swatch.height() as f32 * 0.75)).unwrap();
+                let original = if slot == ColorSlot::Foreground { state(&w).colors.foreground } else { state(&w).colors.background };
+                perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
+                let dialog = w.window.visible_dialog().expect("Double-click opens Edit Color");
+                assert_eq!(dialog.widget_name(), "edit-color-dialog");
+                assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible());
+                let red = find_named(dialog.upcast_ref(), "edit-color-value-0").unwrap().downcast::<adw::EntryRow>().unwrap().text().parse::<f32>().unwrap();
+                assert!((red - original.linear_in(RgbSpace::Srgb).unwrap()[0]).abs() < 1e-5, "Editor belongs to the double-clicked swatch");
+                response(&w, "apply");
+                assert_eq!(if slot == ColorSlot::Foreground { state(&w).colors.foreground } else { state(&w).colors.background }, original);
+            }
+            w.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Foreground } });
             // Exercise ordinary SDR picking through the same real pointer,
             // independently of the older hue-gradient comparison tolerance.
             let sdr = Workspace::with_project(&app, Some((new_drawing(64, 64).unwrap(), None)));
@@ -315,7 +367,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
             pump(120);
             let sr = &sdr.color_panel.root;
             assert!(
-                !find_named(sr.upcast_ref(), "color-hdr-brightness")
+                !find_named(sr.upcast_ref(), "color-hdr-intensity-ramp")
                     .unwrap()
                     .is_visible()
             );
@@ -421,7 +473,6 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 root.width()
             );
             for name in [
-                "color-hdr-brightness",
                 "color-hdr-intensity-ramp",
                 "color-edit-button",
                 "color-wheel",

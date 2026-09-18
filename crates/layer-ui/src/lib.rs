@@ -32,7 +32,7 @@ mod tools;
 pub use color::{
     ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui,
     ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor,
-    ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
+    HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};

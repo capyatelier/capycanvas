@@ -17,6 +17,7 @@ struct Form {
     dialog: adw::AlertDialog,
     model: adw::ComboRow,
     fields: [adw::EntryRow; 4],
+    intensity: adw::EntryRow,
     description: gtk::Label,
     validation: gtk::Label,
     preview: ColorPatch,
@@ -46,7 +47,17 @@ impl Form {
         self.refresh_preview();
     }
     fn refresh_preview(&self) {
-        match self.editor.borrow().color() {
+        let color = (|| {
+            let editor = self.editor.borrow();
+            if self.hdr {
+                let stops = self.intensity.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())?;
+                if !stops.is_finite() || editor.intensity() != Some(stops) {
+                    return Err("Enter an EV value within the color’s half-float range".into());
+                }
+            }
+            editor.color()
+        })();
+        match color {
             Ok(color) => {
                 let mut text = format!("Defined in {}", color.space.name());
                 if !if self.hdr { color.in_hdr_gamut(self.space) } else { color.in_gamut(self.space) }.unwrap() {
@@ -88,9 +99,12 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
         ColorSlot::Background => colors.background,
         ColorSlot::Transparent => return,
     };
-    choose(workspace, definition, move |workspace, color| {
+    let mut selected = colors.clone();
+    selected.apply(ColorAction::Select { slot }).unwrap();
+    choose_with_intensity(workspace, definition, Some(selected.hdr_intensity()), move |workspace, color, intensity| {
         workspace.dispatch(UiAction::Color {
-            action: ColorAction::SetSlot { slot, color },
+            action: if let Some(stops) = intensity { ColorAction::SetSlotIntensity { slot, color, stops } }
+                else { ColorAction::SetSlot { slot, color } },
         });
     });
 }
@@ -99,6 +113,14 @@ pub fn choose(
     workspace: &Rc<Workspace>,
     definition: RgbColor,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor) + 'static,
+) {
+    choose_with_intensity(workspace, definition, None, move |w, color, _| accepted(w, color));
+}
+fn choose_with_intensity(
+    workspace: &Rc<Workspace>,
+    definition: RgbColor,
+    intensity: Option<f32>,
+    accepted: impl FnOnce(&Rc<Workspace>, RgbColor, Option<f32>) + 'static,
 ) {
     let Some((space, epoch, hdr)) = workspace.gpu.borrow().as_ref().map(|g| {
         (
@@ -116,7 +138,11 @@ pub fn choose(
             return;
         }
     };
-    if hdr { editor.set_model(ColorInputModel::LinearRgb).unwrap(); }
+    if hdr {
+        editor.set_model(ColorInputModel::LinearRgb).unwrap();
+        let stops = intensity.unwrap_or_else(|| definition.brightness_ev(space).ok().flatten().unwrap_or(0.).max(0.));
+        if let Err(error) = editor.enable_hdr(stops) { workspace.changed(Err(error)); return; }
+    }
     let dialog = adw::AlertDialog::builder()
         .heading("Edit Color")
         .content_width(400)
@@ -134,6 +160,11 @@ pub fn choose(
         &ColorInputModel::ALL.map(ColorInputModel::name),
     )));
     group.add(&model);
+    let intensity = adw::EntryRow::builder().title("Intensity (EV)").build();
+    intensity.set_widget_name("edit-color-ev");
+    intensity.set_visible(hdr);
+    if hdr { intensity.set_text(&editor.intensity().unwrap().to_string()); }
+    group.add(&intensity);
     let fields = std::array::from_fn(|i| {
         let row = adw::EntryRow::new();
         row.set_widget_name(&format!("edit-color-value-{i}"));
@@ -165,12 +196,28 @@ pub fn choose(
         dialog,
         model,
         fields,
+        intensity,
         description,
         validation,
         preview,
         view: workspace.view_color(),
         space,
         hdr,
+    });
+    let weak = Rc::downgrade(&form);
+    form.intensity.connect_changed(move |row| {
+        let Some(form) = weak.upgrade() else { return; };
+        if form.updating.get() { return; }
+        let result = row.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())
+            .and_then(|stops| form.editor.borrow_mut().set_intensity(stops));
+        match result {
+            Ok(()) => form.populate(),
+            Err(error) => {
+                form.validation.add_css_class("error");
+                form.validation.set_text(&error);
+                form.dialog.set_response_enabled("apply", false);
+            }
+        }
     });
     for (i, row) in form.fields.iter().enumerate() {
         let weak = Rc::downgrade(&form);
@@ -237,7 +284,7 @@ pub fn choose(
                 return;
             }
             match form.editor.borrow().color() {
-                Ok(color) => accepted(&workspace, color),
+                Ok(color) => accepted(&workspace, color, form.editor.borrow().intensity()),
                 Err(error) => workspace.changed(Err(error)),
             }
         }

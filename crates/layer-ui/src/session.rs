@@ -2475,7 +2475,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::Color { action } => {
                 let hdr = self.engine.document().color.depth.is_float();
-                if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. }) && !hdr {
+                if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
                 self.state.colors.set_hdr_enabled(hdr)?;

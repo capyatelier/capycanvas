@@ -10,6 +10,8 @@ mod okhsv;
 mod editor;
 mod hdr_picker;
 use hdr_picker::HdrPaint;
+mod hdr_arc;
+pub use hdr_arc::HdrIntensityArc;
 pub use editor::{ColorEditor, ColorInputModel};
 mod form;
 pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui};
@@ -77,6 +79,7 @@ pub enum ColorAction {
     /// Multiply the bounded picker color in linear light, retaining its coordinates.
     HdrIntensity { stops: f32 },
     SetSlot { slot: ColorSlot, color: RgbColor },
+    SetSlotIntensity { slot: ColorSlot, color: RgbColor, stops: f32 },
     Library { action: ColorLibraryAction },
     /// The definition is retained even when outside the document/display gamut.
     Definition {
@@ -609,6 +612,19 @@ impl ColorState {
         match action {
             ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev(self.rgb_space, stops)?)?,
             ColorAction::HdrIntensity { stops } => self.set_hdr_intensity(stops)?,
+            ColorAction::SetSlotIntensity { slot, color, stops } => {
+                if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
+                if self.hdr_picker.is_none() { return Err("HDR intensity requires an HDR drawing".into()); }
+                Self::validate_definition(color)?;
+                let paint = HdrPaint::at_intensity(color, self.rgb_space, stops)?;
+                layer_core::color::hdr::encode_pixel(color.linear_in(self.rgb_space)?).map_err(str::to_string)?;
+                self.paint_slot = slot;
+                // Accepting an untouched draft retains exact base coordinates too.
+                if self.definition() != color || self.hdr_intensity() != stops {
+                    self.set_color_with_picker(color, Some(paint))?;
+                }
+                self.slot = slot;
+            }
             ColorAction::SetSlot { slot, color } => {
                 if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
                 Self::validate_definition(color)?;
@@ -1113,12 +1129,22 @@ pub struct ColorPanelLayout {
     pub background: [f32; 4],
     pub transparent: [f32; 4],
     pub swap: [f32; 4],
+    pub edit: [f32; 4],
     pub shapes: [[f32; 4]; 2],
     pub shape_rotations: [f32; 2],
     pub readout: [f32; 4],
     pub readout_radius: f32,
 }
 impl ColorPanelLayout {
+    /// The SDR wheel stays square; HDR reserves a footer for its outer arc.
+    pub const HDR_FOOTER: f32 = 44.;
+    pub fn with_hdr(size: f32) -> Option<Self> {
+        let mut layout = Self::new(size)?;
+        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent, &mut layout.swap] {
+            b[1] += Self::HDR_FOOTER;
+        }
+        Some(layout)
+    }
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 128. {
             return None;
@@ -1140,6 +1166,7 @@ impl ColorPanelLayout {
             foreground: [0., (size - fg - bg * 0.26).round(), fg, fg],
             background,
             transparent: [transparent.round(), transparent.round(), bg, bg],
+            edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
                 let r = outer + shape * 0.5 + 0.5;
