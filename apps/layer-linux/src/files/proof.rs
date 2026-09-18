@@ -3,10 +3,16 @@
 use super::*;
 use crate::{number_control::NumberControl, panel_controls};
 use layer_core::color::{
-    DocumentColor, ProofRecipe, RenderingIntent, RgbSpace,
+    DocumentColor, ProofRecipe, RgbSpace,
     hdr::{SdrMethod, SdrRendition},
 };
-use layer_ui::ProofMode;
+use layer_ui::{
+    ProofMode,
+    proof_panel::{
+        PROOF_INTENTS, PrintProofControl, PrintProofSettings, ProofSimulation, sdr_method_choices,
+        sdr_number_controls,
+    },
+};
 use std::{
     cell::{Cell, RefCell},
     rc::Weak,
@@ -39,40 +45,11 @@ impl Page {
         }
     }
 }
-#[derive(Clone)]
-struct PrintSettings {
-    profile: Option<ExportProfile>,
-    intent: RenderingIntent,
-    bpc: bool,
-    simulation: u32,
-}
-impl Default for PrintSettings {
-    fn default() -> Self {
-        Self {
-            profile: None,
-            intent: RenderingIntent::RelativeColorimetric,
-            bpc: true,
-            simulation: 1,
-        }
-    }
-}
-impl PrintSettings {
-    fn recipe(&self) -> Result<ProofRecipe, String> {
-        let p = self.profile.as_ref().ok_or("Choose a print profile")?;
-        let mut r = ProofRecipe::new(p.name.clone(), p.profile.clone());
-        r.conversion.intent = self.intent;
-        r.conversion.black_point_compensation = self.bpc;
-        r.simulate_paper = self.simulation == 2;
-        r.simulate_black_ink = self.simulation != 0;
-        r.validate()?;
-        Ok(r)
-    }
-}
 #[derive(Default)]
 struct Model {
     identity: Cell<Option<(u64, DocumentColor)>>,
     page: Cell<Page>,
-    print: RefCell<PrintSettings>,
+    print: RefCell<PrintProofSettings>,
     saved_proof: RefCell<Option<ProofRecipe>>,
     print_dirty: Cell<bool>,
     serial: Cell<u64>,
@@ -98,7 +75,7 @@ struct Form {
     range_row: gtk::Box,
     back: gtk::Button,
     auto: gtk::Button,
-    chooser: profile::ProfileChooser,
+    chooser: profile::ProfilePicker,
     intent: gtk::DropDown,
     bpc: gtk::CheckButton,
     simulation: gtk::DropDown,
@@ -107,18 +84,12 @@ struct Form {
     error: gtk::Label,
     updating: Cell<bool>,
 }
-const INTENTS: [RenderingIntent; 4] = [
-    RenderingIntent::RelativeColorimetric,
-    RenderingIntent::Perceptual,
-    RenderingIntent::Saturation,
-    RenderingIntent::AbsoluteColorimetric,
-];
 impl ProofPanel {
     pub fn new() -> Rc<Self> {
         Self::with_model(Rc::default())
     }
     fn with_model(model: Rc<Model>) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let root = panel_controls::column();
         root.set_widget_name("proof-panel");
         root.set_vexpand(true);
         root.set_margin_top(6);
@@ -183,7 +154,9 @@ impl ProofPanel {
         };
         if self.model.identity.get() != Some(identity) {
             self.cancel_job();
-            if let Some(c)=self.model.analysis.borrow().as_ref(){c.cancel();}
+            if let Some(c) = self.model.analysis.borrow().as_ref() {
+                c.cancel();
+            }
             self.finish_export();
             self.model.identity.set(Some(identity));
             self.model.page.set(match mode {
@@ -214,18 +187,14 @@ impl ProofPanel {
     }
     fn restore_print(self: &Rc<Self>, w: &Rc<Workspace>, recipe: Option<ProofRecipe>) {
         *self.model.saved_proof.borrow_mut() = recipe.clone();
-        *self.model.print.borrow_mut() = PrintSettings::default();
+        *self.model.print.borrow_mut() = PrintProofSettings::default();
         self.model.print_dirty.set(false);
         let Some(recipe) = recipe else { return };
         {
             let mut p = self.model.print.borrow_mut();
             p.intent = recipe.conversion.intent;
             p.bpc = recipe.conversion.black_point_compensation;
-            p.simulation = if recipe.simulate_paper {
-                2
-            } else {
-                u32::from(recipe.simulate_black_ink)
-            };
+            p.simulation = ProofSimulation::from_recipe(&recipe);
         }
         let identity = self.model.identity.get();
         let weak = Rc::downgrade(self);
@@ -342,11 +311,8 @@ impl ProofPanel {
             exposure: form.controls[0].value() as f32,
             contrast: form.controls[1].value() as f32,
             headroom: form.controls[2].value() as f32,
-            method: match form.method.selected() {
-                1 => SdrMethod::ToneMap,
-                2 => form.legacy_method.get(),
-                _ => SdrMethod::Bt2390,
-            },
+            method: sdr_method_choices(form.legacy_method.get())[form.method.selected() as usize]
+                .value,
         }
     }
     fn edit_sdr(&self, w: &Rc<Workspace>, form: &Form, phase: Option<ContactPhase>) {
@@ -419,7 +385,11 @@ impl ProofPanel {
         let panel = self.clone();
         let w = w.clone();
         glib::spawn_future_local(async move {
-            let close=w.window.connect_destroy(glib::clone!(#[strong] control,move |_|control.cancel()));
+            let close = w.window.connect_destroy(glib::clone!(
+                #[strong]
+                control,
+                move |_| control.cancel()
+            ));
             let worker_control = control.clone();
             let result = gio::spawn_blocking(move || {
                 gpu.capture(
@@ -476,7 +446,11 @@ impl ProofPanel {
         {
             glib::timeout_future(std::time::Duration::from_millis(20)).await;
         }
-        if self.model.page.get() == Page::Print && self.model.print_dirty.get(){if let Some(form)=self.form.borrow().as_ref(){(form.chooser.selected)()?;}}
+        if self.model.page.get() == Page::Print && self.model.print_dirty.get() {
+            if let Some(form) = self.form.borrow().as_ref() {
+                (form.chooser.selected)()?;
+            }
+        }
         if self.model.page.get() == Page::Print && !self.model.error.borrow().is_empty() {
             return Err(self.model.error.borrow().clone());
         }
@@ -496,12 +470,12 @@ impl ProofPanel {
         if form.updating.get() {
             return;
         }
-        let intent = INTENTS[form.intent.selected().min(3) as usize];
-        *self.model.print.borrow_mut() = PrintSettings {
+        let intent = PROOF_INTENTS[form.intent.selected().min(3) as usize].value;
+        *self.model.print.borrow_mut() = PrintProofSettings {
             profile: (form.chooser.selected)().ok(),
             intent,
-            bpc: form.bpc.is_active() && intent != RenderingIntent::AbsoluteColorimetric,
-            simulation: form.simulation.selected(),
+            bpc: form.bpc.is_active(),
+            simulation: ProofSimulation::CHOICES[form.simulation.selected() as usize].value,
         };
         self.model
             .serial
@@ -547,7 +521,11 @@ impl ProofPanel {
         let panel = self.clone();
         let w = w.clone();
         glib::spawn_future_local(async move {
-            let close=w.window.connect_destroy(glib::clone!(#[strong] cancelled,move |_|cancelled.store(true,Ordering::Release)));
+            let close = w.window.connect_destroy(glib::clone!(
+                #[strong]
+                cancelled,
+                move |_| cancelled.store(true, Ordering::Release)
+            ));
             w.proof.pause().await;
             let worker_cancelled = cancelled.clone();
             let worker_recipe = recipe.clone();
@@ -641,12 +619,8 @@ impl ProofPanel {
         {
             c.set_value(v.into());
         }
-        let mut methods = vec!["Perceptual", "Browser"];
-        match recipe.method {
-            SdrMethod::Scale => methods.push("Saved: Scale"),
-            SdrMethod::Clip => methods.push("Saved: Clip"),
-            _ => (),
-        }
+        let choices = sdr_method_choices(recipe.method);
+        let methods: Vec<_> = choices.iter().map(|c| c.label).collect();
         let list = f
             .method
             .model()
@@ -659,11 +633,12 @@ impl ProofPanel {
             f.method.set_model(Some(&gtk::StringList::new(&methods)));
         }
         f.legacy_method.set(recipe.method);
-        f.method.set_selected(match recipe.method {
-            SdrMethod::Bt2390 => 0,
-            SdrMethod::ToneMap => 1,
-            SdrMethod::Scale | SdrMethod::Clip => 2,
-        });
+        f.method.set_selected(
+            choices
+                .iter()
+                .position(|c| c.value == recipe.method)
+                .unwrap() as u32,
+        );
         f.range_row.set_visible(recipe.method != SdrMethod::Clip);
         f.back.set_visible(self.model.export_wait.get());
         let p = self.model.print.borrow();
@@ -672,12 +647,20 @@ impl ProofPanel {
                 f.chooser.restore_document(profile.clone());
             }
         }
-        f.intent
-            .set_selected(INTENTS.iter().position(|v| *v == p.intent).unwrap_or(0) as u32);
-        f.bpc.set_active(p.bpc);
-        f.bpc
-            .set_sensitive(p.intent != RenderingIntent::AbsoluteColorimetric);
-        f.simulation.set_selected(p.simulation);
+        f.intent.set_selected(
+            PROOF_INTENTS
+                .iter()
+                .position(|v| v.value == p.intent)
+                .unwrap_or(0) as u32,
+        );
+        f.bpc.set_active(p.bpc && p.bpc_available());
+        f.bpc.set_sensitive(p.bpc_available());
+        f.simulation.set_selected(
+            ProofSimulation::CHOICES
+                .iter()
+                .position(|v| v.value == p.simulation)
+                .unwrap() as u32,
+        );
         f.warning.set_sensitive(has_proof);
         f.warning.set_active(warning);
         f.auto.set_label(if self.model.analysis.borrow().is_some() {
@@ -712,35 +695,18 @@ impl Form {
             .build();
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
-        let sdr = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let method = gtk::DropDown::from_strings(&["Perceptual", "Browser"]);
+        let sdr = panel_controls::column();
+        let method = gtk::DropDown::from_strings(
+            &sdr_method_choices(SdrMethod::Bt2390)
+                .iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>(),
+        );
         method.set_widget_name("sdr-appearance-method");
         sdr.append(&panel_controls::row("Method", &method));
         let range_row = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let controls = [
-            ("Exposure", "exposure", -12., 12., 0.1, 2, "EV", 1.),
-            ("Contrast", "contrast", 0.25, 4., 0.01, 0, "%", 100.),
-            ("HDR range", "headroom", 0., 16., 0.1, 2, "EV", 1.),
-        ]
-        .map(|(title, name, min, max, step, digits, unit, scale)| {
-            let mut spec = NumericControl::number(min, max, step, digits);
-            spec.kind = NumericKind::Slider;
-            spec.unit = unit.into();
-            spec.scale = scale;
-            match name {
-                "contrast" => {
-                    spec.resolution = 0.01;
-                    spec.soft_min = 0.5;
-                    spec.soft_max = 2.;
-                }
-                "exposure" => {
-                    spec.soft_min = -4.;
-                    spec.soft_max = 4.;
-                }
-                _ => {
-                    spec.soft_max = 6.;
-                }
-            }
+        let controls = sdr_number_controls().map(|definition| {
+            let (title, name, spec) = (definition.label, definition.key, definition.numeric);
             let c = NumberControl::inline(spec, title);
             c.set_widget_name(&format!("sdr-appearance-{name}"));
             let row = panel_controls::row(title, &c);
@@ -767,47 +733,47 @@ impl Form {
             w,
             move |_| panel.fit_sdr(&w)
         ));
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, panel_controls::SPACING);
         actions.set_halign(gtk::Align::End);
         actions.append(&auto);
         actions.append(&reset);
         sdr.append(&actions);
         stack.add_named(&crate::workspace::scroll(&sdr), Some("sdr"));
-        let print = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");
-        let chooser = profile::ProfileChooser::new(
+        let chooser = profile::ProfilePicker::compact(
             w,
-            "Printer & paper",
-            "proof-profile",
+            "proof-profile-choose",
             space,
             profile::ProfilePurpose::Proof,
         );
-        chooser.row.set_title_lines(1);
-        chooser.row.set_subtitle_lines(1);
-        let profile_group = adw::PreferencesGroup::new();
-        profile_group.add(&chooser.row);
-        print.append(&profile_group);
-        print.append(&chooser.error);
-        let simulation = gtk::DropDown::from_strings(&["Colors", "Black ink", "Paper & ink"]);
+        let simulation = gtk::DropDown::from_strings(&ProofSimulation::CHOICES.map(|c| c.label));
         simulation.set_widget_name("proof-simulation");
-        print.append(&panel_controls::row("Simulate", &simulation));
-        let options = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let intent =
-            gtk::DropDown::from_strings(&["Relative", "Perceptual", "Saturation", "Absolute"]);
+        let intent = gtk::DropDown::from_strings(&PROOF_INTENTS.map(|c| c.label));
         intent.set_widget_name("proof-intent");
-        options.append(&panel_controls::row("Intent", &intent));
-        let bpc = gtk::CheckButton::with_label("Black point compensation");
+        let bpc = panel_controls::check(PrintProofControl::BlackPointCompensation.label());
         bpc.set_widget_name("proof-bpc");
-        options.append(&bpc);
-        let warning = gtk::CheckButton::with_label("Show out-of-gamut colors");
+        let warning = panel_controls::check(PrintProofControl::GamutWarning.label());
         warning.set_widget_name("proof-gamut-warning");
-        options.append(&warning);
-        let advanced = gtk::Expander::builder()
-            .label("Options")
-            .child(&options)
-            .build();
-        advanced.set_widget_name("proof-options");
-        print.append(&advanced);
+        // Shared order and labels; only native widget construction lives here.
+        for field in PrintProofControl::ALL {
+            match field {
+                PrintProofControl::Profile => {
+                    let row = panel_controls::row(field.label(), &chooser.button);
+                    row.set_widget_name("proof-profile");
+                    print.append(&row);
+                    print.append(&chooser.error);
+                }
+                PrintProofControl::Simulation => {
+                    print.append(&panel_controls::row(field.label(), &simulation))
+                }
+                PrintProofControl::Intent => {
+                    print.append(&panel_controls::row(field.label(), &intent))
+                }
+                PrintProofControl::BlackPointCompensation => print.append(&bpc),
+                PrintProofControl::GamutWarning => print.append(&warning),
+            }
+        }
         stack.add_named(&crate::workspace::scroll(&print), Some("print"));
         let progress = gtk::Spinner::new();
         progress.set_tooltip_text(Some("Preparing print proof"));
@@ -915,14 +881,14 @@ impl Form {
                 panel.update_all(&w);
             }
         ));
-        f.chooser.row.connect_subtitle_notify(glib::clone!(
+        f.chooser.connect_changed(glib::clone!(
             #[weak]
             panel,
             #[weak]
             w,
             #[weak]
             f,
-            move |_| panel.edit_print(&w, &f)
+            move || panel.edit_print(&w, &f)
         ));
         f.intent.connect_selected_notify(glib::clone!(
             #[weak]

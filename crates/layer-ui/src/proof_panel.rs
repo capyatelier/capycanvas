@@ -1,0 +1,211 @@
+//! Portable Proof control definitions and print-option policy. Hosts supply
+//! native widgets, profile I/O and asynchronous preparation, not option semantics.
+use crate::{ExportProfile, NumericControl, NumericKind};
+use layer_core::color::{ProofRecipe, RenderingIntent, hdr::SdrMethod};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ProofChoice<T> {
+    pub value: T,
+    pub label: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrintProofControl {
+    Profile,
+    Simulation,
+    Intent,
+    BlackPointCompensation,
+    GamutWarning,
+}
+impl PrintProofControl {
+    pub const ALL: [Self; 5] = [
+        Self::Profile,
+        Self::Simulation,
+        Self::Intent,
+        Self::BlackPointCompensation,
+        Self::GamutWarning,
+    ];
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Profile => "Profile",
+            Self::Simulation => "Simulate",
+            Self::Intent => "Intent",
+            Self::BlackPointCompensation => "Black point compensation",
+            Self::GamutWarning => "Gamut warning",
+        }
+    }
+}
+
+pub const PROOF_INTENTS: [ProofChoice<RenderingIntent>; 4] = [
+    ProofChoice {
+        value: RenderingIntent::RelativeColorimetric,
+        label: "Relative",
+    },
+    ProofChoice {
+        value: RenderingIntent::Perceptual,
+        label: "Perceptual",
+    },
+    ProofChoice {
+        value: RenderingIntent::Saturation,
+        label: "Saturation",
+    },
+    ProofChoice {
+        value: RenderingIntent::AbsoluteColorimetric,
+        label: "Absolute",
+    },
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofSimulation {
+    Colors,
+    #[default]
+    BlackInk,
+    PaperAndInk,
+}
+impl ProofSimulation {
+    pub const CHOICES: [ProofChoice<Self>; 3] = [
+        ProofChoice {
+            value: Self::Colors,
+            label: "Colors",
+        },
+        ProofChoice {
+            value: Self::BlackInk,
+            label: "Black ink",
+        },
+        ProofChoice {
+            value: Self::PaperAndInk,
+            label: "Paper & ink",
+        },
+    ];
+    pub fn from_recipe(recipe: &ProofRecipe) -> Self {
+        if recipe.simulate_paper {
+            Self::PaperAndInk
+        } else if recipe.simulate_black_ink {
+            Self::BlackInk
+        } else {
+            Self::Colors
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrintProofSettings {
+    pub profile: Option<ExportProfile>,
+    pub intent: RenderingIntent,
+    pub bpc: bool,
+    pub simulation: ProofSimulation,
+}
+impl Default for PrintProofSettings {
+    fn default() -> Self {
+        Self {
+            profile: None,
+            intent: RenderingIntent::RelativeColorimetric,
+            bpc: true,
+            simulation: ProofSimulation::default(),
+        }
+    }
+}
+impl PrintProofSettings {
+    pub fn bpc_available(&self) -> bool {
+        self.intent != RenderingIntent::AbsoluteColorimetric
+    }
+    pub fn recipe(&self) -> Result<ProofRecipe, String> {
+        let p = self.profile.as_ref().ok_or("Choose a print profile")?;
+        let mut recipe = ProofRecipe::new(p.name.clone(), p.profile.clone());
+        recipe.conversion.intent = self.intent;
+        recipe.conversion.black_point_compensation = self.bpc && self.bpc_available();
+        recipe.simulate_paper = self.simulation == ProofSimulation::PaperAndInk;
+        recipe.simulate_black_ink = self.simulation != ProofSimulation::Colors;
+        recipe.validate()?;
+        Ok(recipe)
+    }
+}
+
+pub fn sdr_method_choices(saved: SdrMethod) -> Vec<ProofChoice<SdrMethod>> {
+    let mut choices = vec![
+        ProofChoice {
+            value: SdrMethod::Bt2390,
+            label: "Perceptual",
+        },
+        ProofChoice {
+            value: SdrMethod::ToneMap,
+            label: "Browser",
+        },
+    ];
+    match saved {
+        SdrMethod::Scale => choices.push(ProofChoice {
+            value: saved,
+            label: "Saved: Scale",
+        }),
+        SdrMethod::Clip => choices.push(ProofChoice {
+            value: saved,
+            label: "Saved: Clip",
+        }),
+        _ => (),
+    }
+    choices
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProofNumberControl {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub numeric: NumericControl,
+}
+pub fn sdr_number_controls() -> [ProofNumberControl; 3] {
+    [
+        ("exposure", "Exposure", -12., 12., 0.1, 2, "EV", 1., -4., 4.),
+        (
+            "contrast", "Contrast", 0.25, 4., 0.01, 0, "%", 100., 0.5, 2.,
+        ),
+        ("headroom", "HDR range", 0., 16., 0.1, 2, "EV", 1., 0., 6.),
+    ]
+    .map(
+        |(key, label, min, max, step, digits, unit, scale, soft_min, soft_max)| {
+            let mut numeric = NumericControl::number(min, max, step, digits).unit(unit);
+            numeric.kind = NumericKind::Slider;
+            numeric.scale = scale;
+            numeric.soft_min = soft_min;
+            numeric.soft_max = soft_max;
+            if key == "contrast" {
+                numeric.resolution = 0.01;
+            }
+            ProofNumberControl {
+                key,
+                label,
+                numeric,
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layer_core::color::RgbSpace;
+    #[test]
+    fn print_options_round_trip_and_absolute_intent_disables_bpc() {
+        let mut settings = PrintProofSettings {
+            profile: Some(ExportProfile::builtin(RgbSpace::Srgb)),
+            ..Default::default()
+        };
+        for intent in PROOF_INTENTS {
+            settings.intent = intent.value;
+            for simulation in ProofSimulation::CHOICES {
+                settings.simulation = simulation.value;
+                let recipe = settings.recipe().unwrap();
+                assert_eq!(ProofSimulation::from_recipe(&recipe), simulation.value);
+                assert_eq!(
+                    recipe.conversion.black_point_compensation,
+                    settings.bpc_available()
+                );
+                let restored: PrintProofSettings =
+                    serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+                assert_eq!(restored.recipe().unwrap(), recipe);
+            }
+        }
+    }
+}

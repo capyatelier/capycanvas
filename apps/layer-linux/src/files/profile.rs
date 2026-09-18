@@ -72,7 +72,7 @@ impl ProfilePurpose {
 }
 
 mod picker;
-pub(super) use picker::ProfileChooser;
+pub(super) use picker::{ProfileChooser, ProfilePicker};
 pub(super) const UNNAMED_PROFILE: &str = "Embedded ICC profile";
 
 // Keep a replaced proof locally; the project continues to embed only its active proof.

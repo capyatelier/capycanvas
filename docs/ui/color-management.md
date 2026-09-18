@@ -183,8 +183,8 @@ layer exchange. Add separately scoped layered PSD interchange to the roadmap.
 **Proof → Print → compare → make optional print edits → Export.**
 
 Select/import a printer/paper ICC profile and keep proof intent, BPC and paper/ink
-simulation together. **Off / Print** selects the view; **Gamut warning** is in
-Print's Options, with an obvious **Proof: [target]** indicator. Compare with the normal
+simulation together. **Off / Print** selects the view; **Gamut warning** is directly visible in
+Print, with an obvious **Proof: [target]** indicator. Compare with the normal
 view without editing pixels. Use Save As or normal document duplication for a
 print variant; a bespoke virtual-copy system is not a prerequisite.
 
@@ -266,9 +266,10 @@ they never change HDR artwork. **View → Proof**, Document Properties and Expor
 open this panel. **Back to Export** returns to the retained export draft. There
 is no Apply/Revert, Preview checkbox or overflow menu beside the selector.
 
-**Proof → Print** chooses the printer/paper profile and ink/paper simulation.
-Rendering intent, black point compensation and gamut warning are in the native
-**Options** expander. A changed profile prepares asynchronously with cancellation
+**Proof → Print** has a compact **Profile** dropdown, **Simulate**, **Intent**,
+**Black point compensation** and **Gamut warning**. All five controls are visible
+in one flat panel, with common row spacing and no Options fold. A changed profile
+prepares asynchronously with cancellation
 and retains the previous recipe if validation fails. View simulation and gamut
 warnings never enter artwork or export. The master saves one print recipe;
 Export's deliberate **Use print profile** action converts delivery pixels and

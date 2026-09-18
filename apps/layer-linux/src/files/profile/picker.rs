@@ -3,6 +3,19 @@ use super::*;
 
 pub(crate) struct ProfileChooser {
     pub row: adw::ActionRow,
+    picker: ProfilePicker,
+}
+impl std::ops::Deref for ProfileChooser {
+    type Target = ProfilePicker;
+    fn deref(&self) -> &Self::Target {
+        &self.picker
+    }
+}
+
+/// Reusable menu-backed profile control. The same loader serves compact panels
+/// and dialog rows; their visible presentation is independent of profile state.
+pub(crate) struct ProfilePicker {
+    pub button: gtk::MenuButton,
     pub error: gtk::Label,
     pub selected: Rc<dyn Fn() -> Result<ExportProfile, String>>,
     pub restore: Rc<dyn Fn(ExportProfile)>,
@@ -12,7 +25,7 @@ pub(crate) struct ProfileChooser {
 struct State {
     w: std::rc::Weak<Workspace>,
     window: glib::WeakRef<adw::ApplicationWindow>,
-    row: glib::WeakRef<adw::ActionRow>,
+    changed: RefCell<Vec<Rc<dyn Fn(&str)>>>,
     error: glib::WeakRef<gtk::Label>,
     menu: glib::WeakRef<gtk::MenuButton>,
     value: RefCell<Option<ExportProfile>>,
@@ -28,9 +41,6 @@ struct State {
 
 impl State {
     fn notify(&self) {
-        let Some(row) = self.row.upgrade() else {
-            return;
-        };
         let subtitle = if self.busy.get() {
             "Reading profile…".into()
         } else {
@@ -39,17 +49,16 @@ impl State {
                 .as_ref()
                 .map_or_else(|| "Choose a profile…".into(), |p| p.name.clone())
         };
-        // Callers observe subtitle notifications for validation and previews.
-        // Freeze ensures a repeated choice still publishes exactly once.
-        let _guard = row.freeze_notify();
-        row.set_subtitle(&subtitle);
-        row.notify("subtitle");
         if let Some(error) = self.error.upgrade() {
             error.set_label(self.failure.borrow().as_deref().unwrap_or(""));
             error.set_visible(self.failure.borrow().is_some());
         }
         if let Some(menu) = self.menu.upgrade() {
             menu.set_sensitive(!self.in_flight.get());
+        }
+        let listeners = self.changed.borrow().clone();
+        for changed in listeners {
+            changed(&subtitle);
         }
     }
     fn set(&self, value: ExportProfile) {
@@ -123,7 +132,7 @@ impl State {
         let working = self.working;
         if let Some(mut value) = value {
             return gio::spawn_blocking(move || {
-                value.channels=layer_color::profile_channels(&value.profile)?;
+                value.channels = layer_color::profile_channels(&value.profile)?;
                 purpose.validate(&value, working)?;
                 Ok(Some(value))
             })
@@ -200,20 +209,59 @@ fn item(
     );
 }
 
-impl ProfileChooser {
+impl ProfilePicker {
     /// Reuse the bounded loader and its preset-generation arbitration for
     /// programmatic selections such as the document's saved print profile.
-    pub fn validated_selection(&self)->Rc<dyn Fn(ColorProfile,String)> {
-        let state=self.state.clone();
-        Rc::new(move |profile,name|state.choose(Some(ExportProfile{profile,name,channels:ProfileChannels::Rgb}),None))
+    pub fn validated_selection(&self) -> Rc<dyn Fn(ColorProfile, String)> {
+        let state = self.state.clone();
+        Rc::new(move |profile, name| {
+            state.choose(
+                Some(ExportProfile {
+                    profile,
+                    name,
+                    channels: ProfileChannels::Rgb,
+                }),
+                None,
+            )
+        })
     }
-    pub fn is_pending(&self) -> bool { self.state.in_flight.get() || self.state.busy.get() }
+    pub fn is_pending(&self) -> bool {
+        self.state.in_flight.get() || self.state.busy.get()
+    }
     pub fn restore_document(&self, profile: ExportProfile) {
         *self.state.document.borrow_mut() =
             matches!(profile.profile, ColorProfile::Icc(_)).then(|| profile.clone());
         self.state.set(profile);
     }
 
+    pub fn connect_changed(&self, changed: impl Fn() + 'static) {
+        self.state
+            .changed
+            .borrow_mut()
+            .push(Rc::new(move |_| changed()));
+    }
+    pub fn compact(
+        w: &Rc<Workspace>,
+        name: &str,
+        working: RgbSpace,
+        purpose: ProfilePurpose,
+    ) -> Self {
+        let picker = Self::build(&w.window, Some(w), working, purpose);
+        picker.button.set_widget_name(name);
+        crate::panel_controls::menu_choice(&picker.button, "Choose…");
+        picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
+            #[weak(rename_to = button)]
+            picker.button,
+            move |text: &str| {
+                button.set_label(text);
+                button.set_tooltip_text(Some(text));
+            }
+        )));
+        picker
+    }
+}
+
+impl ProfileChooser {
     pub fn new(
         w: &Rc<Workspace>,
         title: &str,
@@ -243,25 +291,47 @@ impl ProfileChooser {
         working: RgbSpace,
         purpose: ProfilePurpose,
     ) -> Self {
-        let prefix = match purpose {
-            ProfilePurpose::Proof => "proof",
-            ProfilePurpose::Output => "export",
-            ProfilePurpose::Source(_) => "source",
-        };
+        let picker = ProfilePicker::build(window, workspace, working, purpose);
         let row = adw::ActionRow::builder()
             .title(title)
             .subtitle("Choose a profile…")
             .use_markup(false)
             .build();
         row.set_widget_name(name);
+        row.add_suffix(&picker.button);
+        row.set_activatable_widget(Some(&picker.button));
+        picker.state.changed.borrow_mut().push(Rc::new(glib::clone!(
+            #[weak]
+            row,
+            move |text: &str| {
+                // Existing dialog consumers observe subtitle notifications.
+                let _guard = row.freeze_notify();
+                row.set_subtitle(text);
+                row.notify("subtitle");
+            }
+        )));
+        Self { row, picker }
+    }
+}
+
+impl ProfilePicker {
+    fn build(
+        window: &adw::ApplicationWindow,
+        workspace: Option<&Rc<Workspace>>,
+        working: RgbSpace,
+        purpose: ProfilePurpose,
+    ) -> Self {
+        let prefix = match purpose {
+            ProfilePurpose::Proof => "proof",
+            ProfilePurpose::Output => "export",
+            ProfilePurpose::Source(_) => "source",
+        };
         let menu = gtk::MenuButton::builder()
             .icon_name("pan-down-symbolic")
             .valign(gtk::Align::Center)
             .build();
         menu.set_widget_name(&format!("{prefix}-profile-choose"));
         menu.set_tooltip_text(Some("Choose or add a profile"));
-        row.add_suffix(&menu);
-        row.set_activatable_widget(Some(&menu));
         let error = gtk::Label::builder()
             .wrap(true)
             .xalign(0.)
@@ -272,7 +342,7 @@ impl ProfileChooser {
         let state = Rc::new(State {
             w: workspace.map_or_else(std::rc::Weak::new, Rc::downgrade),
             window: window.downgrade(),
-            row: row.downgrade(),
+            changed: RefCell::default(),
             error: error.downgrade(),
             menu: menu.downgrade(),
             value: Default::default(),
@@ -505,7 +575,7 @@ impl ProfileChooser {
             move |value| state.set(value)
         });
         Self {
-            row,
+            button: menu,
             error,
             selected,
             restore,

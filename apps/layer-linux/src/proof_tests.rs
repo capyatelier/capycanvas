@@ -43,7 +43,6 @@ fn settled(w:&Rc<Workspace>){
     assert!(!error.is_visible(),"{}",error.text());
 }
 fn proof_choice(w:&Rc<Workspace>,name:&str)->gtk::DropDown{
-    if name=="proof-intent"{find_named(w.proof_panel.root.upcast_ref(),"proof-options").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true); }
     find_named(w.proof_panel.root.upcast_ref(),name).unwrap().downcast().unwrap()
 }
 
@@ -592,7 +591,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     );
     assert!(w.window.visible_dialog().is_none());
     assert!(w.proof_panel.root.is_mapped());
-    mode(&w,"print");find_named(w.proof_panel.root.upcast_ref(),"proof-options").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true);
+    mode(&w,"print");
     proof_choice(&w, "proof-intent").set_selected(3);
     assert!(!toggle(&w, "proof-bpc").is_active());
     assert!(!toggle(&w, "proof-bpc").is_sensitive());
@@ -616,26 +615,11 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         pump(20);
-        let row: adw::ActionRow = find_named(
-            w.proof_panel.root.upcast_ref(),
-            "proof-profile",
-        )
-        .unwrap()
-        .downcast()
-        .unwrap();
-        if row.subtitle().is_some_and(|s| {
-            s == layer_color::profile_description(&ColorProfile::Icc(
-                std::fs::read(&icc).unwrap().into(),
-            ))
-            .unwrap()
-        }) {
+        let name = super::new_photo::profile_name(&w, "proof-profile");
+        if name == layer_color::profile_description(&ColorProfile::Icc(std::fs::read(&icc).unwrap().into())).unwrap() {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "proof profile import: {:?}",
-            row.subtitle()
-        );
+        assert!(Instant::now() < deadline, "proof profile import: {name}");
     }
     super::new_photo::capture_ui(&w, &output, "setup.png");
     settled(&w);
@@ -1051,11 +1035,14 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         mode.set_active_name(Some("print"));pump(300);
         assert!(w.proof_panel.root.width()<=viewport.width(),"Print controls must fit {}",preset.name());
         super::new_photo::capture_ui(&w,output,&format!("{}-print-compact.png",preset.name()));
-        let advanced=find_named(w.proof_panel.root.upcast_ref(),"proof-options").unwrap().downcast::<gtk::Expander>().unwrap();
-        advanced.set_expanded(true);pump(100);
-        assert!(w.proof_panel.root.width()<=viewport.width(),"Advanced controls must fit {}",preset.name());
+        assert!(find_named(w.proof_panel.root.upcast_ref(),"proof-options").is_none());
+        for name in ["proof-profile-choose", "proof-simulation", "proof-intent", "proof-bpc", "proof-gamut-warning"] {
+            let control=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
+            assert!(control.is_mapped(), "{name} must be directly visible");
+            let bounds=control.compute_bounds(&viewport).unwrap();
+            assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=viewport.width() as f32+1., "{name} must fit the compact panel: {bounds:?}");
+        }
         super::new_photo::capture_ui(&w,output,&format!("{}-print.png",preset.name()));
-        advanced.set_expanded(false);pump(100);
         invoke(&w,CommandId::SdrRendition);
         let tab=w.groups.borrow().iter().flat_map(|g| &g.tabs).find(|(p,_)| *p==Panel::Proof).unwrap().1.clone();
         let drag=begin_workspace_drag(&w,tab.upcast_ref(),10.,10.);

@@ -160,13 +160,10 @@ pub(super) fn profile_manager_action(w: &Rc<Workspace>, index: u32, action: &str
     }
 }
 pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
-    find_named(&controls_root(&w.window), name)
-        .unwrap()
-        .downcast::<adw::ActionRow>()
-        .unwrap()
-        .subtitle()
-        .unwrap()
-        .into()
+    let root=controls_root(&w.window);
+    let control=find_named(&root,name).unwrap();
+    if let Some(row)=control.downcast_ref::<adw::ActionRow>() {return row.subtitle().unwrap().into();}
+    find_named(&control,"proof-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap().label().unwrap().into()
 }
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {

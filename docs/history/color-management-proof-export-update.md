@@ -23,9 +23,9 @@ is the endpoint in stops above reference white: higher values preserve more
 bright distinctions; lower values make the rendition brighter. Its tooltip/name
 must not imply that it measures the connected monitor.
 
-Print offers Printer & paper and Simulate (Colors / Black ink / Paper & ink).
-The native Options expander contains intent, black point compensation and gamut
-warning. The two simulation effects remain viewing-only. Export → Color &
+Print offers a compact Profile dropdown, Simulate (Colors / Black ink /
+Paper & ink), Intent, Black point compensation and Gamut warning. All options
+are directly visible with common spacing; there is no Options fold. The two simulation effects remain viewing-only. Export → Color &
 transparency → Use print profile explicitly selects the saved profile and its
 conversion intent/BPC for delivery; CMYK selects a supported opaque format.
 An RGB sharing file never accidentally receives a printer ICC tag describing
@@ -237,3 +237,27 @@ Physical HDR luminance/calibration, mixed-monitor movement, actual print matchin
 touch/pen contacts and Apple/Windows/mobile HDR viewing remain unqualified.
 Sharing services may strip auxiliary metadata. This is a review build, not a
 cross-platform release-signoff declaration.
+
+## Flat print controls follow-up
+
+Print now uses a native, compact **Profile** menu alongside **Simulate** and
+**Intent**. **Black point compensation** and **Gamut warning** remain directly
+visible. Profile import and management stay inside the Profile menu. Long names
+ellipsize with their full text available as a tooltip. The panel uses common
+six-logical-pixel spacing, native dropdowns/checks and the shared flat segmented control;
+there is no separate preference card or Options expander.
+
+`layer-ui::proof_panel` owns typed print settings, control order and labels,
+intent/simulation choices, absolute-intent/BPC normalization, and SDR numeric
+specifications using the existing `NumericControl`. GTK builds native widgets
+from those definitions. Profile parsing, validation, library actions and stale
+selection handling share one `ProfilePicker`; dialog rows and compact panel
+menus are presentations of that picker, not separate implementations. Other
+hosts can consume these shared Rust definitions without adopting GTK widgets.
+The current change does not claim that their native Proof UIs are already ported.
+
+Follow-up evidence lives in `artifacts/color-m4/proof-flat/`: workspace and wasm32
+checks, shared print-option round-trip/BPC tests, native compact Paint/Photo layout,
+profile picker, print save/reopen/export, cancellation, source-profile repair and
+HDR/SDR editing workflows. Native layout
+checks confirm the five print controls are mapped and fit the panel width.

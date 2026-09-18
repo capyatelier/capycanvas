@@ -170,7 +170,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-tabs button.icon-only-tab { min-width: 20px; }
 .dock-tabs button.selected-tool { background: var(--panel-bg); }
 .tab-joins { color: var(--panel-bg); }
-.dock-panel entry, .dock-panel dropdown > button { background: var(--input-bg); }
+.dock-panel entry, .dock-panel dropdown > button, .dock-panel menubutton.panel-choice > button { background: var(--input-bg); }
 .dock-panel .brush-choice { padding: 3px 6px; }
 .brush-choice label { font-size: 1em; }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
