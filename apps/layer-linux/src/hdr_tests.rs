@@ -277,12 +277,12 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
         .linear_in(RgbSpace::Srgb)
         .unwrap();
     assert!((entered[0] - 8.).abs() < 2e-5);
-    let brightness = find_named(photo.color_panel.root.upcast_ref(), "color-hdr-brightness").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    let intensity = find_named(photo.color_panel.root.upcast_ref(), "color-hdr-intensity-ramp").unwrap().downcast::<crate::hdr_color_scale::HdrColorScale>().unwrap();
     let previous = state(&photo).colors.foreground;
     photo.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
         color: layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, [65504., 2., 1., 1.]).unwrap(),
     }});
-    assert!((brightness.value() - f64::from(65504f32.log2())).abs() < 0.0001, "readout preserves values beyond the slider's editing range");
+    assert!((intensity.value() - f64::from(65504f32.log2())).abs() < 0.0001, "arc preserves sampled values beyond its default drag interval");
     photo.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition { color: previous }});
     photo.dispatch(UiAction::SetBrushSize { value: 40. });
     ready(&photo);
