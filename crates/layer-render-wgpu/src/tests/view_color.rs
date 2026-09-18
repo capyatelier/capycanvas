@@ -483,10 +483,10 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
                         presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
                         presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
                         presenter.present(&r,&output,view(),[0.;4]).unwrap();
-                        let mut expected=if headroom==1. || proof {recipe.map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
+                        let mut expected=if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
                         else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
                         if proof {expected=lut.apply_premultiplied(expected,true,false);}
-                        let rgb=rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from));
+                        let rgb=if headroom==1. && !proof {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
                         let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
                         let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
                         else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };

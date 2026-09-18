@@ -384,7 +384,7 @@ impl PreviewPipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content-framed thumbnails"),
-            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("hdr_mapping.wgsl"), include_str!("thumbnails.wgsl")).into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("thumbnails.wgsl")).into()),
         });
         let layout = |bounds| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

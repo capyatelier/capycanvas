@@ -503,7 +503,7 @@ fn shader_source(
     hdr: bool,
 ) -> Result<String, GpuRasterError> {
     let mut source = working_color::source(extended, space);
-    source.push_str(include_str!("hdr_mapping.wgsl"));
+    source.push_str(&crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb));
     source.push_str(include_str!("scene.wgsl"));
     let space_id = layer_core::color::RgbSpace::ALL
         .iter()

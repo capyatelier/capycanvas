@@ -154,8 +154,7 @@ impl ViewColor {
             let [exposure, contrast, knee] = recipe.map(f32::from_bits);
             let rendition = layer_core::color::hdr::SdrRendition { exposure, contrast, knee };
             let p = color.linear_in(document).expect("validated artwork color");
-            let rgb = rendition.map_rgb([p[0], p[1], p[2]]);
-            let rgb = layer_core::color::rgb::apply(document.linear_transform(self.space()), rgb.map(f64::from)).map(|v| v as f32);
+            let rgb = rendition.mapper(document, self.space()).map_rgb([p[0], p[1], p[2]]);
             [rgb[0], rgb[1], rgb[2], p[3]]
         } else { color.linear_in(self.space()).expect("validated artwork color") };
         [0.94, 0.80].map(|checker| {
@@ -213,12 +212,11 @@ pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: Rg
             let [exposure, contrast, knee] = recipe.map(f32::from_bits);
             layer_core::color::hdr::SdrRendition { exposure, contrast, knee }
         } else { Default::default() };
-        let transform = document.linear_transform(view.space());
+        let mapper = rendition.mapper(document, view.space());
         let mut bytes = Vec::with_capacity(pixels.len() * 4);
         for p in pixels {
             let p = document_pixel(*p);
-            let rgb = rendition.map_rgb([p[0],p[1],p[2]]);
-            let rgb = layer_core::color::rgb::apply(transform, rgb.map(f64::from));
+            let rgb = mapper.map_rgb([p[0],p[1],p[2]]).map(f64::from);
             bytes.extend(rgb.map(|v| (view.space().encode(v).clamp(0.,1.) * 255.).round() as u8));
             bytes.push((p[3] * 255.).round() as u8);
         }

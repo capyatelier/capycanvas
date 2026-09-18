@@ -49,6 +49,7 @@ impl SnapshotRenderer {
         let extent = self.extent;
         let matrix = self.color().space.linear_transform(space);
         let rendition = self.sdr_rendition;
+        let sdr = rendition.map(|r| r.mapper(self.color().space, space));
         let mut rows = Rows::new(self);
         let mut image = reduce(extent, bounds, space, |y, target| {
             target.copy_from_slice(rows.read(y)?);
@@ -57,9 +58,9 @@ impl SnapshotRenderer {
         // Linear primary/adaptation matrices commute with area averaging and
         // associated alpha. No encoded or bounded sRGB intermediate is used.
         for pixel in &mut image.pixels {
-            if let Some(r) = rendition {
+            if rendition.is_some() {
                 *pixel = if headroom > 1. { layer_core::color::hdr::map_display_premultiplied(*pixel, headroom) }
-                    else { r.map_premultiplied(*pixel) };
+                    else { *pixel = sdr.unwrap().map_premultiplied(*pixel); continue; };
             }
             let rgb: [f64; 3] = std::array::from_fn(|c| f64::from(pixel[c]));
             for (out, row) in pixel[..3].iter_mut().zip(matrix) {
@@ -85,12 +86,12 @@ impl SnapshotRenderer {
         let working = self.color().space;
         let to_working = RgbSpace::Srgb.linear_transform(working);
         let matrix = working.linear_transform(space);
-        let rendition = self.sdr_rendition.unwrap_or_default();
+        let rendition = self.sdr_rendition.unwrap_or_default().mapper(working, space);
         for pixel in &mut image.pixels {
             let rgb = layer_core::color::rgb::apply(to_working, [pixel[0], pixel[1], pixel[2]].map(f64::from));
             pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
             *pixel = if headroom > 1. { layer_core::color::hdr::map_display_premultiplied(*pixel, headroom) }
-                else { rendition.map_premultiplied(*pixel) };
+                else { *pixel = rendition.map_premultiplied(*pixel); continue; };
             let rgb = layer_core::color::rgb::apply(matrix, [pixel[0], pixel[1], pixel[2]].map(f64::from));
             pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
         }

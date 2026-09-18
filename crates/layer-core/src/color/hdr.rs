@@ -48,8 +48,8 @@ pub fn map_display_premultiplied(p: [f32; 4], headroom: f32) -> [f32; 4] {
 }
 
 /// A deliberate SDR rendition, owned by the document and shared by viewing,
-/// proofing and delivery. The shoulder begins at `knee` and tends toward white;
-/// negative channels are mapped to black in this rendition only.
+/// proofing and delivery. `knee` retains the persisted highlight-control value;
+/// the luminance shoulder and destination gamut compression are viewing derivatives.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SdrRendition {
@@ -91,28 +91,82 @@ impl SdrRendition {
         }
         Ok(())
     }
-    /// Linear straight document RGB. Max-channel scaling preserves chromaticity
-    /// of nonnegative colors without introducing a per-channel shoulder hue shift.
-    pub fn map_rgb(self, rgb: [f32; 3]) -> [f32; 3] {
-        let rgb = rgb.map(|v| v.max(0.));
-        let peak = rgb.into_iter().fold(0., f32::max);
-        if peak == 0. {
-            return [0.; 3];
-        }
-        let x = 0.18 * (peak * self.exposure.exp2() / 0.18).powf(self.contrast);
-        let mapped = if x <= self.knee {
-            x
-        } else {
-            1. - (1. - self.knee).powi(2) / (x + 1. - 2. * self.knee)
+    /// Compile the shared SDR appearance for a source and an RGB destination.
+    /// Matrix and luminance work is hoisted out of pixel/row loops.
+    pub fn mapper(self, source: super::RgbSpace, destination: super::RgbSpace) -> SdrMapper {
+        SdrMapper { recipe: self, source_y: luminance(source), destination_y: luminance(destination),
+            matrix: source.linear_transform(destination).map(|r| r.map(|v| v as f32)) }
+    }
+    pub fn map_rgb(self, rgb: [f32; 3], space: super::RgbSpace) -> [f32; 3] {
+        self.mapper(space, space).map_rgb(rgb)
+    }
+    pub fn map_premultiplied(self, p: [f32; 4], space: super::RgbSpace) -> [f32; 4] {
+        self.mapper(space, space).map_premultiplied(p)
+    }
+
+}
+
+/// D65-relative luminance: adaptation precedes tone mapping, so equivalent
+/// colors in different working spaces receive the same brightness transform.
+pub fn luminance(space: super::RgbSpace) -> [f32; 3] {
+    let m = space.linear_transform(super::RgbSpace::Srgb);
+    let y = super::RgbSpace::Srgb.to_xyz()[1];
+    std::array::from_fn(|c| (y[0]*m[0][c] + y[1]*m[1][c] + y[2]*m[2][c]) as f32)
+}
+pub fn relative_luminance(rgb: [f32; 3], y: [f32; 3]) -> f32 {
+    rgb[1] + y[0] * (rgb[0] - rgb[1]) + y[2] * (rgb[2] - rgb[1])
+}
+/// Smooth compression towards the equal-luminance neutral, in the actual
+/// destination gamut. Leaves neutrals and interior colors unchanged; rolls off
+/// chroma before the boundary instead of clipping RGB channels independently.
+pub fn gamut_map(rgb: [f32; 3], y: [f32; 3]) -> [f32; 3] {
+    let light = relative_luminance(rgb, y).clamp(0., 1.);
+    if light <= 0. || light >= 1. { return [light; 3]; }
+    let mut extent = 0f32;
+    for v in rgb {
+        extent = extent.max(if v > light { (v-light)/(1.-light) } else { (light-v)/light });
+    }
+    if extent <= 0.8 { return rgb; }
+    let compressed = 1. - 0.04 / (extent - 0.6);
+    rgb.map(|v| (light + (v-light) * (compressed/extent)).clamp(0., 1.))
+}
+#[derive(Clone, Copy)]
+pub struct SdrMapper {
+    recipe: SdrRendition,
+    source_y: [f32; 3],
+    destination_y: [f32; 3],
+    matrix: [[f32; 3]; 3],
+}
+impl SdrMapper {
+    /// Unbounded, straight source RGB after luminance mapping. Destination gamut
+    /// compression belongs after the RGB matrix (or before an ICC proof LUT).
+    pub fn tone_rgb(self, rgb: [f32; 3]) -> [f32; 3] {
+        let light = relative_luminance(rgb, self.source_y).max(0.);
+        if light <= 0. { return [0.; 3]; }
+        let r = self.recipe;
+        let x = 0.18 * (r.contrast * ((light / 0.18).log2() + r.exposure)).clamp(-126., 120.).exp2();
+        // Preserve black and middle gray. Reserve a broad shoulder for highlights
+        // rather than spending almost all SDR range below reference white.
+        let shape = (r.highlights() * 0.02).exp2();
+        let mapped = if x <= 0.18 { x } else {
+            0.18 + 0.82 * (1. - (1. + (x - 0.18) / (0.82 * shape)).powf(-shape))
         };
-        rgb.map(|v| v / peak * mapped)
+        rgb.map(|v| v / light * mapped)
+    }
+    pub fn tone_premultiplied(self, p: [f32; 4]) -> [f32; 4] {
+        if p[3] <= 0. { return [0.; 4]; }
+        let rgb = self.tone_rgb([p[0]/p[3],p[1]/p[3],p[2]/p[3]]);
+        [rgb[0]*p[3],rgb[1]*p[3],rgb[2]*p[3],p[3]]
+    }
+    pub fn map_rgb(self, rgb: [f32; 3]) -> [f32; 3] {
+        let rgb = self.tone_rgb(rgb);
+        let out = self.matrix.map(|r| r[0]*rgb[0]+r[1]*rgb[1]+r[2]*rgb[2]);
+        gamut_map(out, self.destination_y)
     }
     pub fn map_premultiplied(self, p: [f32; 4]) -> [f32; 4] {
-        if p[3] <= 0. {
-            return [0.; 4];
-        }
-        let rgb = self.map_rgb([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
-        [rgb[0] * p[3], rgb[1] * p[3], rgb[2] * p[3], p[3]]
+        if p[3] <= 0. { return [0.; 4]; }
+        let rgb = self.map_rgb([p[0]/p[3],p[1]/p[3],p[2]/p[3]]);
+        [rgb[0]*p[3],rgb[1]*p[3],rgb[2]*p[3],p[3]]
     }
 }
 
@@ -136,7 +190,7 @@ mod tests {
             let recipe = SdrRendition::from_appearance(0., 1., highlights).unwrap();
             assert!((recipe.highlights() - highlights).abs() < 0.0001);
             let previous = SdrRendition::from_appearance(0., 1., (highlights - 1.).max(-100.)).unwrap();
-            assert!(recipe.map_rgb([4.; 3])[0] >= previous.map_rgb([4.; 3])[0]);
+            assert!(recipe.map_rgb([4.; 3], super::super::RgbSpace::Srgb)[0] >= previous.map_rgb([4.; 3], super::super::RgbSpace::Srgb)[0]);
         }
         assert_eq!(SdrRendition::from_appearance(0., 1., 0.).unwrap(), SdrRendition::default());
         assert!(SdrRendition::from_appearance(0., 1., f32::NAN).is_err());
@@ -167,18 +221,60 @@ mod tests {
         }
     }
     #[test]
-    fn rendition_is_monotone_bounded_and_preserves_alpha_and_rgb_ratios() {
+    fn rendition_retains_highlight_separation_and_alpha() {
+        use super::super::RgbSpace;
         let r = SdrRendition::default();
-        let mut previous = 0.;
-        for i in 0..=65504 {
-            let p = i as f32 / 16.;
-            let mapped = r.map_rgb([p, p / 2., -p]);
-            assert!((previous..=1.).contains(&mapped[0]));
-            assert_eq!(mapped[1], mapped[0] / 2.);
-            assert_eq!(mapped[2], 0.);
-            previous = mapped[0];
+        let mapper = r.mapper(RgbSpace::Srgb, RgbSpace::Srgb);
+        for (input, expected) in [(0.,0.),(0.18,0.18),(1.,0.59),(4.,0.8550862)] {
+            assert!((mapper.map_rgb([input;3])[0]-expected).abs()<1e-6);
         }
-        assert_eq!(r.map_premultiplied([2., -1., 0., 0.]), [0.; 4]);
-        assert_eq!(r.map_premultiplied([1., 0.5, 0., 0.25])[3], 0.25);
+        let code = |v| (super::super::srgb_encode(mapper.map_rgb([v;3])[0])*255.).round();
+        assert!(code(4.)-code(1.)>=30.);
+        assert!(code(16.)-code(4.)>=10.);
+        let mut previous=0.;
+        for i in 0..=65504 {
+            let mapped=mapper.map_rgb([i as f32/16.;3]);
+            assert!((previous..=1.).contains(&mapped[0]));
+            previous=mapped[0];
+        }
+        for p in [[4.,1.,0.25],[8.,-0.1,2.],[-0.1,3.,0.5]] {
+            let opaque=mapper.map_rgb(p);
+            assert!(opaque.into_iter().all(|v|v.is_finite() && (0. ..=1.).contains(&v)));
+            for a in [0.00001,0.25,0.5,1.] {
+                let out=mapper.map_premultiplied([p[0]*a,p[1]*a,p[2]*a,a]);
+                assert_eq!(out[3],a);
+                for c in 0..3 {assert!((out[c]/a-opaque[c]).abs()<2e-6);}
+            }
+        }
+        assert_eq!(mapper.map_premultiplied([2.,-1.,0.,0.]),[0.;4]);
+    }
+    #[test]
+    fn equivalent_colors_map_equally_across_working_spaces() {
+        use super::super::{RgbSpace, rgb};
+        let recipe=SdrRendition::default();
+        for output in RgbSpace::ALL {
+            for original in [[4.,1.,0.25],[0.18;3],[8.,-0.1,2.],[0.,0.,1.]] {
+                let expected=recipe.mapper(RgbSpace::Srgb,output).map_rgb(original);
+                for source in RgbSpace::ALL {
+                    let input=rgb::apply(RgbSpace::Srgb.linear_transform(source),original.map(f64::from));
+                    let actual=recipe.mapper(source,output).map_rgb(input.map(|v|v as f32));
+                    for c in 0..3 {assert!((actual[c]-expected[c]).abs()<2e-6,"{source:?} -> {output:?}: {actual:?} != {expected:?}");}
+                }
+            }
+        }
+    }
+    #[test]
+    fn gamut_compression_preserves_luminance_and_interior_colors() {
+        use super::super::RgbSpace;
+        for space in RgbSpace::ALL {
+            let y=luminance(space);
+            for input in [[0.3,0.4,0.5],[0.18;3],[2.,0.1,0.1],[-0.2,0.8,0.2]] {
+                let light=relative_luminance(input,y);
+                let out=gamut_map(input,y);
+                assert!((relative_luminance(out,y)-light.clamp(0.,1.)).abs()<2e-6);
+                assert!(out.into_iter().all(|v| (0. ..=1.).contains(&v)));
+            }
+            assert_eq!(gamut_map([0.3,0.4,0.5],y),[0.3,0.4,0.5]);
+        }
     }
 }

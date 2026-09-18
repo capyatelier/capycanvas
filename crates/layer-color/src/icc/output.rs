@@ -15,6 +15,9 @@ pub struct WorkingEncoder {
     destination: SourceInterpretation,
     kind: OutputKind,
     dither: OutputDither,
+    hdr_gamut: bool,
+    source_y: [f32; 3],
+    destination_y: [f32; 3],
 }
 enum OutputKind {
     Builtin {
@@ -82,11 +85,25 @@ impl WorkingEncoder {
                 }
             },
         };
+        let destination_y = layer_core::color::hdr::luminance(match &destination.profile {
+            ColorProfile::Builtin(space) => *space,
+            _ => source,
+        });
         Ok(Self {
             destination,
             kind,
             dither: encoding.dither,
+            hdr_gamut: false,
+            source_y: layer_core::color::hdr::luminance(source),
+            destination_y,
         })
+    }
+
+    /// Only HDR-to-SDR delivery requests this perceptual gamut rolloff. Ordinary
+    /// SDR conversion and native backing retain their exact existing contract.
+    pub fn with_hdr_gamut_mapping(mut self, enabled: bool) -> Self {
+        self.hdr_gamut = enabled;
+        self
     }
 
     /// Use this interpretation for the written file, including any generated
@@ -172,6 +189,9 @@ impl WorkingEncoder {
                 if rgb.iter().any(|v| !v.is_finite()) {
                     return Err("Working RGB exceeds finite output precision".into());
                 }
+                let rgb = if self.hdr_gamut && !matches!(self.kind, OutputKind::Builtin { .. }) {
+                    layer_core::color::hdr::gamut_map(rgb, self.source_y)
+                } else { rgb };
                 values[i] = [rgb[0], rgb[1], rgb[2], alpha];
             }
             let mut converted = [[0.; 4]; 256];
@@ -196,8 +216,11 @@ impl WorkingEncoder {
                             linear
                         } else {
                             layer_core::color::rgb::apply(*matrix, linear)
-                        }
-                        .map(|v| if destination.depth.is_float() { v } else { space.encode(v) });
+                        };
+                        let rgb = if self.hdr_gamut {
+                            layer_core::color::hdr::gamut_map(rgb.map(|v| v as f32), self.destination_y).map(f64::from)
+                        } else { rgb };
+                        let rgb = rgb.map(|v| if destination.depth.is_float() { v } else { space.encode(v) });
                         [rgb[0], rgb[1], rgb[2], 0.]
                     }
                     OutputKind::Rgb(_) => converted[i].map(f64::from),

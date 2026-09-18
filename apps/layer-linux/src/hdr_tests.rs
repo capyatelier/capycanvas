@@ -447,7 +447,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
         sdr.rows().read(y, &mut row).unwrap();
         decoder.decode_pixels(&row, &mut actual).unwrap();
         for (x, p) in actual.iter().enumerate() {
-            let expected = recipe.map_premultiplied(painted[y as usize * 512 + x]);
+            let expected = recipe.map_premultiplied(painted[y as usize * 512 + x], RgbSpace::Srgb);
             for c in 0..3 {
                 assert!(
                     (p[c] - expected[c]).abs() < 0.01,

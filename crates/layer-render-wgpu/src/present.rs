@@ -302,7 +302,7 @@ impl ViewportPresenter {
                     crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),
-                    include_str!("hdr_mapping.wgsl"),
+                    crate::view_color::hdr_shader(device.working_space(), color.primaries()),
                     include_str!("hdr_view.wgsl"),
                     include_str!("proof_view.wgsl"),
                     include_str!("overview_sample.wgsl"),
