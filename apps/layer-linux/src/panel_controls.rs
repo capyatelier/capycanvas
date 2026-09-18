@@ -10,6 +10,7 @@ pub fn segmented(name: &str, choices: &[(&str, &str)]) -> adw::ToggleGroup {
         .hexpand(true)
         .build();
     group.set_widget_name(name);
+    group.add_css_class("flat");
     for &(id, label) in choices {
         group.add(adw::Toggle::builder().name(id).label(label).build());
     }
