@@ -173,6 +173,21 @@ cause in shared code where possible.
 
 ## Shared G-Pen preparation and prediction — 2026-09-17
 
+The latest user clarification is approximately **2000 px**, with visible lag and
+roughly 54 ms Diagnostics p99 on the preceding review. The new shared correction
+removes the generic 50% radius halo from dry-contact planning when the shader's
+actual edge parameters need less area; prediction uses the same bounds. In the
+2000 px replay, median recomposition falls from 17.15 to 10.13 million pixels per
+update. Reversed-order Mac medians improve 42–43%; physical iPad synthetic
+median/p99 improve 112.569/133.916 → 65.399/94.970 ms. All retained artwork tiles
+match exactly, omitted tiles are verified zero, and Undo/Redo passes. Thirteen
+focused checks and both Release builds pass. The corrected normal iPad app is
+installed with all 14 recoveries and 145 original files preserved. Physical
+Pencil responsiveness is pending; the full-pressure replay does not predict the
+user's live p99. See the [current 2000 px analysis](apple-drawing-performance-review.md#current-2000-px-footprint-correction).
+This supersedes installed-build and pending-test references in the older
+570 px records below. Evidence is `artifacts/apple-wide-gpen-v1/`.
+
 The visible large-brush lag follow-up removes two unnecessary costs in the shared
 renderer: dry paint no longer decodes/binds eight unread neighboring source tiles,
 and native dry/wet prediction reuses the existing direct committed-color/coverage
@@ -347,6 +362,18 @@ the owner fixture separately checks supplied names. The temporary metadata
 probe is removed, and final runtime hashes match both Release builds.
 Physical UIKit provider/placement acceptance remains open, with artist apps and
 drawings preserved. This milestone adds no device performance claim.
+
+The later native Mac clipboard workflow at `4c4e7fa5` also passes through the
+actual Edit menu and system pasteboard. Two encoded images support Cancel/Apply
+and exact sampled artwork through Undo/Redo; an invalid second image inserts
+nothing and preserves history; a subsequent local file-URL paste succeeds and
+cancels cleanly without changing the original file. One XCTest passes with no
+failures or skips, and its final capture is reviewed. The fixture keeps synthetic
+clipboard contents local to this Mac and restores the original from memory unless
+a newer user copy intervenes. Both existing Mac review processes remain running;
+the isolated app is torn down and the iPad is untouched. Evidence is under
+`artifacts/apple-native-clipboard-v1/`. No application runtime change is needed;
+physical UIKit clipboard/provider acceptance remains separate.
 
 ## Shared color/source transactions — 2026-09-17
 

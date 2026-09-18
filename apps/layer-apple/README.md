@@ -783,6 +783,11 @@ channel, alpha and admission-limit checks. These owner tests do not establish
 native picker/clipboard-provider delivery or cloud access. The Mac UI workflow
 `testNativeImageImport` covers the actual picker, cancellation, the imported layer
 name, sampled artwork and Undo/Redo.
+`testNativeImagePaste` covers the actual Mac Paste menu and system pasteboard:
+encoded-image batches, Cancel/Apply, sampled artwork/history, atomic failure of a
+later member and file-URL retry. Its synthetic clipboard contents stay on the
+current Mac. Teardown restores the original clipboard from memory unless a newer
+user copy replaced it. Neither test qualifies physical UIKit provider delivery.
 
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 also use the native document worker. Shared code owns color semantics and exact

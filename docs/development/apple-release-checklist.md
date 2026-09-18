@@ -18,6 +18,17 @@ results. Large-brush smoothness and sustained watercolor acceptance remain open.
 The user subsequently confirms perceptible pen lag relative to Clip Studio Paint
 with a similar G-Pen size. Attribute brush versus composition/submission costs
 and correct the measured bottleneck; this is not a percentile-only concern.
+The latest clarification is approximately **2000 px** with roughly 54 ms p99.
+The [shared footprint correction](apple-drawing-performance-review.md#current-2000-px-footprint-correction)
+now reduces excess brush/composition area without changing shader output. At
+2000 px, reversed-order Mac replay medians improve 42–43%; physical iPad
+synthetic median/p99 improve 112.569/133.916 → 65.399/94.970 ms. Retained native
+pixels and exact history match; omitted tiles are verified empty. Thirteen
+focused checks and both Release builds pass. The corrected normal iPad app is
+installed with all 14 recoveries and 145 original files preserved. The requested
+2000 px physical Pencil retest remains open; this supersedes the installed-build
+and pending-test status in the preceding 570 px evidence below. R6 stays open.
+
 The [shared G-Pen follow-up](apple-handoff.md#shared-g-pen-preparation-and-prediction--2026-09-17)
 now removes unread dry-brush source neighborhoods and redundant native prediction
 copies. Four paired Mac workloads improve by 6–12%; the physical synthetic iPad
@@ -379,13 +390,30 @@ not the physical/native workflow gates listed in the table.
 | Rulers | All three choices; Mac mouse creation/handle editing; stationary AppKit Shift press/release previews for straight/parallel handles; constrained/free pixel/history and UIKit modifier callback checks | Physical constrained painting/handles and UIKit hardware modifier delivery. |
 | Artwork history | Exact pixel/history checks in each edit family and physical drawing Undo/Redo | Reconcile all remaining edit families in this table with history evidence; do not create a duplicate standalone matrix. |
 | Layer operations | Mask/link/group artwork/history, scrolling/reorder, Layers configuration and previews; coordinated image decode/ownership; user-confirmed physical Pencil upward handle/body reorder and Undo | Native image-provider delivery and remaining hierarchy/interruption interactions. |
-| Pixel selection actions | Native Select All/Fill/Deselect/Invert; Mac assembled freehand cancellation and exact history | Native lasso delivery shared with Selection above; there are no shared add/subtract selection modifiers. |
+| Pixel selection actions | Native Select All/Fill/Deselect/Invert; Mac OS-delivered freehand selection/fill, cancellation and exact PNG history | Physical UIKit/Pencil lasso delivery is shared with Selection above; there are no shared add/subtract selection modifiers. |
 | Workspace and Zen | Shared topology/history, native drawers/styles/configuration; complete local manager workflows; mounted floating size/preview checks | Retained tile/drawer/column presentations with real devices, cancellation, Zen and persisted layout across native window transitions. |
 | Title-bar customization | Shared geometry/history/persistence, native mouse/pen fixtures and direct physical iPad item removal; duplicate-handler removal passes mounted header secondary click, holds, dragging and history | Remaining actual window/overflow/state combinations and Pencil delivery. |
 | Camera | Native Hand/Fit/flip; direct Navigator and camera checks; supplied scroll/pinch/rotate; physical iPad touch navigation | Physical indirect input and interruption (R3). |
 | Preferences and shortcuts | All 16 pre-SDR Settings rows reconciled; every editable row passes native-owner edit, fresh-owner restore and exact durable Reset on both policies. The five added SDR policy rows have the scoped checks referenced in the color workflow milestones. Retained native numeric/text/image-choice editing, Reset/Done/reopen, search and shortcut forms/conflicts pass. Native theme/cursor choices and Done/reopen pass on both hosts; Mac prediction dependencies and amount editing also pass. | Physical iPad prediction dependencies pass by user confirmation; broader native text/menu traversal and Mac hardware key combinations. Physical iPad keyboard checks, including UIKit compact-menu Command-Z and text Command-A, are deferred by the user for this release. |
 | Native windows | Mac/simulator independent windows; Mac last-window reopen and full-screen artwork/history; native iPadOS full-screen control accepted by the user | Physical iPad independent drawing/history and continued input pass; remaining scene/display/lifecycle checks (R4). Keep the unsupported UIKit in-app toggle unavailable; the accepted native control satisfies the capability requirement. |
 | Application information and links | Mac/simulator About and actual browser handoff; mounted editor rejection/retry; native AppKit Settings clicks and visible rejection/retry on both shared Apple policies | Alternate-handler OS delivery and physical iPad link delivery. |
+
+Four Mac OS-delivered mouse checks at `e350a585` close freehand selection and
+lasso fill on both Apple policies. Tagged events reach the mounted production
+editor through the window server; full exported PNG Undo/Redo, Escape/focus/tool
+cancellation and the next contact all pass. Tool selection uses shared actions
+and keys use the AppKit queue, so this does not qualify physical tablet/Pencil,
+UIKit or hardware-key delivery. Evidence is `artifacts/apple-native-lasso-v1/`.
+The broader held-contact capture attempt remains unqualified and its fixture
+changes are removed; it supplies no additional figure/ruler acceptance.
+
+Native Mac clipboard delivery now also passes through the actual Paste menu:
+encoded-image batches, Cancel/Apply, exact sampled artwork and Undo/Redo, atomic
+second-member failure with intact history, and local file-URL retry/cancellation.
+The original file is unchanged, the final capture is reviewed and the isolated
+test app is torn down; both Mac reviews and the iPad remain unchanged. See the
+[native provider record](apple-handoff.md#external-photo-drops--2026-09-17).
+This closes the Mac clipboard gap, not physical UIKit delivery or R4 lifecycle.
 
 The former generic selection-modifier gap was broader than the actual shared
 feature set. Lasso and Auto Select replace the selection through `SetSelection`;

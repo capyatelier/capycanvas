@@ -1,6 +1,64 @@
 # Large-photo drawing: algorithm review — 2026-09-17
 
+## Current 2000 px footprint correction
+
+The user clarifies that the current workload is an approximately 2000 px G-Pen
+on the 61 MP photo (the retained control shows 2048 px), still visibly slower
+than Clip Studio Paint with roughly 54 ms Diagnostics p99. The earlier 570 px
+results do not qualify that workload. The corrected physical Pencil retest is
+pending; no comparison to Clip Studio Paint's internal implementation is claimed.
+
+The shared contact planner used the generic swept-contact bound: the largest
+endpoint radius multiplied by 1.5, regardless of the brush's edge parameters.
+For an ordinary G-Pen this schedules painting, native tile capture, prediction
+and composition over a substantial empty halo. The correction derives the
+conservative outer support from the existing shader: edge roughness, pooling,
+antialiasing and its radius cutoff. Interpolated and rotating nibs remain inside
+the largest endpoint radius. Wet and other nonlocal materials retain their
+existing dependency bounds. Prediction retirement uses the same planned region;
+direct prediction intersects that region before encoding. No brush shader,
+precision, contact count, cache ceiling or platform-specific path changes.
+
+Ten Mac replays cover 2000 px in both execution orders, ordinary two-sample
+2000 px input, 570.7 px circles and a 96 px zigzag control. For eight samples per
+update, 2000 px median completion improves **93.86 → 53.28 ms** and
+**91.65 → 53.26 ms**, approximately 42–43%. Two-sample 2000 px improves
+**77.29 → 43.30 ms**; 570.7 px improves **21.52 → 15.42 ms**. The small-brush
+median changes **6.94 → 6.52 ms**, with p99 essentially unchanged
+(**12.38 → 12.44 ms**). These are offscreen queue-completion measurements.
+
+On the physical iPad, the same full-pressure 2000 px synthetic workload improves
+median/p99 from **112.569/133.916 ms to 65.399/94.970 ms**. This is 180 drawing
+updates with eight input samples each, manual 8 ms prediction, followed by 360
+zoom updates, with a fixed 768 MiB display allowance. Cached zoom median remains
+about **1.80 ms**. This workload is heavier than the user's live test: it does
+not predict a new live Diagnostics p99 or measure Pencil-to-display latency.
+
+Median recomposition falls from **17.15 to 10.13 million pixels per update**,
+and intermediate display submissions from **32 to 19**. All retained native
+artwork tiles match byte-for-byte in every pair, contacts are unchanged, and
+exact Undo/Redo passes. The 2000 px result omits 89 previously allocated tiles;
+their digests are verified against entirely zero native tiles, so this changes
+storage allocation without removing artwork. The result identifies excessive
+damage propagation as a substantial shared bottleneck. It neither establishes
+a hardware floor nor proves that all remaining visible lag is resolved.
+
+Thirteen focused checks cover interpolated/anisotropic/tiny contact support,
+sparse G-Pen/Pencil preparation, prediction and mask cancellation, native color
+and continuous contact invariants. Both Apple Release builds pass without
+compiler warnings, and Web compilation passes. The corrected normal iPad Release is restored at Recovered
+Drawings; all 14 complete recoveries and 145 original files are preserved
+exactly, and disposable replay output is removed. The Mac review is unchanged.
+Private evidence is `artifacts/apple-wide-gpen-v1/`, based on `4c4e7fa5` plus the
+correction. The first local candidate exposed a prediction loop still traversing
+the broader original damage; the final correction shares the allocated bounds
+and passes the checks above. Private fixture build/restore checks also required
+normalizing relocated asset paths; neither failure is counted as a passing run.
+
 ## Current G-Pen follow-up
+
+The following records the preceding 570 px investigation; the 2000 px correction
+above supersedes its pending-review status.
 
 After the document errors were fixed, the user confirmed visible Pencil lag
 relative to Clip Studio Paint at a comparable brush size. The earlier uncertain

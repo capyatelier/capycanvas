@@ -3573,6 +3573,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let plan = BrushPassPlan::for_style(&batch.style);
         let texture_key = Self::texture_set_key(&batch.style);
+        let damage = damage.intersect(self.preview_damage);
         for coordinate in page_coordinates(damage) {
             let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
                 .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
@@ -4158,7 +4159,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut preview_is_watercolor = false;
 
         // Ranges were validated during tile planning; accumulate metrics once.
-        for batch in packet.dab_batches {
+        for (batch, tiles) in packet.dab_batches.iter().zip(&batch_tiles) {
             let start = batch.first_dab as usize;
             let dabs = &packet.dabs[start..start + batch.dab_count as usize];
             let batch_dirty = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
@@ -4167,6 +4168,12 @@ impl CanvasRenderer for WgpuRasterizer {
                     WatercolorLayerStyle::from_dab_style(&batch.style).radius(),
                     packet.document_extent,
                 )
+            } else if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some() {
+                // Prediction retirement must use the same bounded footprint as
+                // painting, rather than reintroducing the generic brush halo.
+                tiles.iter().fold(PixelRect::EMPTY, |bounds, tile| {
+                    bounds.union(page_rect(tile.coordinate))
+                }).intersect(batch_dirty)
             } else {
                 batch_dirty
             };
