@@ -158,6 +158,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .iter()
                                 .copied()
                                 .filter(|id| id.available_on(self.state.platform))
+                                .filter(|id| !matches!(id, CommandId::SdrRendition | CommandId::PreviewSdr) || self.engine.document().color.depth.is_float())
                                 .filter(|id| {
                                     !(menu == M::View
                                         && *id == CommandId::ResetLayout

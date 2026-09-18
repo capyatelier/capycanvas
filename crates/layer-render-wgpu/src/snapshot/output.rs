@@ -1,19 +1,32 @@
 //! Profiled streaming output; resizing never changes native snapshot geometry.
 use super::*;
+use layer_core::color::RgbSpace;
 
 impl SnapshotRenderer {
-    pub fn write_hdr_png(&mut self, output: impl std::io::Write, map_out_of_range: bool) -> Result<layer_color::OutputStatistics, String> {
+    pub fn write_hdr_png(&mut self, output: impl std::io::Write, clip: bool) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
+        self.hdr_rows(|extent, space, read| layer_color::photo::write_hdr_png_rows(output, extent, space, resolution, clip, read))
+    }
+
+    pub fn inspect_hdr_output(&mut self) -> Result<layer_color::OutputStatistics, String> {
+        self.hdr_rows(|extent, space, read| layer_color::photo::inspect_hdr_rows(extent, space, read))
+    }
+
+    fn hdr_rows(&mut self, consume: impl FnOnce([u32; 2], RgbSpace, &mut dyn FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>) -> Result<layer_color::OutputStatistics, String>) -> Result<layer_color::OutputStatistics, String> {
         self.check_cancelled().map_err(|e| e.to_string())?;
         if !self.color().depth.is_float() { return Err("PQ delivery requires an HDR document".into()); }
-        let extent=self.output_extent;let source_extent=self.extent;let space=self.color().space;
-        let resolution=self.output_resolution;let control=self.control.clone();
-        let mut resampler=(source_extent!=extent).then(||layer_color::RowResampler::new(source_extent,extent)).transpose()?;
-        let mut source=Rows::new(self);
-        layer_color::photo::write_hdr_png_rows(output,extent,space,resolution,map_out_of_range,|y,row| {
-            control.check().map_err(|e|e.to_string())?;
-            if let Some(resampler)=&mut resampler {resampler.read_row(y,row,&mut |y,row:&mut [[f32;4]]|{row.copy_from_slice(source.read(y)?);Ok(())})?;}
-            else {row.copy_from_slice(source.read(y)?);}
-            control.output_rows.store(y+1,Ordering::Relaxed);
+        let extent = self.output_extent;
+        let source_extent = self.extent;
+        let space = self.color().space;
+        let control = self.control.clone();
+        let mut resampler = (source_extent != extent).then(|| layer_color::RowResampler::new(source_extent, extent)).transpose()?;
+        let mut source = Rows::new(self);
+        consume(extent, space, &mut |y, row| {
+            control.check().map_err(|e| e.to_string())?;
+            if let Some(resampler) = &mut resampler {
+                resampler.read_row(y, row, &mut |y, row: &mut [[f32; 4]]| { row.copy_from_slice(source.read(y)?); Ok(()) })?;
+            } else { row.copy_from_slice(source.read(y)?); }
+            control.output_rows.store(y + 1, Ordering::Relaxed);
             Ok(())
         })
     }

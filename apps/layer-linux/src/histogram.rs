@@ -21,6 +21,7 @@ pub(crate) struct Inspector {
     pub(crate) window: adw::Window,
     workspace: Weak<Workspace>,
     chart: gtk::DrawingArea,
+    axis: [gtk::Label; 2],
     channel: gtk::DropDown,
     logarithmic: gtk::CheckButton,
     automatic: gtk::CheckButton,
@@ -145,7 +146,7 @@ impl Inspector {
         let animated = project.document.has_animated_effects();
         self.running.set(true);
         self.status
-            .set_label("Updating · complete composite at full resolution");
+            .set_label("Updating…");
         let control = CaptureControl::default();
         *self.control.borrow_mut() = Some(control.clone());
         let weak = Rc::downgrade(self);
@@ -180,7 +181,7 @@ impl Inspector {
                     state.result.replace(Some(result));
                     state
                         .status
-                        .set_label("Current · complete committed composite");
+                        .set_label("Current");
                     state.refresh();
                 }
                 Err(error) => state.status.set_label(&error),
@@ -193,8 +194,20 @@ impl Inspector {
         let Some(result) = result.as_ref() else {
             return;
         };
-        self.description.set_label(&format!("{} · {}-bit document\n{} pixels counted · {} fully transparent pixels excluded\nRGB is profile-encoded; luminance is linear relative Y. Partial coverage is unassociated; each pixel counts once.", result.color.space.name(), result.color.depth.bits(), result.pixels, result.transparent));
-        if result.color.depth.is_float() { self.description.set_label(&format!("{} · 16-bit float HDR\n{} pixels counted · {} transparent excluded\nRGB and luminance: −12 to +16 stops relative to 203 cd/m² reference white; first bin includes nonpositive values. Above white is HDR data, not clipping.", result.color.space.name(), result.pixels, result.transparent)); }
+        let hdr = result.color.depth.is_float();
+        let bins = result.plot_bins();
+        if hdr {
+            use layer_core::color::histogram::hdr_bin_stops;
+            self.axis[0].set_label(&format!("{:+.0} EV", hdr_bin_stops(bins.start)));
+            self.axis[1].set_label(&format!("{:+.0} EV", hdr_bin_stops(bins.end - 1)));
+            self.channel.set_tooltip_text(Some("Linear brightness in stops above SDR white"));
+        } else {
+            self.axis[0].set_label("0"); self.axis[1].set_label("1");
+            self.channel.set_tooltip_text(Some("Profile-encoded RGB or linear luminance"));
+        }
+        self.description.set_label(&format!("{} · {}\n{} pixels · {} transparent excluded{}",
+            result.color.space.name(), result.color.depth.label(), result.pixels, result.transparent,
+            if hdr { "\n0 EV = SDR white (203 cd/m²). Nonpositive samples are counted separately." } else { "" }));
         if let Some(time) = self.sampled_time.get() {
             self.description.set_label(&format!(
                 "{}\nAnimation sampled at {time:.2} s. Pause and resume to sample again.",
@@ -246,7 +259,7 @@ pub(crate) fn show(w: &Rc<Workspace>) {
         .destroy_with_parent(true)
         .hide_on_close(true)
         .default_width(430)
-        .default_height(720)
+        .default_height(480)
         .build();
     window.set_widget_name("histogram-window");
     let toolbar = adw::ToolbarView::new();
@@ -284,10 +297,11 @@ pub(crate) fn show(w: &Rc<Workspace>) {
     let zero = label("0", "histogram-axis-zero");
     zero.set_hexpand(true);
     axis.append(&zero);
-    axis.append(&label("1", "histogram-axis-one"));
+    let one = label("1", "histogram-axis-one");
+    axis.append(&one);
     body.append(&axis);
     let options = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let logarithmic = gtk::CheckButton::with_label("Log scale");
+    let logarithmic = gtk::CheckButton::with_label("Logarithmic counts");
     let automatic = gtk::CheckButton::with_label("Update automatically");
     automatic.set_active(true);
     automatic.set_widget_name("histogram-automatic");
@@ -297,10 +311,13 @@ pub(crate) fn show(w: &Rc<Workspace>) {
     let status = label("Waiting for a committed canvas…", "histogram-status");
     let range = label("", "histogram-range");
     let description = label("", "histogram-description");
-    for label in [&status, &range, &description] {
-        body.append(label);
-    }
-    body.append(&label("Endpoint counts include black and white artwork; they do not prove lost detail. Outside-SDR counts describe this document space, not a monitor or export profile.", "histogram-help"));
+    body.append(&status);
+    let details = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    details.append(&range); details.append(&description);
+    details.append(&label("Counts describe the artwork, not display or export clipping.", "histogram-help"));
+    let expander = gtk::Expander::builder().label("Details").child(&details).build();
+    expander.set_widget_name("histogram-details");
+    body.append(&expander);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
@@ -313,6 +330,7 @@ pub(crate) fn show(w: &Rc<Workspace>) {
         window,
         workspace: Rc::downgrade(w),
         chart,
+        axis: [zero, one],
         channel,
         logarithmic,
         automatic,
@@ -380,9 +398,10 @@ pub(crate) fn show(w: &Rc<Workspace>) {
                 count as f64
             }
         };
+        let plot = result.plot_bins();
         let max = indices
             .iter()
-            .flat_map(|&i| &result.channels[i].bins)
+            .flat_map(|&i| &result.channels[i].bins[plot.clone()])
             .copied()
             .max()
             .unwrap_or(1)
@@ -398,7 +417,7 @@ pub(crate) fn show(w: &Rc<Workspace>) {
                 [0.6, 0.6, 0.6],
             ][i];
             cr.set_source_rgba(rgb[0], rgb[1], rgb[2], 0.65);
-            let bins = &result.channels[i].bins;
+            let bins = &result.channels[i].bins[plot.clone()];
             for (x, &count) in bins.iter().enumerate() {
                 let h = (height as f64 - 2.) * scale(count) / scale(max);
                 cr.rectangle(
@@ -410,6 +429,15 @@ pub(crate) fn show(w: &Rc<Workspace>) {
             }
             let _ = cr.fill();
         }
+        if result.color.depth.is_float() {
+            use layer_core::color::histogram::hdr_bin;
+            let x = (hdr_bin(1.) - plot.start) as f64 / plot.len() as f64 * width as f64;
+            cr.set_source_rgba(0.8, 0.8, 0.8, 0.9);
+            cr.set_line_width(1.); cr.move_to(x, 18.); cr.line_to(x, height as f64); let _ = cr.stroke();
+            cr.set_font_size(11.); cr.move_to((x + 4.).min(width as f64 - 85.), 13.);
+            let _ = cr.show_text("SDR white · 0 EV");
+        }
+
     });
     *w.histogram.borrow_mut() = Some(state.clone());
     state.window.present();

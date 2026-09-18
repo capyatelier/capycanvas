@@ -82,6 +82,7 @@ pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result
 /// explicit application preference action and does not depend on exporting a file.
 pub(super) fn install(
     parent: &adw::ApplicationWindow,
+    hdr_document: bool,
     group: &adw::PreferencesGroup,
     preset: &adw::ComboRow,
     library: Rc<std::cell::RefCell<ExportPresets>>,
@@ -95,7 +96,9 @@ pub(super) fn install(
     buttons.set_halign(gtk::Align::Center);
     buttons.set_margin_top(8);
     buttons.set_margin_bottom(8);
-    row.set_child(Some(&buttons));
+    let expander = gtk::Expander::builder().label("Manage presets").child(&buttons).build();
+    expander.set_widget_name("export-manage-presets");
+    row.set_child(Some(&expander));
     group.add(&row);
     let status = adw::ActionRow::builder()
         .use_markup(false)
@@ -115,6 +118,7 @@ pub(super) fn install(
             let names: Vec<_> = ExportPresets::DESTINATIONS
                 .iter()
                 .copied()
+                .map(|name| if hdr_document && name == "Further editing" { "Further editing (SDR)" } else { name })
                 .chain(library.names())
                 .collect();
             updating.set(true);

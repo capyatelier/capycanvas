@@ -67,7 +67,7 @@ impl Form {
         self.dialog
             .set_response_enabled("create", options.validate().is_ok());
         self.remove.set_sensitive(
-            self.preset.selected() >= 4 && self.preset.selected() != gtk::INVALID_LIST_POSITION,
+            self.preset.selected() >= 5 && self.preset.selected() != gtk::INVALID_LIST_POSITION,
         );
     }
     fn edited(&self) {
@@ -79,7 +79,7 @@ impl Form {
     fn presets(&self, settings: &NewDocumentSettings, selected: u32) {
         self.updating.set(true);
         let mut names = vec!["Custom".to_string()];
-        names.extend(NewDocumentPreset::builtins().into_iter().map(|p| p.name));
+        names.extend(NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk).into_iter().map(|p| p.name));
         names.extend(settings.presets.iter().map(|p| p.name.clone()));
         self.preset.set_model(Some(&gtk::StringList::new(
             &names.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -206,7 +206,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
         remove,
         updating: Cell::new(false),
     });
-    let selected = NewDocumentPreset::builtins()
+    let selected = NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk)
         .iter()
         .chain(settings.presets.iter())
         .position(|p| p.options == settings.defaults)
@@ -248,7 +248,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                 .new_document
                 .clone();
             if selected > 0 {
-                if let Some(preset) = NewDocumentPreset::builtins()
+                if let Some(preset) = NewDocumentPreset::builtins_for(layer_ui::Platform::Gtk)
                     .iter()
                     .chain(settings.presets.iter())
                     .nth(selected as usize - 1)
@@ -324,7 +324,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                             .new_document
                             .clone();
                         if settings.save(&name.text(), options).is_ok() {
-                            let selected = settings.presets.len() as u32 + 3;
+                            let selected = settings.presets.len() as u32 + 4;
                             w.dispatch(UiAction::NewDocumentPreferences {
                                 action: NewDocumentAction::Remember { options, name: name.text().into(), defaults: false },
                             });
@@ -361,7 +361,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
                     if let Some(index) = form
                         .preset
                         .selected()
-                        .checked_sub(4)
+                        .checked_sub(5)
                         .map(|v| v as usize)
                         .filter(|i| *i < settings.presets.len())
                     {

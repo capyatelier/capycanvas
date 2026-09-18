@@ -204,8 +204,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
         &[CommandId::Histogram],
-        &[CommandId::SdrRendition, CommandId::PreviewSdr],
-        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning],
+        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::PreviewSdr],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
@@ -784,8 +783,8 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::SdrRendition => "SDR Rendition…",
-            Self::PreviewSdr => "Preview on SDR Display",
+            Self::SdrRendition => "SDR Appearance…",
+            Self::PreviewSdr => "Preview SDR",
             Self::SoftProofSetup => "Proof Setup…",
             Self::SoftProof => "Proof Colors",
             Self::GamutWarning => "Gamut Warning",
@@ -938,6 +937,8 @@ pub struct UiState {
     /// Temporary viewing choices, excluded from document and workspace saving.
     pub soft_proof: bool,
     pub preview_sdr: bool,
+    pub hdr_display_available: bool,
+    pub sdr_appearance_preview: Option<layer_core::color::hdr::SdrRendition>,
     pub gamut_warning: bool,
     pub revision: u64,
     /// Observed native/browser window state; never stored in workspace preferences.

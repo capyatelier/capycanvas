@@ -236,7 +236,16 @@ mod allocation {
                             .upgrade()
                             .map_or(HEADER_HEIGHT, |w| w.header.height()),
                     }),
-                    Slot::Status => Some(resolved.status),
+                    Slot::Status => {
+                        // HDR/proof status remains operable when the optional
+                        // zoom/rotation HUD is hidden. Measure native buttons.
+                        let mut bounds = resolved.status;
+                        let height = child.measure(gtk::Orientation::Vertical, bounds.width as i32).1 as f32;
+                        let extra = (height - bounds.height).max(0.);
+                        bounds.y -= extra;
+                        bounds.height += extra;
+                        Some(bounds)
+                    },
                     Slot::Drawer(id) | Slot::DrawerShadow(id) => {
                         drawers.iter().find(|(i, _)| i == id).map(|(_, d)| d.bounds)
                     }
@@ -797,7 +806,7 @@ pub struct Workspace {
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
-    pub(crate) hdr_status: gtk::Label,
+    pub(crate) hdr_status: gtk::Button,
     pub(crate) recovery: Rc<crate::recovery::Recovery>,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
@@ -921,7 +930,8 @@ impl Workspace {
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let proof = crate::proof_view::ProofView::new();
         status_bar.append(&proof.label);
-        let hdr_status=gtk::Label::builder().visible(false).build();
+        let hdr_status=gtk::Button::builder().visible(false).build();
+        hdr_status.add_css_class("flat");
         hdr_status.set_widget_name("hdr-view-status");
         hdr_status.add_css_class("status-bubble");
         status_bar.append(&hdr_status);
@@ -1055,6 +1065,7 @@ impl Workspace {
             input: Rc::default(),
             tooltips: Rc::default(),
         });
+        this.hdr_status.connect_clicked(glib::clone!(#[weak] this, move |_| crate::hdr::display_details(&this)));
         this.apply_palette(Settings::default().palette(
             if adw::StyleManager::default().is_dark() {
                 Theme::Dark
@@ -1630,7 +1641,7 @@ impl Workspace {
     pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
         self.gpu.borrow().as_ref().map_or(Default::default(), |g| {
             let document = g.session.engine().document();
-            g.session.engine().backend().view_color.with_rendition(document.color, document.sdr_rendition)
+            g.session.engine().backend().view_color.with_rendition(document.color, g.session.effective_sdr_rendition())
         })
     }
     pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
@@ -1734,16 +1745,19 @@ impl Workspace {
     }
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
-            Ok(change) => {
+            Ok(mut change) => {
                 if let Some(g) = self.gpu.borrow_mut().as_mut() {
-                    let document = g.session.engine().document();
-                    let rendition = document.color.depth.is_float().then_some(document.sdr_rendition);
-                    self.hdr_status.set_visible(rendition.is_some());
-                    let preview = g.session.state().preview_sdr;
+                    let hdr = g.session.engine().document().color.depth.is_float();
+                    let rendition = hdr.then(|| g.session.effective_sdr_rendition());
+                    let proof = g.session.state().soft_proof || g.session.state().gamut_warning;
+                    self.hdr_status.set_visible(hdr && !proof);
+                    let preview = g.session.state().preview_sdr || g.session.state().sdr_appearance_preview.is_some();
                     let headroom = g.session.renderer_mut().display_headroom;
-                    self.hdr_status.set_label(&if preview { "HDR · SDR preview".into() } else if headroom > 1. { format!("HDR · {headroom:.1}× display headroom") } else { "HDR · mapped SDR display".into() });
-                    self.hdr_status.set_tooltip_text(Some("HDR data retained. Display headroom uses the compositor's current luminance hint. Unknown or SDR displays show the saved SDR rendition; print proof always uses that rendition."));
+                    if g.session.set_hdr_display_available(headroom > 1.) { change.regions |= regions::COMMANDS; }
+                    self.hdr_status.set_label(if preview && headroom > 1. { "SDR preview" } else if headroom > 1. { "HDR" } else { "Showing SDR" });
+                    self.hdr_status.set_tooltip_text(Some("Display details"));
                     if let Err(e) = g.session.renderer_mut().set_hdr_view(rendition, preview) { eprintln!("HDR viewing: {e}"); }
+
                 }
                 self.proof.sync(self);
                 let publication = self
@@ -2135,7 +2149,7 @@ impl Workspace {
             self.tool_settings.refresh(self, &state);
             self.placement_actions.refresh(&state);
         }
-        if regions & regions::BRUSH != 0 {
+        if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
             self.color_panel.refresh(&state.colors, self.view_color());
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);

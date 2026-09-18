@@ -248,6 +248,8 @@ pub struct LayerPropertiesView {
     pub description: String,
     pub enabled: bool,
     pub controls: Vec<PropertyControl>,
+    /// Linear input/output range for HDR curve axes; absent for encoded curves.
+    pub curve_max: Option<f32>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PropertyControl {
@@ -323,6 +325,7 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
         return LayerPropertiesView::default();
     };
     let mut controls = Vec::new();
+    let mut curve_max = None;
     let description = if let Some(effect) = &layer.effect {
         controls.extend(
             effect
@@ -332,6 +335,24 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
                 .zip(&effect.values)
                 .map(|(p, v)| control(p, v.clone())),
         );
+        if effect.program.id.as_ref() == "curves" {
+            let linear = effect.value("domain") == Some(&EffectValue::Choice(1));
+            if linear {
+                if let Some(EffectValue::Number(stops)) = effect.value("hdr_stops") { curve_max = Some(stops.exp2()); }
+            }
+            controls.retain(|c| match c.key.as_str() {
+                "domain" => doc.color.depth.is_float() || linear,
+                "hdr_stops" => linear,
+                _ => true,
+            });
+            for c in &mut controls {
+                if matches!(c.key.as_str(), "domain" | "hdr_stops") {
+                    c.section = Some("Advanced".into());
+                    // Older masters embed their original parameter labels.
+                    c.label = if c.key == "domain" { "Curve space" } else { "HDR range" }.into();
+                }
+            }
+        }
         effect.program.label.to_string()
     } else {
         let mut numeric = NumericControl::percent();
@@ -369,6 +390,7 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
         description,
         enabled: !doc.is_locked(layer.id),
         controls,
+        curve_max,
     }
 }
 pub(super) struct EffectGesture {

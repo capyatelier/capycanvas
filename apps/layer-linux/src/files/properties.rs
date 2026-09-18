@@ -42,10 +42,10 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
                 Ok::<_, String>((
                     name,
                     format!(
-                        "{} × {} px · {}-bit {channels}\n{profile}{assumed}",
+                        "{} × {} px · {} · {channels}\n{profile}{assumed}",
                         source.extent[0],
                         source.extent[1],
-                        interpretation.depth.bits()
+                        interpretation.depth.label()
                     ),
                 ))
             })
@@ -90,7 +90,7 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
             },
         ),
     );
-    add(&group, "Bit depth", &format!("{}-bit", color.depth.bits()));
+    add(&group, "Bit depth", color.depth.label());
     body.append(&group);
     if !sources.is_empty() {
         let group = adw::PreferencesGroup::builder()
@@ -114,8 +114,9 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         .build();
     dialog.set_widget_name("document-properties-dialog");
     dialog.add_response("done", "Done");
+    if color.depth.is_float() { dialog.add_response("appearance", "SDR Appearance…"); }
     dialog.set_close_response("done");
     dialog.set_default_response(Some("done"));
-    crate::alert::choose(dialog, &w.window).await;
+    if crate::alert::choose(dialog, &w.window).await == "appearance" { crate::hdr::configure(w).await?; }
     Ok(true)
 }

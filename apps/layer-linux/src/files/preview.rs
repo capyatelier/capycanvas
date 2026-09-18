@@ -8,6 +8,7 @@ struct Image {
     extent: [u32; 2],
     bytes: Vec<u8>,
     clipped: Option<u64>,
+    hdr: bool,
 }
 fn thumbnail(
     gpu: &SnapshotGpu,
@@ -21,6 +22,16 @@ fn thumbnail(
     let mut renderer =
         gpu.capture(project, background, time, Default::default(), control)
             .map_err(|e| e.to_string())?;
+    let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
+    let mut hdr_clipped = None;
+    if let Some(recipe) = output.as_ref().filter(|r| r.format.is_hdr()) {
+        renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
+        let count = renderer.inspect_hdr_output()?.clipped_channels;
+        if count > 0 && !recipe.format.maps_hdr_range() {
+            return Err("Some colors exceed HDR PNG’s range. Adjust the artwork or enable ‘Clip out-of-range colors’ in Advanced.".into());
+        }
+        hdr_clipped = Some(count);
+    }
     let (preview, clipped) = if let Some(recipe) = output.filter(|r| !r.format.is_hdr()) {
         recipe.validate()?;
         renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
@@ -33,7 +44,7 @@ fn thumbnail(
         )?;
         (preview, Some(statistics.clipped_channels))
     } else {
-        (renderer.preview_document([220, 160], view.space())?, None)
+        (renderer.preview_document([220, 160], view.space())?, hdr_clipped)
     };
     let mut bytes = Vec::with_capacity(preview.pixels.len() * 4);
     // Match the canvas's linear alpha-over-checker. Opaque, tagged bytes keep
@@ -52,6 +63,7 @@ fn thumbnail(
         extent: preview.extent,
         bytes,
         clipped,
+        hdr,
     })
 }
 
@@ -70,6 +82,7 @@ pub(super) struct Comparison {
     view: crate::display_color::ViewColor,
     before: gtk::Picture,
     after: gtk::Picture,
+    labels: [gtk::Label; 2],
     pub status: gtk::Label,
     original: RefCell<Option<Project>>,
     pending: RefCell<Option<Pending>>,
@@ -96,20 +109,27 @@ impl Comparison {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
-        let make = |label: &str, name: &str| {
+        pictures.set_halign(gtk::Align::Center);
+        let labels = labels.map(|label| gtk::Label::new(Some(label)));
+        let make = |label: &gtk::Label, name: &str| {
             let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
             let picture = gtk::Picture::new();
             picture.set_widget_name(name);
-            picture.set_alternative_text(Some(label));
+            picture.set_alternative_text(Some(&label.text()));
             picture.set_can_shrink(true);
             picture.set_size_request(160, 100);
-            column.append(&gtk::Label::new(Some(label)));
-            column.append(&picture);
+            column.append(label);
+            // Measure a bounded preview area, not the image's height-for-width
+            // request at the entire dialog width. Contain retains all edges.
+            let preview = gtk::Overlay::new();
+            preview.set_child(Some(&gtk::DrawingArea::builder().content_width(160).content_height(120).build()));
+            preview.add_overlay(&picture);
+            column.append(&preview);
             pictures.append(&column);
             picture
         };
-        let before = make(labels[0], "color-preview-before");
-        let after = make(labels[1], "color-preview-after");
+        let before = make(&labels[0], "color-preview-before");
+        let after = make(&labels[1], "color-preview-after");
         let status = gtk::Label::builder()
             .label("Choose a profile to preview the complete canvas.")
             .wrap(true)
@@ -124,6 +144,7 @@ impl Comparison {
             widget,
             before,
             after,
+            labels,
             status,
             original: RefCell::new(Some(original)),
             pending: RefCell::new(None),
@@ -164,6 +185,9 @@ impl Comparison {
         self.request_image(project, background, time, None);
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
+        self.labels[0].parent().unwrap().set_visible(!recipe.format.is_hdr());
+        let labels = if recipe.format.is_hdr() { ["SDR master preview", "SDR preview"] } else { ["Master", "Output"] };
+        for (label, text) in self.labels.iter().zip(labels) { label.set_label(text); }
         self.request_image(
             snapshot.project.clone(),
             snapshot.background,
@@ -205,7 +229,7 @@ impl Comparison {
                 let view = this.view;
                 let gpu = this.gpu.clone();
                 let result = gio::spawn_blocking(move || {
-                    let before = original
+                    let before = original.filter(|_| !next.output.as_ref().is_some_and(|r| r.format.is_hdr()))
                         .map(|project| {
                             thumbnail(
                                 &gpu,
@@ -245,11 +269,11 @@ impl Comparison {
                             set(&this.before, before);
                             this.original.borrow_mut().take();
                         }
-                        let description = match after.clipped {
+                        let description = if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
                             Some(0) => "Output preview",
                             Some(_) => "Output preview · some colors exceed the output gamut",
                             None => "Complete canvas",
-                        };
+                        } };
                         set(&this.after, after);
                         this.status
                             .set_label(&format!("{description} · {} view", view.space().name()));

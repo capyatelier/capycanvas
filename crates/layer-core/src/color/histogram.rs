@@ -42,6 +42,17 @@ pub struct Histogram {
     luminance: [f64; 3],
 }
 impl Histogram {
+    /// Positive HDR bins shown by an inspector. Keep white and nearby stops in
+    /// view; expand to include occupied tails. Bin zero has a separate count.
+    pub fn plot_bins(&self) -> std::ops::Range<usize> {
+        if !self.color.depth.is_float() { return 0..BINS; }
+        let occupied = |i| self.channels.iter().any(|c| c.bins[i] > 0);
+        let first = (1..BINS).find(|&i| occupied(i)).unwrap_or(hdr_bin(1.));
+        let last = (1..BINS).rev().find(|&i| occupied(i)).unwrap_or(hdr_bin(1.));
+        let low = hdr_bin_stops(first).floor().min(-4.).max(-12.);
+        let high = (hdr_bin_stops(last).ceil() + 1.).max(2.).min(16.);
+        hdr_bin(2f64.powf(low))..(hdr_bin(2f64.powf(high)) + 1).min(BINS)
+    }
     pub fn new(color: DocumentColor) -> Self {
         Self {
             color,
@@ -92,14 +103,29 @@ impl Histogram {
 
 /// Bin 0 counts nonpositive channels; remaining bins cover -12..+16 stops
 /// relative to portable reference white. `above` still reports above-white data.
-fn hdr_bin(linear: f64) -> usize {
+pub fn hdr_bin(linear: f64) -> usize {
     if linear <= 0. { 0 } else { 1 + (((linear.log2()+12.)/28.).clamp(0.,1.)*254.).floor() as usize }
 }
+/// Lower stop boundary of a positive HDR bin.
+pub fn hdr_bin_stops(bin: usize) -> f64 { (bin.saturating_sub(1) as f64 / 254.) * 28. - 12. }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::color::{SampleDepth, RgbSpace};
 
+    #[test]
+    fn fitted_hdr_axis_contains_all_positive_bins_and_white() {
+        let mut h = Histogram::new(DocumentColor { depth: SampleDepth::F16, ..Default::default() });
+        for values in [[-2., 0., 1., 1.], [0.000001, 8., 65504., 1.]] {
+            h.add(&[values]).unwrap();
+            let range = h.plot_bins();
+            assert!(range.contains(&hdr_bin(1.)));
+            for channel in &h.channels { for (i, count) in channel.bins.iter().enumerate().skip(1) {
+                if *count > 0 { assert!(range.contains(&i)); }
+            }}
+        }
+        assert_eq!(Histogram::new(DocumentColor::default()).plot_bins(), 0..BINS);
+    }
     #[test]
     fn native_codes_transparency_and_strip_partition_do_not_change_distributions() {
         for space in RgbSpace::ALL {

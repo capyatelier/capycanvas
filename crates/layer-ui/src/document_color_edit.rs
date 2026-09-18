@@ -3,13 +3,33 @@ use super::*;
 use layer_core::{ColorTransition, PreparedColorTransition, Project};
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn effective_sdr_rendition(&self) -> layer_core::color::hdr::SdrRendition {
+        self.state.sdr_appearance_preview.unwrap_or(self.engine.document().sdr_rendition)
+    }
+    pub fn preview_sdr_appearance(&mut self, recipe: Option<layer_core::color::hdr::SdrRendition>) -> Result<UiChange, String> {
+        if let Some(recipe) = recipe {
+            self.require_document_idle()?;
+            if !self.engine.document().color.depth.is_float() { return Err("SDR appearance requires HDR artwork".into()); }
+            recipe.validate().map_err(str::to_string)?;
+        }
+        self.state.sdr_appearance_preview = recipe;
+        self.refresh_commands();
+        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+    }
+    pub fn set_hdr_display_available(&mut self, available: bool) -> bool {
+        if self.state.hdr_display_available == available { return false; }
+        self.state.hdr_display_available = available;
+        self.refresh_commands();
+        true
+    }
+
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
         self.require_document_idle()?;
         if !self.engine.document().color.depth.is_float() { return Err("SDR rendition settings require HDR artwork".into()); }
         recipe.validate().map_err(str::to_string)?;
         if recipe != self.engine.document().sdr_rendition { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
         self.refresh_document(); self.refresh_commands();
-        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
 
     /// A host validates the actual bidirectional ICC transform before publishing

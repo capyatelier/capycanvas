@@ -76,6 +76,16 @@ pub struct NewDocumentPreset {
     pub options: NewDocumentOptions,
 }
 impl NewDocumentPreset {
+    pub fn builtins_for(platform: crate::Platform) -> Vec<Self> {
+        let mut presets = Self::builtins().to_vec();
+        if platform == crate::Platform::Gtk {
+            presets.push(Self { name: "HDR drawing".into(), options: NewDocumentOptions {
+                color: DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 },
+                ..Default::default()
+            }});
+        }
+        presets
+    }
     pub fn builtins() -> [Self; 3] {
         [
             ("Standard drawing", RgbSpace::Srgb, SampleDepth::U8),

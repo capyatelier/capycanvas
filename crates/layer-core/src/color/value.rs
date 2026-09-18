@@ -82,6 +82,36 @@ impl RgbColor {
         Ok(rgba)
     }
 
+    /// HDR brightness does not put a color outside chromatic gamut. Negative
+    /// components still indicate a chromaticity outside the destination primaries.
+    pub fn in_hdr_gamut(self, destination: RgbSpace) -> Result<bool, String> {
+        let p = self.linear_in(destination)?;
+        let tolerance = p[..3].iter().copied().fold(1., f32::max) * 1e-6;
+        Ok(p[..3].iter().all(|v| *v >= -tolerance))
+    }
+
+    /// Peak-channel brightness relative to reference white; black has no EV.
+    pub fn brightness_ev(self, destination: RgbSpace) -> Result<Option<f32>, String> {
+        let p = self.linear_in(destination)?;
+        let peak = p[..3].iter().copied().fold(0., f32::max);
+        Ok((peak > 0.).then(|| peak.log2()))
+    }
+
+    pub fn with_brightness_ev(self, destination: RgbSpace, stops: f32) -> Result<Self, String> {
+        if !stops.is_finite() || !(-16. ..=15.).contains(&stops) {
+            return Err("Brightness must be between −16 and +15 EV".into());
+        }
+        let mut p = self.linear_in(destination)?;
+        let peak = p[..3].iter().copied().fold(0., f32::max);
+        if peak <= 0. { return Err("Choose a color brighter than black first".into()); }
+        let scale = stops.exp2() / peak;
+        for v in &mut p[..3] { *v *= scale; }
+        if p[..3].iter().any(|v| !v.is_finite() || v.abs() > 65504.) {
+            return Err("Color exceeds HDR storage range".into());
+        }
+        Self::from_linear(destination, p)
+    }
+
     /// Allow only conversion roundoff at a boundary, below half an integer16
     /// code. This reports gamut; it never alters the selected color.
     pub fn in_gamut(self, destination: RgbSpace) -> Result<bool, String> {
@@ -94,6 +124,22 @@ impl RgbColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdr_brightness_preserves_chromaticity_alpha_and_separates_gamut() {
+        let color = RgbColor::from_linear(RgbSpace::Srgb, [8., 2., 1., 0.25]).unwrap();
+        assert!(color.in_hdr_gamut(RgbSpace::Srgb).unwrap());
+        assert!(!color.in_gamut(RgbSpace::Srgb).unwrap());
+        assert!((color.brightness_ev(RgbSpace::Srgb).unwrap().unwrap() - 3.).abs() < 1e-6);
+        let brighter = color.with_brightness_ev(RgbSpace::Srgb, 4.).unwrap().linear_in(RgbSpace::Srgb).unwrap();
+        for (a, b) in brighter.into_iter().zip([16., 4., 2., 0.25]) { assert!((a-b).abs() < 2e-5); }
+        let red = RgbColor::from_linear(RgbSpace::DisplayP3, [8., 0., 0., 1.]).unwrap();
+        assert!(!red.in_hdr_gamut(RgbSpace::Srgb).unwrap());
+        assert!(red.in_hdr_gamut(RgbSpace::DisplayP3).unwrap());
+        assert!(RgbColor::BLACK.brightness_ev(RgbSpace::Srgb).unwrap().is_none());
+        assert!(RgbColor::BLACK.with_brightness_ev(RgbSpace::Srgb, 1.).is_err());
+        assert!(color.with_brightness_ev(RgbSpace::Srgb, f32::NAN).is_err());
+    }
 
     #[test]
     fn p3_red_keeps_extended_srgb_and_low_alpha() {

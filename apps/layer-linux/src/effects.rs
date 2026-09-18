@@ -546,6 +546,7 @@ impl EffectPanels {
             }
             if let Some(layer) = view.layer {
                 let mut section = None;
+                let mut target = self.body.clone();
                 for (index, control) in view.controls.iter().enumerate() {
                     if section != control.section.as_deref() {
                         if index > 0 {
@@ -554,7 +555,12 @@ impl EffectPanels {
                             self.body.append(&divider);
                         }
                         section = control.section.as_deref();
-                        if let Some(text) = section {
+                        target = self.body.clone();
+                        if section == Some("Advanced") {
+                            target = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                            let expander = gtk::Expander::builder().label("Advanced").child(&target).build();
+                            self.body.append(&expander);
+                        } else if let Some(text) = section {
                             let heading = gtk::Label::new(Some(text));
                             heading.set_xalign(0.);
                             heading.add_css_class("heading");
@@ -580,7 +586,7 @@ impl EffectPanels {
                             input.connect_value_changed(move |i| {
                                 dispatch(EffectValue::Number(i.value() as f32))
                             });
-                            self.body.append(&input);
+                            target.append(&input);
                             Field::Number(input)
                         }
                         PropertyKind::Toggle => {
@@ -589,7 +595,7 @@ impl EffectPanels {
                             input.connect_active_notify(move |i| {
                                 dispatch(EffectValue::Toggle(i.is_active()))
                             });
-                            self.body.append(&row(&control.label, &input));
+                            target.append(&row(&control.label, &input));
                             Field::Toggle(input)
                         }
                         PropertyKind::Choice { options } => {
@@ -599,14 +605,14 @@ impl EffectPanels {
                             input.connect_selected_notify(move |i| {
                                 dispatch(EffectValue::Choice(i.selected()))
                             });
-                            self.body.append(&row(&control.label, &input));
+                            target.append(&row(&control.label, &input));
                             Field::Choice(input)
                         }
                         PropertyKind::Color => {
                             let input = crate::color_editor::ColorButton::new();
                             input.widget.set_widget_name(&format!("effect-color-{}", control.key));
                             input.bind(w, move |_, color| dispatch(EffectValue::Color(color)));
-                            self.body.append(&row(&control.label, &input.widget));
+                            target.append(&row(&control.label, &input.widget));
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {
@@ -616,7 +622,7 @@ impl EffectPanels {
                         }
                         PropertyKind::Gradient => {
                             let input = GradientEditor::new(w, layer, &control.key);
-                            self.body.append(&input.root);
+                            target.append(&input.root);
                             Field::Gradient(input)
                         }
                     };
@@ -634,6 +640,7 @@ impl EffectPanels {
                 }
                 (Field::Curve(i), EffectValue::Curve(p)) => {
                     *i.points.borrow_mut() = p.clone();
+                    i.range.set(view.curve_max);
                     i.root.queue_draw();
                 }
                 (Field::Gradient(i), EffectValue::Gradient(stops)) => i.update(stops),
@@ -867,6 +874,7 @@ impl GradientEditor {
 struct CurveEditor {
     root: gtk::DrawingArea,
     points: Rc<RefCell<Vec<[f32; 2]>>>,
+    range: Rc<Cell<Option<f32>>>,
 }
 impl CurveEditor {
     fn new(w: &Rc<Workspace>, layer: u64, key: &str) -> Self {
@@ -879,9 +887,12 @@ impl CurveEditor {
             "Drag points to shape the curve. Click to add; right-click to remove.",
         ));
         let points = Rc::new(RefCell::new(vec![[0., 0.], [1., 1.]]));
+        let range = Rc::new(Cell::new(None::<f32>));
         root.set_draw_func(glib::clone!(
             #[strong]
             points,
+            #[strong]
+            range,
             move |area, cr, width, height| {
                 let (width, height) = (width as f64, height as f64);
                 let c = area.color();
@@ -897,6 +908,23 @@ impl CurveEditor {
                     cr.line_to(width, t * height);
                 }
                 cr.stroke().ok();
+                cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 0.7);
+                cr.set_font_size(11.);
+                if let Some(peak) = range.get() {
+                    let white = 1. / f64::from(peak);
+                    cr.set_dash(&[3., 3.], 0.);
+                    cr.move_to(white * width, 0.); cr.line_to(white * width, height);
+                    cr.move_to(0., (1. - white) * height); cr.line_to(width, (1. - white) * height);
+                    cr.stroke().ok(); cr.set_dash(&[], 0.);
+                    cr.move_to(5., 13.); let _ = cr.show_text("SDR white · 0 EV");
+                    let label = format!("{peak:.0} · +{:.0} EV", peak.log2());
+                    let label_width = cr.text_extents(&label).map_or(70., |e| e.x_advance());
+                    cr.move_to((width - label_width - 5.).max(5.), height - 5.);
+                    let _ = cr.show_text(&label);
+                } else {
+                    cr.move_to(5., 13.); let _ = cr.show_text("Output");
+                    cr.move_to(width - 40., height - 5.); let _ = cr.show_text("Input");
+                }
                 let p = points.borrow();
                 cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 1.);
                 cr.set_line_width(1.5);
@@ -1035,6 +1063,6 @@ impl CurveEditor {
             }
         ));
         root.add_controller(remove);
-        Self { root, points }
+        Self { root, points, range }
     }
 }

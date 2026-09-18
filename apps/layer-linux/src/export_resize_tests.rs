@@ -390,7 +390,11 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     let settings = state(&w).settings.clone();
     let widget =
         |name: &str| find_named(w.window.visible_dialog().unwrap().upcast_ref(), name).unwrap();
-    let press = |name: &str| click(&widget(name).downcast::<gtk::Button>().unwrap());
+    let press = |name: &str| {
+        widget("export-manage-presets").downcast::<gtk::Expander>().unwrap().set_expanded(true);
+        pump(100);
+        click(&widget(name).downcast::<gtk::Button>().unwrap());
+    };
     let wait_saved = || {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {

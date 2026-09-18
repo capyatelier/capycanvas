@@ -27,7 +27,7 @@ impl ExportFormat {
         match self {
             Self::Png => "PNG image",
             Self::PngHdr => "HDR PNG · BT.2020 PQ",
-            Self::PngHdrMapped => "HDR PNG · map to BT.2020 PQ range",
+            Self::PngHdrMapped => "HDR PNG · clipped to PQ range",
             Self::Tiff => "TIFF image",
             Self::Jpeg => "JPEG image",
         }
@@ -298,9 +298,9 @@ impl ExportRecipe {
         if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
         if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
         ExportDraft {
-            formats: if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
-            depths: if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
-            backgrounds: if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
+            formats: if self.format.is_hdr() { vec![ExportFormat::PngHdr] } else if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
+            depths: if self.format.is_hdr() { vec![SampleDepth::U16] } else if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
+            backgrounds: if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
             dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
             recipe: self,
         }
@@ -343,7 +343,7 @@ impl ExportForm {
                 ("Web / Share", ExportRecipe::web_share()),
                 ("Wide-color image", ExportRecipe::wide_color()),
                 (
-                    "Further editing",
+                    if document.color.depth.is_float() { "Further editing (SDR)" } else { "Further editing" },
                     ExportRecipe::further_editing(document.color),
                 ),
             ],
@@ -355,6 +355,22 @@ impl ExportForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hdr_choices_describe_only_the_fixed_delivery_contract() {
+        for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped] {
+            let draft = ExportRecipe::web_share().draft(ExportDraftAction::Format(format));
+            assert_eq!(draft.formats, [ExportFormat::PngHdr]);
+            assert_eq!(draft.depths, [SampleDepth::U16]);
+            assert_eq!(draft.backgrounds, [ExportBackground::Preserve]);
+            assert_eq!(draft.dithers, [layer_core::color::OutputDither::None]);
+            assert_eq!(draft.recipe.format, format);
+            draft.recipe.validate().unwrap();
+        }
+        let sdr = ExportRecipe::web_share().draft(ExportDraftAction::Refresh);
+        assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]);
+        assert_eq!(sdr.depths, [SampleDepth::U8, SampleDepth::U16]);
+    }
+
     #[test]
     fn draft_transitions_keep_supported_depth_alpha_and_dither_choices() {
         let mut recipe = ExportRecipe::further_editing(DocumentColor::default());

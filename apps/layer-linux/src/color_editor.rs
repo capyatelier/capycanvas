@@ -22,6 +22,7 @@ struct Form {
     preview: ColorPatch,
     view: ViewColor,
     space: RgbSpace,
+    hdr: bool,
 }
 impl Form {
     fn populate(&self) {
@@ -48,15 +49,16 @@ impl Form {
         match self.editor.borrow().color() {
             Ok(color) => {
                 let mut text = format!("Defined in {}", color.space.name());
-                if !color.in_gamut(self.space).unwrap() {
+                if !if self.hdr { color.in_hdr_gamut(self.space) } else { color.in_gamut(self.space) }.unwrap() {
                     text.push_str(" · Outside document gamut");
                 }
-                if !color.in_gamut(self.view.space()).unwrap() {
+                if !if self.hdr { color.in_hdr_gamut(self.view.space()) } else { color.in_gamut(self.view.space()) }.unwrap() {
                     text.push_str(&format!(
                         " · Outside {} preview gamut",
                         self.view.space().name()
                     ));
                 }
+                if self.hdr && color.brightness_ev(self.space).unwrap().is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
@@ -98,21 +100,23 @@ pub fn choose(
     definition: RgbColor,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor) + 'static,
 ) {
-    let Some((space, epoch)) = workspace.gpu.borrow().as_ref().map(|g| {
+    let Some((space, epoch, hdr)) = workspace.gpu.borrow().as_ref().map(|g| {
         (
             g.session.state().colors.rgb_space(),
             g.session.state().document_file.epoch,
+            g.session.engine().document().color.depth.is_float(),
         )
     }) else {
         return;
     };
-    let editor = match ColorEditor::new(definition, space) {
+    let mut editor = match ColorEditor::new(definition, space) {
         Ok(editor) => editor,
         Err(error) => {
             workspace.changed(Err(error));
             return;
         }
     };
+    if hdr { editor.set_model(ColorInputModel::LinearRgb).unwrap(); }
     let dialog = adw::AlertDialog::builder()
         .heading("Edit Color")
         .content_width(400)
@@ -166,6 +170,7 @@ pub fn choose(
         preview,
         view: workspace.view_color(),
         space,
+        hdr,
     });
     for (i, row) in form.fields.iter().enumerate() {
         let weak = Rc::downgrade(&form);

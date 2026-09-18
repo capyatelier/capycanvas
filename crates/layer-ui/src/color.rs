@@ -71,6 +71,7 @@ pub enum ColorWheelPart {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ColorAction {
+    Brightness { stops: f32 },
     SetSlot { slot: ColorSlot, color: RgbColor },
     Library { action: ColorLibraryAction },
     /// The definition is retained even when outside the document/display gamut.
@@ -592,6 +593,7 @@ impl ColorState {
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
         match action {
+            ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev(self.rgb_space, stops)?)?,
             ColorAction::SetSlot { slot, color } => {
                 if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
                 Self::validate_definition(color)?;

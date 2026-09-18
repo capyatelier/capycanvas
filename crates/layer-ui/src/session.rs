@@ -183,6 +183,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             state: UiState {
                 soft_proof: false,
                 preview_sdr: false,
+                hdr_display_available: false,
+                sdr_appearance_preview: None,
                 gamut_warning: false,
                 revision: 0,
                 fullscreen: false,
@@ -1757,7 +1759,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
-            CommandId::SdrRendition | CommandId::PreviewSdr => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProof => document.proof.is_some()
                 || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
@@ -2470,7 +2473,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::Color { action } => {
+                if matches!(action, ColorAction::Brightness { .. }) && !self.engine.document().color.depth.is_float() {
+                    return Err("HDR brightness requires an HDR drawing".into());
+                }
+                // Hue changes retain the selected HDR brightness. Field/value
+                // picking remains an explicit choice of a new brightness.
+                let brightness = if self.engine.document().color.depth.is_float() && matches!(action,
+                    ColorAction::PickWheel { part: ColorWheelPart::Hue, .. } |
+                    ColorAction::Component { index: 0, .. }) {
+                    self.state.colors.definition().brightness_ev(self.state.colors.rgb_space())?.filter(|v| *v > 0.)
+                } else { None };
                 self.state.colors.apply(action)?;
+                if let Some(stops) = brightness { self.state.colors.apply(ColorAction::Brightness { stops })?; }
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
@@ -13871,8 +13885,7 @@ mod tests {
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
                 ["histogram"],
-                ["sdr_rendition", "preview_sdr"],
-                ["soft_proof_setup", "soft_proof", "gamut_warning"],
+                ["soft_proof_setup", "soft_proof", "gamut_warning", "preview_sdr"],
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],

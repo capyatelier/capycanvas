@@ -53,6 +53,18 @@ impl Default for SdrRendition {
     }
 }
 impl SdrRendition {
+    /// User-facing highlight adjustment: neutral at the default shoulder;
+    /// increasing it retains brighter highlights, decreasing it compresses more.
+    pub fn highlights(self) -> f32 {
+        ((self.knee - 0.75) / if self.knee < 0.75 { 0.5 } else { 0.2 } * 100.).clamp(-100., 100.)
+    }
+    pub fn from_appearance(exposure: f32, contrast: f32, highlights: f32) -> Result<Self, &'static str> {
+        if !highlights.is_finite() || !(-100. ..=100.).contains(&highlights) { return Err("Highlights must be between -100 and 100"); }
+        let result = Self { exposure, contrast, knee: (0.75 + highlights / 100. * if highlights < 0. { 0.5 } else { 0.2 }).clamp(0.25, 0.95) };
+        result.validate()?;
+        Ok(result)
+    }
+
     pub fn validate(self) -> Result<(), &'static str> {
         if !self.exposure.is_finite()
             || !(-12. ..=12.).contains(&self.exposure)
@@ -104,6 +116,17 @@ pub fn pq_encode(nits: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appearance_highlights_roundtrip_and_direction() {
+        for highlights in [-100., -50., 0., 50., 100.] {
+            let recipe = SdrRendition::from_appearance(0., 1., highlights).unwrap();
+            assert!((recipe.highlights() - highlights).abs() < 0.0001);
+            let previous = SdrRendition::from_appearance(0., 1., (highlights - 1.).max(-100.)).unwrap();
+            assert!(recipe.map_rgb([4.; 3])[0] >= previous.map_rgb([4.; 3])[0]);
+        }
+        assert_eq!(SdrRendition::from_appearance(0., 1., 0.).unwrap(), SdrRendition::default());
+        assert!(SdrRendition::from_appearance(0., 1., f32::NAN).is_err());
+    }
     #[test]
     fn every_finite_half_code_round_trips_with_subnormals_and_signed_zero() {
         for bits in 0..=u16::MAX {

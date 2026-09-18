@@ -86,6 +86,8 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
     let inspector = w.histogram.borrow().as_ref().unwrap().clone();
     assert!(!inspector.window.is_modal());
     let initial = completed(&inspector);
+    find_named(inspector.window.upcast_ref(), "histogram-details").unwrap().downcast::<gtk::Expander>().unwrap().set_expanded(true);
+    pump(100);
     assert_eq!((initial.pixels, initial.transparent), (768, 256));
     for (i, value) in [20000, 30000, 40000].into_iter().enumerate() {
         let channel = &initial.channels[i];
@@ -199,7 +201,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !label(&inspector, "histogram-status")
         .text()
-        .contains("full resolution")
+        .contains("Updating…")
     {
         pump(1);
         assert!(Instant::now() < deadline);

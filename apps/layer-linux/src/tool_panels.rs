@@ -644,6 +644,8 @@ pub struct ColorPanel {
     menu_swap: gtk::Button,
     menu_edit: gtk::Button,
     menu_library: gtk::Button,
+    brightness: crate::number_control::NumberControl,
+    edit_color: gtk::Button,
 }
 impl ColorPanel {
     pub fn new() -> Self {
@@ -654,6 +656,16 @@ impl ColorPanel {
         wheel.set_valign(gtk::Align::Fill);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
+        let brightness = crate::number_control::NumberControl::new(
+            layer_ui::NumericControl::number(-16., 15., 0.1, 2).unit("EV"), "Brightness", "");
+        brightness.set_widget_name("color-hdr-brightness");
+        root.append(&brightness);
+        let edit_color = gtk::Button::from_icon_name("document-edit-symbolic");
+        edit_color.set_tooltip_text(Some("Edit Color…"));
+        edit_color.update_property(&[gtk::accessible::Property::Label("Edit Color")]);
+        edit_color.add_css_class("flat");
+        edit_color.set_widget_name("color-edit-button");
+        brightness.first_child().unwrap().downcast::<gtk::Box>().unwrap().append(&edit_color);
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Background, "Background color"),
@@ -759,9 +771,16 @@ impl ColorPanel {
             menu_swap,
             menu_edit,
             menu_library,
+            brightness,
+            edit_color,
         }
     }
     pub fn bind(&self, workspace: &Rc<Workspace>) {
+        self.brightness.connect_value_changed(glib::clone!(#[weak] workspace, move |i| workspace.dispatch(UiAction::Color { action: ColorAction::Brightness { stops: i.value() as f32 } })));
+        self.edit_color.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
+            let slot = workspace.gpu.borrow().as_ref().map(|g| g.session.state().colors.slot);
+            if let Some(slot) = slot { crate::color_editor::show(&workspace, slot); }
+        }));
         workspace.watch_popover(self.wheel.imp().menu.borrow().as_ref().unwrap());
         for (slot, button, _) in &self.swatches {
             let slot = *slot;
@@ -960,6 +979,15 @@ impl ColorPanel {
         self.wheel.add_controller(drag);
     }
     pub fn refresh(&self, state: &ColorState, view: ViewColor) {
+        let hdr = matches!(view, ViewColor::Mapped { .. });
+        self.brightness.set_visible(hdr);
+        if hdr { self.root.reorder_child_after(&self.brightness, None::<&gtk::Widget>); }
+        else { self.root.reorder_child_after(&self.wheel, None::<&gtk::Widget>); }
+        self.edit_color.set_visible(hdr);
+        self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
+        let ev = state.definition().brightness_ev(state.rgb_space()).ok().flatten();
+        self.brightness.set_sensitive(ev.is_some() && state.slot != ColorSlot::Transparent);
+        self.brightness.set_value(f64::from(ev.unwrap_or(0.)));
         let previous_view = self.wheel.imp().view.replace(view);
         if self.initialized.replace(true) && previous_view == view && *self.wheel.imp().color.borrow() == *state {
             return;
@@ -976,7 +1004,14 @@ impl ColorPanel {
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let description = format!("{}. {}", state.gamut_description_in(view.space()), state.readout_description());
+        let gamut = if hdr {
+            let mut text = state.rgb_space().name().to_string();
+            if !state.definition().in_hdr_gamut(state.rgb_space()).unwrap() { text.push_str(" · Outside document gamut"); }
+            if !state.definition().in_hdr_gamut(view.space()).unwrap() { text.push_str(" · Outside display gamut"); }
+            if ev.is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
+            text
+        } else { state.gamut_description_in(view.space()) };
+        let description = format!("{}. {}", gamut, state.readout_description());
         self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
@@ -1017,8 +1052,8 @@ fn draw_readout(area: &gtk::DrawingArea, cr: &cairo::Context, half: f64, state: 
     cr.move_to(2., font + 1.);
     let _ = cr.show_text(state.readout_label());
     let label_width = cr.text_extents(state.readout_label()).unwrap().x_advance();
-    if !state.definition().in_gamut(view.space()).unwrap()
-        || !state.definition().in_gamut(state.rgb_space()).unwrap()
+    let gamut = |space| if matches!(view, ViewColor::Mapped { .. }) { state.definition().in_hdr_gamut(space) } else { state.definition().in_gamut(space) };
+    if !gamut(view.space()).unwrap() || !gamut(state.rgb_space()).unwrap()
     {
         // The definition remains intact. The compact marker's tooltip and
         // accessible label identify the gamut the preview cannot represent.

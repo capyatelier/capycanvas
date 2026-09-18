@@ -353,3 +353,37 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
         assert!(copy.identity.validate(&s, false, true).is_err(), "closed request must stay closed");
     }
 }
+
+#[test]
+fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
+    use layer_core::color::{SampleDepth, hdr::SdrRendition};
+    let mut document = Document::new("HDR", 32, 32);
+    document.color.depth = SampleDepth::F16;
+    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut s = UiSession::new(renderer, document, [32, 32]).unwrap();
+    s.set_platform(Platform::Gtk);
+    let original = s.engine.document().clone();
+    let checkpoint = s.engine.checkpoint();
+    assert!(!s.command(CommandId::PreviewSdr).enabled);
+    s.set_hdr_display_available(true);
+    assert!(s.command(CommandId::PreviewSdr).enabled);
+    let recipe = SdrRendition { exposure: -2., ..Default::default() };
+    s.preview_sdr_appearance(Some(recipe)).unwrap();
+    assert_eq!(s.effective_sdr_rendition(), recipe);
+    assert_eq!(s.engine.document(), &original);
+    assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition, original.sdr_rendition);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+    assert!(!s.command(CommandId::PreviewSdr).enabled);
+    s.preview_sdr_appearance(None).unwrap();
+    assert_eq!(s.effective_sdr_rendition(), original.sdr_rendition);
+    assert!(s.command(CommandId::PreviewSdr).enabled);
+    s.set_sdr_rendition(recipe).unwrap();
+    s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+    assert_eq!(s.engine.document().sdr_rendition, original.sdr_rendition);
+    s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+    assert_eq!(s.engine.document().sdr_rendition, recipe);
+    s.state.soft_proof = true; s.refresh_commands();
+    assert!(!s.command(CommandId::PreviewSdr).enabled);
+    s.state.soft_proof = false; s.set_hdr_display_available(false);
+    assert!(!s.command(CommandId::PreviewSdr).enabled);
+}

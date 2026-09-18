@@ -324,7 +324,7 @@ fn native_new_presets_and_profiled_photo_master() {
     .set_text("P3 cover");
     response(&w, "save");
     assert_eq!(state(&w).settings.new_document.presets[0].options, options);
-    assert_eq!(combo(&w, "new-document-preset").selected(), 4);
+    assert_eq!(combo(&w, "new-document-preset").selected(), 5);
     find_named(w.window.upcast_ref(), "new-document-remember")
         .unwrap()
         .downcast::<gtk::CheckButton>()
@@ -343,7 +343,7 @@ fn native_new_presets_and_profiled_photo_master() {
     assert!(!painting.document.layers[1].visible);
     assert!(location.is_none());
     invoke(&w, CommandId::NewDocument);
-    assert_eq!(combo(&w, "new-document-preset").selected(), 4);
+    assert_eq!(combo(&w, "new-document-preset").selected(), 5);
     combo(&w, "new-document-preset").set_selected(3);
     assert_eq!(combo(&w, "new-document-space").selected(), 3);
     assert_eq!(combo(&w, "new-document-depth").selected(), 1);
@@ -413,7 +413,7 @@ fn native_new_presets_and_profiled_photo_master() {
     fresh.window.destroy();
     pump(50);
     invoke(&w, CommandId::NewDocument);
-    combo(&w, "new-document-preset").set_selected(4);
+    combo(&w, "new-document-preset").set_selected(5);
     find_named(w.window.upcast_ref(), "new-document-remove-preset")
         .unwrap()
         .downcast::<gtk::Button>()

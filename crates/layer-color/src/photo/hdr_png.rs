@@ -84,6 +84,38 @@ pub(super) fn read<R: BufRead + Seek>(
     builder.finish()
 }
 
+/// The same unassociation and color conversion are used by preflight and writing.
+fn output_nits(p: &[f32; 4], to_srgb: rgb::Matrix3, to_2020: rgb::Matrix3) -> Result<[f64; 3], String> {
+    if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
+        return Err("Invalid HDR export samples".into());
+    }
+    let rgb = if p[3] > 0. { [p[0] / p[3], p[1] / p[3], p[2] / p[3]].map(f64::from) } else { [0.; 3] };
+    let nits = rgb::apply(to_2020, rgb::apply(to_srgb, rgb)).map(|v| v * f64::from(hdr::REFERENCE_WHITE_NITS));
+    if nits.iter().any(|v| !v.is_finite()) { return Err("Non-finite HDR output".into()); }
+    Ok(nits)
+}
+
+/// Full-resolution range inspection without encoding a PNG or changing samples.
+/// The row provider owns cancellation and bounded composition/resampling.
+pub fn inspect_hdr_rows(
+    extent: [u32; 2], space: RgbSpace,
+    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+) -> Result<crate::OutputStatistics, String> {
+    validate_extent(extent, 32768)?;
+    let mut statistics = crate::OutputStatistics::default();
+    let mut pixels = vec![[0.; 4]; extent[0] as usize];
+    let to_srgb = space.linear_transform(RgbSpace::Srgb);
+    let to_2020 = hdr::srgb_to_bt2020();
+    for y in 0..extent[1] {
+        read(y, &mut pixels)?;
+        for p in &pixels {
+            statistics.clipped_channels += output_nits(p, to_srgb, to_2020)?.into_iter()
+                .filter(|nits| !(0. ..=10000.).contains(nits)).count() as u64;
+        }
+    }
+    Ok(statistics)
+}
+
 /// Rows are unmodified linear-premultiplied artwork in `space`. Mapping to PQ's
 /// gamut/range is an explicit delivery choice; strict mode fails before publish.
 /// Metadata defines BT.2020 PQ in absolute nits, independently of the monitor.
@@ -124,16 +156,7 @@ pub fn write_hdr_png_rows(
         for y in 0..extent[1] {
             read(y, &mut pixels)?;
             for (p, o) in pixels.iter().zip(row.chunks_exact_mut(8)) {
-                if p.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&p[3]) {
-                    return Err("Invalid HDR export samples".into());
-                }
-                let rgb = if p[3] > 0. {
-                    [p[0] / p[3], p[1] / p[3], p[2] / p[3]].map(f64::from)
-                } else {
-                    [0.; 3]
-                };
-                let rgb = rgb::apply(to_2020, rgb::apply(to_srgb, rgb))
-                    .map(|v| v * f64::from(hdr::REFERENCE_WHITE_NITS));
+                let rgb = output_nits(p, to_srgb, to_2020)?;
                 for c in 0..3 {
                     let nits = rgb[c];
                     if !nits.is_finite() {
@@ -141,7 +164,7 @@ pub fn write_hdr_png_rows(
                     }
                     if !(0. ..=10000.).contains(&nits) {
                         if !map_out_of_range {
-                            return Err("Artwork exceeds BT.2020 PQ gamut or 10000 cd/m². Enable explicit PQ range mapping or edit the HDR colors.".into());
+                            return Err("Artwork exceeds BT.2020 PQ gamut or 10000 cd/m². Choose “Clip out-of-range colors” or adjust the HDR artwork.".into());
                         }
                         statistics.clipped_channels += 1;
                     }
@@ -162,6 +185,25 @@ pub fn write_hdr_png_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn range_inspection_agrees_with_writer_and_propagates_cancellation() {
+        for space in RgbSpace::ALL {
+            for pixel in [[8., 2., 1., 1.], [-2., 100., 0., 0.5], [400., 1., 0., 0.]] {
+                let rows = |_: u32, row: &mut [[f32; 4]]| { row.fill(pixel); Ok(()) };
+                let inspected = inspect_hdr_rows([7, 3], space, rows).unwrap();
+                let written = write_hdr_png_rows(Vec::new(), [7, 3], space, None, true, rows).unwrap();
+                assert_eq!(inspected.clipped_channels, written.clipped_channels);
+                assert_eq!(write_hdr_png_rows(Vec::new(), [7, 3], space, None, false, rows).is_ok(), inspected.clipped_channels == 0);
+            }
+        }
+        let mut rows = 0;
+        let error = inspect_hdr_rows([9, 10], RgbSpace::Srgb, |y, row| {
+            rows += 1;
+            if y == 2 { return Err("cancelled".into()); }
+            row.fill([1.; 4]); Ok(())
+        }).unwrap_err();
+        assert_eq!(error, "cancelled"); assert_eq!(rows, 3);
+    }
     #[test]
     fn pq_png_tags_normalization_alpha_and_explicit_range_mapping() {
         let pixels = [

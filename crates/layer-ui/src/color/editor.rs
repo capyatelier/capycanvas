@@ -25,7 +25,7 @@ impl ColorInputModel {
     pub fn name(self) -> &'static str {
         match self {
             Self::DocumentRgb => "Document RGB",
-            Self::LinearRgb => "Linear RGB / HDR",
+            Self::LinearRgb => "Linear RGB",
             Self::SrgbHex => "sRGB hex",
             Self::Hsv => "HSV (document RGB)",
             Self::Hls => "HLS (document RGB)",
@@ -212,9 +212,9 @@ impl ColorEditor {
     }
     pub fn description(&self) -> String {
         let mut text = format!("Document RGB: {}.", self.document_space.name());
-        if self.model == ColorInputModel::LinearRgb { text.push_str(" Linear 1 is reference white (203 cd/m² in HDR). Negative values and values above 1 are supported; alpha is separate."); }
+        if self.model == ColorInputModel::LinearRgb { text.push_str(" 1 = reference white."); }
         if self.model == ColorInputModel::SrgbHex {
-            text.push_str(" Hex uses sRGB and rounds its preview to 8-bit. An unchanged entry keeps the original color.");
+            text.push_str(" Hex uses 8-bit sRGB.");
         }
         text
     }

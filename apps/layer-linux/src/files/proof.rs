@@ -40,6 +40,9 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
         .build();
     dialog.set_widget_name("soft-proof-setup");
     dialog.add_responses(&[("cancel", "Cancel"), ("apply", "Apply")]);
+    if w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().document().color.depth.is_float()) {
+        dialog.add_response("appearance", "SDR Appearance…");
+    }
     dialog.set_response_appearance("apply", adw::ResponseAppearance::Suggested);
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("apply"));
@@ -150,6 +153,7 @@ pub(super) async fn run(w: &Rc<Workspace>) -> Result<(), String> {
     ));
     loop {
         let response = crate::alert::choose(dialog.clone(), &w.window).await;
+        if response == "appearance" { crate::hdr::configure(w).await?; continue; }
         if response != "apply" {
             return Ok(());
         }
