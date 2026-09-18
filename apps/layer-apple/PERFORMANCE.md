@@ -11,8 +11,10 @@ simulator runs omit these events and cannot establish presentation acceptance.
 
 Retained ten-minute 4K watercolor and ink sessions are recorded on each
 physical platform below, with their measured source revisions.
-Complete workload-matrix results, physical input-to-pixel evidence and calibrated
-instrumentation overhead remain required on both platforms. Following the user's
+Complete workload-matrix results and physical input-to-pixel evidence remain
+required on both platforms. The [Mac recorder comparison](#mac-recorder-overhead--2026-09-17)
+below qualifies one workload; remaining instrumentation scope includes iPad.
+Following the user's
 2026-09-11 clarification, current Mac validation targets **90 Hz (11.11 ms)**;
 Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
@@ -342,6 +344,48 @@ under the accepted rare-miss standard. It does not establish physical Pencil
 latency, recorder-off overhead, other color depths, memory pressure or current
 iPad watercolor/large-photo performance. No renderer change accompanies this
 qualification; the pending physical iPad result remains the next device step.
+
+## Mac recorder overhead — 2026-09-17
+
+Six 45-second Mac Release intervals on runtime `dcfcb5de` compare the existing
+sRGB/U8 layered-4K watercolor workload in **off, CPU-only, full, full, CPU-only,
+off** order. A private build adds the same bounded drawable-presentation observer
+and phase CPU/memory samples to every mode, including recorder-off. Production
+input, rendering, panels and recovery remain active. No compiler, GPU profiler or
+UI test overlaps the measurements. Each interval delivers 10,129–10,131 actual
+samples, with nominal thermals; all six recoveries pass the production reader.
+
+| Recorder mode | Mean process CPU over 45 seconds | Presentation interval p99 | Long intervals at 90 Hz, with 5% tolerance | Drawable acquisition-to-presentation p99 |
+| --- | --- | --- | --- | --- |
+| Off | 36.457 CPU seconds | 11.111 ms | 0.712–0.798% | 31.261–31.344 ms |
+| CPU/input/presentation only | 36.243 CPU seconds | 11.111 ms | 0.797–0.851% | 31.259–31.623 ms |
+| Full, including GPU timer | 37.985 CPU seconds | 11.111 ms | 0.664–0.798% | 41.385–41.430 ms |
+
+CPU-only recording has no resolved CPU penalty within the recorder-off repeat
+variation. Full recording uses approximately **4.2% more process CPU**, and its
+drawable-to-presentation tail grows by roughly one 90 Hz refresh despite similar
+presentation cadence. This is why cadence and scheduling delay must remain
+separate measurements. Use `CAPY_TRACE_GPU=0` for cadence acceptance and short
+GPU-enabled captures for attribution; do not apply a universal timing correction.
+Mean final footprint increases by approximately 3.0 MiB with CPU-only recording
+and 6.6 MiB with full recording. These short observations do not establish
+sustained memory behavior.
+
+The independent observer exactly matches the native trace's presentation records
+in all four recorded runs. No measured callback has zero presentation time.
+The full traces retain one startup zero-time callback each and 25/29 skipped GPU
+samples, with no invalid GPU timings, polling errors, final pending samples,
+rejected input, frame errors or recorder overflow. First/last artwork captures
+are reviewed; all owned calibration processes are closed and artist editors are
+preserved. Evidence and private observer sources are in
+`artifacts/apple-recorder-calibration-v1/`.
+
+The common observer has its own small cost. Two runs per mode do not establish
+a statistical correction, and drawable acquisition is not pen input. Trace export
+occurs after drawing and is excluded from the CPU intervals. Other workloads,
+iPad overhead, physical input-to-display latency and the pending large-brush
+Pencil acceptance remain separate. This private calibration build is not a
+replacement review or shipping-build qualification.
 
 ## Mac recorder-off recovery and idle — 2026-09-17
 
