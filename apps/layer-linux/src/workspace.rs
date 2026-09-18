@@ -1648,7 +1648,12 @@ impl Workspace {
         self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
     }
     pub(crate) fn display_description(&self) -> String {
-        let mut description = self.view_color().description().to_string();
+        let encoding = self.gpu.borrow().as_ref().and_then(|g| g.session.engine().backend().display_encoding);
+        let mut description = match encoding {
+            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "Managed BT.2020 PQ canvas. The compositor maps its color and brightness to each monitor; artwork controls use SDR previews.".to_string(),
+            Some(_) => "Managed linear scRGB canvas. The compositor maps its color and brightness to each monitor; artwork controls use SDR previews.".to_string(),
+            None => self.view_color().description().to_string(),
+        };
         if let Some(monitor) = self.window.surface().and_then(|s| s.display().monitor_at_surface(&s)) {
             if let Some(name) = monitor.description().or_else(|| monitor.model()).or_else(|| monitor.connector()) {
                 description.push_str(&format!(" Monitor: {name}."));
@@ -2004,6 +2009,9 @@ impl Workspace {
             move |_, _| this.wake()
         ));
         actions.add_action(&stopped);
+        let display = gtk::gio::SimpleAction::new("display-changed", None);
+        display.connect_activate(glib::clone!(#[weak(rename_to = this)] self, move |_, _| this.wake()));
+        actions.add_action(&display);
         self.area.insert_action_group("canvas", Some(&actions));
         self.area.connect_realize(glib::clone!(
             #[weak(rename_to = this)]

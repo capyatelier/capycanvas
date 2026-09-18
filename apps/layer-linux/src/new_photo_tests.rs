@@ -53,6 +53,22 @@ pub(super) fn chooser() -> gtk::FileChooserDialog {
         assert!(Instant::now() < deadline, "native chooser");
     }
 }
+pub(super) fn export_enabled(w: &Rc<Workspace>) -> bool {
+    find_named(w.window.visible_dialog().unwrap().upcast_ref(), "export-confirm").unwrap().is_sensitive()
+}
+pub(super) fn export_page(w: &Rc<Workspace>, tag: &str) {
+    let dialog = w.window.visible_dialog().unwrap();
+    if dialog.widget_name() != "export-options" { return; }
+    let nav = find_named(dialog.upcast_ref(), "export-navigation").unwrap().downcast::<adw::NavigationView>().unwrap();
+    if nav.visible_page_tag().as_deref() == Some(tag) { return; }
+    nav.pop_to_tag("main");
+    if tag != "main" {
+        let row = find_named(dialog.upcast_ref(), &format!("export-open-{tag}")).unwrap().downcast::<adw::ActionRow>().unwrap();
+        row.emit_by_name::<()>("activated", &[]);
+    }
+    pump(350);
+    assert_eq!(nav.visible_page_tag().as_deref(), Some(tag));
+}
 pub(super) fn combo(w: &Rc<Workspace>, name: &str) -> adw::ComboRow {
     find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
         .unwrap()
@@ -78,6 +94,11 @@ pub(super) fn profile_action(w: &Rc<Workspace>, prefix: &str, action: &str) {
 }
 
 pub(super) fn profile_action_window(window: &adw::ApplicationWindow, prefix: &str, action: &str) {
+    if prefix == "export" {
+        let dialog = window.visible_dialog().unwrap();
+        let nav = find_named(dialog.upcast_ref(), "export-navigation").unwrap().downcast::<adw::NavigationView>().unwrap();
+        if nav.visible_page_tag().as_deref() != Some("color") { nav.pop_to_tag("main"); nav.push_by_tag("color"); pump(350); }
+    }
     let menu = find_named(
         window.visible_dialog().unwrap().upcast_ref(),
         &format!("{prefix}-profile-choose"),
@@ -140,6 +161,19 @@ pub(super) fn profile_name(w: &Rc<Workspace>, name: &str) -> String {
         .into()
 }
 pub(super) fn response(w: &Rc<Workspace>, id: &str) {
+    if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {
+        export_page(w, "main");
+        let dialog = w.window.visible_dialog().unwrap();
+        let name = match id { "export" => "export-confirm", "appearance" => "export-appearance", "cancel" => "export-cancel", _ => panic!("unexpected export response: {id}") };
+        let widget = find_named(dialog.upcast_ref(), name).unwrap();
+        assert!(widget.is_sensitive());
+        assert!(widget.is_visible());
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() { click(button); }
+        else { widget.downcast::<adw::ActionRow>().unwrap().emit_by_name::<()>("activated", &[]); }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while dialog.is_mapped() { pump(20); assert!(Instant::now() < deadline); }
+        return;
+    }
     if id == "close"
         && w.window
             .visible_dialog()

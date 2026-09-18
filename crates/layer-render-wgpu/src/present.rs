@@ -295,9 +295,11 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
+                    color == SdrSurfaceColor::Bt2100Pq,
+                    crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),
                     include_str!("hdr_mapping.wgsl"),

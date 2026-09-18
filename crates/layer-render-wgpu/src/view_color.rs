@@ -1,9 +1,9 @@
 //! Display/output coordinates, independent of document depth and editing values.
 use layer_core::color::RgbSpace;
 
-/// Supported SDR surface encodings. Extended linear sRGB carries wide-gamut SDR
-/// colors to the compositor without a premature sRGB gamut clamp. It does not
-/// enable HDR editing or change document reference white.
+/// Surface encodings, independent of document storage. Extended linear sRGB
+/// carries wide-gamut SDR; scRGB and PQ additionally support negotiated HDR.
+/// Surface selection never changes the document's reference white.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SdrSurfaceColor {
     #[default]
@@ -12,6 +12,8 @@ pub enum SdrSurfaceColor {
     ExtendedLinearSrgb,
     /// Wayland Windows-scRGB: linear sRGB with RGB 1 = 80 cd/m².
     WindowsScrgb,
+    /// Full-range BT.2020 PQ; RGB 1 in the artwork remains 203 cd/m².
+    Bt2100Pq,
 }
 impl SdrSurfaceColor {
     pub fn surface_color_space(self) -> wgpu::SurfaceColorSpace {
@@ -19,6 +21,7 @@ impl SdrSurfaceColor {
             Self::Srgb => wgpu::SurfaceColorSpace::Srgb,
             Self::DisplayP3 => wgpu::SurfaceColorSpace::DisplayP3,
             Self::ExtendedLinearSrgb | Self::WindowsScrgb => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            Self::Bt2100Pq => wgpu::SurfaceColorSpace::Bt2100Pq,
         }
     }
     pub(crate) fn primaries(self) -> RgbSpace {
@@ -32,7 +35,7 @@ impl SdrSurfaceColor {
         self,
         format: wgpu::TextureFormat,
     ) -> Result<bool, crate::GpuRasterError> {
-        if matches!(self, Self::ExtendedLinearSrgb | Self::WindowsScrgb) {
+        if matches!(self, Self::ExtendedLinearSrgb | Self::WindowsScrgb | Self::Bt2100Pq) {
             if !matches!(
                 format,
                 wgpu::TextureFormat::Rgba16Float | wgpu::TextureFormat::Rgba32Float
@@ -53,6 +56,10 @@ pub(crate) fn transform(name: &str, source: RgbSpace, destination: RgbSpace) -> 
         return format!("fn {name}(rgb:vec3<f32>)->vec3<f32>{{return rgb;}}\n");
     }
     let matrix = source.linear_transform(destination);
+    matrix_shader(name, matrix)
+}
+
+pub(crate) fn matrix_shader(name: &str, matrix: layer_core::color::rgb::Matrix3) -> String {
     let row = |i: usize| {
         format!(
             "vec3<f32>({:.12},{:.12},{:.12})",

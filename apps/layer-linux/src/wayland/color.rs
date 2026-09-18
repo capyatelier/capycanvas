@@ -18,8 +18,8 @@ pub(super) use wayland_protocols::wp::color_management::v1::client::{
 #[derive(Default)]
 pub(super) struct State {
     pub(super) features: HashSet<u32>,
-    primaries: HashSet<u32>,
-    transfers: HashSet<u32>,
+    pub(super) primaries: HashSet<u32>,
+    pub(super) transfers: HashSet<u32>,
     pub(super) intents: HashSet<u32>,
     generation: u64,
     ready: Option<Result<(), String>>,

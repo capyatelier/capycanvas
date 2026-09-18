@@ -128,9 +128,8 @@ fn deliver(w: &Rc<Workspace>, directory: &std::path::Path, name: &str, format: u
     if format >= 3 {
         assert!(!combo(w, "export-depth").is_visible());
         assert!(!combo(w, "export-format").is_visible());
-        let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !dialog.is_response_enabled("export") { pump(20); assert!(Instant::now() < deadline, "HDR preflight"); }
+        while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline, "HDR preflight"); }
     }
     if format == 0 {
         combo(w, "export-depth").set_selected(0);
@@ -411,7 +410,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     ready(&restored);
     assert_eq!(pixels(&restored), painted);
     invoke(&restored, CommandId::ExportDocument);
-    combo(&restored, "export-range").set_selected(1);
+    combo(&restored, "export-range").set_selected(0);
     response(&restored, "appearance");
     let window = appearance();
     appearance_exposure(&window, -0.75);
@@ -420,7 +419,8 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&restored).document.sdr_rendition, recipe);
     let deadline = Instant::now() + Duration::from_secs(30);
     while restored.window.visible_dialog().is_none() { pump(20); assert!(Instant::now() < deadline); }
-    assert_eq!(combo(&restored, "export-range").selected(), 1);
+    assert_eq!(combo(&restored, "export-range").selected(), 0);
+    combo(&restored, "export-range").set_selected(1);
     pump(500);
     capture_ui(&restored, &directory, "hdr-export.png");
     response(&restored, "cancel"); finish(&restored);
@@ -484,19 +484,102 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     let original = snapshot(&w);
     invoke(&w, CommandId::ExportDocument);
     combo(&w, "export-range").set_selected(1);
-    let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+    let dialog = w.window.visible_dialog().unwrap();
     let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     while !status.text().contains("exceed") { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
-    assert!(!dialog.is_response_enabled("export"));
+    assert!(!super::new_photo::export_enabled(&w));
     let clip = find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().downcast::<adw::SwitchRow>().unwrap();
     clip.set_active(true);
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !dialog.is_response_enabled("export") { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
+    while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
     assert!(status.text().contains("clipped"));
     clip.set_active(false);
-    assert!(!dialog.is_response_enabled("export"), "stale successful check cannot authorize a new range choice");
+    assert!(!super::new_photo::export_enabled(&w), "stale successful check cannot authorize a new range choice");
     response(&w, "cancel"); finish(&w);
     assert_eq!(snapshot(&w), original);
+    w.window.destroy(); pump(100);
+}
+
+#[test]
+#[ignore = "Wayland display and hardware GPU; optional LAYER_EXPECT_HDR=1 physical qualification"]
+fn native_hdr_display_negotiation_and_export_navigation() {
+    let app = native_test_app("art.capycanvas.HdrDisplayNavigation");
+    let w = Workspace::with_project(&app, Some((new_drawing(192, 128).unwrap(), None)));
+    w.window.present(); ready(&w);
+    // Promote the existing window, so HDR cannot depend on reopening the file.
+    invoke(&w, CommandId::ChangeBitDepth);
+    combo(&w, "document-color-depth").set_selected(2);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        pump(20);
+        let d = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        if d.is_response_enabled("apply") { break; }
+        assert!(Instant::now() < deadline);
+    }
+    response(&w, "apply"); finish(&w); ready(&w);
+    assert_eq!(project(&w).document.color.depth, SampleDepth::F16);
+    let expected_hdr = std::env::var_os("LAYER_EXPECT_HDR").is_some();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        pump(50);
+        let gpu = w.gpu.borrow();
+        let backend = gpu.as_ref().unwrap().session.engine().backend();
+        if backend.display_encoding.is_some() && (!expected_hdr || backend.display_headroom > 1.) {
+            eprintln!("HDR_DISPLAY_QUALIFICATION encoding={:?} headroom={:.4} label={:?}", backend.display_encoding, backend.display_headroom, w.hdr_status.label());
+            break;
+        }
+        assert!(Instant::now() < deadline, "HDR negotiation: {:?}, {}", backend.display_encoding, backend.display_headroom);
+    }
+    if expected_hdr {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while w.hdr_status.label().as_deref() != Some("HDR") { pump(20); assert!(Instant::now() < deadline, "HDR feedback did not refresh idle UI"); }
+    }
+    let output = std::env::var_os("LAYER_HDR_OUTPUT").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/feedback-navigation"));
+    std::fs::create_dir_all(&output).unwrap();
+    capture_ui(&w, &output, "hdr-display.png");
+    if expected_hdr {
+        invoke(&w, CommandId::PreviewSdr); ready(&w);
+        assert_eq!(w.hdr_status.label().as_deref(), Some("SDR preview"));
+        invoke(&w, CommandId::PreviewSdr); ready(&w);
+        assert_eq!(w.hdr_status.label().as_deref(), Some("HDR"));
+    }
+    let before = snapshot(&w);
+    invoke(&w, CommandId::ExportDocument);
+    pump(600);
+    let dialog = w.window.visible_dialog().unwrap();
+    assert!(!dialog.is::<adw::AlertDialog>());
+    assert!(find_named(dialog.upcast_ref(), "export-bpc").is_none());
+    let scroll = find_named(dialog.upcast_ref(), "export-main-scroll").unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+    let adjustment = scroll.vadjustment();
+    assert!(adjustment.upper() <= adjustment.page_size() + 1., "main page requires scrolling: {} / {}", adjustment.upper(), adjustment.page_size());
+    capture_ui(&w, &output, "export-sdr-main.png");
+    super::new_photo::export_page(&w, "size");
+    combo(&w, "export-size").set_selected(1);
+    for name in ["export-width", "export-height"] {
+        find_named(dialog.upcast_ref(), name).unwrap().downcast::<adw::SpinRow>().unwrap().set_value(100.);
+    }
+    capture_ui(&w, &output, "export-size.png");
+    super::new_photo::export_page(&w, "main");
+    let size = find_named(dialog.upcast_ref(), "export-open-size").unwrap().downcast::<adw::ActionRow>().unwrap();
+    assert_eq!(size.subtitle().as_deref(), Some("100 × 67 px"));
+    super::new_photo::export_page(&w, "color");
+    combo(&w, "export-depth").set_selected(1);
+    capture_ui(&w, &output, "export-color.png");
+    super::new_photo::export_page(&w, "presets");
+    assert!(find_named(dialog.upcast_ref(), "export-preset-save").unwrap().is::<adw::ButtonRow>());
+    capture_ui(&w, &output, "export-presets.png");
+    super::new_photo::export_page(&w, "main");
+    assert_eq!(combo(&w, "export-depth").selected(), 1);
+    combo(&w, "export-range").set_selected(1);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline); }
+    assert!(!find_named(dialog.upcast_ref(), "export-open-color").unwrap().is_visible());
+    assert!(!find_named(dialog.upcast_ref(), "export-appearance").unwrap().is_visible());
+    assert!(!find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().is_visible());
+    capture_ui(&w, &output, "export-hdr-main.png");
+    response(&w, "cancel"); finish(&w);
+    assert_eq!(snapshot(&w), before);
     w.window.destroy(); pump(100);
 }

@@ -679,9 +679,11 @@ fn native_document_files() {
             let options = w.window.visible_dialog().unwrap();
             // This codec matrix explicitly starts from the original Web choices.
             // Successful delivery now remembers the destination between sheets.
+            new_photo::export_page(&w, "presets");
             let reset = find_named(options.upcast_ref(), "export-preset-reset").unwrap()
-                .downcast::<gtk::Button>().unwrap();
-            click(&reset);
+                .downcast::<adw::ButtonRow>().unwrap();
+            reset.emit_by_name::<()>("activated", &[]);
+            pump(100);
             let deadline = Instant::now() + Duration::from_secs(10);
             while !reset.is_sensitive() {
                 pump(20);
@@ -689,7 +691,7 @@ fn native_document_files() {
             }
             for (name, selected) in [
                 ("export-preset", "Web / Share"), ("export-format", "PNG"),
-                ("export-depth", "8-bit SDR"),
+                ("export-depth", "8-bit"),
                 ("export-background", "Keep transparency"),
             ] {
                 let row = find_named(options.upcast_ref(), name).unwrap()
@@ -704,7 +706,7 @@ fn native_document_files() {
                 assert_eq!(find_named(options.upcast_ref(), "export-depth").unwrap()
                     .downcast::<adw::ComboRow>().unwrap().selected(), 1);
                 assert!(!find_named(options.upcast_ref(), "export-dither").unwrap()
-                    .downcast::<adw::SwitchRow>().unwrap().is_sensitive());
+                    .downcast::<adw::SwitchRow>().unwrap().is_visible());
                 new_photo::profile_action(&w, "export", "builtin-3");
             }
             if path == &jpeg_path {
@@ -716,11 +718,10 @@ fn native_document_files() {
                 assert!(!depth.is_sensitive());
                 let background = find_named(options.upcast_ref(), "export-background").unwrap()
                     .downcast::<adw::ComboRow>().unwrap();
-                assert_eq!(background.selected(), 1);
-                background.set_selected(0);
-                assert!(!options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
-                background.set_selected(2);
-                assert!(options.clone().downcast::<adw::AlertDialog>().unwrap().is_response_enabled("export"));
+                assert_eq!(background.selected(), 0);
+                assert_eq!(background.model().unwrap().n_items(), 2);
+                background.set_selected(1);
+                assert!(new_photo::export_enabled(&w));
                 new_photo::profile_action(&w, "export", "builtin-1");
                 let quality = find_named(options.upcast_ref(), "export-jpeg-quality").unwrap()
                     .downcast::<adw::SpinRow>().unwrap();
@@ -732,21 +733,16 @@ fn native_document_files() {
                 advanced.set_expanded(true);
                 let intent = find_named(options.upcast_ref(), "export-intent").unwrap()
                     .downcast::<adw::ComboRow>().unwrap();
-                let bpc = find_named(options.upcast_ref(), "export-bpc").unwrap()
-                    .downcast::<adw::SwitchRow>().unwrap();
+                assert!(find_named(options.upcast_ref(), "export-bpc").is_none());
                 let dither = find_named(options.upcast_ref(), "export-dither").unwrap()
                     .downcast::<adw::SwitchRow>().unwrap();
                 assert_eq!(intent.selected(), 0);
-                assert!(!bpc.is_active());
                 assert!(!dither.is_active());
                 intent.set_selected(3);
-                assert!(!bpc.is_sensitive());
                 intent.set_selected(0);
-                assert!(!bpc.is_sensitive());
-                bpc.set_active(false);
                 dither.set_active(true);
                 pump(350);
-                let scroll = find_named(options.upcast_ref(), "export-scroll").unwrap()
+                let scroll = find_named(options.upcast_ref(), "export-color-scroll").unwrap()
                     .downcast::<gtk::ScrolledWindow>().unwrap();
                 let adjustment = scroll.vadjustment();
                 adjustment.set_value(adjustment.upper() - adjustment.page_size());
@@ -757,7 +753,7 @@ fn native_document_files() {
                 adjustment.set_value(0.);
             }
             if let Some((_, profile_path, _, channels)) = custom_exports.iter().find(|(p, _, _, _)| p == path) {
-                let alert = options.clone().downcast::<adw::AlertDialog>().unwrap();
+                let export_enabled = || new_photo::export_enabled(&w);
                 let button = find_named(options.upcast_ref(), "export-profile-choose").unwrap().downcast::<gtk::MenuButton>().unwrap();
                 let wait_profile = || {
                     let deadline = Instant::now() + Duration::from_secs(15);
@@ -769,7 +765,7 @@ fn native_document_files() {
                 new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
-                assert!(alert.is_response_enabled("export"));
+                assert!(export_enabled());
                 new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(&bad_profile)).unwrap();
@@ -777,7 +773,7 @@ fn native_document_files() {
                 file.response(gtk::ResponseType::Accept);
                 wait_profile();
                 assert!(find_named(options.upcast_ref(), "export-profile-error").unwrap().is_visible());
-                assert!(!alert.is_response_enabled("export"));
+                assert!(!export_enabled());
                 new_photo::profile_action(&w, "export", "add");
                 let file = chooser();
                 file.set_file(&gtk::gio::File::for_path(profile_path)).unwrap();
@@ -788,23 +784,23 @@ fn native_document_files() {
                 new_photo::profile_action(&w, "export", "add");
                 chooser().response(gtk::ResponseType::Cancel);
                 wait_profile();
-                assert!(alert.is_response_enabled("export"));
+                assert!(export_enabled());
                 let format = find_named(options.upcast_ref(), "export-format").unwrap().downcast::<adw::ComboRow>().unwrap();
                 let background = find_named(options.upcast_ref(), "export-background").unwrap().downcast::<adw::ComboRow>().unwrap();
                 if *channels == layer_core::color::source::SourceChannels::Cmyk {
                     assert_eq!(format.selected(), 1);
-                    assert_eq!(background.selected(), 1);
+                    assert_eq!(background.selected(), 0);
+                    assert_eq!(background.model().unwrap().n_items(), 2);
                     format.set_selected(0);
-                    assert!(!alert.is_response_enabled("export"));
+                    assert!(!export_enabled());
                     format.set_selected(1);
-                    background.set_selected(0);
-                    assert!(!alert.is_response_enabled("export"));
+                    assert_eq!(background.model().unwrap().n_items(), 2);
                     background.set_selected(1);
                 } else {
                     format.set_selected(u32::from(path.extension().unwrap() == "tif"));
                 }
                 find_named(options.upcast_ref(), "export-depth").unwrap().downcast::<adw::ComboRow>().unwrap().set_selected(1);
-                assert!(alert.is_response_enabled("export"));
+                assert!(export_enabled());
                 if *channels == layer_core::color::source::SourceChannels::Rgba {
                     // Selected bytes are frozen; changing the file afterwards
                     // cannot retag or change the output at publication time.
@@ -815,7 +811,7 @@ fn native_document_files() {
             }
             pump(80);
             capture_reference(&w, output.join(if path == &tiff_path { "export-tiff-options.png" } else if path == &jpeg_path { "export-jpeg-options.png" } else { "export-options.png" }).to_str().unwrap(), 1.);
-            click(&find_button(options.upcast_ref(), "Choose file…").unwrap());
+            new_photo::response(&w, "export");
         }
         let save = chooser();
         assert_eq!(
@@ -13798,6 +13794,15 @@ fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
 }
 
 fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+    // NavigationView retains unpushed pages outside the visible widget tree.
+    if root.widget_name() == "export-navigation" {
+        let nav = root.downcast_ref::<adw::NavigationView>().unwrap();
+        for tag in ["main", "size", "color", "presets"] {
+            if let Some(page) = nav.find_page(tag)
+                && let Some(found) = page.child().and_then(|child| find_named(&child, name)) { return Some(found); }
+        }
+    }
+
     if root.widget_name() == name {
         return Some(root.clone());
     }

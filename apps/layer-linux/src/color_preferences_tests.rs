@@ -208,11 +208,9 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     invoke(&w, CommandId::ExportDocument);
     dialog(&w, "export-options");
     super::new_photo::profile_action(&w, "export", "saved-0");
-    let export = dialog(&w, "export-options")
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
+    dialog(&w, "export-options");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !export.is_response_enabled("export") {
+    while !super::new_photo::export_enabled(&w) {
         pump(20);
         assert!(Instant::now() < deadline);
     }

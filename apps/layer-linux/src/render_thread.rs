@@ -107,7 +107,7 @@ enum Reply {
     Thumbnail(ReadbackImage),
     ColorSample(Result<layer_render::ColorSample, String>),
     FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
-    DisplayHeadroom(f32),
+    DisplayHeadroom(f32, Option<layer_render_wgpu::SdrSurfaceColor>),
     Error(String),
     Readback(ReadbackImage),
 }
@@ -120,6 +120,7 @@ pub struct RenderWorker {
     transform_preview: Option<layer_render::TransformPreview>,
     initialized: bool,
     pub(crate) display_headroom: f32,
+    pub(crate) display_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
     snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
@@ -253,6 +254,7 @@ impl RenderWorker {
             transform_preview: None,
             initialized: false,
             display_headroom: 1.,
+            display_encoding: None,
             snapshot_gpu: None,
             view_color: Default::default(),
             first_frame_sent: false,
@@ -355,7 +357,7 @@ impl RenderWorker {
                         self.outlines = outlines;
                         self.snapshot_gpu = Some(gpu);
                     }
-                    Reply::DisplayHeadroom(headroom) => self.display_headroom = headroom,
+                    Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                     _ => (),
                 }
@@ -391,7 +393,7 @@ impl RenderWorker {
                     self.filter_previews_pending = false;
                     self.filter_previews.push_back(image);
                 }
-                Reply::DisplayHeadroom(headroom) => self.display_headroom = headroom,
+                Reply::DisplayHeadroom(headroom, encoding) => { self.display_headroom = headroom; self.display_encoding = encoding; },
                 Reply::Error(error) => { self.snapshot_gpu = None; return Err(error); },
                 Reply::Readback(image) => self.readbacks.push_back(image),
             }
@@ -657,7 +659,9 @@ struct Worker {
     cursor_scale: f32,
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     pending_present: bool,
-    hdr_surface: bool,
+    hdr_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
+    hdr_float_supported: bool,
+    hdr_attempted: bool,
     hdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     preview_sdr: bool,
     display_headroom: f32,
@@ -714,6 +718,7 @@ impl Worker {
         if reply.send(Reply::Initialized(self.view_color, self.renderer.snapshot_gpu())).is_err() {
             return Ok(());
         }
+        self.report_display(reply)?;
         #[cfg(test)]
         let mut timing = crate::timing::Timing::new(self.renderer.device(), worker_stats);
         let mut telemetry_enabled = false;
@@ -732,11 +737,11 @@ impl Worker {
                 .poll(wgpu::PollType::Poll)
                 .map_err(error)?;
             self.child.dispatch()?;
-            let headroom = if self.hdr_surface { self.child.hdr_headroom() } else { 1. };
+            let headroom = if self.hdr_encoding.is_some() { self.child.hdr_headroom() } else { 1. };
             if headroom != self.display_headroom {
                 self.display_headroom = headroom;
                 self.update_hdr_view()?;
-                reply.send(Reply::DisplayHeadroom(headroom)).map_err(error)?;
+                self.report_display(reply)?;
             }
             if !startup_progress.complete
                 && self.paper_ready.load(Ordering::Acquire)
@@ -836,6 +841,9 @@ impl Worker {
                 || self.child.feedback_pending()
             {
                 receiver.recv_timeout(Duration::from_millis(if thumbnail_ready { 1 } else { 8 }))
+            } else if self.hdr_encoding.is_some() {
+                // Display changes arrive on Wayland even when artwork is idle.
+                receiver.recv_timeout(Duration::from_millis(100))
             } else {
                 receiver
                     .recv()
@@ -882,6 +890,10 @@ impl Worker {
             }
             match command {
                 Command::HdrView(rendition, preview_sdr) => {
+                    if rendition.is_some() && !self.hdr_attempted {
+                        self.enable_hdr()?;
+                        self.report_display(reply)?;
+                    }
                     self.hdr_rendition = rendition;
                     self.renderer.set_ui_rendition(rendition).map_err(error)?;
                     self.preview_sdr = preview_sdr;
@@ -1056,9 +1068,11 @@ impl Worker {
         let mut config = surface
             .get_default_config(&adapter, 1, 1)
             .ok_or("Vulkan Wayland swapchain unavailable")?;
-        let hdr_surface = color.depth.is_float()
-            && caps.color_spaces(wgpu::TextureFormat::Rgba16Float).contains(wgpu::SurfaceColorSpaces::PASS_THROUGH)
-            && child.describe_hdr()?;
+        let hdr_float_supported = caps.color_spaces(wgpu::TextureFormat::Rgba16Float).contains(wgpu::SurfaceColorSpaces::PASS_THROUGH);
+        let hdr_encoding = if color.depth.is_float() && hdr_float_supported {
+            child.describe_hdr()?
+        } else { None };
+        let hdr_surface = hdr_encoding.is_some();
         let (format, view_color) = if hdr_surface {
             (wgpu::TextureFormat::Rgba16Float, crate::display_color::ViewColor::Srgb)
         } else {
@@ -1117,7 +1131,7 @@ impl Worker {
         ).map_err(error)?;
         renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);
-        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, if hdr_surface { layer_render_wgpu::SdrSurfaceColor::WindowsScrgb } else { view_color.surface() })
+        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, hdr_encoding.unwrap_or_else(|| view_color.surface()))
             .map_err(error)?;
         presenter.prepare_overviews(&renderer);
         Ok(Self {
@@ -1137,11 +1151,37 @@ impl Worker {
             cursor_scale: 1.0,
             overviews: Vec::new(),
             pending_present: false,
-            hdr_surface,
+            hdr_encoding,
+            hdr_float_supported,
+            hdr_attempted: color.depth.is_float(),
             hdr_rendition: color.depth.is_float().then_some(Default::default()),
             preview_sdr: false,
             display_headroom: 1.,
         })
+    }
+    fn report_display(&self, reply: &mpsc::Sender<Reply>) -> Result<(), String> {
+        reply.send(Reply::DisplayHeadroom(self.display_headroom, self.hdr_encoding)).map_err(error)?;
+        let area = self.area.clone();
+        gtk::glib::idle_add_once(move || {
+            if let Some(area) = area.upgrade() {
+                let _ = area.activate_action("canvas.display-changed", None);
+            }
+        });
+        Ok(())
+    }
+    fn enable_hdr(&mut self) -> Result<(), String> {
+        self.hdr_attempted = true;
+        if !self.hdr_float_supported { return Ok(()); }
+        let Some(encoding) = self.child.describe_hdr()? else { return Ok(()); };
+        let mut presenter = ViewportPresenter::for_surface(&self.renderer, wgpu::TextureFormat::Rgba16Float, encoding).map_err(error)?;
+        presenter.inherit_proof(&self.renderer, &self.presenter);
+        presenter.prepare_overviews(&self.renderer);
+        self.presenter = presenter;
+        self.hdr_encoding = Some(encoding);
+        self.config.format = wgpu::TextureFormat::Rgba16Float;
+        // The next complete frame installs geometry, cursor and the new swapchain.
+        self.last_view = None;
+        Ok(())
     }
     fn update_hdr_view(&mut self) -> Result<(), String> {
         let headroom = if self.preview_sdr { 1. } else { self.display_headroom };

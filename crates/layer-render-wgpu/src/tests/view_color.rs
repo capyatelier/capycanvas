@@ -466,7 +466,7 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
         let lut=Arc::new(layer_color::ProofLut::build(space,&ProofRecipe::new("SDR proof".into(),ColorProfile::Builtin(RgbSpace::Srgb)),||false).unwrap());
         let target=texture(&r,wgpu::TextureFormat::Rgba32Float);
         let output=target.create_view(&Default::default());
-        for p in [[8.,2.,-0.125,1.],[32.,4.,1.,0.5],[1.,1.,1.,1./65536.],[0.;4]] {
+        for p in [[1.,1.,1.,1.],[8.,2.,-0.125,1.],[32.,4.,1.,0.5],[1.,1.,1.,1./65536.],[0.;4]] {
             let bits=layer_core::color::hdr::encode_pixel(p).unwrap();
             let p=layer_core::color::hdr::decode_pixel(bits).unwrap();
             let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
@@ -475,7 +475,8 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
             let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
             frame(&mut r,&layer);
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
-            let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,SdrSurfaceColor::WindowsScrgb).unwrap();
+            for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
+            let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{exposure:-2.,contrast:1.5,knee:0.65}] {
                 for headroom in [1.,4.] {
                     for proof in [false,true] {
@@ -490,12 +491,15 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
                         };
                         if proof {expected=lut.apply_premultiplied(expected,true,false);}
                         let rgb=rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from));
-                        let expected=rgb.map(|v|(v+0.94*(1.-f64::from(p[3])))*2.5375);
+                        let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
+                        let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
+                        else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
                         let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
                         for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
                         assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
                     }
                 }
+            }
             }
         }
     }

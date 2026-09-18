@@ -244,10 +244,10 @@ impl Worker {
         let mut presenter = ViewportPresenter::for_surface(
             &renderer,
             self.config.format,
-            if self.hdr_surface { layer_render_wgpu::SdrSurfaceColor::WindowsScrgb } else { self.view_color.surface() },
+            self.hdr_encoding.unwrap_or_else(|| self.view_color.surface()),
         )
         .map_err(error)?;
-        presenter.set_hdr_view(&renderer, request.project.document.color.depth.is_float().then_some(request.project.document.sdr_rendition), 1.).map_err(error)?;
+        presenter.set_hdr_view(&renderer, request.project.document.color.depth.is_float().then_some(request.project.document.sdr_rendition), if self.preview_sdr { 1. } else { self.display_headroom }).map_err(error)?;
         presenter.prepare_overviews(&renderer);
         check()?;
         Ok(Prepared {

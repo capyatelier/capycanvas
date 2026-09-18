@@ -148,7 +148,16 @@ fn view_half(value:f32)->f32 {
     return sign(value)*bitcast<f32>(rounded);
 }
 fn view_store(original:vec4<f32>)->vec4<f32> {
-    let c=vec4(original.rgb*VIEW_WHITE_SCALE,original.a);
+    var c=vec4(original.rgb*VIEW_WHITE_SCALE,original.a);
+    if VIEW_PQ {
+        if original.a<=0. {return vec4(0.);}
+        // PQ describes a bounded display derivative. The compositor maps this
+        // BT.2020 signal to the monitor; extended editing samples stay intact.
+        let rgb=view_bt2020(original.rgb/original.a);
+        let p=pow(clamp(rgb*0.0203,vec3(0.),vec3(1.)),vec3(2610./16384.));
+        let pq=pow((vec3(3424./4096.)+(2413./128.)*p)/(vec3(1.)+(2392./128.)*p),vec3(2523./32.));
+        c=vec4(pq*original.a,original.a);
+    }
     if VIEW_FLOAT16 {return vec4<f32>(view_half(c.r),view_half(c.g),view_half(c.b),view_half(c.a));}
     return c;
 }

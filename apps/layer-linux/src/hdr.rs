@@ -265,14 +265,19 @@ pub(crate) fn display_details(w: &Rc<Workspace>) {
             return;
         };
         let headroom = gpu.session.engine().backend().display_headroom;
+        let encoding = gpu.session.engine().backend().display_encoding;
+        let route = match encoding {
+            Some(layer_render_wgpu::SdrSurfaceColor::Bt2100Pq) => "BT.2020 PQ · floating-point surface. Colors are limited to the display signal’s range for viewing.",
+            Some(_) => "Linear scRGB · floating-point surface.",
+            None => "The compositor did not offer a supported HDR surface.",
+        };
         let state = if headroom > 1. {
-            format!("HDR presentation available · {headroom:.1}× headroom")
+            format!("HDR presentation · {headroom:.1}× compositor headroom")
         } else {
-            "Showing the saved SDR appearance. HDR presentation is unavailable on the current canvas surface. If this drawing was converted from SDR, save and reopen it to retry HDR presentation.".into()
+            "Showing the saved SDR appearance. The compositor has not reported HDR headroom for this window.".into()
         };
         format!(
-            "{state}\n\nReference white: 203 cd/m². The HDR master is preserved.\n\n{}",
-            w.display_description()
+            "{state}\n\n{route}\n\nArtwork reference white: 203 cd/m². Display limits come from the compositor, not a brightness measurement. The HDR master is preserved."
         )
     };
     let dialog = adw::AlertDialog::builder()

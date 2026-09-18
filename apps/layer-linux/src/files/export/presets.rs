@@ -83,29 +83,21 @@ pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result
 pub(super) fn install(
     parent: &adw::ApplicationWindow,
     hdr_document: bool,
-    group: &adw::PreferencesGroup,
+    group: &gtk::Box,
     preset: &adw::ComboRow,
     library: Rc<std::cell::RefCell<ExportPresets>>,
     destination: Rc<std::cell::Cell<usize>>,
     updating: Rc<std::cell::Cell<bool>>,
     read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, String>>,
 ) {
-    let row = adw::PreferencesRow::new();
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    buttons.set_valign(gtk::Align::Center);
-    buttons.set_halign(gtk::Align::Center);
-    buttons.set_margin_top(8);
-    buttons.set_margin_bottom(8);
-    let expander = gtk::Expander::builder().label("Manage presets").child(&buttons).build();
-    expander.set_widget_name("export-manage-presets");
-    row.set_child(Some(&expander));
-    group.add(&row);
+    let buttons = adw::PreferencesGroup::new();
+    group.append(&buttons);
     let status = adw::ActionRow::builder()
         .use_markup(false)
         .visible(false)
         .build();
     status.set_widget_name("export-presets-status");
-    group.add(&status);
+    buttons.add(&status);
     let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!(
         #[weak]
         preset,
@@ -128,8 +120,8 @@ pub(super) fn install(
         }
     ));
     refresh(0);
-    for (operation, label) in [(0, "Save as…"), (1, "Update"), (2, "Remove"), (3, "Reset")] {
-        let button = gtk::Button::with_label(label);
+    for (operation, label) in [(0, "Save as new preset…"), (1, "Update saved preset"), (2, "Remove saved preset"), (3, "Restore original settings")] {
+        let button = adw::ButtonRow::builder().title(label).use_markup(false).build();
         button.set_widget_name(
             [
                 "export-preset-save",
@@ -146,14 +138,24 @@ pub(super) fn install(
                 "Restore this destination's original choices",
             ][operation],
         ));
-        buttons.append(&button);
+        if operation == 2 { button.add_css_class("destructive-action"); }
+        buttons.add(&button);
         let refresh_button = glib::clone!(
             #[weak]
             button,
             #[strong]
             destination,
-            move |_: &adw::ComboRow| {
-                button.set_sensitive(match operation {
+            move |preset: &adw::ComboRow| {
+                if let Some(value) = preset.model().and_then(|model| model.item(destination.get() as u32)).and_downcast::<gtk::StringObject>() {
+                    let name = value.string();
+                    button.set_title(&match operation {
+                        1 => format!("Update “{name}”"),
+                        2 => format!("Remove “{name}”"),
+                        3 => format!("Reset “{name}”"),
+                        _ => "Save as new preset…".into(),
+                    });
+                }
+                button.set_visible(match operation {
                     1 | 2 => destination.get() >= 4,
                     3 => destination.get() < 4,
                     _ => true,
@@ -162,7 +164,7 @@ pub(super) fn install(
         );
         refresh_button(preset);
         preset.connect_selected_notify(refresh_button);
-        button.connect_clicked(glib::clone!(
+        button.connect_activated(glib::clone!(
             #[weak]
             parent,
             #[weak]

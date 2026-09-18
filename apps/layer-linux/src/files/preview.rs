@@ -9,6 +9,7 @@ struct Image {
     bytes: Vec<u8>,
     clipped: Option<u64>,
     hdr: bool,
+    range_blocked: bool,
 }
 fn thumbnail(
     gpu: &SnapshotGpu,
@@ -24,12 +25,11 @@ fn thumbnail(
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let mut hdr_clipped = None;
+    let mut range_blocked = false;
     if let Some(recipe) = output.as_ref().filter(|r| r.format.is_hdr()) {
         renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
         let count = renderer.inspect_hdr_output()?.clipped_channels;
-        if count > 0 && !recipe.format.maps_hdr_range() {
-            return Err("Some colors exceed HDR PNG’s range. Adjust the artwork or enable ‘Clip out-of-range colors’ in Advanced.".into());
-        }
+        range_blocked = count > 0 && !recipe.format.maps_hdr_range();
         hdr_clipped = Some(count);
     }
     let (preview, clipped) = if let Some(recipe) = output.filter(|r| !r.format.is_hdr()) {
@@ -64,6 +64,7 @@ fn thumbnail(
         bytes,
         clipped,
         hdr,
+        range_blocked,
     })
 }
 
@@ -91,6 +92,7 @@ pub(super) struct Comparison {
     closed: Cell<bool>,
     serial: Cell<u64>,
     pub ready: Cell<bool>,
+    pub range_exceeded: Cell<bool>,
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
@@ -153,6 +155,7 @@ impl Comparison {
             closed: Cell::new(false),
             serial: Cell::new(0),
             ready: Cell::new(false),
+            range_exceeded: Cell::new(false),
             changed: RefCell::new(None),
         })
     }
@@ -163,6 +166,7 @@ impl Comparison {
         }
     }
     pub fn invalidate(&self, message: &str) {
+        self.range_exceeded.set(false);
         self.serial.set(self.serial.get() + 1);
         self.pending.borrow_mut().take();
         if let Some(control) = self.control.borrow().as_ref() {
@@ -269,7 +273,9 @@ impl Comparison {
                             set(&this.before, before);
                             this.original.borrow_mut().take();
                         }
-                        let description = if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
+                        let ready = !after.range_blocked;
+                        this.range_exceeded.set(after.range_blocked);
+                        let description = if after.range_blocked { "Some colors exceed HDR PNG’s range. Adjust the artwork or enable clipping below." } else if after.hdr { if after.clipped == Some(0) { "HDR range checked" } else { "HDR range checked · out-of-range colors will be clipped" } } else { match after.clipped {
                             Some(0) => "Output preview",
                             Some(_) => "Output preview · some colors exceed the output gamut",
                             None => "Complete canvas",
@@ -277,7 +283,7 @@ impl Comparison {
                         set(&this.after, after);
                         this.status
                             .set_label(&format!("{description} · {} view", view.space().name()));
-                        this.mark_ready(true);
+                        this.mark_ready(ready);
                     }
                     Err(error) => {
                         this.status.set_label(&error);
