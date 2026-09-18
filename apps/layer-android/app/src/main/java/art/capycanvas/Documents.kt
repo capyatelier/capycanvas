@@ -195,6 +195,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
 
 @Composable internal fun DocumentRequests(host: CanvasHost) {
     val state = host.snapshot?.objectOrNull("state") ?: return
+    ProofRequests(host,state)
     val file = state.getJSONObject("document_file")
     val request = state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "document" }
     val options = host.snapshot!!.getJSONObject("document_options")

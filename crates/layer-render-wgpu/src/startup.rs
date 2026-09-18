@@ -63,6 +63,11 @@ impl Requirements {
             return;
         }
         let plan = BrushPassPlan::for_style(style);
+        if style.execution == BrushExecution::Dry && plan.direct.is_none()
+            && let Some(dry) = &r.pipelines.dry_material {
+            self.compute.push(dry.kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+            if preview { self.compute.push(dry.kernels[plan.material as usize * 2].clone()); }
+        }
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());
         } else {
@@ -285,7 +290,7 @@ impl WgpuRasterizer {
                     queue: self.queue.clone(),
                 };
                 let (tx, rx) = mpsc::channel();
-                startup.compiler.enqueue(DOCUMENT, move || {
+                let work = move || {
                     let result = (|| {
                         for (layers, execution) in chains {
                             candidate.prepare(
@@ -295,12 +300,32 @@ impl WgpuRasterizer {
                                 0.,
                             )?;
                         }
-                        Ok::<_, GpuRasterError>(candidate.fork())
+                        Ok::<_, GpuRasterError>(())
                     })()
                     .map_err(|e| e.to_string());
-                    let _ = tx.send(result);
-                    Ok(())
-                });
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        candidate.compile();
+                        let _ = tx.send(result.map(|()| candidate.fork()));
+                        Ok(())
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let compilation = candidate.compile_async();
+                        Box::pin(async move {
+                            let compiled = compilation.await;
+                            let _ = tx.send(result.and(compiled).map(|()| candidate.fork()));
+                            Ok(())
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<(), String>>>,
+                            >
+                    }
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                startup.compiler.enqueue(DOCUMENT, work);
+                #[cfg(target_arch = "wasm32")]
+                startup.compiler.enqueue_async(DOCUMENT, work);
                 startup.effects = Some(rx);
                 startup.effects_ready = false;
             } else {
@@ -309,6 +334,11 @@ impl WgpuRasterizer {
             }
         }
         let mut current = Requirements::default();
+        // Native publication must be ready before accepting a brush contact,
+        // but blank paper does not depend on writeback/promotion/validation.
+        if let Some(native) = &self.native_edit {
+            current.compute.extend(native.pipelines().cloned());
+        }
         let locked = document
             .layers
             .iter()
@@ -366,6 +396,9 @@ impl WgpuRasterizer {
                 .chain([&self.layer_masks.initialize])
             {
                 startup.compiler.pipeline(p, OTHER);
+            }
+            if let Some(dry) = &self.pipelines.dry_material {
+                for p in &dry.kernels { startup.compiler.pipeline(p, OTHER); }
             }
             for p in [
                 &self.selection_clip.crossings,
@@ -517,6 +550,58 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod gpu_tests {
     use super::*;
+    #[test]
+    fn native_publication_pipelines_follow_canvas_and_gate_brush() {
+        let color = layer_core::color::DocumentColor::default();
+        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
+            reference.adapter.clone(),
+            reference.device().clone(),
+            reference.queue.clone(),
+            color,
+        )
+        .unwrap();
+        assert!(renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()));
+        assert!(
+            renderer
+                .native_edit
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .all(|p| !p.ready())
+        );
+        assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels.iter().all(|p| !p.ready()));
+        let document = Document::new("native staged startup", 128, 128);
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.prepare_startup(&document, &brush, false).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !renderer.poll_startup().unwrap().brush_ready {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Native brush compilation timed out"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            renderer
+                .scene_pipelines
+                .pipeline
+                .iter()
+                .all(Deferred::ready)
+        );
+        assert!(
+            renderer
+                .native_edit
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .all(Deferred::ready)
+        );
+        for index in [2, 3] {
+            assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels[index].ready(),
+                "G-Pen commit and prediction kernels must be ready before input is enabled");
+        }
+    }
     #[test]
     fn region_requests_wait_for_compilation_without_blocking_or_allocating_images() {
         let reference = WgpuRasterizer::new_headless().unwrap();

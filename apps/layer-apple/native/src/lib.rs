@@ -269,7 +269,11 @@ pub unsafe extern "C" fn capy_apple_request(
                 }
                 Some(serde_json::to_value(reply).map_err(|e| e.to_string())?)
             }
-            2 => Some(a.host.query(value)?),
+            2 => Some(match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("proof_form") => layer_ui::proof_workflow::proof_form(&a.host.session),
+                Some("proof_status") => serde_json::to_value(a.metal.proof.observe(&a.host.session)).map_err(|e| e.to_string())?,
+                _ => a.host.query(value)?,
+            }),
             6 => Some(workspaces::session_request(&mut a.host, value)?),
             4 => Some(
                 serde_json::to_value(

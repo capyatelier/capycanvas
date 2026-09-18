@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "CanvasWindow.h"
 #include "UiControls.h"
+#include "ExternalImages.h"
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Windows.Graphics.h>
@@ -21,6 +22,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
     auto json=command.json.c_str();
     switch(command.kind){
         case CanvasCommandKind::Input:return capy_input(host,json);
+        case CanvasCommandKind::Prediction:return capy_native_prediction(host,command.json=="true");
         case CanvasCommandKind::Document:return capy_document_action(host,json);
         case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
         case CanvasCommandKind::Overviews:return capy_overviews(host,json);
@@ -158,10 +160,15 @@ void CanvasWindow::Open() {
                 // settles before retiring the workspace contact or menu.
                 self->dispatcher.TryEnqueue([weak]{if(auto self=weak.lock();self&&!self->closed&&self->workspace){
                     auto owner=self->Handle();
-                    if(IsIconic(owner)||GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)!=owner)self->workspace->CancelGesture();
+                    auto foreground=GetForegroundWindow();
+                    // Tablet/IME helper HWNDs can briefly own activation without
+                    // presenting another application. Preserve the idle placement
+                    // across those transitions; visible app switches still blur.
+                    if(IsIconic(owner)||(IsWindowVisible(foreground)&&GetAncestor(foreground,GA_ROOTOWNER)!=owner)){
+                        self->workspace->CancelGesture();self->heldKeys.clear();
+                        self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
+                    }
                 }});
-                self->heldKeys.clear();
-                self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
             }else{self->Resize();self->RefreshWorkspaceSwitcher();}
         }
     });
@@ -298,11 +305,22 @@ void CanvasWindow::Start() {
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);},
-        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
+        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
     documents=std::make_unique<DocumentView>(
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);},
         model,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
+        [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
+    panel.AllowDrop(true);
+    panel.DragOver([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
+        event.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);event.DragUIOverride().Caption(L"Place images on canvas");event.Handled(true);
+    }});
+    panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
+        auto action=CapyUi::imageDrop(CapyUi::object(self->lastModel,L"state"));auto point=event.GetPosition(self->panel);auto scale=self->panel.XamlRoot().RasterizationScale();
+        action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
+        CapyUi::receiveImageDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
+    }});
     workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
@@ -393,6 +411,12 @@ void CanvasWindow::StartInput() {
         using namespace Microsoft::UI::Input;
         inputSource=panel.CreateCoreIndependentInputSource(
             InputPointerSourceDeviceKinds::Mouse|InputPointerSourceDeviceKinds::Pen|InputPointerSourceDeviceKinds::Touch);
+        // The OS supplies prediction; shared Rust keeps it out of document truth.
+        try {
+            pointerPredictor=PointerPredictor::CreateForInputPointerSource(inputSource);
+            pointerPredictor.PredictionTime(std::chrono::milliseconds(16));
+        } catch(hresult_error const&) { pointerPredictor=nullptr; }
+        SendIndependent(CanvasCommand{CanvasCommandKind::Prediction,pointerPredictor?"true":"false"});
         inputSource.PointerPressed([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock())self->Pointer(e,1);
         });
@@ -428,8 +452,8 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
     if(phase==1)dispatcher.TryEnqueue([weak=weak_from_this()]{
         if(auto self=weak.lock())if(!self->closing)self->canvasFocus.Focus(FocusState::Pointer);
     });
-    for(uint32_t i=count;i>0;--i) {
-        auto point=(phase==0||phase==2)?points.GetAt(i-1):e.CurrentPoint(); auto props=point.Properties();
+    auto capture=[&](Microsoft::UI::Input::PointerPoint const& point,bool predicted) {
+        auto props=point.Properties();
         auto type=point.PointerDeviceType();
         uint32_t tool=type==Microsoft::UI::Input::PointerDeviceType::Mouse?1:
             type==Microsoft::UI::Input::PointerDeviceType::Touch?3:props.IsEraser()?2:0;
@@ -442,12 +466,29 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());
         p.phase=phase;p.tool=tool;
         p.button=props.IsMiddleButtonPressed()?1:props.IsRightButtonPressed()?2:0;
-        p.flags=(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
+        p.flags=(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
         samples.push_back(p);
         if(GetEnvironmentVariableW(L"CAPY_TRACE_INPUT",nullptr,0)) std::ofstream("pointer-input.log",std::ios::app) << p.phase << " " << p.x << " " << p.y << " " << p.timestamp_ns << std::endl;
         if(samples.size()==CanvasWorkBuffer::PointerBatch) {
-            if(!SendIndependent(std::move(samples)))return;
+            if(!SendIndependent(std::move(samples)))return false;
             samples={};samples.reserve(CanvasWorkBuffer::PointerBatch);
+        }
+        return true;
+    };
+    for(uint32_t i=count;i>0;--i) {
+        auto point=(phase==0||phase==2)?points.GetAt(i-1):e.CurrentPoint();
+        if(!capture(point,false))return;
+    }
+    if(pointerPredictor&&phase==2) {
+        try {
+            auto predicted=pointerPredictor.GetPredictedPoints(e.CurrentPoint());
+            std::sort(predicted.begin(),predicted.end(),[](auto const& a,auto const& b){return a.Timestamp()<b.Timestamp();});
+            for(auto const& point:predicted)if(point.Timestamp()>=e.CurrentPoint().Timestamp()) {
+                if(!capture(point,true))return;
+            }
+        } catch(hresult_error const&) {
+            pointerPredictor.Close();pointerPredictor=nullptr;
+            SendIndependent(CanvasCommand{CanvasCommandKind::Prediction,"false"});
         }
     }
     if(!samples.empty()&&!SendIndependent(std::move(samples)))return;
@@ -705,7 +746,8 @@ void CanvasWindow::Run() {
             if(preview){
                 auto request=preview->kind==CanvasQueryKind::Filters?capy_filter_previews:
                     preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:
-                    preview->kind==CanvasQueryKind::LayerMenu?capy_layer_menu:capy_workspace_query;
+                    preview->kind==CanvasQueryKind::LayerMenu?capy_layer_menu:
+                    preview->kind==CanvasQueryKind::Document?capy_document_preview:capy_workspace_query;
                 PreviewPacket packet(request(host,preview->json.c_str()),capy_preview_free);
                 if(!packet&&!capy_device_lost(host))Fail(capy_error());
                 preview->reply(std::move(packet));
@@ -871,7 +913,10 @@ void CanvasWindow::Stop() {
     wake.notify_all();space.notify_all();
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
-            if(auto self=weak.lock())self->inputSource=nullptr;
+            if(auto self=weak.lock()) {
+                if(self->pointerPredictor){self->pointerPredictor.Close();self->pointerPredictor=nullptr;}
+                self->inputSource=nullptr;
+            }
         });
         inputController.ShutdownQueueAsync().Completed([weak=weak_from_this()](auto&&,auto&&){
             if(auto self=weak.lock())self->dispatcher.TryEnqueue([weak]{
@@ -1042,10 +1087,13 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     }
     auto preferencesClose=object(model,L"windows_settings_close");
     if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
-        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))){Stop();return;}
+        &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))
+        &&(!object(model,L"windows_recovery").Size()||flag(object(model,L"windows_recovery"),L"ready"))){Stop();return;}
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
+        if(message.empty())message=str(object(model,L"windows_recovery"),L"error");
+        if(message.empty()&&str(object(model,L"windows_document"),L"type")==L"workflow_busy")message=L"Preparing document…";
         if(message.empty())message=str(object(model,L"windows_filter_load"),L"error");
         if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
         if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=L"Loading filters…";

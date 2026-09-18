@@ -688,7 +688,7 @@ fn left_mask(id: u64) -> LayerMask {
     m
 }
 
-fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
+pub(crate) fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
     let brush = layer_core::default_brush(preset);
     DabStyle {
         brush_to_layer: layer_core::Affine::IDENTITY,
@@ -2598,54 +2598,54 @@ fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
 #[test]
 fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners() {
     use layer_core::color::{DocumentColor, IntegerDepth, RgbSpace};
-    for (native, preset) in [false, true].into_iter().flat_map(|native| {
-        [layer_core::DefaultBrushPreset::GPen, layer_core::DefaultBrushPreset::Pencil]
-            .map(|preset| (native, preset))
-    }) {
+    for native in [false, true] {
         let mut r = if native {
             WgpuRasterizer::new_native_headless(DocumentColor {
                 space: RgbSpace::ProPhoto, depth: IntegerDepth::U16,
             }).unwrap()
         } else { WgpuRasterizer::new_headless().unwrap() };
-        let layers = [Layer::paint(LayerId(1), "sparse contacts")];
-        let mut first = dab([0.2, 0.4, 0.8, 0.7]);
-        first.center = Point { x: 90., y: 90. };
-        first.radii = [25.; 2];
-        first.contact = [1., 0., 0., 0.];
-        let mut last = first;
-        last.center = Point { x: 890., y: 890. };
-        let mut stroke = batch(1);
-        stroke.style = preset_style(preset);
-        stroke.dab_count = 2;
-        stroke.damage = first.bounds().union(last.bounds());
-        let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
-            r.submit(FramePacket {
-                view: view(), document_extent: [1024; 2], layers: &layers,
-                dabs, dab_batches: batches, restore_rasters: &[], reset_layers: reset,
-                time_seconds: 0., composite_all: true,
-            }).unwrap();
-        };
-        render(&mut r, &[first, last], &[stroke.clone()], true);
-        let together = r.readback_srgb_rgba8().unwrap();
-        let paint = &r.paint_layers[0];
-        assert_eq!(paint.pages.len(), 2, "native={native}");
-        let destination = BrushPassPlan::for_style(&stroke.style).requires_destination();
-        assert_eq!(paint.coverage_pages.len(), if destination { 2 } else { 0 }, "native={native}, preset={preset:?}");
-        assert!(paint.pages.iter().all(|p| p.secondary.is_some() == destination));
-        assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
-        assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
-        assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
-        // Independent per-contact submissions establish pixels, including the
-        // untouched interior; no reference renderer or second runtime path.
-        stroke.dab_count = 1;
-        stroke.stroke_end = false;
-        stroke.damage = first.bounds();
-        render(&mut r, &[first], &[stroke.clone()], true);
-        stroke.stroke_start = false;
-        stroke.stroke_end = true;
-        stroke.damage = last.bounds();
-        render(&mut r, &[last], &[stroke], false);
-        assert_eq!(together, r.readback_srgb_rgba8().unwrap(), "native={native}");
+        for preset in layer_core::CONTACT_BRUSH_PRESETS {
+            let layers = [Layer::paint(LayerId(1), "sparse contacts")];
+            let mut first = dab([0.2, 0.4, 0.8, 0.7]);
+            first.center = Point { x: 90., y: 90. };
+            first.radii = [25.; 2];
+            first.previous = [25., 25., 1., 0.];
+            first.contact = [1., 0., 0., 0.];
+            let mut last = first;
+            last.center = Point { x: 890., y: 890. };
+            let mut stroke = batch(1);
+            stroke.style = preset_style(preset);
+            stroke.dab_count = 2;
+            stroke.damage = first.bounds().union(last.bounds());
+            let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
+                r.submit(FramePacket {
+                    view: view(), document_extent: [1024; 2], layers: &layers,
+                    dabs, dab_batches: batches, restore_rasters: &[], reset_layers: reset,
+                    time_seconds: 0., composite_all: true,
+                }).unwrap();
+            };
+            render(&mut r, &[first, last], &[stroke.clone()], true);
+            let together = r.readback_srgb_rgba8().unwrap();
+            let paint = &r.paint_layers[0];
+            assert_eq!(paint.pages.len(), 2, "native={native}");
+            let destination = BrushPassPlan::for_style(&stroke.style).requires_destination();
+            assert_eq!(paint.coverage_pages.len(), if destination { 2 } else { 0 }, "native={native}, preset={preset:?}");
+            assert!(paint.pages.iter().all(|p| p.secondary.is_some() == destination));
+            assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
+            assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
+            assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
+            // Independent per-contact submissions establish pixels, including the
+            // untouched interior; no reference renderer or second runtime path.
+            stroke.dab_count = 1;
+            stroke.stroke_end = false;
+            stroke.damage = first.bounds();
+            render(&mut r, &[first], &[stroke.clone()], true);
+            stroke.stroke_start = false;
+            stroke.stroke_end = true;
+            stroke.damage = last.bounds();
+            render(&mut r, &[last], &[stroke], false);
+            assert_eq!(together, r.readback_srgb_rgba8().unwrap(), "native={native}, preset={preset:?}");
+        }
     }
 }
 

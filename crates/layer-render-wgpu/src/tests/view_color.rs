@@ -431,8 +431,15 @@ fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
             let target_view = target.create_view(&Default::default());
             for surface in [SdrSurfaceColor::Srgb, SdrSurfaceColor::DisplayP3] {
                 let mut presenter = ViewportPresenter::for_surface(&r, format, surface).unwrap();
+                // Exercise every tetrahedral order, tied fractions, endpoints
+                // and coverage. The shader deliberately avoids dynamic indices.
                 for codes in [[63124, 2917, 23000, 0], [32768, 23111, 11300, 1],
-                    [432, 893, 200, 17000], [61111, 51222, 9999, 65535], [30000; 4]] {
+                    [432, 893, 200, 17000], [61111, 51222, 9999, 65535], [30000; 4],
+                    [1234, 23456, 54321, 65535], [1234, 54321, 23456, 65535],
+                    [23456, 1234, 54321, 65535], [23456, 54321, 1234, 65535],
+                    [54321, 1234, 23456, 65535], [54321, 23456, 1234, 65535],
+                    [1234, 1234, 54321, 65535], [1234, 54321, 1234, 65535],
+                    [54321, 1234, 1234, 65535], [0, 0, 0, 65535], [65535; 4]] {
                     frame(&mut r, &source(space, codes));
                     let raw = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
                     let exported = r.readback_srgb_rgba8().unwrap();

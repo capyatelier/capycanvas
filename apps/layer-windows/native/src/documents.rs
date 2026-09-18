@@ -1,12 +1,6 @@
 //! Document jobs transfer immutable state; the live canvas remains on its owner.
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
 //!
-//! M1 host migration pending: treating a drained input queue as a recoverable
-//! drawing is DEPRECATED. Project::read/write and capture_project_save already
-//! use the shared raster API; retain those calls. Private autosave still needs
-//! capture_project_recovery on the owner, backing/encoding on the file worker,
-//! and atomic publication without acknowledging a manual save. Follow the
-//! GTK/Web/Android pixel/hash and lifecycle tests before qualifying Windows.
 use crate::document_io::{Stream, atomic_write, check_cancelled, io_error, location};
 use layer_core::{Project, ProjectAsset, ProjectLimits};
 use layer_host::{NativeHost, Renderer};
@@ -27,10 +21,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentAction {
     RequestImport,
+    NewPreferences { id: u32, action: layer_ui::NewDocumentAction },
+    Recovery { action: crate::recovery::Action },
+    WorkflowBegin { id: u32 },
+    DropImages { epoch: u64, revision: u64, active_layer: u64, paths: Vec<String>,
+        screen: Option<layer_core::Point>, layer: Option<(u64, f32)> },
+    Workflow { id: u32, action: crate::document_workflows::Action },
+    Create { id: u32, epoch: u64, revision: u64, options: layer_ui::NewDocumentOptions,
+        #[serde(default)] preset: String, #[serde(default)] defaults: bool },
+    Interpret { id: u32, profile: Option<crate::color_storage::ProfileChoice> },
     /// Lossless request identity; a null path is ordinary picker cancellation.
     ImportImage {
         id: String,
@@ -72,14 +75,16 @@ pub(crate) enum DocumentAction {
         path: String,
     },
 }
-struct Environment {
+pub(crate) struct Environment {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     viewport: [u32; 2],
+    defaults: layer_ui::NewDocumentOptions,
+    photo_policy: layer_ui::PhotoOpenPolicy,
 }
 impl Environment {
-    fn capture(host: &NativeHost) -> Result<Self, String> {
+    pub(crate) fn capture(host: &NativeHost) -> Result<Self, String> {
         let gpu = host
             .session
             .engine()
@@ -92,14 +97,22 @@ impl Environment {
             device: gpu.device().clone(),
             queue: gpu.queue().clone(),
             viewport: host.session.state().camera.viewport,
+            defaults: host.session.state().settings.new_document.defaults,
+            photo_policy: host.session.state().settings.photo_open,
         })
     }
 }
+struct Opening { environment: Environment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry> }
 enum Source {
+    Create(layer_ui::NewDocumentOptions),
+    Recovery(PathBuf),
+    Interpret(Box<layer_ui::ImportedDocument>, crate::color_storage::ProfileChoice),
     New { width: u32, height: u32 },
     Open(PathBuf),
 }
 enum Job {
+    Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
+    DiscardOpening(Box<Opening>),
     ImportImage {
         path: PathBuf,
         limit: u32,
@@ -119,6 +132,10 @@ enum Job {
     },
 }
 enum Completed {
+    Workflow(Box<crate::document_workflows::Task>),
+    Cancelled,
+    Interpretation(Box<Opening>),
+    PhotoPrepared(Box<UiSession<Renderer>>),
     Imported(ProjectAsset),
     Saved,
     Exported,
@@ -130,6 +147,7 @@ struct Mailbox {
     completed: Option<Result<Completed, String>>,
     retired: Option<Box<UiSession<Renderer>>>,
     retired_image: Option<ProjectAsset>,
+    retired_workflow: Option<Box<crate::document_workflows::Task>>,
 }
 #[derive(Default)]
 struct Shared {
@@ -151,11 +169,12 @@ impl Worker {
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 loop {
-                    let (job, retired, retired_image, stopping, completed) = {
+                    let (job, retired, retired_image, retired_workflow, stopping, completed) = {
                         let mut mailbox = state.mailbox.lock().unwrap();
                         while mailbox.pending.is_none()
                             && mailbox.retired.is_none()
                             && mailbox.retired_image.is_none()
+                            && mailbox.retired_workflow.is_none()
                             && !state.stopping.load(Ordering::Acquire)
                         {
                             mailbox = state.ready.wait(mailbox).unwrap();
@@ -165,6 +184,7 @@ impl Worker {
                             mailbox.pending.take(),
                             mailbox.retired.take(),
                             mailbox.retired_image.take(),
+                            mailbox.retired_workflow.take(),
                             stopping,
                             if stopping {
                                 mailbox.completed.take()
@@ -176,6 +196,7 @@ impl Worker {
                     // Never destroy a candidate or retired GPU while holding the mailbox.
                     drop(retired);
                     drop(retired_image);
+                    drop(retired_workflow);
                     if stopping {
                         drop(job);
                         drop(completed);
@@ -219,6 +240,12 @@ impl Worker {
         mailbox.retired_image = Some(image);
         self.shared.ready.notify_one();
     }
+    fn retire_workflow(&self, task: Box<crate::document_workflows::Task>) {
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        assert!(mailbox.retired_workflow.is_none());
+        mailbox.retired_workflow = Some(task);
+        self.shared.ready.notify_one();
+    }
     fn stop(&mut self) -> Result<(), String> {
         {
             // Serialize the predicate change with the worker entering wait.
@@ -245,6 +272,8 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
+        Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
+        Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::ImportImage {
             path,
             limit,
@@ -265,14 +294,14 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         Job::Prepare {
             environment,
             source,
-        } => prepare(environment, source, cancel).map(Completed::Prepared),
+        } => prepare(environment, source, cancel),
     }
 }
 fn prepare(
     environment: Environment,
     source: Source,
     cancel: &AtomicBool,
-) -> Result<Box<UiSession<Renderer>>, String> {
+) -> Result<Completed, String> {
     let limits = ProjectLimits {
         dimension: environment
             .device
@@ -281,30 +310,34 @@ fn prepare(
             .min(ProjectLimits::default().dimension),
         ..Default::default()
     };
-    let project = match source {
-        Source::New { width, height } => {
-            if width > limits.dimension || height > limits.dimension {
-                return Err("The canvas size exceeds this graphics device's limit".into());
-            }
-            layer_ui::new_drawing(width, height)?
-        }
+    let imported = match source {
+        Source::New { width, height } => layer_ui::ImportedDocument {
+            project: layer_ui::NewDocumentOptions { extent: [width, height], ..environment.defaults }.project()?,
+            source: layer_ui::ImportSource::Master,
+        },
+        Source::Create(options) => layer_ui::ImportedDocument { project: options.project()?, source: layer_ui::ImportSource::Master },
+        Source::Recovery(path) => layer_ui::read_import(Stream { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancel },
+            layer_ui::ImportIntent::Recovery, environment.photo_policy, "Recovered drawing", limits, Default::default(), cancel)?,
+        Source::Interpret(mut imported, profile) => { imported.interpret(profile.resolve(cancel)?)?; *imported },
         Source::Open(path) => {
-            let file = File::open(path).map_err(|e| io_error("open", e))?;
-            Project::read(
-                Stream {
-                    inner: BufReader::new(file),
-                    cancel,
-                },
-                limits,
-            )?
+            let file = File::open(&path).map_err(|e| io_error("open", e))?;
+            layer_ui::read_import(Stream { inner: BufReader::new(file), cancel }, layer_ui::ImportIntent::Open,
+                environment.photo_policy, path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"),
+                limits, Default::default(), cancel)?
         }
     };
+    if imported.interpretation_required(environment.photo_policy).is_some() {
+        return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles: crate::color_storage::list(cancel)? })));
+    }
+    let kind = imported.source;
+    let project = imported.project;
+    project.validate(limits)?;
     check_cancelled(cancel)?;
     // Eager preparation is isolated from the independently presented live canvas.
-    #[allow(deprecated)]
-    let mut gpu =
-        WgpuRasterizer::from_wgpu(environment.adapter, environment.device, environment.queue)
-            .map_err(|e| e.to_string())?;
+    let mut gpu = WgpuRasterizer::from_wgpu_native_staged(environment.adapter,
+        environment.device, environment.queue, project.document.color).map_err(|e| e.to_string())?;
+    gpu.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(|e| e.to_string())?;
+    gpu.finish_startup_cache();
     let mut programs = Vec::new();
     for effect in project
         .document
@@ -316,34 +349,40 @@ fn prepare(
             programs.push(effect.program.clone());
         }
     }
-    if !programs.is_empty() {
+    let mut validating = !programs.is_empty();
+    if validating {
         gpu.request_effect_validation(EffectValidationRequest {
             request_id: 1,
             namespace: programs.clone(),
             programs,
         })
         .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            check_cancelled(cancel)?;
-            gpu.device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(|e| e.to_string())?;
-            if let Some(result) = gpu.take_effect_validation() {
-                result.result?;
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err("Project shader preparation timed out".into());
-            }
-            std::thread::sleep(Duration::from_millis(2));
+    }
+    gpu.prepare_startup(&project.document, &Default::default(), false).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        check_cancelled(cancel)?;
+        gpu.device().poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
+        if validating && let Some(result) = gpu.take_effect_validation() {
+            result.result?;
+            validating = false;
         }
+        let ready = gpu.poll_startup().map_err(|e| e.to_string())?;
+        if !validating && ready.canvas_ready && ready.brush_ready { break; }
+        if Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
+        std::thread::sleep(Duration::from_millis(2));
     }
     let mut candidate =
         UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;
     candidate.frame(0, 0)?;
     check_cancelled(cancel)?;
-    Ok(Box::new(candidate))
+    Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(Box::new(candidate)) } else { Completed::Prepared(Box::new(candidate)) })
+}
+pub(crate) fn prepare_recovery(environment: Environment, path: PathBuf, cancel: &AtomicBool) -> Result<Box<UiSession<Renderer>>, String> {
+    match prepare(environment, Source::Recovery(path), cancel)? {
+        Completed::Prepared(candidate) => Ok(candidate),
+        _ => Err("Recovery is not a native drawing".into()),
+    }
 }
 struct Active {
     id: u32,
@@ -383,6 +422,10 @@ pub(crate) struct DocumentService {
     worker: Worker,
     active: Option<Active>,
     export: Option<PathBuf>,
+    opening: Option<Box<Opening>>,
+    workflow: Option<Box<crate::document_workflows::Task>>,
+    workflow_control: Option<(u32, layer_render_wgpu::snapshot::CaptureControl)>,
+    workflow_running: bool,
 }
 impl DocumentService {
     pub(crate) fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
@@ -392,7 +435,21 @@ impl DocumentService {
             next_import: 1,
             active: None,
             export: None,
+            opening: None,
+            workflow: None,
+            workflow_control: None,
+            workflow_running: false,
         })
+    }
+    pub(crate) fn status(&self) -> Option<serde_json::Value> {
+        if let Some(task) = &self.workflow { return Some(task.status()); }
+        if self.workflow_running { return self.workflow_control.as_ref().map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id})); }
+        self.opening.as_ref().map(|opening| serde_json::json!({
+            "type": "interpret", "id": self.active.as_ref().map(|a| a.id),
+            "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
+            "profiles": opening.profiles,
+            "channels": opening.imported.project.document.layers.iter().find_map(|l| l.source.as_ref()).map(|s| s.interpretation.channels),
+        }))
     }
     pub(crate) fn importing(&self) -> bool {
         self.import.is_some()
@@ -406,7 +463,7 @@ impl DocumentService {
         })
     }
     fn request_import(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        if self.active.is_some() || self.import.is_some() {
+        if self.active.is_some() || self.import.is_some() || self.workflow_control.is_some() {
             return Err("A document operation is already running".into());
         }
         let document = host.session.engine().document();
@@ -474,6 +531,12 @@ impl DocumentService {
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.cancel_import(host);
+        if let Some((_, control)) = &self.workflow_control { control.cancel(); }
+        if let Some(task) = self.workflow.take() {
+            task.complete(host, false)?;
+            self.workflow_control = None;
+            self.worker.retire_workflow(task);
+        }
         if self.export.take().is_some() {
             let active = self.active.take().ok_or("Missing PNG export request")?;
             Self::complete(
@@ -529,6 +592,63 @@ impl DocumentService {
         host: &mut NativeHost,
         action: DocumentAction,
     ) -> Result<(), String> {
+        if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
+            Self::matches(host, epoch, revision)?;
+            if self.active.is_some() || self.import.is_some() || self.workflow_control.is_some()
+                || host.session.engine().document().active_layer.0 != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
+            host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::ImportImage })?;
+            let id = host.session.state().requests.iter().find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })).ok_or("Image placement request is missing")?.id;
+            let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
+            let task = match prepared { Ok(task) => task, Err(error) => return Self::complete(host, id, Err(error)) };
+            self.workflow_control = Some((id, task.control.clone()));self.workflow_running = true;
+            self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::ReadImages { paths } });
+            return Ok(());
+        }
+        if let DocumentAction::WorkflowBegin { id } = action {
+            if self.active.is_some() || self.import.is_some() || self.workflow_control.is_some() { return Err("A document operation is already running".into()); }
+            let task = crate::document_workflows::Task::capture(host, id)?;
+            self.workflow_control = Some((id, task.control.clone()));
+            self.workflow_running = true;
+            self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::Describe });
+            return Ok(());
+        }
+        if let DocumentAction::Workflow { id, action } = action {
+            if self.workflow_control.as_ref().map(|(id, _)| *id) != Some(id) { return Err("Document workflow expired".into()); }
+            if matches!(action, crate::document_workflows::Action::Cancel) && self.workflow_running {
+                self.workflow_control.as_ref().unwrap().1.cancel();
+                return Ok(());
+            }
+            let mut task = self.workflow.take().ok_or("Wait for document preparation")?;
+            let result = match action {
+                crate::document_workflows::Action::Cancel => task.complete(host, false),
+                crate::document_workflows::Action::Commit => task.commit(host),
+                other => {
+                    self.workflow_running = true;
+                    self.worker.submit(Job::Workflow { task, action: other });
+                    host.invalidate_snapshot();
+                    return Ok(());
+                }
+            };
+            if let Err(error) = result { self.workflow = Some(task); return Err(error); }
+            self.workflow_control = None;
+            self.worker.retire_workflow(task);
+            host.invalidate_snapshot();
+            return Ok(());
+        }
+        if let DocumentAction::Interpret { id, profile } = action {
+            if self.active.as_ref().map(|a| a.id) != Some(id) { return Err("Image request is no longer current".into()); }
+            let opening = self.opening.take().ok_or("No image interpretation is pending")?;
+            if let Some(profile) = profile {
+                let Opening { environment, imported, .. } = *opening;
+                self.worker.submit(Job::Prepare { environment, source: Source::Interpret(Box::new(imported), profile) });
+            } else { self.worker.submit(Job::DiscardOpening(opening)); }
+            host.invalidate_snapshot();
+            return Ok(());
+        }
+        if let DocumentAction::NewPreferences { id, action } = action {
+            if !matches!(Self::request(host,id)?,DocumentRequest::New) { return Err("Drawing preset dialog expired".into()); }
+            return host.dispatch(layer_ui::UiAction::NewDocumentPreferences {action});
+        }
         if let DocumentAction::RequestImport = action {
             return self.request_import(host);
         }
@@ -581,6 +701,7 @@ impl DocumentService {
             DocumentAction::Cancel { id }
             | DocumentAction::Failure { id, .. }
             | DocumentAction::New { id, .. }
+            | DocumentAction::Create { id, .. }
             | DocumentAction::Open { id, .. }
             | DocumentAction::Save { id, .. }
             | DocumentAction::Export { id, .. } => *id,
@@ -639,6 +760,18 @@ impl DocumentService {
                         },
                         Some(selected),
                     )
+                }
+                DocumentAction::Create { epoch, revision, options, preset, defaults, .. }
+                    if matches!(request, DocumentRequest::New) => {
+                    Self::matches(host, epoch, revision)?;
+                    options.validate()?;
+                    let environment = Environment::capture(host)?;
+                    if defaults || !preset.trim().is_empty() {
+                        host.dispatch(layer_ui::UiAction::NewDocumentPreferences { action: layer_ui::NewDocumentAction::Remember {
+                            options, name: preset, defaults,
+                        } })?;
+                    }
+                    (Job::Prepare { environment, source: Source::Create(options) }, None)
                 }
                 DocumentAction::New {
                     epoch,
@@ -763,6 +896,42 @@ impl DocumentService {
         let Some(completed) = self.worker.take(defer_import) else {
             return Ok(());
         };
+        if self.workflow_running {
+            self.workflow_running = false;
+            let mut task = match completed {
+                Ok(Completed::Workflow(task)) => task,
+                Err(error) => {
+                    let id = self.workflow_control.take().ok_or("Workflow identity is missing")?.0;
+                    if matches!(host.session.state().requests.iter().find(|r| r.id == id).map(|r| &r.kind), Some(HostRequestKind::Histogram)) {
+                        return host.dispatch(layer_ui::UiAction::CompleteRequest { id, error: Some(error) });
+                    }
+                    return Self::complete(host, id, Err(error));
+                }
+                _ => return Err("Unexpected workflow completion".into()),
+            };
+            if task.control.is_cancelled() || task.stage == "saved" {
+                task.complete(host, task.stage == "saved")?;
+                self.workflow_control = None;
+                self.worker.retire_workflow(task);
+            } else {
+                match task.prepare_owner(host) {
+                    Ok(true) => { self.workflow_running = true; self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::Compare }); return Ok(()); }
+                    Err(error) => { task.fail(error); }
+                    _ => {}
+                }
+                // Placement begins only after the native progress sheet has closed.
+                // Its queued focus-loss event must precede the shared placement.
+                if task.stage == "commit" && !task.awaits_placement_ui() {
+                    match task.commit(host) {
+                        Ok(()) => { self.workflow_control = None; self.worker.retire_workflow(task); host.invalidate_snapshot(); return Ok(()); }
+                        Err(error) => task.fail(error),
+                    }
+                }
+                self.workflow = Some(task);
+            }
+            host.invalidate_snapshot();
+            return Ok(());
+        }
         if let Some(import) = self.import.take() {
             host.invalidate_snapshot();
             let cancelled = import.cancelled.load(Ordering::Acquire);
@@ -793,8 +962,18 @@ impl DocumentService {
             }
             return Ok(());
         }
+        let completed = match completed {
+            Ok(Completed::Interpretation(opening)) => { self.opening = Some(opening); host.invalidate_snapshot(); return Ok(()); }
+            Ok(Completed::PhotoPrepared(candidate)) => {
+                if let Some(active) = &mut self.active { active.location = layer_ui::ImportSource::Photo.adoption_location(active.location.take()); }
+                Ok(Completed::Prepared(candidate))
+            }
+            other => other,
+        };
         let active = self.active.take().ok_or("Unexpected document completion")?;
         let result = match completed {
+            Ok(Completed::Cancelled) => Ok(false),
+            Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_)) => unreachable!(),
             Ok(Completed::Imported(image)) => {
                 self.worker.discard_image(image);
                 Err("Unexpected image import completion".into())
@@ -850,7 +1029,13 @@ impl DocumentService {
         };
         Self::complete(host, active.id, result)
     }
+    pub(crate) fn preview(&self, id: u32, index: usize) -> Result<crate::previews::CapyPreview, String> {
+        let task = self.workflow.as_ref().filter(|t| t.id == id).ok_or("Document preview expired")?;
+        task.preview(index)
+    }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
+        if let Some((_, control)) = &self.workflow_control { control.cancel(); }
+        if let Some(task) = self.workflow.take() { self.worker.retire_workflow(task); }
         self.worker.stop()
     }
 }

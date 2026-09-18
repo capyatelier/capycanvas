@@ -45,7 +45,7 @@ pub(super) enum Execution {
 
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
-    pub pipeline: wgpu::RenderPipeline,
+    pub pipeline: Deferred<wgpu::RenderPipeline>,
     pub binding: wgpu::BindGroup,
 }
 struct Instance {
@@ -54,7 +54,7 @@ struct Instance {
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
     compute_binding: wgpu::BindGroup,
-    pipelines: HashMap<Execution, wgpu::RenderPipeline>,
+    pipelines: HashMap<Execution, Deferred<wgpu::RenderPipeline>>,
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
 }
@@ -62,7 +62,11 @@ pub(super) struct Effects {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
-    pipelines: Vec<(Vec<Arc<EffectProgram>>, Execution, wgpu::RenderPipeline)>,
+    pipelines: Vec<(
+        Vec<Arc<EffectProgram>>,
+        Execution,
+        Deferred<wgpu::RenderPipeline>,
+    )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
     instances: HashMap<Vec<LayerId>, Instance>,
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
@@ -71,6 +75,42 @@ pub(super) struct Effects {
     pub compilations: u64,
 }
 impl Effects {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compile(&self) {
+        for (_, _, pipeline) in &self.pipelines {
+            pipeline.compile();
+        }
+        for (_, pipeline) in &self.preparation.pipelines {
+            pipeline.compile();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn compile_async(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>> {
+        // Start every pipeline in the bounded program job before its error scopes
+        // are popped. Futures own handles; no live effects/session borrow escapes.
+        let futures: Vec<_> = self
+            .pipelines
+            .iter()
+            .map(|(_, _, p)| p.compile_async())
+            .chain(
+                self.preparation
+                    .pipelines
+                    .iter()
+                    .map(|(_, p)| p.compile_async()),
+            )
+            .collect();
+        Box::pin(async move {
+            let mut error = None;
+            for future in futures {
+                if let Err(next) = future.await {
+                    error.get_or_insert(next);
+                }
+            }
+            error.map_or(Ok(()), Err)
+        })
+    }
     /// Cold catalog publication only. Keep live instances until the shared
     /// document owner publishes; discard superseded compilation versions.
     pub fn retain_compilations(&mut self, programs: &[Arc<EffectProgram>]) {
@@ -261,15 +301,19 @@ impl Effects {
                     label: Some("checked pointwise effect"),
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 });
-            let pipeline = fullscreen_pipeline(
-                r.device(),
-                &self.pipeline_layout,
-                &module,
-                "effect_fragment",
-                None,
-                r.device().working_format(),
-                "pointwise effect chain",
-            );
+            let (device, layout) = (r.device().clone(), self.pipeline_layout.clone());
+            let pipeline = Deferred::pipeline(move |mode| {
+                fullscreen_pipeline_recipe(
+                    mode,
+                    &device,
+                    &layout,
+                    &module,
+                    "effect_fragment",
+                    None,
+                    device.working_format(),
+                    "pointwise effect chain",
+                )
+            });
             self.pipelines.push((programs, stage, pipeline.clone()));
             self.compilations += 1;
             pipeline

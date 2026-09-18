@@ -32,6 +32,86 @@ fn display_batches_submit_complete_halves_and_leave_final_tiles_with_the_frame()
     }
 }
 
+#[test]
+fn repeated_wide_composition_reuses_decoded_sources_with_exact_pixels_and_bounded_memory() {
+    // More unique source tiles than the decoded cache can hold. Partial edges
+    // and translucent pixels expose stale scratch or reordered layer blending.
+    let mut doc = document([17 * PAGE_SIZE + 3, 4 * PAGE_SIZE + 7]);
+    let mut r = bounded_renderer(doc.color).unwrap();
+    r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.06, 0.12);
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    submit(&mut r, &doc, v, true);
+    let original = present(&r, &mut presenter, v);
+    let bytes = r.scene.as_ref().unwrap().scratch_bytes();
+    let tiles = u64::from(doc.width.div_ceil(PAGE_SIZE) * doc.height.div_ceil(PAGE_SIZE));
+    for _ in 0..4 {
+        let before = r.scene.as_ref().unwrap().source_cache_work();
+        submit(&mut r, &doc, v, true);
+        assert_eq!(original, present(&r, &mut presenter, v));
+        let after = r.scene.as_ref().unwrap().source_cache_work();
+        assert!(after[1] - before[1] < tiles / 2,
+            "unchanged sources should survive repeated wider-than-cache compositions: {} misses / {tiles} tiles", after[1] - before[1]);
+        assert!(r.scene.as_ref().unwrap().scratch_bytes() <= bytes);
+    }
+    // The same reuse must reflect an actual layer edit immediately.
+    doc.layers[0].opacity = 0.;
+    submit(&mut r, &doc, v, true);
+    assert_ne!(original, present(&r, &mut presenter, v));
+    doc.layers[0].opacity = 1.;
+    submit(&mut r, &doc, v, true);
+    assert_eq!(original, present(&r, &mut presenter, v));
+}
+
+#[test]
+fn sparse_contact_prediction_retirement_matches_full_recomposition() {
+    let doc = document([1537, 1025]);
+    let mut incremental = bounded_renderer(doc.color).unwrap();
+    let mut reference = bounded_renderer(doc.color).unwrap();
+    for r in [&mut incremental, &mut reference] {
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.set_complete_display_allowance(64 * 1024 * 1024);
+    }
+    let mut a = ViewportPresenter::for_surface(&incremental, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let mut b = ViewportPresenter::for_surface(&reference, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.2, 0.12);
+    let style = crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+    for (frame, (center, radius, preview)) in [
+        ([310., 330.], 285., false),
+        ([780., 520.], 355., true),
+        ([1230., 710.], 235., true),
+        ([650., 210.], 190., true),
+        ([650., 210.], 190., false),
+    ].into_iter().enumerate() {
+        let mut dab = crate::tests::test_dab(center, [0.8, 0.04, 0.2, 0.7], 1.);
+        dab.radii = [radius; 2];
+        dab.previous = [radius * 0.7, radius * 0.7, 1., 0.];
+        dab.motion = [320., -130.];
+        dab.contact = [1., 0., 0., 0.];
+        dab.previous_contact = [0.7, 0., 0., 0.];
+        let batch = DabBatch {
+            material_update: 0, stroke_id: StrokeId(1), layer_id: doc.layers[0].id,
+            kind: if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent },
+            stroke_start: frame == 0, stroke_end: frame == 4, first_dab: 0, dab_count: 1,
+            style: style.clone(), damage: dab.bounds(),
+        };
+        for (r, all) in [(&mut incremental, frame == 0), (&mut reference, true)] {
+            r.submit(FramePacket {
+                layers: &doc.layers, document_extent: [doc.width, doc.height], view: v,
+                time_seconds: 0., dabs: &[dab], dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[], reset_layers: frame == 0, composite_all: all,
+            }).unwrap();
+        }
+        assert_eq!(present(&incremental, &mut a, v), present(&reference, &mut b, v), "frame {frame}");
+    }
+    assert!(incremental.metrics.composited_pixels < reference.metrics.composited_pixels);
+    for r in [&mut incremental, &mut reference] { submit(r, &doc, v, false); }
+    assert_eq!(present(&incremental, &mut a, v), present(&reference, &mut b, v));
+}
+
 fn centered_view(extent: [u32; 2], viewport: [u32; 2], scale: f32, angle: f32) -> ViewState {
     let (sin, cos) = angle.sin_cos();
     let a = scale * cos;

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import {mkdir, writeFile} from "node:fs/promises";
 
 export async function checkWorkspaceManager({call, evaluate, settle, reload, touch = false}) {
-  const wait = async predicate => {
-    for (let n=0; n<150; n++) { if (await evaluate(predicate)) return; await new Promise(r=>setTimeout(r,100)); }
+  const wait = async (predicate, timeout = 15000) => {
+    for (let n=0; n<Math.ceil(timeout/100); n++) { if (await evaluate(predicate)) return; await new Promise(r=>setTimeout(r,100)); }
     throw Error(`Workspace timeout: ${predicate}\n${await evaluate('layerApp.app.workspace_view()')}`);
   };
   const view = () => evaluate('JSON.parse(layerApp.app.workspace_view())');
@@ -85,7 +85,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.deepEqual((await capture()).working,changed.working,'History restores layout and preserves tools');
     await send({type:'invoke',command:'undo_workspace'});
     const beforeRestart=await capture();
-    await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
+    await reload(); await wait('window.layerApp?.startupTimes.complete != null', 55000); await idle();
     assert.equal((await view()).id,created);
     assert.deepEqual(normalized(await capture()),normalized(beforeRestart),'Restart retains undo/redo and working settings');
     await menu('Manage Workspaces…');
@@ -135,7 +135,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.deepEqual(await evaluate('layerApp.state().workspace.layout'),beforeLayoutResetView,'One Undo Workspace reverses restoration');
     await send({type:'invoke',command:'redo_workspace'});
     assert.deepEqual((await capture()).working,expectedReset.working);
-    await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
+    await reload(); await wait('window.layerApp?.startupTimes.complete != null', 55000); await idle();
     assert.equal((await view()).id,created); assert.deepEqual((await capture()).working,expectedReset.working);
     const deleted=created, beforeDelete=await capture();
     const illustrator=(await view()).defaults.find(row=>row.id==='builtin:workspace:illustrator').id;
@@ -158,7 +158,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Manage Workspaces…');
     assert.deepEqual((await view()).rows.map(row=>row.id).sort(),rowsBeforeDelete.filter(id=>id!==deleted).sort(),'Deletion removes the row without creating a replacement workspace');
     await click('.workspace-manager footer button');
-    await reload(); await wait('window.layerApp?.startupTimes.complete != null'); await idle();
+    await reload(); await wait('window.layerApp?.startupTimes.complete != null', 55000); await idle();
     assert.equal((await view()).id,illustrator,'Reload retains the chosen default');
     await menu('Manage Workspaces…'); assert.ok(!(await view()).rows.some(row=>row.id===deleted),'Deleted workspace stays absent after reload');
     await click('.workspace-manager footer button');

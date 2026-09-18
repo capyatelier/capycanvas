@@ -5,7 +5,245 @@ import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 
+/// Keep user clipboard data in memory and never overwrite a newer user copy.
+@MainActor private final class NativePhotoPasteboard {
+    let board = NSPasteboard.general
+    let saved: [NSPasteboardItem]
+    var changeCount: Int
+    var replaced = false
+
+    init() throws {
+        changeCount = board.changeCount
+        saved = try (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                let data = try XCTUnwrap(item.data(forType: type), "Preserve clipboard before testing")
+                XCTAssertTrue(copy.setData(data, forType: type))
+            }
+            return copy
+        }
+        XCTAssertEqual(board.changeCount, changeCount)
+    }
+    func replace(_ items: [NSPasteboardItem]) throws {
+        guard board.changeCount == changeCount else {
+            throw NSError(domain: "PhotoClipboardCheck", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Clipboard changed during the test"])
+        }
+        board.prepareForNewContents(with: .currentHostOnly)
+        replaced = true
+        let written = board.writeObjects(items)
+        changeCount = board.changeCount
+        XCTAssertTrue(written)
+    }
+    func restore() {
+        guard replaced && board.changeCount == changeCount else { return }
+        board.prepareForNewContents(with: .currentHostOnly)
+        if !saved.isEmpty { XCTAssertTrue(board.writeObjects(saved)) }
+    }
+}
+
 extension XCTestCase {
+    @MainActor func checkSavePanelKeepsItsDocumentAcrossWindowFocus(in app: XCUIApplication) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Window Files " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstURL = root.appendingPathComponent("First.capy")
+        let secondURL = root.appendingPathComponent("Second.capy")
+        let copyURL = root.appendingPathComponent("First Copy.capy")
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch()
+        let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
+        XCTAssertTrue(paint.waitForExistence(timeout: 30))
+        if !paint.isSelected { workspaceActivate(paint) }
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"),
+            evaluatedWith: app.descendants(matching: .any)["canvas"].firstMatch)
+        waitForExpectations(timeout: 30)
+        let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
+        let firstID = scenes.firstMatch.identifier
+        let first = app.windows.containing(.any, identifier: firstID).firstMatch
+        func command(_ id: String, _ label: String) {
+            editorMenu(in: app, menu: "File", id: id, label: label)
+        }
+        func expectTitle(_ window: XCUIElement, _ name: String) {
+            expectation(for: NSPredicate { _, _ in window.title == name }, evaluatedWith: window)
+                .expectationDescription = "Native window title: \(name)"
+            waitForExpectations(timeout: 15)
+        }
+        func focus(_ name: String) {
+            editorMenu(in: app, menu: "Window", id: "", label: name)
+        }
+        func expectRows(_ window: XCUIElement, _ count: Int) {
+            let rows = window.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+            expectation(for: NSPredicate { _, _ in rows.count == count }, evaluatedWith: window)
+                .expectationDescription = "\(count) visible layer rows in \(window.title)"
+            waitForExpectations(timeout: 15)
+        }
+        func beginSaveAs(_ url: URL) -> XCUIElement {
+            command("save_document_as", "Save As…")
+            let save = app.windows.buttons["OKButton"].firstMatch
+            XCTAssertTrue(save.waitForExistence(timeout: 15))
+            app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(root.path + "\n")
+            let name = app.textFields["saveAsNameTextField"]
+            workspaceActivate(name)
+            name.typeKey("a", modifierFlags: .command); name.typeText(url.lastPathComponent)
+            return save
+        }
+        func finishSave(_ save: XCUIElement) {
+            XCTAssertTrue(save.isHittable)
+            save.click()
+            XCTAssertTrue(save.waitForNonExistence(timeout: 15))
+        }
+        func history(_ label: String) {
+            editorMenu(in: app, menu: "Edit", id: label.lowercased(), label: label)
+        }
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        expectation(for: NSPredicate { _, _ in
+            let sample = self.editorPixels(in: app); return Int(sample[2]) > Int(sample[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let painted = editorPixels(in: app)
+        finishSave(beginSaveAs(firstURL))
+        expectTitle(first, "First.capy")
+        let originalFirst = try Data(contentsOf: firstURL)
+        command("new_window", "New Window")
+        let secondScene = scenes.matching(NSPredicate(format: "identifier != %@", firstID)).firstMatch
+        XCTAssertTrue(secondScene.waitForExistence(timeout: 30))
+        // Paint belongs to the first window; use the available Photo workspace
+        // to expose the second drawing's Layers panel without moving that owner.
+        workspaceActivate(secondScene.buttons["workspace-switch-builtin:workspace:photographer"])
+        let second = app.windows.containing(.any, identifier: secondScene.identifier).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 15), app.debugDescription)
+        expectRows(second, 2)
+        finishSave(beginSaveAs(secondURL))
+        expectTitle(second, "Second.capy")
+        let originalSecond = try Data(contentsOf: secondURL)
+
+        focus("First.capy")
+        workspaceActivate(first.buttons["layer-New layer"])
+        expectRows(first, 3)
+        _ = beginSaveAs(copyURL)
+        focus("Second.capy")
+        workspaceActivate(second.buttons["layer-New layer"])
+        expectRows(second, 3)
+        history("Undo"); expectRows(second, 2)
+        history("Redo"); expectRows(second, 3)
+        focus("First.capy")
+        let cancel = app.windows.buttons["CancelButton"].firstMatch
+        XCTAssertTrue(cancel.isHittable)
+        cancel.click()
+        XCTAssertTrue(app.windows.buttons["OKButton"].firstMatch.waitForNonExistence(timeout: 15))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copyURL.path))
+        expectTitle(first, "First.capy"); expectTitle(second, "Second.capy")
+        expectRows(first, 3); expectRows(second, 3)
+        XCTAssertEqual(try Data(contentsOf: firstURL), originalFirst)
+        XCTAssertEqual(try Data(contentsOf: secondURL), originalSecond)
+
+        focus("First.capy")
+        history("Undo"); expectRows(first, 2)
+        history("Redo"); expectRows(first, 3)
+        let retry = beginSaveAs(copyURL)
+        focus("Second.capy")
+        focus("First.capy")
+        finishSave(retry)
+        expectTitle(first, "First Copy.capy"); expectTitle(second, "Second.capy")
+        let copied = try Data(contentsOf: copyURL)
+        XCTAssertEqual(try Data(contentsOf: firstURL), originalFirst)
+        XCTAssertEqual(try Data(contentsOf: secondURL), originalSecond)
+        focus("Second.capy")
+        command("save_document", "Save")
+        expectation(for: NSPredicate { _, _ in (try? Data(contentsOf: secondURL)) != originalSecond }, evaluatedWith: second)
+        waitForExpectations(timeout: 15)
+        XCTAssertEqual(try Data(contentsOf: copyURL), copied)
+
+        focus("First Copy.capy")
+        command("open_document", "Open…")
+        let open = app.windows.buttons["OKButton"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(copyURL.path + "\n")
+        workspaceActivate(open)
+        XCTAssertTrue(open.waitForNonExistence(timeout: 15))
+        expectTitle(first, "First Copy.capy"); expectRows(first, 3)
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: first)
+        waitForExpectations(timeout: 15)
+        focus("Second.capy")
+        history("Undo"); expectRows(second, 2)
+        expectRows(first, 3)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        attachEditor(in: app, name: "independent-file-dialog-owners")
+        app.terminate()
+    }
+
+    @MainActor func checkNativeImagePaste(in app: XCUIApplication) throws {
+        let clipboard = try NativePhotoPasteboard()
+        addTeardownBlock { await MainActor.run { clipboard.restore() } }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Paste " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let photo = root.appendingPathComponent("Clipboard blue.png")
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let title = app.staticTexts["document-title"]
+        let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
+        let size = extent.components(separatedBy: " × ").compactMap(Int.init)
+        XCTAssertEqual(size.count, 2)
+        let context = try XCTUnwrap(CGContext(data: nil, width: size[0], height: size[1], bitsPerComponent: 8,
+            bytesPerRow: size[0] * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size[0], height: size[1]))
+        let output = try XCTUnwrap(CGImageDestinationCreateWithURL(photo as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(output, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(output))
+        let original = try Data(contentsOf: photo)
+        func item(_ data: Data, type: NSPasteboard.PasteboardType = .png) -> NSPasteboardItem {
+            let item = NSPasteboardItem(); XCTAssertTrue(item.setData(data, forType: type)); return item
+        }
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let apply = app.buttons["photo-placement-apply"]
+        func paste() { editorMenu(in: app, menu: "Edit", id: "paste_image", label: "Paste Image as Layer") }
+        func expect(_ count: Int, _ pixels: Data) {
+            expectation(for: NSPredicate { _, _ in
+                rows.count == count && self.editorPixels(in: app) == pixels
+            }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+        }
+        let paper = editorPixels(in: app)
+        for cancel in [true, false] {
+            try clipboard.replace([item(original), item(original)])
+            paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 4)
+            workspaceActivate(cancel ? app.buttons["photo-placement-cancel"] : apply)
+            XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
+            if cancel { expect(2, paper) }
+        }
+        let painted = editorPixels(in: app)
+        XCTAssertGreaterThan(Int(painted[2]), Int(painted[0]) + 100)
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
+            editorHistory(command, in: app); expect(count, pixels)
+        }
+        try clipboard.replace([item(original), item(Data("invalid PNG".utf8))])
+        paste()
+        let failure = app.sheets.firstMatch
+        XCTAssertTrue(failure.waitForExistence(timeout: 20))
+        workspaceActivate(failure.buttons["OK"])
+        XCTAssertTrue(failure.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(apply.exists); expect(4, painted)
+        // A failed batch must not insert its first valid member or add history.
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
+            editorHistory(command, in: app); expect(count, pixels)
+        }
+        try clipboard.replace([item(photo.dataRepresentation, type: .fileURL)])
+        paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 5)
+        workspaceActivate(app.buttons["photo-placement-cancel"])
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); expect(4, painted)
+        XCTAssertEqual(try Data(contentsOf: photo), original)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        attachEditor(in: app, name: "native-clipboard-batch-history-and-failure-retry")
+    }
+
     @MainActor func checkNativeImageDrop(in app: XCUIApplication) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Capy Drop " + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

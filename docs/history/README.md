@@ -25,6 +25,7 @@ remains at its existing path while implementation work continues.
 - [GTK + Wayland canvas subsurface: feasibility proof](wayland-subsurface-feasibility.md).
 - [Android UI before canvas shaders](android-first-ui.md).
 - [Four-stage WebGPU startup — 2026-09-10](web-staged-startup.md).
+- [Tablet web startup: input lock and GPU compilation — 2026-09-17](web-startup-tablet-2026-09-17.md).
 
 ## Workspace and settings
 

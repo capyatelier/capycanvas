@@ -29,7 +29,12 @@ import UIKit
     private weak var store: EditorStore?
     private var requestID: UInt64?
     private var approved: (UInt64, UInt64)?
+    // Keep the native picker's URL, including its security scope. The shared
+    // location string identifies the document but cannot recreate file access.
     private var destination: URL?
+    #if os(macOS)
+    weak var presentationWindow: NSWindow?
+    #endif
     var closeWindow: (() -> Void)?
     private var handledClose = false
     private var activeTask: NativeProjectTask?
@@ -83,8 +88,7 @@ import UIKit
         blocksEditor = action != "save" || closeCompletion != nil
         switch action {
         case "save":
-            destination = URL(string: document["location"]["uri"].string)
-            save(as: document["location"].isNull) { [weak self] saved in self?.finish(saved) }
+            save(to: document["location"]["uri"].string) { [weak self] saved in self?.finish(saved) }
         case "new":
             let completed: (JSON?) -> Void = { [weak self] options in
                 guard let self else { return }
@@ -241,8 +245,8 @@ import UIKit
             if error == nil { complete(choice.options) }
         }
     }
-    private func save(as copy: Bool, completion: @escaping (Bool) -> Void) {
-        if !copy, let destination { write(destination, completion: completion); return }
+    private func save(to uri: String, completion: @escaping (Bool) -> Void) {
+        if let destination, destination.absoluteString == uri { write(destination, completion: completion); return }
         task(opening: false) { [weak self] task in
             guard let self else { return }
             deliver(task, name: title, type: .capyProject) { [weak self] url in
@@ -418,7 +422,10 @@ import UIKit
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error { self.report(error) }
-                            else if let recovery { self.store?.recovery.didRestore(recovery) }
+                            else {
+                                self.destination = recovery == nil ? url : nil
+                                if let recovery { self.store?.recovery.didRestore(recovery) }
+                            }
                             self.recovering = nil
                             self.finish(error == nil)
                         }
@@ -475,7 +482,7 @@ import UIKit
         let panel = NSOpenPanel()
         panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = photosOnly
         panel.canChooseDirectories = false
-        panel.begin { response in completion(response == .OK ? panel.urls : []) }
+        present(panel) { response in completion(response == .OK ? panel.urls : []) }
         #else
         pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes, multiple: photosOnly)
         #endif
@@ -487,11 +494,21 @@ import UIKit
         panel.allowedContentTypes = [type]; panel.canCreateDirectories = true
         panel.nameFieldStringValue = URL(fileURLWithPath: name).pathExtension.isEmpty
             ? name + "." + (type == .capyProject ? "capy" : type.preferredFilenameExtension ?? "png") : name
-        panel.begin { response in completion(response == .OK ? panel.url : nil) }
+        present(panel) { response in completion(response == .OK ? panel.url : nil) }
         #else
         completion(nil) // iPad uses the export picker above.
         #endif
     }
+    #if os(macOS)
+    private func present(_ panel: NSSavePanel, completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        guard let presentationWindow else {
+            completion(.cancel)
+            error = "The drawing window is unavailable."
+            return
+        }
+        panel.beginSheetModal(for: presentationWindow, completionHandler: completion)
+    }
+    #endif
     func picked(_ urls: [URL]) {
         let completion = pickerCompletion; pickerCompletion = nil; picker = nil
         completion?(urls)

@@ -37,8 +37,12 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
             recognizer.allowedTouchTypes = [UITouch.TouchType.direct, .pencil, .indirectPointer].map { NSNumber(value: $0.rawValue) }
         }
         // Use UIKit's native hold duration, movement slop and cancellation.
-        observer = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
-            object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.cancel() } }
+        observer = NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification,
+            object: nil, queue: .main) { [weak self] notification in MainActor.assumeIsolated {
+                guard let self, let scene = self.window?.windowScene,
+                    notification.object as? UIScene === scene else { return }
+                self.cancel()
+            } }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }

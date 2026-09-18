@@ -14,7 +14,7 @@ impl WgpuRasterizer {
         &mut self,
         layer: LayerId,
         coordinate: [u32; 2],
-        offsets: [[i32; 2]; N],
+        offsets: [Option<[i32; 2]>; N],
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
@@ -22,7 +22,7 @@ impl WgpuRasterizer {
         if !self.tiled_sources.contains_key(&layer) && self.native_backing(layer).is_none() {
             return Ok(());
         }
-        for [dx, dy] in offsets {
+        for [dx, dy] in offsets.into_iter().flatten() {
             let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
             if x < 0 || y < 0 {
                 continue;
@@ -48,10 +48,11 @@ impl WgpuRasterizer {
         &'a self,
         layer: &'a PaintLayer,
         coordinate: [u32; 2],
-        offsets: [[i32; 2]; N],
+        offsets: [Option<[i32; 2]>; N],
         preview: bool,
     ) -> [&'a wgpu::TextureView; N] {
-        offsets.map(|[dx, dy]| {
+        offsets.map(|offset| {
+            let Some([dx, dy]) = offset else { return &self.empty_view; };
             let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
             if x < 0 || y < 0 {
                 return &self.empty_view;

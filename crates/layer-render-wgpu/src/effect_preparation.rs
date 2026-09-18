@@ -13,13 +13,13 @@ pub(super) struct State {
     pub values: Vec<EffectValue>,
 }
 pub(super) struct Dispatch {
-    pub pipeline: wgpu::ComputePipeline,
+    pub pipeline: Deferred<wgpu::ComputePipeline>,
     pub binding: wgpu::BindGroup,
     pub groups: [u32; 3],
 }
 pub(super) struct Preparation {
     pub layout: wgpu::BindGroupLayout,
-    pipelines: Vec<(Key, wgpu::ComputePipeline)>,
+    pub(super) pipelines: Vec<(Key, Deferred<wgpu::ComputePipeline>)>,
     pub pending: Vec<Dispatch>,
     pub executions: u64,
 }
@@ -67,7 +67,7 @@ impl Preparation {
         &mut self,
         device: &PipelineDevice,
         key: &Key,
-    ) -> Result<wgpu::ComputePipeline, GpuRasterError> {
+    ) -> Result<Deferred<wgpu::ComputePipeline>, GpuRasterError> {
         if let Some((_, pipeline)) = self.pipelines.iter().find(|(k, _)| k == key) {
             return Ok(pipeline.clone());
         }
@@ -160,13 +160,19 @@ impl Preparation {
             bind_group_layouts: &[Some(&self.layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("effect preparation"),
-            layout: Some(&layout),
-            module: &module,
-            entry_point: Some("prep_main"),
-            compilation_options: Default::default(),
-            cache: None,
+        let device = device.clone();
+        let pipeline = Deferred::pipeline(move |mode| {
+            mode.compute(
+                &device,
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("effect preparation"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("prep_main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            )
         });
         self.pipelines.push((key.clone(), pipeline.clone()));
         Ok(pipeline)

@@ -104,7 +104,7 @@ import ImageIO
             try await wait("Rename not applied") { store.state["layers"].array.contains { $0["label"].string == "Saved layer" } }
             try await invoke("save_document")
             precondition(!store.state["document_file"]["modified"].bool)
-            let savedData = try Data(contentsOf: target)
+            var savedData = try Data(contentsOf: target)
             // A file can launch the app before its first state publication or
             // before the canvas attaches. Retain it through normal startup.
             for published in [false, true] {
@@ -213,6 +213,17 @@ import ImageIO
             saveLocation = nil
             try await invoke("save_document_as")
             precondition((try? Data(contentsOf: target)) == savedData)
+            let choicesAfterCancellation = choices
+            let savedLayerName = "Saved after cancelling Save As"
+            store.layer(["op":"rename", "id":id, "name":savedLayerName])
+            try await wait("Rename after cancelled Save As") {
+                store.state["layers"].array.contains { $0["label"].string == savedLayerName }
+            }
+            try await invoke("save_document")
+            precondition(choices == choicesAfterCancellation && store.projectFiles.error == nil,
+                "Save after cancelling Save As must retain the original destination without another picker")
+            precondition(!store.state["document_file"]["modified"].bool)
+            savedData = try Data(contentsOf: target)
             store.invoke("add_layer")
             try await wait("Unsaved edit not applied") { store.state["layers"].array.count == 4 }
             let epoch = store.state["document_file"]["epoch"].uint
@@ -290,7 +301,7 @@ import ImageIO
             store.projectFiles.choose("discard")
             try await wait("Confirmed open did not settle") { !store.projectFiles.busy }
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
-            precondition(store.state["layers"].array.contains { $0["label"].string == "Saved layer" })
+            precondition(store.state["layers"].array.contains { $0["label"].string == savedLayerName })
             precondition(!store.state["document_file"]["modified"].bool)
             store.invoke("add_layer")
             var closed: Bool?

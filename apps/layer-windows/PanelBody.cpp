@@ -53,9 +53,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             navigator=std::make_unique<NavigatorView>(data,std::move(layoutChanged));
             auto view=navigator->Root();root=view;
         }else if(str(panel,L"id")==L"adjustments"&&shows(panel,L"adjustments")){
-            auto view=FiltersPanel(data,bindings,&contentHeight);root=view;
+            auto view=FiltersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
         }else if(str(panel,L"id")==L"layers"){
-            auto view=LayersPanel(data,bindings,&contentHeight);root=view;
+            auto view=LayersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
@@ -181,11 +181,13 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 contentHeight=[fittedColor,inset]{return fittedColor.ActualHeight()+2*inset;};
             }else if(!scrollable)root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
+                scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
                 root=scroll;
             }else{
+                scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
                 ScrollViewer scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollMode::Disabled);
                 scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);root=scroll;
             }

@@ -110,7 +110,9 @@ its own window when warm delivery creates another. These checks do not establish
 the full file-provider or lifecycle matrix; evidence and current scope are in
 the [Apple handoff](../../docs/development/apple-handoff.md).
 
-macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
+macOS attaches NSOpenPanel/NSSavePanel to the owning document window, whose native
+title follows the current filename. Returning through the Window menu also
+returns to that drawing's pending panel. iPad uses UIDocumentPickerViewController:
 Save As prepares an archive in a private temporary directory before presenting
 the export picker. Save acknowledgments follow the completed destination write
 or successful picker export, never location selection alone. Cancelled or failed
@@ -147,10 +149,16 @@ library copy leaves original files and profiles embedded in projects/presets
 intact. Missing first-run preferences use shared defaults; invalid existing data
 reports an error rather than silently substituting a profile.
 
-Security-scoped access and NSFileCoordinator surround file operations. Regular
-writes stream into a private sibling temporary file, sync, rename and sync the
-directory. Cancellation wins before the atomic publication boundary. File-provider
-export is completed by the native picker. Source/sample allocations are shared
+Security-scoped access and NSFileCoordinator surround file operations. The native
+owner retains the actual picker URL for subsequent Save; the shared URI is an
+identity, not an access grant. Successful Open replaces that retained destination,
+and cancelling Save As preserves the previous one. Regular writes stream into a
+system-provided replacement directory on the destination volume, sync the archive,
+then publish with FileManager replacement/move. A file-only grant does not permit
+creating arbitrary siblings or opening the parent directory for syncing. Private
+recovery manifests still use their own directory-synced atomic publication.
+Cancellation wins before the replacement boundary. File-provider export is
+completed by the native picker. Source/sample allocations are shared
 with the snapshot, but large-document capture cost, GPU preparation, memory peaks
 and storage latency still require measurement.
 

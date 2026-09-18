@@ -1,6 +1,17 @@
 # Phase 2 handoff: macOS and iPadOS
 
-2026-09-16. Implement and qualify complete SDR color/photo editing on **both**
+Latest closure, 2026-09-18: the user accepts current full-pressure large-photo
+G-Pen performance and confirms local Save As/Open/ordinary Save. Filter-preview
+cancellations retry without blocking the editor, and repeated zoom is smooth.
+The shared optimization quality review is published. Do not repeat older pending
+G-Pen or local-save checks below; the [current release checklist](apple-release-checklist.md)
+tracks remaining UIKit controls, provider/lifecycle, managed-display and separate
+watercolor/memory/measurement acceptance.
+Physical iPad keyboard and second-Mac-display checks are user-deferred, as is
+iCloud acceptance.
+
+Original integration brief, 2026-09-16 (implementation milestones below supersede
+its starting-state assessment): implement and qualify complete SDR color/photo editing on **both**
 Apple hosts. GTK is qualified within its recorded envelope; Web/Android have
 passing device workflows, with the latest user retest pending. Apple is not yet
 compatible with all shared phase 2 contracts. Start from the integration of
@@ -181,4 +192,8 @@ Target smooth iPad 120 Hz; current Mac evidence is 90 Hz, with 120 Hz hardware
 qualification still deferred. Document actual refresh, missed frames and latency;
 do not label CPU submission as presentation. Preserve users' files/recovery,
 identify the installed build, commit significant checkpoints, and publish a
-short acceptance record with remaining hardware gaps. Print proofing/HDR is later.
+short acceptance record with remaining hardware gaps. The subsequent shared
+proof milestone now enables Proof Setup/Colors/Gamut Warning on Apple, matching
+Web/Android; see the [proof record](apple-handoff.md#shared-print-proofing--2026-09-17).
+Its scoped worker/native/UIKit passes do not close physical provider, print-color
+accuracy or managed-display acceptance. HDR remains later.

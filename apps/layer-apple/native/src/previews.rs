@@ -1,6 +1,6 @@
 //! Owned picker atlases and live overview layout. No per-channel JSON or GPU wait.
 use super::*;
-use layer_render::{CanvasRenderer, FilterPreviewImage};
+use layer_render::FilterPreviewImage;
 
 /// # Safety
 /// Serial owner call; JSON is an array of logical bounds/clip/order records.
@@ -79,6 +79,7 @@ pub struct CapyFilterPreviewInfo {
 /// # Safety
 /// Call on the serial editor owner. The returned allocation has no editor/GPU
 /// references and can be read and freed on an image worker after editor teardown.
+/// The shared query already retires stale requests without an editor error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_take_filter_previews(
     app: *mut CapyApple,
@@ -87,16 +88,9 @@ pub unsafe extern "C" fn capy_apple_take_filter_previews(
         return std::ptr::null_mut();
     };
     app.perform(|app| {
-        let renderer = app.host.session.renderer_mut();
-        if let Some(gpu) = &renderer.0 {
-            gpu.device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(|e| e.to_string())?;
-        }
-        let Some(result) = renderer.take_filter_previews() else {
+        let Some(atlas) = app.host.take_filter_preview_image() else {
             return Ok(std::ptr::null_mut());
         };
-        let atlas = result.map_err(|e| e.to_string())?;
         let filters =
             CString::new(serde_json::to_string(&atlas.filters).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;

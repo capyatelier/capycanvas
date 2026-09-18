@@ -121,15 +121,18 @@ impl Pipelines {
             source: wgpu::ShaderSource::Wgsl(include_str!("display_mips.wgsl").into()),
         });
         let device = device.clone();
-        let reduce = Deferred::new(move || {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("display mip reduction"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("reduce"),
-                compilation_options: Default::default(),
-                cache: None,
-            })
+        let reduce = Deferred::pipeline(move |mode| {
+            mode.compute(
+                &device,
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("display mip reduction"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("reduce"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            )
         });
         Self {
             layout,

@@ -9,7 +9,7 @@ impl WebApp {
         id: Option<String>,
         bytes: Option<js_sys::Uint8Array>,
     ) -> Result<js_sys::Promise, JsValue> {
-        if !matches!(operation, "list" | "get" | "import" | "remove") {
+        if !matches!(operation, "list" | "get" | "import" | "remove" | "show" | "hide") {
             return Err(js("Unknown profile library action"));
         }
         let buffers = js_sys::Array::new();

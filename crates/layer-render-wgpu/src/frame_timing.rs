@@ -158,6 +158,29 @@ impl GpuFrameTimer {
     /// outside this span, and timing adds no start/end queue submissions.
     /// Pair a successful begin with end_encoded and submitted.
     pub(crate) fn begin_encoded(&mut self, encoder: &mut wgpu::CommandEncoder, frame: u64) -> bool {
+        if !self.reserve(frame) {
+            return false;
+        }
+        let (index, _) = self.active.unwrap();
+        self.marker.as_ref().unwrap().write(encoder, &self.slots[index].query, 0);
+        true
+    }
+
+    /// Optional pass-only profiling, without extra marker passes. The caller
+    /// must notify `submitted` after submitting the containing command buffer.
+    pub(crate) fn begin_render_pass(&mut self, frame: u64) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        if !self.reserve(frame) {
+            return None;
+        }
+        let (index, _) = self.active.unwrap();
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: &self.slots[index].query,
+            beginning_of_pass_write_index: Some(0),
+            end_of_pass_write_index: Some(1),
+        })
+    }
+
+    fn reserve(&mut self, frame: u64) -> bool {
         self.requested += 1;
         let slot = if self.active.is_none() {
             self.slots
@@ -173,7 +196,6 @@ impl GpuFrameTimer {
         };
         slot.busy.store(true, Ordering::Release);
         self.active = Some((index, frame));
-        self.marker.as_ref().unwrap().write(encoder, &slot.query, 0);
         true
     }
     pub(crate) fn end_encoded(&self, encoder: &mut wgpu::CommandEncoder) {

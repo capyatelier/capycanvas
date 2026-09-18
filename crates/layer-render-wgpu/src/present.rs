@@ -43,6 +43,7 @@ impl OverviewPlacement {
 }
 
 pub struct ViewportPresenter {
+    timing: Option<crate::frame_timing::GpuFrameTimer>,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
@@ -76,6 +77,28 @@ pub struct ViewportPresenter {
 }
 
 impl ViewportPresenter {
+    /// Opt-in, bounded and nonblocking pass timings for benchmarks using
+    /// `present` / `present_overviews`. Leave disabled when submitting `encode`
+    /// directly: those callers cannot notify this timer of their submission.
+    pub fn gpu_timings(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        enabled: bool,
+    ) -> Vec<crate::frame_timing::GpuFrameSample> {
+        if !enabled {
+            self.timing = None;
+            return Vec::new();
+        }
+        let timer = self.timing.get_or_insert_with(|| {
+            crate::frame_timing::GpuFrameTimer::new(renderer.device(), renderer.queue())
+        });
+        timer.poll(renderer.device(), renderer.queue());
+        let mut samples = vec![crate::frame_timing::GpuFrameSample::default(); 256];
+        let count = timer.take_into(&mut samples);
+        samples.truncate(count);
+        samples
+    }
+
     pub fn proof_storage_bytes(&self) -> u64 {
         if self.proof_lut.is_some() { self.proof_buffer.size() } else { 0 }
     }
@@ -83,6 +106,10 @@ impl ViewportPresenter {
     /// Explicit viewport captures share immutable samples and the same viewing
     /// options; they do not allocate another LUT. Export never calls this path.
     pub fn inherit_proof(&mut self, source: &Self) {
+        if self.proof_buffer == source.proof_buffer && self.proof_uniform == source.proof_uniform {
+            self.proof_options = source.proof_options;
+            return;
+        }
         self.proof_buffer = source.proof_buffer.clone();
         self.proof_uniform = source.proof_uniform.clone();
         self.proof_options = source.proof_options;
@@ -364,6 +391,7 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             }),
             proof_options: [0; 4],
+            timing: None,
             proof_lut: None,
             bind_group: None,
             selection_buffer: None,
@@ -521,6 +549,9 @@ impl ViewportPresenter {
             });
         self.encode(renderer, &mut encoder, target, view, surround_linear)?;
         renderer.queue.submit([encoder.finish()]);
+        if let Some(timer) = &mut self.timing {
+            timer.submitted(renderer.queue());
+        }
         Ok(())
     }
 
@@ -564,6 +595,9 @@ impl ViewportPresenter {
             true,
         )?;
         renderer.queue.submit([encoder.finish()]);
+        if let Some(timer) = &mut self.timing {
+            timer.submitted(renderer.queue());
+        }
         Ok(())
     }
 
@@ -720,6 +754,10 @@ impl ViewportPresenter {
             )?;
             self.overviews_changed = false;
         }
+        let timestamp_writes = self.timing.as_mut().and_then(|timer| {
+            timer.poll(renderer.device(), renderer.queue());
+            timer.begin_render_pass(timer.stats().requested)
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
@@ -737,7 +775,7 @@ impl ViewportPresenter {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

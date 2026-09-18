@@ -88,13 +88,25 @@ function Find-Id([string]$Id) {
 function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     $script:found=$null;Wait-Until {$script:found=Find-Name $Name $Type;$null -ne $script:found} "Missing control: $Name";$script:found
 }
-function Invoke-Control([string]$Name) {(Control $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
+function Invoke-Control([string]$Name) {
+    $before=(Model).state.document_file.revision
+    Wait-Until {
+        try {$item=Find-Name $Name;if(!$item -or !$item.Current.IsEnabled){return $false};$item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();$true}
+        catch [System.Windows.Automation.ElementNotAvailableException] {(Model).state.document_file.revision -ne $before}
+    } "Could not invoke control: $Name"
+}
 function File-Command([string]$Id) {
     $script:scope=$root
     Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
     Wait-Until {$item=Find-Id $Id;$item -and $item.Current.IsEnabled} "Enabled file command not found: $Id"
     (Find-Id $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    if($Id -eq 'export_document') {
+        Wait-Until {(Model).windows_document.stage -eq 'options'} 'Export options did not open' 45
+        Invoke-Control 'Preview export'
+        Wait-Until {(Model).windows_document.stage -eq 'preview'} 'Export preview did not finish' 60
+        Invoke-Control 'Export…'
+    }
 }
 function New-Dialog {
     $script:scope=$root
@@ -261,7 +273,7 @@ function Import-Start {
     Picker 'Open'
 }
 function Import-Idle {
-    Wait-Until {$current=Model;$current -and !$current.windows_importing} 'Image import did not finish' 30
+    Wait-Until {$current=Model;$current -and !$current.windows_importing -and !$current.state.document_file.busy} 'Image import did not finish' 30
     $script:scope=$root
 }
 $opacity=Find-Id 'layer-opacity'
@@ -273,14 +285,17 @@ Invoke-Control 'Undo'
 Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the clean opacity checkpoint'
 $badImage=Join-Path $run 'Invalid image.png'
 [IO.File]::WriteAllText($badImage,'synthetic invalid image')
-Import-Start;Choose-Path $badImage;Import-Idle
-Wait-Until {(Model).error -like '*could not decode*'} 'Invalid image did not report a recoverable decoder error'
+Import-Start;Choose-Path $badImage
+Wait-Until {(Model).windows_document.stage -eq 'error'} 'Invalid image did not report a recoverable decoder error' 30
+$script:scope=$root;$script:scope=Find-Id 'document-workflow';Invoke-Control 'Close';Import-Idle
 if(@((Model).state.layers).Count -ne 2 -or (Model).state.document_file.modified){throw 'Invalid image changed the document'}
 Import-Start;Choose-Path $imageSource;Import-Idle
-Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.label -eq 'Imported image'} 'Image layer was not selected'
+Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.label -eq 'Source image 日本語'} 'Image layer was not selected'
 if((Model).error){throw 'Successful import did not clear the previous decoder error'}
 $imported=(Model).state.layer_tools.editing_layer.id
 Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not arrive' 15
+Invoke-Control 'Apply transform'
+Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Placement did not enter undo history'
 Invoke-Control 'Undo'
 Wait-Until {@((Model).state.layers).Count -eq 2 -and !(Model).state.document_file.modified} 'Import Undo did not restore the clean document'
 Invoke-Control 'Redo'

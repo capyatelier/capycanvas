@@ -26,6 +26,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "drop"
             | "workspace_drag_preview"
             | "layer_drop"
+            | "image_layer_drop"
             | "drawer"
             | "drawer_toolbar"
             | "expansion"

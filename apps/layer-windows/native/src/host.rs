@@ -59,6 +59,7 @@ pub struct CapyHost {
     services: Option<crate::settings::SettingsService>,
     filters: Option<crate::filter_packages::FilterService>,
     documents: Option<crate::documents::DocumentService>,
+    recovery: Option<crate::recovery::Service>,
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
     blocked_contacts: std::collections::BTreeSet<u64>,
 }
@@ -103,6 +104,7 @@ impl CapyHost {
             services: None,
             filters: None,
             documents: None,
+            recovery: None,
             workspaces: None,
             blocked_contacts: Default::default(),
         })
@@ -132,6 +134,7 @@ impl CapyHost {
         if let Some(service) = self.documents.as_mut() {
             service.poll(&mut self.native)?;
         }
+        if let Some(service) = self.recovery.as_mut() { service.poll(&mut self.native)?; }
         if let Some(service) = self.services.as_mut() {
             service.poll(&mut self.native)?;
         }
@@ -141,6 +144,7 @@ impl CapyHost {
         if let Some(service) = self.workspaces.as_mut() {
             if self.native.session.state().document_file.close_ready
                 && self.services.as_ref().is_none_or(|s| s.close_status().ready)
+                && self.recovery.as_ref().is_none_or(|s| s.close_ready())
                 && !service.status().close_requested
             {
                 service.request_close(&mut self.native);
@@ -169,7 +173,8 @@ impl CapyHost {
             // renderer and presenter before requesting another device. Retained
             // CPU assets, history and input remain in the same UiSession.
             self.presenter = None;
-            drop(self.native.session.renderer_mut().0.take());
+            let renderer = layer_host::Renderer(self.native.session.renderer_mut().0.take());
+            if let Some(service) = &mut self.recovery { service.retire_renderer(renderer); } else { drop(renderer); }
             self.native.startup = Default::default();
             // Completed document candidates may still own the removed device;
             // reject those while allowing an in-flight CPU Save to complete.
@@ -189,7 +194,9 @@ impl CapyHost {
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Capy Canvas Windows"),
-            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            required_features: adapter.features() & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
             required_limits: limits,
             ..Default::default()
         }))
@@ -204,7 +211,9 @@ impl CapyHost {
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         let mut presenter = ViewportPresenter::new(&device, config.format);
-        let renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue).map_err(err)?;
+        let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue,
+            self.native.session.engine().document().color).map_err(err)?;
+        renderer.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(err)?;
         // Prepare the optional overview pipeline during GPU startup, before input is live.
         presenter.prepare_overviews(&renderer);
         gpu_state.check()?;
@@ -214,12 +223,7 @@ impl CapyHost {
             .session
             .replace_renderer(layer_host::Renderer(Some(renderer)))?;
         self.native.apply_change(revision, change);
-        // DEPRECATED teardown placement for the raster backend: a retired
-        // capture worker can wait for GPU mappings/compression. Move this drop
-        // to a retirement worker (see Android resetGpu/GTK RenderWorker), then
-        // qualify retained raster/history recovery on D3D12. Keep the shared
-        // replace_renderer call above; direct backend replacement is obsolete.
-        drop(retired); // Currently still on the render/input owner.
+        if let Some(service) = &mut self.recovery { service.retire_renderer(retired); } else { drop(retired); }
         if self.device_is_lost() {
             self.native.error = None;
         }
@@ -344,6 +348,10 @@ pub unsafe extern "C" fn capy_start_services(
                 },
             ));
         }
+        if host.recovery.is_none() {
+            let context = context as usize;
+            host.recovery = Some(crate::recovery::Service::open(move || { if let Some(wake) = wake { wake(context as *mut c_void); } })?);
+        }
         if host.filters.is_none() {
             let context = context as usize;
             let mut service = crate::filter_packages::FilterService::new(move || {
@@ -419,7 +427,8 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         } else {
             Ok(())
         };
-        documents.and(settings).and(workspaces).and(filters)
+        let recovery = host.recovery.as_mut().map_or(Ok(()), |s| s.stop());
+        documents.and(settings).and(workspaces).and(filters).and(recovery)
     })) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -656,11 +665,14 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
 pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
         let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
-        let result = host
-            .documents
-            .as_mut()
-            .ok_or("Document service is unavailable")?
-            .dispatch(&mut host.native, action);
+        // The restore sheet owns the window until its candidate returns. A
+        // queued title-bar close must not retire that still-unadopted origin.
+        if matches!(action, crate::documents::DocumentAction::Close) && host.recovery.as_ref().is_some_and(|s| s.restoring()) { return Ok(0); }
+        let result = if let crate::documents::DocumentAction::Recovery { action } = action {
+            host.recovery.as_mut().ok_or("Recovery service is unavailable")?.dispatch(&mut host.native, action)
+        } else {
+            host.documents.as_mut().ok_or("Document service is unavailable")?.dispatch(&mut host.native, action)
+        };
         if let Err(error) = result {
             fail(error);
             return Ok(1);
@@ -673,6 +685,16 @@ pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const 
 /// `host` must be null or a live host exclusively accessed by this caller.
 /// `json` must be null or a readable NUL-terminated buffer that remains unchanged
 /// for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_native_prediction(host: *mut CapyHost, available: bool) -> i32 {
+    guard(host, |host| {
+        host.native.session.set_platform_prediction_available(available);
+        host.native.invalidate_snapshot();
+        Ok(0)
+    })
+}
+/// # Safety
+/// Exclusive access to a live host; json is a readable NUL-terminated buffer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
@@ -807,6 +829,8 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .documents
                 .as_ref()
                 .and_then(|service| service.import_request()),
+            windows_recovery: host.recovery.as_ref().map(|service| service.status()),
+            windows_document: host.documents.as_ref().and_then(|service| service.status()),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
@@ -878,6 +902,23 @@ pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
         Ok(0)
     });
     result
+}
+/// Binary, display-only comparison pixels for a prepared document candidate.
+/// # Safety
+/// The host is exclusively owned by the caller; json is a readable C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_document_preview(host: *mut CapyHost, json: *const c_char) -> *mut crate::previews::CapyPreview {
+    let mut packet = std::ptr::null_mut();
+    guard(host, |host| {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Query { id: u32, index: usize }
+        let query: Query = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        let result = host.documents.as_ref().ok_or("Documents unavailable")?.preview(query.id, query.index)?;
+        packet = Box::into_raw(Box::new(result));
+        Ok(0)
+    });
+    packet
 }
 /// Stateless shared numeric policy; safe on the UI thread without a host.
 /// # Safety

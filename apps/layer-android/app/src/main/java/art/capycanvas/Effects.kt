@@ -1,6 +1,5 @@
 package art.capycanvas
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -21,8 +20,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -37,21 +34,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
 private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effect", "action" to action))
-
-internal data class FilterPreviewReply(val status: JSONObject, val header: JSONArray?, val bytes: ByteArray?)
-internal data class FilterPreviewTile(val key: String, val image: ImageBitmap)
-/** Retained across tab switches, bounded by the shared filter catalog. */
-internal class FilterPreviewCache {
-    var request = 0L
-    val images = mutableStateMapOf<String, FilterPreviewTile>()
-}
-private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewReply? = suspendCancellableCoroutine { continuation ->
-    filterPreviews(request) { if (continuation.isActive) continuation.resume(it) }
-}
 
 /** Category/search decisions and preview sampling are shared Rust policy. Only
  * visible row geometry and native bitmap presentation belong to this view. */
@@ -79,45 +64,13 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
     val search = picker.takeUnless { it.isNull("search") }?.getString("search")
     fun send(action: JSONObject) = host.dispatch(obj("type" to "filter_picker", "action" to action))
     LaunchedEffect(search != null) { if (search != null) focus.requestFocus() }
-    LaunchedEffect(host) {
-        var revision: JSONArray? = null
-        var pending: Pair<Long,String>? = null
-        while (isActive) {
-            delay(200)
-            val size = currentSize
-            val key = "${revision}:$size"
+    val previewView = remember { Any() }
+    DisposableEffect(host, previewView) { onDispose { cache.remove(previewView) } }
+    LaunchedEffect(host, previewView) {
+        snapshotFlow {
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
-            val filters = if (pending != null) emptyList() else currentChoices.map { it.getString("id") }
-                .filter { it in visible && cache.images[it]?.key != key }.take(8)
-            val request = ++cache.request
-            val response = host.previewReply(obj("type" to "filter_previews", "request" to request,
-                "revision" to revision, "filters" to JSONArray(filters), "size" to JSONArray(size))) ?: continue
-            revision = response.status.getJSONArray("revision")
-            if (response.status.getBoolean("accepted")) pending = request to key
-            val header = response.header ?: continue
-            val job = pending?.takeIf { it.first == header.getLong(0) } ?: continue
-            pending = null
-            if (job.second != "${revision}:$currentSize") continue
-            val bytes = response.bytes ?: continue
-            val ids = header.getJSONArray(3).values().map { it.toString() }
-            val atlasWidth = header.getInt(1); val rowHeight = header.getInt(2)/ids.size
-            val rows = withContext(Dispatchers.Default) {
-                val pixels = IntArray(atlasWidth*rowHeight)
-                ids.mapIndexed { i,id ->
-                    // The atlas is straight RGBA; Bitmap's color-int API performs
-                    // its required premultiplication. Keep conversion off the UI
-                    // and render Loopers, with one scratch row for the batch.
-                    for(p in pixels.indices) {
-                        val b = (i*pixels.size+p)*4
-                        pixels[p] = ((bytes[b+3].toInt() and 255) shl 24) or ((bytes[b].toInt() and 255) shl 16) or
-                            ((bytes[b+1].toInt() and 255) shl 8) or (bytes[b+2].toInt() and 255)
-                    }
-                    val bitmap = Bitmap.createBitmap(pixels,atlasWidth,rowHeight,Bitmap.Config.ARGB_8888)
-                    id to FilterPreviewTile(job.second, bitmap.asImageBitmap())
-                }
-            }
-            cache.images.putAll(rows)
-        }
+            currentChoices.map { it.getString("id") }.filter { it in visible } to currentSize
+        }.collect { (ids, size) -> cache.update(previewView, ids, size) }
     }
     Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

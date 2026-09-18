@@ -33,6 +33,7 @@ mod color_sample;
 mod source_access;
 mod material_sources;
 mod brush_tiles;
+mod dry_material;
 use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
@@ -45,7 +46,7 @@ mod deferred;
 mod paint_transform;
 mod pixel_transform;
 use builtin_masks::builtin_masks;
-use deferred::Deferred;
+use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
 use pipeline_device::PipelineDevice;
 #[cfg(not(target_arch = "wasm32"))]
@@ -254,6 +255,7 @@ pub enum GpuRasterError {
     SizeOverflow,
     MapFailed(String),
     WaitFailed(String),
+    FilterPreviewCancelled,
     Effect(String),
 }
 
@@ -264,6 +266,7 @@ impl fmt::Display for GpuRasterError {
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
+            Self::FilterPreviewCancelled => formatter.write_str("Filter preview source changed"),
             Self::AdapterUnavailable => {
                 formatter.write_str("no compatible wgpu adapter is available")
             }
@@ -594,10 +597,11 @@ impl BrushReservoir {
 struct LayerPage {
     coordinate: [u32; 2],
     primary: PageSurface,
+    // Inactive color is overwritten by a full-page copy, dry draw or post-stroke
+    // edge pass before use. Only a new primary needs a separate clear.
     secondary: Option<PageSurface>,
     active_secondary: bool,
     primary_needs_clear: bool,
-    secondary_needs_clear: bool,
 }
 
 struct PageSurface {
@@ -650,13 +654,12 @@ impl LayerPage {
         let bytes = if self.active_secondary {
             let bytes = self.primary.storage_bytes();
             self.primary = secondary;
-            self.primary_needs_clear = self.secondary_needs_clear;
+            self.primary_needs_clear = false;
             bytes
         } else {
             secondary.storage_bytes()
         };
         self.active_secondary = false;
-        self.secondary_needs_clear = false;
         bytes
     }
 }
@@ -687,6 +690,7 @@ struct TextureSet {
 }
 
 struct Pipelines {
+    dry_material: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
         MaterialOperation::ALL.len() * MaterialPipelineKind::COUNT],
@@ -703,6 +707,9 @@ struct Pipelines {
 
 impl Pipelines {
     fn compile_all(&self) {
+        if let Some(dry) = &self.dry_material {
+            for p in &dry.kernels { p.compile(); }
+        }
         for p in self
             .direct
             .iter()
@@ -799,6 +806,7 @@ pub struct WgpuRasterizer {
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
+    preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<LayerId>,
     preview_requires_base: bool,
     preview_direct_to_composite: bool,
@@ -1167,6 +1175,7 @@ impl WgpuRasterizer {
             preview_coverage_pages: Vec::with_capacity(8),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
+            preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
             preview_direct_to_composite: false,
@@ -1567,6 +1576,7 @@ impl WgpuRasterizer {
             self.composite_bind_group = None;
             self.live_display = None;
             self.preview_damage = PixelRect::EMPTY;
+            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
@@ -1625,7 +1635,6 @@ impl WgpuRasterizer {
             secondary: None,
             active_secondary: false,
             primary_needs_clear: true,
-            secondary_needs_clear: false,
         }
     }
 
@@ -1694,37 +1703,35 @@ impl WgpuRasterizer {
                 let secondary = self.create_page_surface("layer sparse destination companion");
                 let page = &mut self.paint_layers[layer_index].pages[page_index];
                 page.secondary = Some(secondary);
-                page.secondary_needs_clear = true;
             }
         }
     }
 
     fn material_bind_group(
         &mut self,
-        layer_id: LayerId,
+        batch: &DabBatch,
         coordinate: [u32; 2],
-        stroke_id: StrokeId,
-        watercolor: bool,
         preview: bool,
         gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
+        metadata: Option<&wgpu::Buffer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
-            if gathered.is_some() && i != 4 {
-                // Completed smudge/liquify fields already contain every traced
-                // source sample. Only this destination page remains necessary
-                // for smudge mixing and alpha lock; neighbors are not read.
-                [-1_000_000; 2]
+            if (batch.style.execution == BrushExecution::Dry || gathered.is_some()) && i != 4 {
+                // Dry paint reads only its destination pixel. Completed gather
+                // fields already contain nonlocal smudge/liquify samples.
+                // Neither needs to decode or bind surrounding source tiles.
+                None
             } else {
-                [i as i32 % 3 - 1, i as i32 / 3 - 1]
+                Some([i as i32 % 3 - 1, i as i32 / 3 - 1])
             }
         });
-        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
+        self.prepare_raw_neighborhood(batch.layer_id, coordinate, offsets, preview, encoder)?;
         let layer = self
             .paint_layers
             .iter()
-            .find(|layer| layer.id == layer_id)
-            .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
+            .find(|layer| layer.id == batch.layer_id)
+            .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
         let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
         let coverage = if preview {
             self.preview_coverage_pages
@@ -1737,11 +1744,11 @@ impl WgpuRasterizer {
             layer
                 .coverage_pages
                 .iter()
-                .find(|p| p.coordinate == coordinate && p.owner == Some(stroke_id))
+                .find(|p| p.coordinate == coordinate && p.owner == Some(batch.stroke_id))
         })
         .map(|p| &p.active().view)
         .unwrap_or(&self.empty_scalar_view);
-        let auxiliary = if watercolor {
+        let auxiliary = if BrushPassPlan::for_style(&batch.style).state.watercolor_wetness {
             let pages = if preview {
                 &self.preview_watercolor_wetness_pages
             } else {
@@ -1763,7 +1770,7 @@ impl WgpuRasterizer {
             &self.dab_buffer,
             coverage,
             gathered.map_or(auxiliary, |g| g.0),
-            gathered.map_or(&self.material_source_meta, |g| g.1),
+            metadata.unwrap_or_else(|| gathered.map_or(&self.material_source_meta, |g| g.1)),
         ))
     }
 
@@ -2682,6 +2689,7 @@ impl WgpuRasterizer {
         }
 
         let plan = BrushPassPlan::for_style(&batch.style);
+        let writes_full_page = batch.style.execution == BrushExecution::Dry;
         let layer_index = self
             .paint_layers
             .iter()
@@ -2759,10 +2767,12 @@ impl WgpuRasterizer {
                 .coverage_pages
                 .iter()
                 .find(|page| page.coordinate == coordinate && page.owner == Some(batch.stroke_id));
-            // Preserve this batch's old generations together, before any tile
-            // draws. Source neighborhoods remain consumed one draw at a time.
-            page.active().copy_to(page.surface(!page.active_secondary), encoder);
-            if let Some(coverage) = coverage {
+            // Nonlocal brushes preserve old generations before any tile draws.
+            // Dry draws preserve untouched pixels while writing the new page.
+            if !writes_full_page {
+                page.active().copy_to(page.surface(!page.active_secondary), encoder);
+            }
+            if let Some(coverage) = coverage.filter(|_| !writes_full_page) {
                 let destination = if coverage.active_secondary {
                     &coverage.primary
                 } else {
@@ -2790,9 +2800,10 @@ impl WgpuRasterizer {
             });
         }
         let texture_key = Self::texture_set_key(&batch.style);
+        let mut compute_jobs = Vec::new();
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), false, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), false, encoder,
             )?;
             let page = self.paint_layers[layer_index]
                 .pages
@@ -2800,10 +2811,17 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == job.coordinate)
                 .expect("destination page remains live while encoding");
             let destination = page.surface(job.destination_secondary);
-            // Initialize the inactive wetness target once for the submitted
-            // update. Every internal deposition microbatch accumulates into it
-            // with fixed-function MAX blending before transport begins.
-            let local = job.local;
+            // Dry paint copies untouched pixels in its existing draw.
+            let local = if writes_full_page {
+                PixelRect::full([PAGE_SIZE; 2])
+            } else {
+                job.local
+            };
+            let color_load = if writes_full_page {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
             let texture_set = self
                 .texture_sets
                 .iter()
@@ -2821,6 +2839,15 @@ impl WgpuRasterizer {
                     &coverage.primary.view
                 }
             });
+            if self.compute_dry_material(batch) {
+                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &destination.view, coverage_view);
+                compute_jobs.push((output, source_bind_group, job.coordinate, coverage_view.is_some()));
+                if compute_jobs.len() == SOURCE_SLOTS {
+                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                    compute_jobs.clear();
+                }
+                continue;
+            }
             let scalar_state_view = job.has_scalar_state.then(|| {
                 if plan.state.watercolor_wetness {
                     let page = self.paint_layers[layer_index]
@@ -2845,7 +2872,7 @@ impl WgpuRasterizer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -2854,7 +2881,7 @@ impl WgpuRasterizer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                 }),
@@ -2899,6 +2926,8 @@ impl WgpuRasterizer {
             pass.draw(0..3, 0..1);
         }
 
+        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+
         // Reservoir exchange samples the immutable pre-batch canvas. Keep a
         // bind group to that generation before the page ping-pong state flips.
         let reservoir_exchange = if plan.reservoir {
@@ -2913,11 +2942,10 @@ impl WgpuRasterizer {
                             .min(self.target_extent(batch.layer_id)[1].saturating_sub(1) / PAGE_SIZE),
                     ];
                     self.material_bind_group(
-                        batch.layer_id,
+                        batch,
                         coordinate,
-                        batch.stroke_id,
                         false,
-                        false,
+                        None,
                         None,
                         encoder,
                     )
@@ -2964,13 +2992,13 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]];
-        self.prepare_raw_neighborhood(layer_id, coordinate, offsets, preview, encoder)?;
+        self.prepare_raw_neighborhood(layer_id, coordinate, offsets.map(Some), preview, encoder)?;
         let layer = self
             .paint_layers
             .iter()
             .find(|l| l.id == layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
-        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
+        let colors = self.raw_layer_neighborhood(layer, coordinate, offsets.map(Some), preview);
         let wetness_pages = if preview {
             &self.preview_watercolor_wetness_pages
         } else {
@@ -3439,7 +3467,7 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.dabs.clone(), true, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), true, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3567,11 +3595,13 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         let plan = BrushPassPlan::for_style(&batch.style);
         let texture_key = Self::texture_set_key(&batch.style);
+        let damage = damage.intersect(self.preview_damage);
+        let mut compute_jobs = Vec::new();
         for coordinate in page_coordinates(damage) {
             let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
                 .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, coordinate, range, false, encoder,
+                batch_index, batch, batch_dabs, coordinate, PixelRect::full([PAGE_SIZE; 2]), range, false, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3579,7 +3609,7 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == coordinate)
                 .expect("preview page is prepared before encoding");
             let local = if self.preview_full_pages {
-                // Smudge and liquify return the committed color outside their
+                // Destination brushes retain committed color outside their
                 // contacts. Writing the complete page replaces separate source
                 // initialization and prevents holes in scene/capture consumers.
                 page_rect(coordinate).page_local(coordinate)
@@ -3587,6 +3617,15 @@ impl WgpuRasterizer {
                 damage.intersect(page_rect(coordinate)).page_local(coordinate)
             };
             if local.is_empty() {
+                continue;
+            }
+            if self.compute_dry_material(batch) && self.preview_full_pages {
+                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &page.primary.view, None);
+                compute_jobs.push((output, source_bind_group, coordinate, false));
+                if compute_jobs.len() == SOURCE_SLOTS {
+                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                    compute_jobs.clear();
+                }
                 continue;
             }
             let texture_set = self
@@ -3631,6 +3670,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
         Ok(())
     }
 
@@ -3899,6 +3939,9 @@ impl CanvasRenderer for WgpuRasterizer {
     ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
         self.poll_filter_previews()
     }
+    fn cancel_filter_previews(&mut self) {
+        self.cancel_filter_preview_request();
+    }
     fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
         let mask = self.mask(asset).ok()?;
         Some(mask.outline.get_or_init(|| {
@@ -4094,6 +4137,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
             self.preview_damage = PixelRect::EMPTY;
+            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
@@ -4140,6 +4184,8 @@ impl CanvasRenderer for WgpuRasterizer {
         self.ensure_paint_state_pages(packet.dab_batches, &batch_tiles)?;
 
         let old_preview_damage = self.preview_damage;
+        let old_preview_contact_tiles = self.preview_contact_tiles.take();
+        let mut new_preview_contact_tiles = Some(std::collections::BTreeSet::new());
         let old_preview_layer = self.preview_layer_id;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
         let mut dirty = old_preview_damage.union(watercolor_style_dirty);
@@ -4149,7 +4195,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let mut preview_is_watercolor = false;
 
         // Ranges were validated during tile planning; accumulate metrics once.
-        for batch in packet.dab_batches {
+        for (batch, tiles) in packet.dab_batches.iter().zip(&batch_tiles) {
             let start = batch.first_dab as usize;
             let dabs = &packet.dabs[start..start + batch.dab_count as usize];
             let batch_dirty = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
@@ -4158,6 +4204,12 @@ impl CanvasRenderer for WgpuRasterizer {
                     WatercolorLayerStyle::from_dab_style(&batch.style).radius(),
                     packet.document_extent,
                 )
+            } else if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some() {
+                // Prediction retirement must use the same bounded footprint as
+                // painting, rather than reintroducing the generic brush halo.
+                tiles.iter().fold(PixelRect::EMPTY, |bounds, tile| {
+                    bounds.union(page_rect(tile.coordinate))
+                }).intersect(batch_dirty)
             } else {
                 batch_dirty
             };
@@ -4185,6 +4237,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 continue;
             }
             if batch.kind == DabBatchKind::Preview {
+                if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some()
+                    && !batch.style.rendering.edge_after_stroke {
+                    if let Some(sparse) = &mut new_preview_contact_tiles {
+                        sparse.extend(tiles.iter().map(|tile| tile.coordinate));
+                    }
+                } else { new_preview_contact_tiles = None; }
                 if new_preview_layer.is_some_and(|id| id != batch.layer_id) {
                     return Err(GpuRasterError::MultiplePreviewLayers);
                 }
@@ -4238,8 +4296,6 @@ impl CanvasRenderer for WgpuRasterizer {
                 .filter(|batch| batch.kind == DabBatchKind::Preview && batch.dab_count != 0)
                 .all(|batch| {
                     BrushPassPlan::for_style(&batch.style).requires_destination()
-                        && (!scene_required || matches!(batch.style.execution,
-                            BrushExecution::Smudge | BrushExecution::Liquify))
                 });
         if new_preview_layer.is_none() {
             // Preview is disposable by contract. Release its high-water pool
@@ -4360,17 +4416,6 @@ impl CanvasRenderer for WgpuRasterizer {
                         "layer clear new paint page",
                     );
                 }
-                if page.secondary_needs_clear {
-                    self.encode_clear(
-                        &mut encoder,
-                        &page
-                            .secondary
-                            .as_ref()
-                            .expect("flag requires companion")
-                            .view,
-                        "layer clear new destination companion",
-                    );
-                }
             }
             for page in &layer.material_pages {
                 if page.needs_clear {
@@ -4411,7 +4456,6 @@ impl CanvasRenderer for WgpuRasterizer {
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
                 page.primary_needs_clear = false;
-                page.secondary_needs_clear = false;
             }
             for page in &mut layer.material_pages {
                 page.needs_clear = false;
@@ -4516,6 +4560,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
 
         self.preview_damage = new_preview_damage;
+        self.preview_contact_tiles = new_preview_contact_tiles;
         // Scene composition, placement mips and exact queries consume whole
         // local pages. Direct material prediction writes unchanged pixels too.
         self.preview_full_pages = scene_required || !new_preview_from_persistent;
@@ -4787,7 +4832,11 @@ impl CanvasRenderer for WgpuRasterizer {
                 dirty = dirty.union(bounds);
                 tiles.extend(page_coordinates(bounds));
             };
-            if let Some(id) = old_preview_layer { include(id, old_preview_damage); }
+            if let Some(id) = old_preview_layer {
+                if let Some(sparse) = &old_preview_contact_tiles {
+                    for &coordinate in sparse { include(id, page_rect(coordinate)); }
+                } else { include(id, old_preview_damage); }
+            }
             for (batch, planned) in original_batches.iter().zip(&batch_tiles) {
                 for tile in planned { include(batch.layer_id, page_rect(tile.coordinate)); }
             }
@@ -5576,7 +5625,7 @@ fn create_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let texture = wgpu::BindGroupLayoutEntry {
         binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -5590,7 +5639,7 @@ fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
     }
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: 5,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     });
@@ -5606,7 +5655,7 @@ fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -5616,7 +5665,7 @@ fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -5633,7 +5682,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     for binding in 0..9 {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -5644,7 +5693,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     }
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: 9,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Storage { read_only: true },
             has_dynamic_offset: false,
@@ -5655,7 +5704,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     for binding in 10..12 {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -5665,7 +5714,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         });
     }
     entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 12, visibility: wgpu::ShaderStages::FRAGMENT,
+        binding: 12, visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false, min_binding_size: NonZeroU64::new(160) }, count: None,
     });
@@ -6108,6 +6157,8 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
+    let dry_material = (device.working_format() == wgpu::TextureFormat::Rgba32Float)
+        .then(|| dry_material::Pipelines::new(device, &layouts, &material_shader));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {
@@ -6319,7 +6370,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     ]
     .map(|(layout, shader, entry, blend, label)| {
         let (device, layout, shader) = (device.clone(), layout.clone(), shader.clone());
-        Deferred::new(move || brush_pipeline(&device, &layout, &shader, entry, blend, label))
+        Deferred::pipeline(move |mode| {
+            brush_pipeline_recipe(mode, &device, &layout, &shader, entry, blend, label)
+        })
     });
     let max_blend = wgpu::BlendState {
         color: wgpu::BlendComponent {
@@ -6397,8 +6450,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             material_pipeline_layout.clone(),
             material_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline_targets_with_constants(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6411,13 +6465,27 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     });
     let material_gather = std::array::from_fn(|index| {
         let operation = [MaterialOperation::Liquify, MaterialOperation::Smudge][index];
-        let (device, layout, shader) = (device.clone(), material_pipeline_layout.clone(), material_shader.clone());
-        Deferred::new(move || fullscreen_pipeline_targets_with_constants(
-            &device, &layout, &shader, "gather_fragment",
-            &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba32Float,
-                blend: None, write_mask: wgpu::ColorWrites::ALL })],
-            &[("MATERIAL_OPERATION", operation as u32 as f64)], "gather distant material samples",
-        ))
+        let (device, layout, shader) = (
+            device.clone(),
+            material_pipeline_layout.clone(),
+            material_shader.clone(),
+        );
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
+                &device,
+                &layout,
+                &shader,
+                "gather_fragment",
+                &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba32Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                &[("MATERIAL_OPERATION", operation as u32 as f64)],
+                "gather distant material samples",
+            )
+        })
     });
     let watercolor_transport = std::array::from_fn(|step| {
         let (device, layout, shader) = (
@@ -6425,8 +6493,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             watercolor_transport_layout.clone(),
             watercolor_transport_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline_targets_with_constants(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_targets_with_constants_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6454,8 +6523,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             material_pipeline_layout.clone(),
             material_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6472,8 +6542,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             edge_pipeline_layout.clone(),
             stroke_edge_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6508,8 +6579,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             watercolor_pipeline_layout.clone(),
             watercolor_shader.clone(),
         );
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6523,8 +6595,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     let export = {
         let (device, layout, shader) =
             (device.clone(), export_layout.clone(), export_shader.clone());
-        Deferred::new(move || {
-            fullscreen_pipeline(
+        Deferred::pipeline(move |mode| {
+            fullscreen_pipeline_recipe(
+                mode,
                 &device,
                 &layout,
                 &shader,
@@ -6536,6 +6609,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         })
     };
     Pipelines {
+        dry_material,
         direct,
         material,
         material_gather,
@@ -6550,15 +6624,17 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     }
 }
 
-fn brush_pipeline(
+fn brush_pipeline_recipe(
+    mode: CompileMode,
     device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
     blend: wgpu::BlendState,
     label: &'static str,
-) -> wgpu::RenderPipeline {
-    brush_pipeline_format(
+) -> Compilation<wgpu::RenderPipeline> {
+    brush_pipeline_format_recipe(
+        mode,
         device,
         layout,
         shader,
@@ -6569,7 +6645,8 @@ fn brush_pipeline(
     )
 }
 
-fn brush_pipeline_format(
+fn brush_pipeline_format_recipe(
+    mode: CompileMode,
     device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -6577,45 +6654,127 @@ fn brush_pipeline_format(
     blend: wgpu::BlendState,
     format: wgpu::TextureFormat,
     label: &'static str,
-) -> wgpu::RenderPipeline {
+) -> Compilation<wgpu::RenderPipeline> {
     const ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
         0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
         4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4,
         8 => Float32x4, 9 => Float32x4, 10 => Float32x4
     ];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: mem::size_of::<Dab>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &ATTRIBUTES,
-            })],
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: mem::size_of::<Dab>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &ATTRIBUTES,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            ..Default::default()
+    )
+}
+
+fn fullscreen_pipeline_recipe(
+    mode: CompileMode,
+    device: &PipelineDevice,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    blend: Option<wgpu::BlendState>,
+    format: wgpu::TextureFormat,
+    label: &'static str,
+) -> Compilation<wgpu::RenderPipeline> {
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
         },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
+}
+
+fn fullscreen_pipeline_targets_with_constants_recipe(
+    mode: CompileMode,
+    device: &PipelineDevice,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    targets: &[Option<wgpu::ColorTargetState>],
+    constants: &[(&str, f64)],
+    label: &'static str,
+) -> Compilation<wgpu::RenderPipeline> {
+    mode.render(
+        device,
+        &wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
+                targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
 }
 
 fn fullscreen_pipeline(
@@ -6627,68 +6786,18 @@ fn fullscreen_pipeline(
     format: wgpu::TextureFormat,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+    fullscreen_pipeline_recipe(
+        CompileMode::Immediate,
+        device,
+        layout,
+        shader,
+        fragment_entry,
+        blend,
+        format,
+        label,
+    )
+    .immediate()
 }
-
-fn fullscreen_pipeline_targets_with_constants(
-    device: &PipelineDevice,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
-    targets: &[Option<wgpu::ColorTargetState>],
-    constants: &[(&str, f64)],
-    label: &'static str,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants,
-                ..Default::default()
-            },
-            targets,
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
 fn align_up(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
 }

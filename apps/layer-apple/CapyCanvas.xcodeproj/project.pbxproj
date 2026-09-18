@@ -449,6 +449,18 @@
 			"path" = "Shared/Editor/ProjectFiles.swift";
 			"sourceTree" = "<group>";
 		};
+		"09D26B5363D7E60289DA2594" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/ProofController.swift";
+			"sourceTree" = "<group>";
+		};
+		"6EF4B1437EFA66B0BA11EA31" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/ProofForm.swift";
+			"sourceTree" = "<group>";
+		};
 		"7E1120DA1B0E8C34474826E3" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -1267,6 +1279,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "653CF3C6BEEACF2434DB8A2F";
 		};
+		"541A536695E7105B2CDB47F9" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "09D26B5363D7E60289DA2594";
+		};
+		"B5A8439EE792424C1B75AF5E" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "6EF4B1437EFA66B0BA11EA31";
+		};
 		"B3CE80A302A2CB0E77A5D4E9" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7E1120DA1B0E8C34474826E3";
@@ -1508,6 +1528,8 @@
 				"34902025F63DF7CFCF9E6759",
 				"F31680D516F1F7A69591F945",
 				"031F91BD4F608AE95B9D300D",
+				"541A536695E7105B2CDB47F9",
+				"B5A8439EE792424C1B75AF5E",
 				"B3CE80A302A2CB0E77A5D4E9",
 				"BD4522633DA04313E27E9BC4",
 				"E949CBA17C0BE2D9DB5D4FF5",
@@ -2237,6 +2259,14 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "653CF3C6BEEACF2434DB8A2F";
 		};
+		"1E12C1CEC934AFDB74F5C2F8" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "09D26B5363D7E60289DA2594";
+		};
+		"338F30C108977D34E9FC5824" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "6EF4B1437EFA66B0BA11EA31";
+		};
 		"C90A77B26334B2BB0F92A2C3" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7E1120DA1B0E8C34474826E3";
@@ -2486,6 +2516,8 @@
 				"8CEA3AAF80A03D9F299B2D00",
 				"7660C37B78ADE8656E1F446F",
 				"5C7D38750C0DC7591CEF3692",
+				"1E12C1CEC934AFDB74F5C2F8",
+				"338F30C108977D34E9FC5824",
 				"C90A77B26334B2BB0F92A2C3",
 				"99AE3E524D7302F8FEFB2892",
 				"9EC3B52B704322172484FED2",
@@ -2995,6 +3027,8 @@
 				"742700D6DDEC697C1CB0706E",
 				"30D1198AE889354CFA445140",
 				"653CF3C6BEEACF2434DB8A2F",
+				"09D26B5363D7E60289DA2594",
+				"6EF4B1437EFA66B0BA11EA31",
 				"7E1120DA1B0E8C34474826E3",
 				"1519D171D7D75F42282074A8",
 				"7F811CE2E0B803E78E82433F",

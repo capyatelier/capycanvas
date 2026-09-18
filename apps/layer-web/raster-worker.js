@@ -128,6 +128,12 @@ async function profileLibrary({operation,id},bytes) {
   const store=(mode,op)=>colorPreferences(mode,op,"profiles");
   const policy=(action,data=new Uint8Array())=>wasm.raster_worker_profile_library(JSON.stringify(action),data);
   const profile=({name,channels,profile})=>({name,channels,profile});
+  const hidden=policy({type:"visibility",hidden:await colorPreferences("readonly",s=>s.get("profile-menu-hidden"))??[]});
+  if(operation==="show"||operation==="hide"||operation==="remove"){
+    const next=policy({type:"visibility",hidden,id,visible:operation!=="hide"});
+    await colorPreferences("readwrite",s=>s.put(next,"profile-menu-hidden"));
+    if(operation!=="remove")return true;
+  }
   const inventory=async()=>{
     const entries=[];
     for(const id of await store("readonly",s=>s.getAllKeys())) {
@@ -155,7 +161,7 @@ async function profileLibrary({operation,id},bytes) {
   for(const entry of await inventory()){
     let data=new Uint8Array(),error=null;
     try{if(!entry.issue)data=await read(entry.id);}catch(e){error=String(e);}
-    entries.push(policy({type:"inspect",entry,error},data));
+    entries.push({...policy({type:"inspect",entry,error},data),visible:!hidden.includes(entry.id)});
   }
   return entries.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id));
 }

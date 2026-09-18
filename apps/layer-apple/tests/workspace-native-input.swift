@@ -60,43 +60,72 @@ import SwiftUI
         try await send(.leftMouseDown, start); try await send(.leftMouseUp, start)
         try await wait("Ordinary tile action") { store.panel("toolbar")["tiles"].array.first { $0["id"].uint == tile["id"].uint }?["selected"].bool == true }
         try await action(["type": "invoke", "command": "brush"])
-        for pen in [false, true] {
-            start = center(item)
-            let before = store.state["workspace"].stableKey
-            let neighbor = store.panel("toolbar")["tiles"].array.first {
-                $0["id"].uint != tile["id"].uint && workspace.sources[JSON(["kind": "tile", "panel": "toolbar", "tile": $0["id"].raw]).stableKey] != nil
-            }!
-            let end = center(JSON(["kind": "tile", "panel": "toolbar", "tile": neighbor["id"].raw]))
-            try await send(.leftMouseDown, start, pen: pen)
-            try require(input.contact.device == (pen ? .pen : .mouse) && input.contact.requiresHold,
-                "The native tile must classify its actual device and require a hold")
-            try await send(.leftMouseDragged, end, pen: pen)
-            try require(!input.contact.dragging && input.menu.isNull, "Early tile motion must not drag or open a menu")
-            try await send(.leftMouseUp, end, pen: pen)
-            try require(store.state["workspace"].stableKey == before, "Early tile motion must preserve history and working state")
+        func checkTile(_ tile: JSON, label: String, drawer: Bool) async throws {
+            let item = JSON(["kind": "tile", "panel": "toolbar", "tile": tile["id"].raw])
+            try await wait("\(label) source") { workspace.sources[item.stableKey] != nil }
+            for pen in [false, true] {
+                let start = center(item)
+                let before = store.state["workspace"].stableKey
+                let selected = store.panel("toolbar")["tiles"].array.filter { $0["selected"].bool }.map { $0["id"].uint }
+                let neighbor = store.panel("toolbar")["tiles"].array.first {
+                    $0["id"].uint != tile["id"].uint && workspace.sources[JSON(["kind": "tile", "panel": "toolbar", "tile": $0["id"].raw]).stableKey] != nil
+                }!
+                let end = center(JSON(["kind": "tile", "panel": "toolbar", "tile": neighbor["id"].raw]))
+                try await send(.leftMouseDown, start, pen: pen)
+                try require(input.contact.device == (pen ? .pen : .mouse) && input.contact.requiresHold,
+                    "The native tile must classify its actual device and require a hold")
+                try await send(.leftMouseDragged, end, pen: pen)
+                try require(!input.contact.dragging && input.menu.isNull, "Early tile motion must not drag or open a menu")
+                try await send(.leftMouseUp, end, pen: pen)
+                try require(store.state["workspace"].stableKey == before, "Early tile motion must preserve history and working state")
 
-            try await send(.leftMouseDown, start, pen: pen); try await drain(hold)
-            try require(input.contact.held && !input.contact.dragging, "A native stationary hold must only arm the tile")
-            try require(input.menu.isNull != pen, "Only the pen hold may open the tile menu")
-            try await send(.leftMouseUp, start, pen: pen)
-            try require(store.state["workspace"].stableKey == before, "A held release must not activate or reorder the tile")
-            try require(input.menu.isNull != pen, "Pen release must retain the menu; mouse holds have none")
-            if pen { try key("\u{1b}", code: 53, window: window); try await drain(); try require(input.menu.isNull, "Escape must close the native tile menu") }
+                try await send(.leftMouseDown, start, pen: pen); try await drain(hold)
+                try require(input.contact.held && !input.contact.dragging, "A native stationary hold must only arm the tile: platform=\(platform), \(label), pen=\(pen), "
+                    + "held=\(input.contact.held), dragging=\(input.contact.dragging), key=\(window.isKeyWindow), active=\(NSApp.isActive)")
+                try require(input.menu.isNull != pen, "Only the pen hold may open the tile menu")
+                try await send(.leftMouseUp, start, pen: pen)
+                try require(store.state["workspace"].stableKey == before, "A held release must not activate or reorder the tile")
+                try require(input.menu.isNull != pen, "Pen release must retain the menu; mouse holds have none")
+                if pen { try key("\u{1b}", code: 53, window: window); try await drain(); try require(input.menu.isNull, "Escape must close the native tile menu") }
 
-            try await send(.leftMouseDown, start, pen: pen); try await drain(hold)
-            try await send(.leftMouseDragged, end, pen: pen)
-            try require(input.contact.dragging && input.menu.isNull, "The original held contact must close its menu and start dragging")
-            try await wait("Shared tile insertion hint") { !workspace.dropHint["action"].isNull }
-            try await send(.leftMouseUp, end, pen: pen)
-            try await wait("Shared tile drop") { store.state["workspace"].stableKey != before }
-            let after = store.state["workspace"].stableKey
-            try await action(["type": "invoke", "command": "undo_workspace"])
-            try require(store.state["workspace"].stableKey == before, "One Undo must restore the entire tile reorder")
-            try await action(["type": "invoke", "command": "redo_workspace"])
-            try require(store.state["workspace"].stableKey == after, "One Redo must restore the same tile reorder")
-            try await action(["type": "invoke", "command": "undo_workspace"])
-            note("PASS platform \(platform), \(pen ? "pen" : "mouse"): native tile gating, held menus/release, same-contact reorder and one-step Undo/Redo")
+                try await send(.leftMouseDown, start, pen: pen); try await drain(hold)
+                try await send(.leftMouseDragged, end, pen: pen)
+                try require(input.contact.dragging && input.menu.isNull, "The original held contact must close its menu and start dragging")
+                try await wait("Shared tile insertion hint") { !workspace.dropHint["action"].isNull }
+                try await send(.leftMouseUp, end, pen: pen)
+                try await wait("Shared tile drop") { store.state["workspace"].stableKey != before }
+                let after = store.state["workspace"].stableKey
+                try await action(["type": "invoke", "command": "undo_workspace"])
+                try require(store.state["workspace"].stableKey == before, "One Undo must restore the entire tile reorder")
+                try await action(["type": "invoke", "command": "redo_workspace"])
+                try require(store.state["workspace"].stableKey == after, "One Redo must restore the same tile reorder")
+                try await action(["type": "invoke", "command": "undo_workspace"])
+                try require(store.panel("toolbar")["tiles"].array.filter { $0["selected"].bool }.map { $0["id"].uint } == selected,
+                    "Held pickup/release must not activate a tool")
+                // Layout history restores the tile order, but does not reopen
+                // the transient drawer after the completed move closes it.
+                if drawer && workspace.sources[item.stableKey] == nil {
+                    try await action(["type": "customize", "action": ["type": "toggle_column_drawer", "group": 6, "panel": "toolbar"]])
+                }
+                try await wait("Restored \(label) source") { workspace.sources[item.stableKey] != nil }
+                note("PASS platform \(platform), \(pen ? "pen" : "mouse"): native \(label) gating, held menus/release, same-contact reorder and one-step Undo/Redo")
+            }
         }
+        // An unavailable command and a divider are still reorderable tiles.
+        try await action(["type": "customize", "action": ["type": "insert_tools", "panel": "toolbar", "before": tile["id"].raw]])
+        try await action(["type": "customize", "action": ["type": "picker_select", "control": ["kind": "command", "command": "redo"], "selected": true]])
+        try await action(["type": "customize", "action": ["type": "confirm_tools"]])
+        guard let disabled = store.panel("toolbar")["tiles"].array.first(where: { $0["control"]["command"].string == "redo" }),
+              let divider = store.panel("toolbar")["tiles"].array.first(where: { $0["control"]["kind"].string == "divider" }) else {
+            throw HostFailure(message: "The fixture needs a disabled command and a divider")
+        }
+        try require(!disabled["enabled"].bool, "The Redo fixture must be disabled")
+        func checkTiles(_ presentation: String) async throws {
+            for (tile, label) in [(tile, "tool"), (disabled, "disabled command"), (divider, "divider")] {
+                try await checkTile(tile, label: "\(presentation) \(label)", drawer: presentation == "drawer")
+            }
+        }
+        try await checkTiles("docked")
         // The ribbon grip carries a panel payload but must remain immediate.
         let handle = JSON(["kind": "panel", "panel": "toolbar"])
         start = center(handle)
@@ -113,6 +142,10 @@ import SwiftUI
         try require(store.failure == nil, store.failure ?? "")
         note("PASS platform \(platform): native immediate pen grip, capture across tear-off and focus-loss rollback")
 
+        try await action(["type": "move_panel", "panel": "toolbar", "target": ["kind": "float", "position": [490, 320]], "viewport": [1200, 870]])
+        try await checkTiles("floating")
+        try await action(["type": "invoke", "command": "undo_workspace"])
+
         try await action(["type": "move_panel", "panel": "toolbar", "target": ["kind": "tab", "group": 6], "viewport": [1200, 870]])
         try await action(["type": "customize", "action": ["type": "set_column_collapsed", "group": 6, "collapsed": true]])
         try await action(["type": "customize", "action": ["type": "set_column_drawers", "column": 4, "drawers": true]])
@@ -124,6 +157,7 @@ import SwiftUI
         start = CGPoint(x: icon.midX, y: icon.midY)
         try await send(.leftMouseDown, start, pen: true); try await send(.leftMouseUp, start, pen: true)
         try await wait("Open drawer tab and retained column icon") { source(.handle) != nil && source(.tile) != nil }
+        try await checkTiles("drawer")
         for pen in [false, true] {
             let before = store.state["workspace"].stableKey
             let tab = source(.handle)!.value.bounds

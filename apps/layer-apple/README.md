@@ -550,6 +550,11 @@ among several). It builds a disposable callback fixture, requires its completion
 marker even if `simctl` exits successfully, and removes its own app afterward.
 The fixture covers real scroll-view edge movement in both directions and shared
 contact policies; it does not synthesize physical finger/Pencil gestures.
+Add `--fixture scenes` to check cancellation with two real UIKit window scenes.
+Supplied scene/application notifications must cancel only the owning scene's
+pending contact, held menu or drag; late releases, resumed drops and reparenting
+are covered for mouse, touch and pen policies. This does not replace physical
+scene-interruption acceptance.
 `EditorLaunchTests/testLayerMenuDragUpward` and `EditorMenuChecks` exercise the
 UIKit editor on simulator or device destinations with disposable persistence.
 The connected iPad passes upward layer dragging with exact Undo/Redo, layer
@@ -783,6 +788,11 @@ channel, alpha and admission-limit checks. These owner tests do not establish
 native picker/clipboard-provider delivery or cloud access. The Mac UI workflow
 `testNativeImageImport` covers the actual picker, cancellation, the imported layer
 name, sampled artwork and Undo/Redo.
+`testNativeImagePaste` covers the actual Mac Paste menu and system pasteboard:
+encoded-image batches, Cancel/Apply, sampled artwork/history, atomic failure of a
+later member and file-URL retry. Its synthetic clipboard contents stay on the
+current Mac. Teardown restores the original clipboard from memory unless a newer
+user copy replaced it. Neither test qualifies physical UIKit provider delivery.
 
 Assign Profile, Convert Color Space, Change Bit Depth and Document Properties
 also use the native document worker. Shared code owns color semantics and exact
@@ -1184,3 +1194,21 @@ validation. Both platforms must complete the expanded acceptance matrix.
 
 For a fresh environment, start with the concise
 [Mac/iPad testing and debugging handoff](../../docs/development/apple.md#testing-and-debugging-on-local-hardware).
+
+### Print proofing
+
+Proof Setup, Proof Colors and Gamut Warning use shared Rust preparation and
+viewport policy. The native worker prepares the LUT without blocking input;
+replacing an embedded ICC first preserves its exact bytes in Saved Profiles.
+Library visibility affects proof-profile menus. Viewing flags do not alter
+artwork, sampling or exports; recipe changes use normal document history.
+
+```sh
+cargo test -p layer-apple tests::proof -- --test-threads=1
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/proof-owner.swift
+```
+
+The owner fixture uses the installed macOS generic CMYK profile, disposable
+storage and an isolated native form for both Apple policies. Optional
+`CAPY_PROOF_CAPTURE` records only that owned window. Physical UIKit qualification
+and its provider/display limits are in the Apple handoff.

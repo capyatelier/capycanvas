@@ -185,6 +185,9 @@ impl FilterPreviews {
         }
         let source_layers: Vec<_> = request.layers.iter().map(PreviewMetadata::new).collect();
         let changed = self.key != Some(key) || self.source_layers != source_layers || resized;
+        // The common UI driver retains delivered rows. Keep only the current
+        // bounded request here, rather than a second catalog-sized pixel cache.
+        self.rows.retain(|id, _| request.filters.iter().any(|f| f.program.id == *id));
         self.request = Some(request);
         if changed {
             self.source_layers = source_layers;
@@ -221,6 +224,17 @@ impl FilterPreviews {
         let extent = request.extent;
         let columns = extent[0].div_ceil(PAGE_SIZE);
         let count = columns * extent[1].div_ceil(PAGE_SIZE);
+        // Every tile uses the same queue-ordered window. Allocating a texture
+        // per tile leaves gigabytes awaiting browser GC on large documents,
+        // even though Rust retains only the most recent handle. Edge windows
+        // occupy the top-left prefix; probe samples stay inside the captured
+        // region (or outside the document, where the shader rejects them).
+        let size = std::array::from_fn(|i| extent[i].min(PAGE_SIZE + request.size[i]));
+        if self.source.as_ref().is_none_or(|(texture, _)| {
+            [texture.width(), texture.height()] != size
+        }) {
+            self.source = Some(create_color_target(&r.device, size, "filter probe window"));
+        }
         let winner = self.probe_winner.as_ref().unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(
             &r.device,
@@ -247,11 +261,6 @@ impl FilterPreviews {
                     .saturating_add(request.size[1] / 2)
                     .min(extent[1]),
             );
-            self.source = Some(create_color_target(
-                &r.device,
-                [region.width(), region.height()],
-                "filter probe window",
-            ));
             let (texture, view) = self.source.as_ref().unwrap();
             self.source_scene
                 .capture_filter_source(r, request, texture, region, &mut encoder)?;
@@ -609,11 +618,12 @@ impl FilterPreviews {
         r: &mut WgpuRasterizer,
     ) -> Option<Result<FilterPreviewImage, GpuRasterError>> {
         self.request.as_ref()?;
-        while let Ok(ready) = self.rx.try_recv() {
+        // Even if the next completion arrives during encoding, yield to the
+        // host after one chunk. A fast device must not turn polling into an
+        // unbounded scan on the input/render owner.
+        if let Ok(ready) = self.rx.try_recv() {
             let result = if self.cancelled {
-                Err(GpuRasterError::Effect(
-                    "Filter preview cancelled because its source changed".into(),
-                ))
+                Err(GpuRasterError::FilterPreviewCancelled)
             } else {
                 match ready {
                     Ready::ProbeNext(result) => result.and_then(|_| self.probe_batch(r)),
@@ -749,6 +759,18 @@ impl Scene {
     }
 }
 impl WgpuRasterizer {
+    pub(crate) fn cancel_filter_preview_request(&mut self) {
+        let Some(previews) = self.filter_previews.as_mut() else { return; };
+        if previews.request.take().is_none() { return; }
+        // Old callbacks retain only their sender. Dropping the receiver keeps
+        // them from advancing or completing the next request, without a wait.
+        (previews.tx, previews.rx) = mpsc::channel();
+        previews.probe_winner = None;
+        previews.rendering.clear();
+        previews.key = None;
+        previews.point = None;
+        previews.rows.clear();
+    }
     pub fn filter_previews_pending(&self) -> bool {
         self.filter_previews
             .as_ref()
@@ -893,10 +915,12 @@ mod tests {
         let p = r.filter_previews.as_ref().unwrap();
         assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
         assert!(p.request.is_some());
+        let probe_texture = p.source.as_ref().unwrap().0.clone();
         // A view-only frame must compare the caller's paper color, before the
         // compositor applies paper opacity. It must not cancel this scan.
         frame(&mut r, &layers);
         let mut callbacks = 0;
+        let mut previous_probe_next = 4;
         loop {
             r.device
                 .poll(wgpu::PollType::Wait {
@@ -906,7 +930,12 @@ mod tests {
                 .unwrap();
             let result = r.take_filter_previews();
             let p = r.filter_previews.as_ref().unwrap();
+            assert!(p.probe_next - previous_probe_next <= 4, "one poll advances at most one chunk");
+            previous_probe_next = p.probe_next;
             let (texture, _) = p.source.as_ref().unwrap();
+            if p.point.is_none() {
+                assert_eq!(texture, &probe_texture, "all probe chunks reuse one texture");
+            }
             assert!(texture.width() <= PAGE_SIZE + 200 && texture.height() <= PAGE_SIZE + 40);
             assert!(
                 p.source_scene.image_cache_bytes()
@@ -936,11 +965,22 @@ mod tests {
                 timeout: Some(READBACK_TIMEOUT),
             })
             .unwrap();
-        assert!(r.take_filter_previews().unwrap().is_err());
+        assert!(matches!(r.take_filter_previews(), Some(Err(GpuRasterError::FilterPreviewCancelled))));
         assert!(!r.filter_previews_pending());
         assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 4);
         r.request_filter_previews(request(&layers, 3)).unwrap();
         assert_eq!(finish(&mut r).image.request_id, 3);
+        // Explicit hide/input cancellation never waits for the old callback.
+        // A replacement request can start immediately on a fresh channel.
+        r.filter_previews.as_mut().unwrap().key = None;
+        r.request_filter_previews(request(&layers, 30)).unwrap();
+        let old_sender = r.filter_previews.as_ref().unwrap().tx.clone();
+        r.cancel_filter_previews();
+        assert!(!r.filter_previews_pending());
+        assert!(r.take_filter_previews().is_none());
+        assert!(old_sender.send(Ready::ProbeNext(Ok(0))).is_err());
+        r.request_filter_previews(request(&layers, 31)).unwrap();
+        assert_eq!(finish(&mut r).image.request_id, 31);
         // A valid conservative support declaration can exceed the adapter's
         // texture dimension. Its actual dependency still ends at the document.
         let mut wide = request(&layers, 4);

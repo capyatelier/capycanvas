@@ -258,6 +258,32 @@ impl Device {
         RenderPipeline { inner: pipeline }
     }
 
+    /// Starts asynchronous WebGPU pipeline creation. Descriptor data is copied
+    /// before returning; the future owns its browser promise and returns only a
+    /// compiled, typed handle. Promise rejection includes the pipeline label.
+    /// Panics if this device does not use the WebGPU backend.
+    #[cfg(webgpu)]
+    pub fn create_render_pipeline_async(
+        &self,
+        desc: &RenderPipelineDescriptor<'_>,
+    ) -> impl Future<Output = Result<RenderPipeline, String>> + 'static {
+        let future = self.inner.as_webgpu().create_render_pipeline_async(desc);
+        async move { future.await.map(|inner| RenderPipeline { inner }) }
+    }
+
+    /// Starts asynchronous WebGPU pipeline creation. Descriptor data is copied
+    /// before returning; the future owns its browser promise and returns only a
+    /// compiled, typed handle. Promise rejection includes the pipeline label.
+    /// Panics if this device does not use the WebGPU backend.
+    #[cfg(webgpu)]
+    pub fn create_compute_pipeline_async(
+        &self,
+        desc: &ComputePipelineDescriptor<'_>,
+    ) -> impl Future<Output = Result<ComputePipeline, String>> + 'static {
+        let future = self.inner.as_webgpu().create_compute_pipeline_async(desc);
+        async move { future.await.map(|inner| ComputePipeline { inner }) }
+    }
+
     /// Creates a mesh shader based [`RenderPipeline`].
     #[must_use]
     pub fn create_mesh_pipeline(&self, desc: &MeshPipelineDescriptor<'_>) -> RenderPipeline {

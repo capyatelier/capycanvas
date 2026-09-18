@@ -6,7 +6,6 @@ use jni::{
     objects::{JClass, JDoubleArray, JObject, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
-use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -44,6 +43,13 @@ pub(crate) struct OverviewSlot {
 }
 
 impl App {
+    pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
+        let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
+            (Some(surface), Some(renderer)) => surface.presenter.gpu_timings(renderer, enabled),
+            _ => Vec::new(),
+        };
+        serde_json::json!(samples.into_iter().map(|s| [s.frame, s.elapsed_ns, s.status]).collect::<Vec<_>>())
+    }
     pub(crate) fn project_adopted(&mut self) {
         self.cursor = Default::default();
         // The file worker has already rendered this candidate and waited for
@@ -278,8 +284,11 @@ impl App {
                 })
             })
             .collect();
+        let proof = self.proof.lut(&self.host.session);
+        let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
+        surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
             surface.config.width = extent[0];
@@ -752,14 +761,9 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     let result = (|| {
         let a = unsafe { app(handle) };
         a.observe_gpu_failure(true);
-        let renderer = a.host.session.renderer_mut();
-        if let Some(gpu) = &renderer.0 {
-            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        }
-        let Some(image) = renderer.take_filter_previews() else {
+        let Some(atlas) = a.host.take_filter_preview_image() else {
             return Ok(std::ptr::null_mut());
         };
-        let atlas = image.map_err(error)?;
         let image = atlas.image;
         let header =
             serde_json::json!([image.request_id, image.width, image.height, atlas.filters]);

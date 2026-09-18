@@ -56,10 +56,20 @@ def observe(folder):
     return record, files
 
 
-def matches(stage, folder, record, files):
+def matches(stage, folder, record, files, writer):
     if stage == "archive":
-        return any(name not in SENTINELS and name.endswith(".capy-tmp") and size > 0
-                   for name, size in files.items())
+        # Foundation chooses the replacement directory. Inspect only this
+        # fixture writer's open files, rather than assuming a sibling temporary.
+        opened = subprocess.run(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", str(writer), "-Fn"],
+                                capture_output=True, text=True, check=False)
+        for row in opened.stdout.splitlines():
+            if row.startswith("n/") and row.endswith(".capy-tmp"):
+                try:
+                    if Path(row[1:]).stat().st_size > 0:
+                        return True
+                except FileNotFoundError:
+                    pass
+        return False
     if stage == "manifest":
         for name, size in files.items():
             if name in SENTINELS or not name.endswith(".tmp") or size == 0:
@@ -119,7 +129,8 @@ def run(output):
             for name, content in SENTINELS.items():
                 (folder / name).write_bytes(content)
             with (root / "child.log").open("w") as log:
-                process = subprocess.Popen([str(output / "check"), "discard" if stage == "discard" else "write", *args],
+                mode = stage if stage in ["discard", "archive"] else "write"
+                process = subprocess.Popen([str(output / "check"), mode, *args],
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, env=env)
                 try:
                     ready(process)
@@ -130,11 +141,11 @@ def run(output):
                     while time.monotonic() < deadline:
                         assert process.poll() is None, "Writer exited before observed interruption"
                         record, files = observe(folder)
-                        if matches(stage, folder, record, files):
+                        if matches(stage, folder, record, files, process.pid):
                             stop(process)
                             observations += 1
                             record, files = observe(folder)
-                            if matches(stage, folder, record, files):
+                            if matches(stage, folder, record, files, process.pid):
                                 break
                             os.kill(process.pid, signal.SIGCONT)
                     else:

@@ -37,6 +37,7 @@ fn material_renderer() -> WgpuRasterizer {
 // using the same arithmetic and bindings. This exercises host operation
 // selection, attachment variants, persistent state and both prediction paths.
 fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
+    renderer.pipelines.dry_material = None;
     let source = include_str!("../material_brush.wgsl")
         .replace("override MATERIAL_OPERATION: u32;", "")
         .replace("MATERIAL_OPERATION", "style.operation.z");
@@ -64,17 +65,17 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
         });
     let pipelines: [_; MaterialPipelineKind::COUNT] = std::array::from_fn(|kind| {
         let color = Some(wgpu::ColorTargetState {
-            format: SRGB8_FORMAT,
+            format: renderer.device.working_format(),
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         });
         let coverage = (kind == 1 || kind >= 3).then_some(wgpu::ColorTargetState {
-            format: wgpu::TextureFormat::R8Unorm,
+            format: renderer.device.scalar_format(),
             blend: None,
             write_mask: wgpu::ColorWrites::RED,
         });
         let wetness = (kind >= 2).then_some(wgpu::ColorTargetState {
-            format: wgpu::TextureFormat::R8Unorm,
+            format: renderer.device.scalar_format(),
             blend: Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::One,
@@ -89,7 +90,8 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             }),
             write_mask: wgpu::ColorWrites::RED,
         });
-        fullscreen_pipeline_targets_with_constants(
+        fullscreen_pipeline_targets_with_constants_recipe(
+            CompileMode::Immediate,
             &renderer.device,
             &layout,
             &shader,
@@ -98,6 +100,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             &[],
             "material uniform-dispatch reference",
         )
+        .immediate()
     });
     renderer.pipelines.material = std::array::from_fn(|index| {
         let pipeline = pipelines[index % MaterialPipelineKind::COUNT].clone();
@@ -107,7 +110,10 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
 
 #[test]
 fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
-    let mut specialized = material_renderer();
+    for native in [false, true] {
+    let mut specialized = if native {
+        WgpuRasterizer::new_native_headless(Default::default()).unwrap()
+    } else { material_renderer() };
     eprintln!(
         "material comparison backend={:?}",
         specialized.adapter.get_info().backend
@@ -256,13 +262,19 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
         "every material must affect the painted reference"
     );
     eprintln!(
-        "24 material cases, 120 full-image comparisons; maximum channel error={maximum_error}"
+        "native={native}: 24 material cases, 120 full-image comparisons; maximum channel error={maximum_error}"
     );
+    }
 }
 
 #[test]
 fn single_prediction_borrows_coverage_and_survives_private_preview_transitions() {
-    let mut renderer = material_renderer();
+    for renderer in [material_renderer(), WgpuRasterizer::new_native_headless(Default::default()).unwrap()] {
+        check_single_prediction_coverage(renderer);
+    }
+}
+
+fn check_single_prediction_coverage(mut renderer: WgpuRasterizer) {
     renderer.resize_surface(384, 128).unwrap();
     let layer = Layer::paint(LayerId(1), "Prediction coverage");
     let mut style = test_style(BrushExecution::Dry);
@@ -354,5 +366,6 @@ fn single_prediction_borrows_coverage_and_survives_private_preview_transitions()
         [0, 0, 0],
         "single prediction borrows committed coverage"
     );
-    assert_eq!(preview_bytes, 2 * PAGE_BYTES);
+    let pixel_bytes = u64::from(renderer.device.working_format().block_copy_size(None).unwrap());
+    assert_eq!(preview_bytes, 2 * u64::from(PAGE_SIZE).pow(2) * pixel_bytes);
 }

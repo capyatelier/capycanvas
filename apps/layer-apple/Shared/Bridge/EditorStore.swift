@@ -40,6 +40,7 @@ import SwiftUI
     lazy var windowPresentation = WindowPresentation(store: self)
     lazy var recovery = ArtworkRecovery(store: self)
     lazy var histogram = HistogramController(store: self)
+    lazy var proof = ProofController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
     var paintPreview: JSON {
@@ -100,6 +101,7 @@ import SwiftUI
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 histogram.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
+                proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 projectFiles.receive(state.json)
                 windowPresentation.receive(state.json)
                 recovery.observe(state["document_file"])

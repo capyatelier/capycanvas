@@ -1,5 +1,59 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_jobs() {
+    use crate::proof_workflow::{ProofPreparation, ProofView};
+    use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};
+    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+        let mut s = session(); s.set_platform(platform);
+        let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
+        let original = ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(bytes.clone().into()));
+        s.set_proof_recipe(Some(original.clone())).unwrap();
+        s.files.saved_checkpoint = s.engine.checkpoint();
+        s.refresh_file_state();
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProofSetup }).unwrap();
+        let id = s.state.requests.last().unwrap().id;
+        let replacement = ProofRecipe::new("sRGB".into(), ColorProfile::Builtin(RgbSpace::Srgb));
+        let job = ProofPreparation::begin(&s, Some(id), Some(replacement.clone())).unwrap();
+        assert_eq!(job.preservation(), Some(bytes.as_slice()));
+        let checkpoint = s.engine.checkpoint();
+        assert!(job.apply(&mut s, false).is_err());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.document().proof, Some(original.clone()));
+        let form = crate::proof_workflow::proof_form(&s);
+        assert_eq!(form["document_profile"]["name"], "Embedded P3");
+        // Cancel rejects a late result and has not mutated the original.
+        s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+        assert!(job.apply(&mut s, true).is_err());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProofSetup }).unwrap();
+        let id = s.state.requests.last().unwrap().id;
+        let job = ProofPreparation::begin(&s, Some(id), Some(replacement.clone())).unwrap();
+        job.apply(&mut s, true).unwrap();
+        assert_eq!(s.engine.document().proof, Some(replacement));
+        assert!(s.state.soft_proof && s.state.document_file.modified);
+        assert!(job.validate(&s).is_err());
+        let mut view = ProofView::default();
+        assert!(view.observe(&s).needed);
+        let prepare = ProofPreparation::begin(&s, None, None).unwrap();
+        view.fail(&s, &prepare, "Unavailable profile".into());
+        assert!(!view.observe(&s).needed);
+        assert_eq!(view.observe(&s).text, "Proof unavailable");
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
+        assert_eq!(view.observe(&s).text, "");
+        s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert_eq!(s.engine.document().proof, Some(original));
+        assert!(!s.state.document_file.modified);
+        assert!(prepare.validate(&s).is_err());
+        // First use is enabled on these ports and leaves toggles off until Apply.
+        s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert!(s.engine.document().proof.is_none());
+        s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
+        assert!(!s.state.soft_proof);
+        assert!(matches!(s.state.requests.last().unwrap().kind, HostRequestKind::SoftProofSetup));
+    }
+}
+
+#[test]
 fn proof_colors_first_use_opens_setup_without_enabling_or_editing() {
     let mut s = session();
     s.set_platform(Platform::Gtk);
@@ -59,7 +113,7 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     assert_eq!(s.engine.document().proof, Some(recipe.clone()));
     assert!(!s.state.document_file.modified);
     assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
-    for platform in [Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
+    for platform in [Platform::Windows] {
         s.set_platform(platform);
         assert!(!s.command(CommandId::SoftProofSetup).enabled);
         assert!(s.set_proof_recipe(Some(recipe.clone())).is_err());

@@ -20,6 +20,7 @@ import AppKit
         if let previous = self.window, previous.delegate === self { previous.delegate = downstream }
         self.window = window; downstream = window?.delegate
         window?.delegate = self
+        store?.projectFiles.presentationWindow = window
         store?.projectFiles.closeWindow = { [weak window] in window?.performClose(nil) }
         fullscreenTransition = false
         if let window {

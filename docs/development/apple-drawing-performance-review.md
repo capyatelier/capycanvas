@@ -1,27 +1,796 @@
 # Large-photo drawing: algorithm review — 2026-09-17
 
-The current tile-based design is appropriate, but approximately 50 ms p99 is
+## Release decision — 2026-09-18
+
+The user accepts the current large-brush performance and requests code quality,
+simplification and shared-platform coverage before publication. The analysis
+below remains an account of measured costs and theoretical headroom, not a
+requirement to keep optimizing this accepted workload. The incomplete attempt
+to compose into display scratch was abandoned before build/test and all runtime
+changes from it were removed. No new recording or device installation is needed
+to repeat the already accepted physical check.
+
+## Shared-code quality and brush scope — 2026-09-18
+
+The final cleanup replaces out-of-range sentinel coordinates with explicit
+optional neighborhood entries. Preparation skips absent entries and binding uses
+the existing transparent texture; dry paint and completed gathers request only
+their destination, while smudge/liquify gathers and watercolor transport retain
+their actual neighbors. Contact planning computes each conservative support
+radius once and shares it between rectangle and capsule tests. This removes a
+magic coordinate and repeated calculation without adding a renderer path,
+configuration setting or platform branch.
+
+The reviewed optimizations remain in `layer-render-wgpu`, not the Apple bridge:
+
+| Shared mechanism | Brush/platform scope | Required distinction |
+| --- | --- | --- |
+| Conservative contact bounds and sparse prediction retirement | All local dry contact brushes, including pencils, charcoal, calligraphy and textured inks | Roughness, pooling, nib transforms and antialiasing determine support. Nonlocal materials retain dependency bounds. |
+| Destination-only reads and copy-free dry updates | All dry material brushes that use destination rendering | Smudge, liquify, wet paint and watercolor still need their source neighborhoods/state. |
+| Batched compute with the existing pixel evaluator | Float32 dry material rendering across hosts | Color-only prediction must not write persistent coverage. Other working formats and nonlocal materials retain their exercised render path. |
+| Alternating decoded-source traversal | Composition independently of brush preset | Per-tile layer order and the existing memory/upload bounds remain fixed. |
+
+Web, Android, Linux, Windows and Apple editor constructors all route through the
+shared native document renderer, whose working format is Float32. No preset-name,
+brush-size, pressure threshold or Apple target conditional selects these
+optimizations. This establishes shared implementation reach, not identical
+performance or fresh hardware validation on every GPU backend.
+
+The sparse-preparation regression now checks **all 12 contact presets**, in both
+sRGB8 and native ProPhoto/U16 modes. It compares combined and separate contact
+submissions, checks visible ink, preserves untouched pixels and verifies sparse
+color/coverage allocation. The existing material comparison independently covers
+paint/erase, alpha lock, dry accumulation, prediction and nonlocal materials;
+source-neighborhood comparisons cover real retained sources and cache eviction.
+
+Strict Clippy is not a clean repository gate: an unchanged example has an
+approximate-constant error and other existing warnings remain. Running the same
+check on the reviewed source and its `6afe7589` baseline produces the same **105
+unique diagnostics**, with no additions or suppression attributes. This is a
+qualified comparison, not a claim that the repository has no lint findings.
+All **51 focused tests** pass with zero failures or ignored cases, including
+all 12 contact presets, native/legacy material equivalence, source-neighborhood
+brushes, color precision, prediction retirement, display caching and startup.
+Both Apple Release builds and Web compilation pass without compiler warnings.
+The rejected sampling shortcut
+and unfinished display-target experiment have no remaining production changes.
+Private qualification is under
+`artifacts/apple-brush-quality-v1/`.
+
+## Physical-limit audit after the latest Pencil report — 2026-09-18
+
+The user again reports improved drawing but roughly **60 ms p99 at maximum
+pressure**. This is evidence of remaining latency, not proof of a physical limit.
+The following audit uses the current `6afe7589` algorithm and retained iPad replay;
+it does not restart either artist app or request another Pencil recording.
+
+### What the brush algorithm establishes
+
+For a round contact of radius `r` swept along a straight segment of length `L`,
+the supported area is approximately `πr² + 2rL`. The 2048 px full-pressure disc
+alone covers **3.29 million pixels**, about **12.9 times** the area of a 570 px
+disc. The default G-Pen's sampled pressure curve increases diameter approximately
+as `0.01 + 0.99 × pressure^1.2`; full pressure therefore increases both the brush
+and downstream composition footprint. This accounts for the *direction* of the
+slowdown, not its duration. For a long stroke, overlapping contact areas are not
+all newly changed pixels.
+
+The tile planner rejects tiles outside conservative swept contact bounds.
+Within each retained tile, the dry shader visits its ordered contact range,
+retains uniform-stroke coverage and writes color/coverage. Its work is roughly
+`sum(tile pixels × tile contact count)`, plus linear tile copies. It does not
+rescan the entire 61 MP document per sample. That is a reasonable local raster
+algorithm, but it is not a proof of minimal work: overlapping contacts, unchanged
+coverage, intermediate composition and source decoding can still repeat work.
+A full-resolution raster must eventually represent changed pixels; it need not
+repeat every current pass over every contact's entire support every update.
+
+### A fixed-memory bound on one remaining cost
+
+The captured source-access model reproduces **every original access miss** and
+**all 180 current iPad drawing-frame miss counts**, including the alternating
+composition traversal. Current decoding uses 64 equal one-MiB slots.
+
+Across these 180 updates, current LRU replacement incurs **18,333 misses**.
+An offline farthest-next-use replacement model with the **same 64 slots and
+same access order** incurs **12,366 misses**, or **32.5% fewer**. Its median is
+68 versus the current 100.5 misses per update. This is an idealized total-miss
+bound: it knows future input and ignores queued GPU ownership constraints. It
+is neither a proposed production policy nor a predicted 32.5% frame-time gain.
+Per-frame optimality is not claimed.
+
+Conversely, the median update requests 131 distinct decoded sources. With only
+64 slots, at least `131 - 64 = 67` of those sources cannot already be resident
+at update entry. Thus this representation cannot eliminate decoding merely by
+reordering its current 64-slot cache. The measured cost contains both avoidable
+replacement work and a substantial working-set cost. Eliminating the latter
+would require changing source/composition reuse, the amount of work, or storage;
+expanding memory blindly would not establish a sound general solution.
+
+The existing larger-cache control independently demonstrated faster completion
+with identical artwork on Mac, before alternating traversal. That establishes
+that source reuse can affect time, but does not quantify the remaining gain on
+the current iPad. The earlier grouped-mip and saturated-contact probes did not
+justify their complexity. Keep their negative results in the optimization plan.
+
+### Small shared sampling probe: rejected
+
+The shared Float32 sampler requests four texels even when the requested point
+is exactly a texel center. A one-line early return for that exact case is
+mathematically sufficient and avoids the other three source loads. Two new
+Mac replay pairs reverse execution order and preserve exact native artwork and
+Undo/Redo. Baseline → candidate median / p99 are **36.700 / 83.211 →
+36.822 / 62.039 ms**, then **36.946 / 63.071 → 37.010 / 63.111 ms**.
+Neither pair improves the median; the first tail change does not repeat.
+
+The branch is removed. Fewer shader-level loads alone do not establish a useful
+end-to-end gain: cache reuse, compiler output and other stages can dominate.
+No production runtime change or iPad installation follows this experiment.
+Evidence is `probe-comparison.json`, `probe-qualification.json` and `probe.patch`
+in `artifacts/apple-pressure-limit-v1/`.
+
+### What would establish a time floor
+
+Current iPad replay median / p99 completed-update time is **39.890 / 63.296 ms**.
+Median composition visits **8.32 million pixels**, with 15 intermediate display
+submissions. The CPU composition span is **33.775 ms median**, but includes
+command finalization and waiting for earlier brush work. It cannot be labeled
+33.775 ms of compositor shader execution. The replay also includes stroke-start
+and stroke-end work and does not measure physical Pencil-to-display latency.
+
+A physical lower bound needs necessary operations and actual memory traffic,
+measured against sustainable device throughput/bandwidth. Logical texture loads
+are not DRAM bytes; peak bandwidth or resident allocation alone cannot supply
+that bound. This is the distinction made by the
+[Roofline performance model](https://amcr.lbl.gov/departments/computer-science-department/ppan/roofline-performance-model/).
+No retained measurement demonstrates that current execution reaches such a
+bound. In particular, neither pixel count nor big-O complexity proves that
+60 ms is unavoidable, or that 8.33 ms is attainable for this workload.
+
+The direct next target is shared composition/source reuse and command work,
+qualified against exact pixels/history and ordinary brushes. Further cache
+policy tuning has bounded scope; it cannot be promised to remove most of the
+frame time. Prefer measured pass removal or reuse to a G-Pen-specific visual
+approximation, extra memory, or another pressure-dependent runtime branch.
+The reproducible audit and input hashes are under
+`artifacts/apple-pressure-limit-v1/` (`analyze.py`, `analysis.json`).
+
+## Source reuse within the existing budget — 2026-09-18
+
+An actual access trace identifies sequential cache eviction as avoidable work.
+A 64-slot LRU model reproduces every drawing frame's observed misses exactly.
+Alternating the traversal direction of independent composition tiles predicts
+median misses **131 → 100.5**; both Mac and physical iPad replays then reproduce
+that result. Each sweep revisits the preceding sweep's cached end before replacing
+it. Per-tile layer/blend order, queued resource ownership, source precision and
+the existing cache/upload limits remain intact. The change adds one direction
+flag and uses the existing tile iterator in both directions; it needs no new
+cache, lookup policy, preset threshold or platform branch.
+
+Two matched pairs on each device, reversing execution order for the second pair,
+measure the following completed-update times (median / p99, milliseconds):
+
+| Device | Baseline | Source reuse |
+| --- | --- | --- |
+| Mac, first pair | 39.378 / 79.444 | 37.418 / 75.553 |
+| Mac, reversed pair | 39.169 / 69.056 | 36.900 / 61.203 |
+| iPad, first pair | 41.559 / 65.786 | 40.355 / 63.611 |
+| iPad, reversed pair | 41.803 / 65.930 | 39.890 / 63.296 |
+
+Typical improvement is approximately **5–6% on Mac and 3–5% on iPad**. This is
+modest, not a claim that wide-brush latency is solved. All 776 native artwork
+tiles and exact Undo/Redo match across the four iPad runs and the Mac pairs.
+The physical runs remain thermally nominal; cached zoom median stays about
+1.80 ms. Display pixel counts and memory limits do not change. These use the
+same 180-update, eight-sample, full-pressure 2000 px workload, manual 8 ms
+prediction and p99 convention documented below. They do not measure physical
+Pencil-to-display latency or establish a hardware floor.
+
+The ordinary two-sample 2000 px control improves Mac median completion
+**31.281 → 27.562 ms** and **31.720 → 27.049 ms** (12–15%), with median source misses
+104.5 → 56 and unchanged pixel work. Its first p99 pair regresses 42.587 →
+49.099 ms; the reversed repeat improves 43.996 → 36.849 ms. Both observations
+are retained: this does not establish uniform tail improvement. The 96 px control
+changes median/p99 4.030/10.025 → 3.851/5.120 ms. All controls preserve exact
+native artwork and history. No compiler or other GPU test overlaps these replays.
+
+The new regression reproduces **90 misses for 90 tiles** with the former order.
+With the correction, repeated wider-than-cache composition preserves exact
+displayed pixels, reflects opacity changes immediately and retains bounded
+scratch memory while decoding fewer than half the tiles. All 31 focused checks
+pass, including source ownership/discard, masked/filtered/rotated composition,
+prediction retirement, navigation and device replacement. Both Apple Release
+builds and Web compilation pass without compiler warnings.
+
+The normal updated iPad Release is restored at Recovered Drawings, with all
+14 complete recoveries and 148 original support/document files preserved exactly.
+Disposable replay output is removed; other editor apps and the Mac review process
+are unchanged. Live Pencil acceptance remains open. Evidence is under
+`artifacts/apple-source-reuse-v1/`, based on `ab6d9370` plus this correction.
+The more complicated anchored and resident-first ordering models are not shipped.
+
+## Remaining algorithmic headroom — 2026-09-18
+
+The user confirms the `ab6d9370` review feels better but still reaches roughly
+60 ms Diagnostics p99 at maximum pressure. **This is not an established physical
+limit.** There is measurable avoidable source work in the shared renderer; an
+exact minimum iPad frame time has not been measured or proved.
+
+### Necessary work versus current work
+
+For a circular contact of radius `r` swept a distance `L`, its supported area is
+approximately `πr² + 2rL`, before antialiasing, tile rounding and layer transforms.
+At 2048 px, the circular footprint alone is about 3.29 million document pixels.
+Higher pressure increases the effective radius, so size-dependent cost is
+expected. This does not imply that every pass currently visiting that area is
+necessary. The [dry evaluator](../../crates/layer-render-wgpu/src/material_brush.wgsl)
+visits each relevant contact for each planned pixel: approximately
+`O(sum(tile pixels × tile contact count))`. Layer composition and display reduction
+add further linear passes. The renderer does not repaint the whole 61 MP photo
+for each sample, but this is not a proof that its constants or damage are optimal.
+
+The qualified full-pressure replay has median **127 composited tiles / 8.32 million
+pixels**, five contacts, **131 source-cache misses** and 15 intermediate display
+submissions per update. Its [decoded source cache](../../crates/layer-render-wgpu/src/scene/sources.rs)
+holds 64 Float32 tiles (one MiB each) and evicts the least recently used entry.
+Repeatedly traversing a working set larger than that cache can evict unchanged
+sources before reuse. These misses regenerate decoded tiles, including transfer,
+conversion and command work; they are not additional G-Pen shape evaluations.
+Neither CPU `composition_ms` nor queue completion isolates compositor arithmetic:
+both can include command finalization and waits for earlier brush work.
+
+### Controlled counterexample to an arithmetic floor
+
+A temporary **64 → 256 slot** probe changes only cache capacity, using the current
+qualified source and the identical full-pressure replay. Two Mac pairs in reversed
+order give median completion **38.917 → 33.475 ms** and **38.912 → 33.487 ms**:
+approximately **14% faster**. Median source misses fall **131 → 42**. Composited
+pixels and display submissions are unchanged; final native artwork and Undo/Redo
+are exact. The p99 pairs are 84.370 → 59.923 and 62.966 → 51.913 ms; the variation
+reinforces that these short runs do not establish a sustained latency floor.
+
+This demonstrates avoidable work on the same hardware with the same brush
+calculation and pixels. It does **not** prove that iPad would improve by 14%, or
+that the same gain is available at the existing memory budget. The extra 192 MiB
+is not retained. The next useful optimization target is decoded-source admission
+and reuse within the current budget, with explicit protection of tiles referenced
+by queued commands. A new eviction policy needs actual access-trace and pixel
+qualification; replacing LRU with an unqualified heuristic would be premature.
+
+### Rejected display-reduction experiment
+
+This photo needs five display mip reductions per tile; eight is the full chain's
+maximum. A grouped kernel reuses workgroup values, reducing five dispatches to two
+and retaining the same weighted 2×2 arithmetic. At the replay's median tile count,
+that removes 381 dispatches and about 41.67 MiB of logical texture reads per update.
+Logical texture traffic is not measured DRAM traffic; caches and GPU scheduling
+matter, so dividing those bytes by peak hardware bandwidth cannot prove a frame-time
+floor.
+
+Four display regressions pass, including partial edges, updates and a Float64
+area reference. Native artwork/history also remain exact. However, Mac median
+completion changes **39.193 → 39.383 ms** and **39.352 → 38.419 ms**. The small,
+inconsistent typical benefit does not justify the additional shader complexity.
+The probe is removed. Its initial shader validation failure used a reserved
+identifier; the corrected run supplies the passing evidence.
+
+Both experiments are private attribution tools, not product paths. The normal
+iPad app and drawings were untouched during that assessment, and production source
+was restored to the qualified, published `ab6d9370` milestone before the source-reuse
+correction above. Evidence is under
+`artifacts/apple-mip-reduction-v1/`. Further work should target measured source and
+composition reuse; neither a G-Pen-specific approximation nor a claim that 60 ms
+is optimal follows from the algorithm or measurements.
+
+## Current full-pressure drawing correction — 2026-09-18
+
+The user completed the preceding iPad retest and still sees visible lag, reaching
+roughly **100 ms p99 at full pressure** with the approximately 2000 px G-Pen on
+the 61 MP photo. That supersedes the earlier pending retest. Brush size/pressure
+increases the swept pixel area, but the measured delay is not a proven hardware
+floor or evidence that G-Pen's contact equation alone is the bottleneck.
+
+A controlled replay splits completion before scene composition: roughly 22 ms
+median belongs to preceding brush/prediction work and 28 ms to the remaining
+composition. Additional completion boundaries show native backing conversion is
+negligible during the continuous stroke; publication at stroke end remains a
+separate cost. These artificial boundaries include command finalization and GPU
+waits, alter overlap, and do not measure shader arithmetic or physical latency.
+
+Two shared changes remove measured unnecessary work:
+
+- Dry contact planning rejects tiles outside the conservative capsule swept by
+  the contact's largest supported radius. The radius retains roughness, pooling,
+  antialiasing and interpolated nib support. Inverse-transformed tile bounds keep
+  this conservative for rotated, scaled and sheared layers. Prediction retirement
+  retains the sparse tile set instead of restoring its enclosing rectangle.
+- Float32 dry destination brushes dispatch bounded groups of tiles in compute
+  passes, calling the same pixel evaluator as fragment rendering. Color and
+  coverage retain their existing precision and ping-pong ownership. Each tile
+  owns immutable contact parameters; prediction can write color without changing
+  persistent coverage. Groups remain within the existing source-slot ceiling.
+  Deferred startup prepares these kernels before enabling input. The existing
+  attachment path handles other materials and legacy sRGB attachments.
+
+There is no preset, pressure or brush-size cutoff, Apple-specific rendering
+branch, larger cache, reduced sampling rate or lower-precision brush calculation.
+The tile-planning and parameter-lifetime improvements apply across shared hosts;
+the batched path applies to hosts using the Float32 working renderer.
+
+The physical iPad's matched full-pressure replay improves median completion
+**65.595 → 41.976 ms (36%)**, and p99 **96.308 → 65.862 ms (32%)**. Both runs
+remain thermally nominal. Cached zoom median is unchanged at about **1.804 ms**.
+Each run supplies 180 updates of eight samples at 240 Hz, manual 8 ms prediction,
+then 360 zoom updates, with a fixed 768 MiB display allowance and offscreen
+presentation. Reported p99 uses sorted index `floor(0.99 * (n - 1))`; these short
+runs do not establish sustained latency or predict live Diagnostics p99.
+
+Final diagnostic-free Mac replay median/p99 improve **54.043/108.055 →
+38.363/61.126 ms** at 2000 px. The 96 px control improves **4.705/6.288 →
+3.743/5.933 ms**. These use the same p99 convention and preserve exact history.
+
+All **776 retained native tiles match exactly** before/after on iPad; the 39
+omitted tiles are verified entirely zero. The Mac full-pixel comparison has the
+same result. Cross-device hash identity is not required: 82 tiles already differ
+between Mac and iPad in the baseline, with the same platform differences after
+the change. Both physical runs preserve exact Undo/Redo. Median composition work
+falls from 10.13 to 8.32 million pixels per update.
+
+Thirty distinct focused checks pass, including 240 native/legacy material
+image comparisons with zero output-channel error, native color/coverage precision,
+contact continuity, transformed support bounds, prediction/cancellation, cached
+display versus full recomposition, and shader startup. Both Apple Release builds
+pass without compiler warnings. Web checking passes using the documented LLVM
+compiler; the initial system-clang attempt cannot compile WebAssembly.
+
+The corrected normal iPad Release is open at Recovered Drawings. All 14 complete
+recoveries and 147 original Application Support/document files remain byte-identical;
+disposable replay output is removed and other editor apps are unchanged. The Mac
+review process is untouched. The user now confirms improved drawing, with roughly 60 ms p99 at maximum
+pressure, and requests an algorithmic assessment of further headroom. This does
+not establish a physical floor or full perceptual acceptance; R6 remains open.
+
+Rejected probes are retained, not shipped: skipping saturated contact arithmetic
+had no useful benefit; regrouping compositor output did not help; a fourfold
+source-cache increase cost 192 MiB for only about 6 ms; bypassing display reduction
+also isolates about 6 ms but intentionally produces invalid display pixels.
+The initial batching probe reused mutable tile parameters and failed pixel
+identity; immutable parameters correct that failure. A restore precheck initially
+required cross-device hash equality; the corrected check verifies before/after
+identity on each device and zero omitted tiles before any restoration mutation.
+Private evidence is `artifacts/apple-large-brush-attribution-v1/`, based on
+published `24205989` plus this shared renderer correction.
+
+
+## Current 2000 px footprint correction
+
+The user clarifies that the current workload is an approximately 2000 px G-Pen
+on the 61 MP photo (the retained control shows 2048 px), still visibly slower
+than Clip Studio Paint with roughly 54 ms Diagnostics p99. The earlier 570 px
+results do not qualify that workload. The subsequent full-pressure report and correction above supersede this
+record's pending Pencil retest; no comparison to Clip Studio Paint's internal
+implementation is claimed.
+
+The shared contact planner used the generic swept-contact bound: the largest
+endpoint radius multiplied by 1.5, regardless of the brush's edge parameters.
+For an ordinary G-Pen this schedules painting, native tile capture, prediction
+and composition over a substantial empty halo. The correction derives the
+conservative outer support from the existing shader: edge roughness, pooling,
+antialiasing and its radius cutoff. Interpolated and rotating nibs remain inside
+the largest endpoint radius. Wet and other nonlocal materials retain their
+existing dependency bounds. Prediction retirement uses the same planned region;
+direct prediction intersects that region before encoding. No brush shader,
+precision, contact count, cache ceiling or platform-specific path changes.
+
+Ten Mac replays cover 2000 px in both execution orders, ordinary two-sample
+2000 px input, 570.7 px circles and a 96 px zigzag control. For eight samples per
+update, 2000 px median completion improves **93.86 → 53.28 ms** and
+**91.65 → 53.26 ms**, approximately 42–43%. Two-sample 2000 px improves
+**77.29 → 43.30 ms**; 570.7 px improves **21.52 → 15.42 ms**. The small-brush
+median changes **6.94 → 6.52 ms**, with p99 essentially unchanged
+(**12.38 → 12.44 ms**). These are offscreen queue-completion measurements.
+
+On the physical iPad, the same full-pressure 2000 px synthetic workload improves
+median/p99 from **112.569/133.916 ms to 65.399/94.970 ms**. This is 180 drawing
+updates with eight input samples each, manual 8 ms prediction, followed by 360
+zoom updates, with a fixed 768 MiB display allowance. Cached zoom median remains
+about **1.80 ms**. This workload is heavier than the user's live test: it does
+not predict a new live Diagnostics p99 or measure Pencil-to-display latency.
+
+Median recomposition falls from **17.15 to 10.13 million pixels per update**,
+and intermediate display submissions from **32 to 19**. All retained native
+artwork tiles match byte-for-byte in every pair, contacts are unchanged, and
+exact Undo/Redo passes. The 2000 px result omits 89 previously allocated tiles;
+their digests are verified against entirely zero native tiles, so this changes
+storage allocation without removing artwork. The result identifies excessive
+damage propagation as a substantial shared bottleneck. It neither establishes
+a hardware floor nor proves that all remaining visible lag is resolved.
+
+Thirteen focused checks cover interpolated/anisotropic/tiny contact support,
+sparse G-Pen/Pencil preparation, prediction and mask cancellation, native color
+and continuous contact invariants. Both Apple Release builds pass without
+compiler warnings, and Web compilation passes. The corrected normal iPad Release is restored at Recovered
+Drawings; all 14 complete recoveries and 145 original files are preserved
+exactly, and disposable replay output is removed. The Mac review is unchanged.
+Private evidence is `artifacts/apple-wide-gpen-v1/`, based on `4c4e7fa5` plus the
+correction. The first local candidate exposed a prediction loop still traversing
+the broader original damage; the final correction shares the allocated bounds
+and passes the checks above. Private fixture build/restore checks also required
+normalizing relocated asset paths; neither failure is counted as a passing run.
+
+## Current G-Pen follow-up
+
+The following records the preceding 570 px investigation; the 2000 px correction
+above supersedes its pending-review status.
+
+After the document errors were fixed, the user confirmed visible Pencil lag
+relative to Clip Studio Paint at a comparable brush size. The earlier uncertain
+perceptual status below is superseded; the remaining issue is not just Diagnostics.
+
+The retained physical trace identifies substantial tile preparation and command
+materialization cost: median GPU-active time is 15.357 ms within 41.684 ms total
+completion, and command finalization occupies 68% of sampled running render CPU
+stacks. Committed brush and prediction passes contribute, but so do source copies,
+scene composition and display reduction. The replay's `composition_ms` includes
+finalization and GPU waits; it is not a measurement of compositor shader arithmetic.
+There is no measured hardware lower bound and no evidence that G-Pen's shape
+evaluation alone dominates.
+
+Two shared renderer simplifications remove work without changing brush fidelity:
+
+- Dry paint reads only the destination pixel. Its material binding now prepares
+  the center tile, leaving the eight unused neighboring slots empty. Wet,
+  watercolor and ungathered smudge/liquify keep their required neighborhoods.
+- A single destination-reading prediction batch can already read committed
+  color/coverage and write its result directly. Native scene composition now uses
+  that existing path for dry/wet paint too, removing redundant private prediction
+  color/coverage initialization. Watercolor and multiple prediction batches keep
+  their existing state handling.
+
+The first-principles cost is touched tiles multiplied by their brush, source,
+composition and display passes. Evaluating ink coverage and changed layered pixels
+is necessary; decoding unread neighbors and copying unused prediction state is
+not. These changes reduce those constants without a new rendering path, cache
+limit, platform condition, brush-size threshold or preset special case.
+
+Sixteen local Mac replays cover four workloads in both execution orders. Median
+completed-update time improves by approximately 6–12%, with identical final native
+artwork, exact Undo/Redo, dab counts, composited pixels and display submissions.
+For eight-sample 570.7 px circles, the two pairs improve from 26.48 to 23.22 ms
+and 26.35 to 22.82 ms. Small 96 px zigzags, two-sample circles and 1024 px circles
+also improve. The tests use the earlier saved 9504×6336 drawing.
+
+A physical iPad comparison uses a fresh preserved copy of the current large
+drawing, 180 drawing updates and 360 zoom updates. At 570.7 px, completed drawing
+median/p99 improve from **32.094/52.151 ms to 28.781/42.757 ms**. Cached zoom
+median/p99 are **1.812/9.044 ms and 1.798/8.748 ms**. Final native artwork matches
+exactly and both versions pass exact Undo/Redo. This is one completed run per
+version, with eight synthetic input samples per update, manual 8 ms prediction,
+fixed 768 MiB display admission and offscreen completion. It does not measure
+native presentation or prove parity with Clip Studio Paint. The physical Pencil
+retest remains pending.
+
+The initial combined fixture completes 570 px, then terminates with signal 9;
+the isolated 2048 px baseline also terminates without a complete result. Neither
+qualifies wide-brush performance or establishes the termination's cause. The
+current review's settings showed 2048 px, so the requested physical retest names
+570 px explicitly. The normal updated Release is restored with all 14 complete
+recoveries and 144 original files byte-identical; temporary replay output is
+retained off-device and removed from the app.
+
+Existing source/materialized-pixel and cold native ProPhoto/U16 tests now include
+dry paint; their wet/smudge/liquify cases still pass. Single-prediction coverage
+and private-fork transitions pass on both legacy and native renderers, as do the
+material specialization and native G-Pen checks. Both Apple Release builds and
+Web compilation pass. Android has no separately measured performance result.
+Evidence is `artifacts/apple-gpen-cost-v1/`, based on `02be7ad1` plus this change.
+
+A faster staging-buffer reuse experiment is excluded: the existing pool retains
+its high-water allocation, and large source uploads were not qualified for
+bounded retention across hosts. No pool change ships. Further optimization should
+target measured command/copy costs; neither a speculative G-Pen rewrite nor a
+claim that the remaining delay is unavoidable follows from these results.
+
+### Dry-paint tile preservation
+
+A further shared change removes the committed dry-brush color and coverage
+copies. The existing material draw now writes the whole destination tile and
+passes through source pixels outside the existing tile damage rectangle. It
+evaluates the same contacts inside that rectangle. This combines preservation
+with painting, without changing tile storage, memory ceilings, brush arithmetic
+or native prediction policy. Wet and nonlocal material preparation is unchanged.
+
+Sixteen Mac replays at `aeb2a5c4` plus this change use the same four workloads in
+both execution orders, preserving exact final native artwork, Undo/Redo, dab
+counts, composition area and submission counts:
+
+| Workload | Median completion before → after (ms), two execution orders |
+| --- | --- |
+| 2 samples/update, 570.7 px circles | 14.35 → 14.04; 14.25 → 13.93 |
+| 8 samples/update, 570.7 px circles | 23.67 → 21.75; 23.11 → 21.82 |
+| 8 samples/update, 96 px zigzags | 7.00 → 6.88; 7.05 → 6.96 |
+| 8 samples/update, 1024 px circles | 44.20 → 40.95; 43.26 → 40.82 |
+
+The large-brush median improves by 5.6–8.1%; smaller input batches improve about
+2.2%, and the small-brush median changes little. This is not an every-percentile
+improvement: one small-brush p99 rises from 11.11 to 13.28 ms, and one two-sample
+p99 rises from 24.05 to 24.90 ms. These are Mac offscreen completion measurements,
+not physical iPad or pen-to-display results.
+
+Twelve focused Metal tests pass, covering material specialization, prediction,
+cold/native/source paint and masks. The extended-color reference test now also
+checks every pixel outside the changed rectangle byte-for-byte, across all
+document RGB spaces, U8/U16 depths, tested blend modes and alpha locking.
+Both Apple Release builds and Web compilation pass. The Web check uses the
+installed LLVM compiler for `CC_wasm32_unknown_unknown` and
+`AR_wasm32_unknown_unknown`; the initial system-clang attempt lacked a Wasm
+target and is retained as a toolchain failure.
+
+Evidence is `artifacts/apple-paint-copy-v1/`. Neither review app is replaced:
+the installed iPad still runs the preceding `e350a585` G-Pen milestone while its
+Pencil comparison is pending. The upload-pool experiment remains excluded;
+the installed wgpu pool has no public retention limit, and this change requires
+no new allocator. This follow-up does not close physical performance acceptance.
+
+## Earlier measurements and algorithm review
+
+The current tile-based design is appropriate, but approximately 50–60 ms p99 is
 not an established hardware limit. The shared follow-up below removes redundant
 preparation and overlaps bounded submissions. Retain it; further optimization
 should follow measured composition costs rather than a new rendering architecture.
 No brush-size, preset-name, document-name or gesture special case is justified.
 
-Decision after attribution: keep the sparse planner and the small finalization
-ordering correction now published in `0a7b7d7e`. The latter improves heavy local
-replays without changing their work, pixels or memory ceilings. It does not
-prove an iPad speedup; the combined physical retest is pending. Do not start a
-storage/shader rewrite or increase cache limits to chase a theoretical number.
-If visible stalls remain, attribute their GPU passes on the combined build
-before choosing another change. The current Mac ten-minute watercolor result
-also supports retaining the shared design, within its separately documented
+The subsequent physical retest of the current qualified iPad runtime reports
+approximately **60 ms p99**. A later read-only capture of the open drawing shows
+CPU median/p95/p99 **33.40/72.86/82.16 ms** and GPU
+**31.35/63.52/70.35 ms**. Both are elevated; perceptual impact remains unconfirmed.
+These are retained Diagnostics values, not a controlled capture. They do not demonstrate closure
+of the large-photo tail or establish a hardware floor. A five-minute CPU/Metal
+attachment completes without restarting the drawing, but contains no target GPU
+execution or CPU encoder rows. No drawing-completion reply is received during
+that window. That preliminary trace cannot attribute the reported cost.
+Evidence is `artifacts/apple-photo-cost-v4/`; the controlled device replay below
+supersedes the need for another uncoordinated Pencil recording.
+
+## Physical iPad reproduction without another Pencil retry
+
+A private iPad wrapper now runs the existing `photo_interaction` replay at
+`56c19fc8`, whose runtime sources match the preceding `20cecad7` integration.
+It reads the same saved 9504×6336 drawing, uses 570.7 px G-Pen, 180 on-canvas
+drawing updates with eight synthetic samples each, manual 8 ms prediction and
+the same fixed 768 MiB display admission as the local comparisons. It adds a
+native autorelease pool around each frame, matching the host's task lifetime;
+no production renderer or input path is changed.
+
+Completed drawing updates have median/p95/p99 **30.966/42.919/55.964 ms**,
+maximum **65.270 ms**. The three slowest are final pen-up and early updates 2
+and 5. Composition's elapsed intervals account for 4.702 of 5.564 seconds
+(84.5%); they include command finalization and waits for earlier GPU work.
+This reproduces a similar tail on the actual iPad without UIKit input or the
+Diagnostics panel. This unprofiled run alone does not identify the expensive
+GPU passes.
+
+The following 360 cached zoom updates have median/p99 **1.820/8.213 ms**.
+Exact native Undo/Redo passes, and the original drawing file is unchanged.
+Evidence is `artifacts/apple-photo-ipad-replay-v1/`. The eight-sample batching,
+fixed admission and offscreen completion measurement remain explicit limits:
+this is neither a replay of the user's current Pencil gesture nor native
+presentation/perceptual acceptance. Use this reproducible device workload for
+pass attribution before requesting another physical drawing retry.
+
+A subsequent five-second Metal/CPU recording correlates 83,936 GPU intervals
+to 112 replay updates, with no observed identity/order conflicts. All observed
+encoders have GPU matches in the first 111 updates; the last update is partial.
+Those 111 updates contain a median **529 observed encoders**, **15.357 ms** of
+GPU active time and **41.684 ms** total completion. In the slow captured early
+updates, observed GPU activity is 17–19 ms within 78–88 ms completion intervals.
+This capture ends before pen-up. GPU stages overlap, so per-label durations are
+unioned and must not be added together.
+
+Command finalization appears in **1,537 of 2,260 ms** of sampled running render
+CPU stacks (68.0%). These inclusive samples overlap their enclosing composition
+stacks. Copies, scene draws, committed/predicted painting and display reduction
+all contribute GPU work. This makes command count and CPU/driver materialization
+a measured optimization target; it does not establish a memory-bandwidth floor
+or promise that the frame can reach its observed GPU-active duration.
+
+Profiling increases elapsed time, so retain the unprofiled distribution above
+as the baseline. The first recorder's observer expired during finalization and
+its incomplete trace is rejected. The successful retry keeps the same recorder
+alive through processing and preserves exact final artwork and Undo/Redo.
+The ordinary published review is restored with all eleven recoveries, saved
+files and settings preserved. No new physical Pencil acceptance is claimed.
+
+### Rejected source-upload copy removal
+
+One shared candidate decodes native U8/U16 samples directly from an uploaded
+storage buffer, removing the temporary integer textures and their upload copy.
+Five existing decoder regressions pass, including exhaustive integer-code,
+profile, alpha, ownership and upload-bound checks. The separate standalone
+decode benchmark remains ignored. Numerical tolerances are unchanged; the
+resident-byte assertion changes only by the removed texture allocation.
+
+Sixteen Mac replays compare four workloads in both execution orders: ordinary
+and smaller input batches, a small zigzag brush and a wider circular brush.
+Final native pixels, exact Undo/Redo and primary work counts match. The large
+brush's median completion does not improve meaningfully. A subsequent unprofiled
+iPad replay confirms **30.966 → 30.959 ms** median, **55.964 → 53.678 ms** p99 and
+**65.270 → 65.708 ms** maximum. This is one device run per version, separated by
+profiling/build preparation, not a repeated controlled device pair. The small
+tail movement cannot establish a reliable improvement; one cached-zoom source
+miss also differs and remains in the comparison record.
+
+The candidate is rejected as a performance change. After its removal, all 404
+qualified runtime source hashes match the published baseline. No new product
+path or test is retained. Evidence and the exact rejected patch remain private under
+`artifacts/apple-photo-buffer-decode-v1/`. The ordinary iPad Release is restored
+with all eleven recoveries, saved files and settings intact.
+
+A subsequent fast-forward to `a1150ece` brings shared proof-rendering and
+Web/Android proofing changes. The measurements above remain scoped to
+`56c19fc8`; the installed ordinary review is unchanged. They are not a performance
+qualification of the newer main revision. All 454 shared UI tests, the focused
+Metal proof/CPU-reference regression and the Apple bridge compile check pass on
+the newer source. Neither Apple Release nor device performance is requalified by
+those checks.
+
+The algorithm review therefore supports the existing sparse architecture, not a
+claim of optimal frame time. A typical replay update composites 4.26 million
+pixels, rather than the full 60.22 million. Contact evaluation, ordered blending,
+prediction and mip work remain necessary. The physical trace now identifies
+CPU/driver command preparation as substantial additional work. Any next
+optimization should reduce commands across those shared stages and demonstrate
+repeatable gains on multiple workloads; another isolated upload tweak or a
+larger queue is not justified. Preserve pixel/history semantics and existing
+memory ceilings. The GPU-active interval is neither a frame-time lower bound nor
+a promised target. Large-brush perceptual acceptance remains open; a high p99
+alone does not override the user's smooth-drawing/rare-miss criterion.
+
+### Rejected source-decode scheduling extension
+
+At `a1150ece`, a second small candidate moves pending source decoding before
+preceding independent clears/draws so normal layers can share their existing
+render pass. It stops at a reader of the reused cache texture and introduces
+no storage or shader path. Sixteen reversed-order Mac replays preserve native
+artwork, Undo/Redo and primary work counts, but show no repeatable speed gain:
+ordinary-brush medians are **25.764 → 26.256 ms** and **25.724 → 25.265 ms**;
+wide-brush medians are **47.298 → 47.207 ms** and **46.805 → 47.130 ms**.
+Small-brush medians regress in both pairs. The first ordinary baseline's
+113.781 ms p99 remains in the report, rather than being filtered away.
+
+The candidate and its unexecuted additional regression are removed; no device
+installation is warranted by these results. Evidence is
+`artifacts/apple-source-order-v1/`. The native-root comparisons alone do not
+qualify composite output. Retain the existing simpler ordering. These two
+negative experiments narrow the next performance action: another scheduling
+micro-change is not supported, and a broader batching design needs evidence
+commensurate with its complexity. Continue the remaining feature/parity gates
+while retaining the unresolved large-brush acceptance; do not keep changing
+the renderer merely to obtain a lower diagnostic percentile.
+
+## Corrected workload and remaining avoidable passes
+
+The original `photo_interaction` circles used the viewport dimensions, although
+the document occupied only 1900.8×1267.2 pixels of its 2752×2064 surface at 20%.
+For the 570.7 px brush, an ideal circular footprint touched the document during
+only about 26% of the path. Earlier paired comparisons remain comparisons of
+identical work, but are poor evidence for sustained on-canvas circles. The example
+now fits both paths within the visible document, accounting for brush diameter.
+No production input behavior changes.
+
+The corrected replay reads the user's latest saved 9504×6336 sRGB/U8 drawing
+through the production reader. All measured drawing frames produce dabs.
+Before further optimization, completion p99 ranges from 46.73 to 74.30 ms with
+2, 8 or 16 samples per frame. Composition dominates its recorded wall phases.
+A CPU stack sample records 5880 of 6449 frame-submission observations inside
+composition, including 2230 in command finalization and 2412 in its explicit
+wait. These sampled wall observations overlap nested calls; they are not GPU
+execution measurements. A separate local Instruments recording fails to finalize
+after its target exits and is closed; its incomplete output supplies no GPU claim.
+
+One specific avoidable cost is source decoding between a scratch clear and its
+first draw, which prevents their existing render-pass merge. The shared scene
+planner now places that decode immediately before the adjacent clear. Decoding
+writes the separate source cache, so it has no dependency on that scratch clear;
+other jobs retain their order. This reuses the existing merge without another
+rendering path, larger cache, changed precision or brush-specific policy.
+
+Two reversed-order comparisons give these completed-frame medians:
+
+| Samples per frame | Before (ms) | After (ms) | Median reduction |
+| --- | --- | --- | --- |
+| 2 | 15.91–16.17 | 15.53–15.70 | 1.3–4.0% |
+| 8 | 29.00–29.34 | 26.57–26.93 | 8.2–8.4% |
+| 16 | 43.75–44.60 | 39.43–39.51 | 9.7–11.6% |
+
+All twelve runs preserve exact native Undo/Redo and produce identical final
+paint roots, dab counts, composition area, source misses and display submissions
+within each pair. The eight-sample completion p99 is still 51.45–53.77 ms after
+the change versus 54.36–54.39 ms before. This is a modest general improvement,
+not closure of the full tail. The replay uses fixed 768 MiB display admission,
+synthetic 240 Hz input and manual 8 ms prediction on Mac; it does not reproduce
+physical iPadOS prediction, memory admission or Pencil-to-screen latency.
+These local comparisons leave the physical review session untouched.
+The final source passes 31 focused Metal regressions covering display pixels,
+partial edges/mips, masks/prediction cancellation, source uploads, exact history
+and device replacement; Web and iOS-target renderer compilation also pass.
+Both subsequent Release builds pass without warnings. The iPad review is then
+updated in place after stable complete backups: all eleven recovery records,
+saved files and settings remain byte-identical through installation. Ordinary
+review is open at Recovered Drawings, with recording disabled. The user is asked
+for the same 570 px circles, perceptual lag and CPU/GPU p99. The user again reports
+about 60 ms; they do not identify the metric or confirm whether visible lag remains.
+Deployment evidence is `artifacts/apple-clear-pass-device-v1/`. Mac artist apps
+remain live and unchanged; its candidate is built in a separate directory.
+Keep the architecture. Neither the old nor corrected replay proves
+that 60 ms is an unavoidable hardware limit.
+
+## Pass attribution and redundant paint initialization
+
+Following the repeated 60 ms report, a disposable Mac replay adds timestamps to
+individual render/compute passes. Its 120 eight-sample frames have a median of
+313 instrumented passes: 81 brush, 132 scene and 65 display-reduction passes,
+plus other initialization/history work. The median union of measured intervals
+is 11.54 ms within a 20.62 ms first-to-last-pass span. Intervals overlap, and
+uninstrumented copies may execute between them. These numbers are not additive
+GPU utilization, physical iPad attribution or an uninstrumented speed estimate.
+The temporary probes are removed from product code after recording.
+
+This supports reviewing pass overhead as well as brush arithmetic; it does not
+justify declaring a bandwidth floor or rewriting tile storage. The ordinary
+eight-sample replay composites a median 4.26 million pixels per frame, compared
+with the document's 60.22 million pixels. It has already avoided full-image
+recomposition. Sparse tile planning, ordered blending, prediction and bounded
+caches remain appropriate. More invasive batching or shader changes need evidence
+that their benefit outweighs added resource/dependency complexity.
+
+One redundant operation is directly established: new inactive paint-color
+surfaces are separately cleared, although their first use always overwrites them
+with a full-page copy or the full-page post-stroke edge pass. The shared renderer
+now removes that clear and its state flag, including the obsolete transform
+assignment. Primary color and wetness initialization remain intact. This reduces
+code and render passes without adding a brush, document or platform branch.
+
+Two reversed-order comparisons, 180 drawing frames each, preserve exact native
+artwork/Undo/Redo, dab counts, composition area, source misses, submission counts
+and retained display bytes in all sixteen runs:
+
+| Workload | Median completion before → after (ms) | Median reduction |
+| --- | --- | --- |
+| 2 samples/frame, 571 px circles | 15.84–16.38 → 15.31–15.49 | 3.3–5.4% |
+| 8 samples/frame, 571 px circles | 26.64–27.97 → 25.27–25.88 | 5.1–7.5% |
+| 8 samples/frame, 96 px zigzags | 7.87 → 7.42–7.44 | 5.5–5.7% |
+| 8 samples/frame, 1024 px circles | 49.32–49.45 → 47.12–47.31 | 4.3–4.5% |
+
+The 571 px eight-sample p99 remains 53.85–54.77 ms versus 58.20–60.25 ms before.
+The second wide-brush p99 regresses from 91.42 to 92.61 ms, so this is not an
+every-percentile improvement. Fixed 768 MiB display admission and manual 8 ms
+prediction still limit transfer to the physical iPad. The local evidence is
+`artifacts/apple-photo-pass-v5/`. Twenty-six focused Metal regressions pass,
+covering cold paint, surface retirement/reuse, native blends and wet media,
+source brushes, prediction/masks, sparse G-Pen/Pencil, transforms and exact history.
+Web and iOS-target compilation pass. Neither artist app is restarted or updated.
+The simplification joins the native photo/16-bit qualification milestone; it does
+not close the reported delay or require another device installation for this small
+gain alone.
+Visible drawing lag warrants a coordinated physical trace; a high p99 alone does
+not override the user's accepted smooth-drawing/rare-miss criterion.
+
+Keep the sparse planner and the finalization ordering correction published in
+`0a7b7d7e`, alongside the small clear-pass corrections. None establishes a
+physical hardware floor. Do not start a storage/shader rewrite or increase cache
+limits to chase a theoretical number. If visible stalls remain, attribute their
+GPU passes on the physical build before choosing another change. The current
+Mac ten-minute watercolor result also supports retaining the shared design,
+within its separately documented
 [workload scope](../../apps/layer-apple/PERFORMANCE.md#sustained-mac-watercolor-after-shared-integration--2026-09-17).
 
 ## Current-code decision
 
-Rechecking main at `37f81472` confirms that the sparse planner and finalization
-overlap are already present; the composition source has the same SHA-256 as the
-qualified scheduling change. The earlier algorithm table below describes the
-build that motivated those changes, not additional unimplemented work.
+Rechecking main at `1f96d5a6` confirms that the sparse planner, finalization
+overlap and both clear-pass simplifications are already present. The earlier
+algorithm table below describes the build that motivated those changes, not
+additional unimplemented work.
 
 | Current stage | Remaining cost | Decision |
 | --- | --- | --- |
@@ -46,13 +815,59 @@ estimates below isolate illustrative transfer costs; they do not predict a
 complete frame or prove how much faster this workload can become.
 
 Recommendation: keep the current architecture and qualified shared changes.
-Do not declare the remaining 50 ms unavoidable. If the tail still visibly
-interrupts drawing, make one bounded investigation of GPU pass execution and
-idle gaps on the installed build, then retain only a broadly useful change
-with repeatable replay gains, unchanged pixels/history and bounded memory.
+Do not declare the remaining 50 ms unavoidable. The physical replay attribution
+above now supplies the bounded GPU/CPU investigation. Use it to focus any further
+work on shared command batching, retaining only a broadly useful change with
+repeatable replay gains, unchanged pixels/history and bounded memory.
 If drawing meets the accepted smoothness standard, prioritize the remaining
 release gates. There is no evidence here that another architecture or larger
 cache is necessary to finish the Apple goal.
+
+## Diagnostics overhead and interpretation of the repeated 60 ms report
+
+The displayed percentiles cover the last 120 drawing updates, rather than a
+time window or every screen refresh. With a full window, p99 is the second
+slowest update. Values remain while idle. A roughly 60 ms p99 does not establish
+60 ms on every frame, and these observations do not measure Pencil-to-screen
+latency. This is an interpretation of the metric, not dismissal of a slow update.
+
+A bounded comparison at `1f96d5a6` uses one private replay executable with
+renderer timestamps off/on, then on/off. Each run draws 180 frames with eight
+samples per frame, the same saved large photo, 570.7 px brush, on-canvas circles,
+manual prediction and fixed 768 MiB display admission. Completion medians are
+26.15/25.86 ms in the first off/on pair and 25.81/25.75 ms in the second on/off
+pair. Whole-run p99 is respectively 88.19/54.43 and 53.89/54.38 ms. The larger
+first off-run spikes are retained; the result does not show a repeatable timing
+penalty or justify removing GPU Diagnostics. All four runs preserve identical
+paint roots, work counts and exact Undo/Redo. The source drawing is unchanged,
+all replay processes are closed and the temporary example edit is restored.
+
+Reexamining both earlier qualified eight-sample candidate runs locates their
+five slowest updates at frames 0, 1, 2, 5 and final pen-up (179). Those updates
+take approximately 52–62 ms, principally inside composition's wall interval,
+which includes submission/waiting for earlier GPU work. Startup and pen-up
+therefore deserve separate attribution from steady motion; they remain part
+of the user experience and the reported full-run statistics. This is local Mac
+evidence, not proof that the physical iPad's spikes have the same cause. The
+comparison also excludes native panel/recorder overhead and physical input.
+Evidence is `artifacts/apple-photo-telemetry-v1/`.
+
+The ordinary iPad review subsequently receives the complete published milestone. All
+eleven recoveries, saved files and settings are verified byte-identical through
+installation, and the restored Recovered Drawings screen is reviewed. Recording
+is disabled. A preceding private UIKit preview fixture terminated before any
+capture; it supplies no form acceptance and has been replaced by the ordinary
+Release. Restoration evidence is `artifacts/apple-ipad-final-qualification-v1/`.
+No new physical performance pass is claimed. Keep the remaining investigation
+focused on the actual slow Pencil frames; another general renderer rewrite or
+uncoordinated device trace is not supported by these results.
+
+The later populated-form hardware review succeeds, and the integrated ordinary
+Release at `20cecad7` is restored with all eleven recoveries and artist files
+preserved. Its separate sustained ProPhoto/U16 watercolor run does not reproduce
+the 570 px G-Pen workload or close this remaining tail. See the
+[current qualification record](apple-handoff.md#large-photo-composition-review--2026-09-17)
+for the source-scoped checks and remaining limits.
 
 ## Evidence and its limits
 

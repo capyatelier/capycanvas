@@ -35,6 +35,7 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
 /** Platform ownership and transport, not application policy. The UI never waits
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
+    internal val proof=ProofController(this)
     companion object {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
@@ -135,7 +136,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val recovery = RecoveryController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
     private var handle = 0L
-    internal val filterPreviewCache = FilterPreviewCache()
+    internal val filterPreviewCache = FilterPreviewCache(this)
     private var choreographer: Choreographer? = null
     private var attached = false
     private var currentSurface: Surface? = null
@@ -333,6 +334,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
+        proof.resume()
+        filterPreviewCache.resume()
         currentSurface = surface
         surfaceReady = false
         val generation = ++surfaceGeneration
@@ -376,6 +379,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     /** SurfaceHolder requires rendering to have stopped before this callback
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
+        proof.pause()
+        filterPreviewCache.pause()
         currentSurface = null
         surfaceReady = false
         ++surfaceGeneration
@@ -608,7 +613,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val epoch = state.getJSONObject("document_file").optLong("epoch")
         if (epoch != documentEpoch) {
             documentEpoch = epoch
-            main.post { filterPreviewCache.images.clear() }
+            main.post { filterPreviewCache.reset() }
         }
         // Legacy preferences remain a migration backup. Named workspaces are
         // saved asynchronously by Rust's shared SQLite worker.
@@ -674,6 +679,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {
+        proof.pause()
         documents.images.cancel()
         recovery.close()
         worker.post {

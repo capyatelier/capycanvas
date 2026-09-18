@@ -49,7 +49,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::unique_ptr<CollapsedColumns> collapsed;
     std::unique_ptr<WorkspaceExpansion> expansion;
     std::unique_ptr<ZenToolbars> zen;
-    struct Measurement {double tab=36,content=320;};
+    struct Measurement {double tab=36,content=320;J scroll;};
     std::map<std::wstring,Measurement> measurements;
     hstring lastMeasurements;
     bool measurementQueued=false;
@@ -474,7 +474,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto id=str(value.GetObject(),L"id");std::wstring key(id);live.push_back(key);
             if(!measurements.contains(key)){
                 auto previous=find(accepted,L"panel",id);
-                measurements.emplace(key,Measurement{num(previous,L"tab_width",36),num(previous,L"content_height",320)});
+                measurements.emplace(key,Measurement{num(previous,L"tab_width",36),num(previous,L"content_height",320),object(previous,L"scroll")});
             }
         }
         for(auto it=measurements.begin();it!=measurements.end();)
@@ -484,14 +484,19 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(group.hidden||group.presented.Size()||!group.frame.IsLoaded())continue;
             for(auto const& [panel,tab]:group.tabs)if(tab.IsLoaded()&&tab.DesiredSize().Width>0)
                 measurements[panel].tab=stable(tab.DesiredSize().Width);
+            measurements[std::wstring(str(group.geometry,L"active"))].scroll=group.body->ScrollMetrics();
             double height=group.body->ContentHeight();
             if(std::isfinite(height)&&height>=0)measurements[std::wstring(str(group.geometry,L"active"))].content=stable(height);
+        }
+        if(drawers)for(auto value:drawers->PanelMeasurements()){
+            auto item=value.GetObject();auto panel=std::wstring(str(item,L"panel"));
+            if(measurements.contains(panel)){measurements[panel].content=stable(num(item,L"content_height"));measurements[panel].scroll=object(item,L"scroll");}
         }
         A report;bool same=accepted.Size()==measurements.size();
         for(auto const& [panel,size]:measurements){
             auto previous=find(accepted,L"panel",hstring(panel));
-            same=same&&previous.Size()&&num(previous,L"tab_width")==size.tab&&num(previous,L"content_height")==size.content;
-            report.Append(O({{L"panel",S(hstring(panel))},{L"tab_width",N(size.tab)},{L"content_height",N(size.content)}}));
+            same=same&&previous.Size()&&num(previous,L"tab_width")==size.tab&&num(previous,L"content_height")==size.content&&object(previous,L"scroll").Stringify()==size.scroll.Stringify();
+            report.Append(O({{L"panel",S(hstring(panel))},{L"tab_width",N(size.tab)},{L"content_height",N(size.content)},{L"scroll",size.scroll.Size()?V(size.scroll):JsonValue::CreateNullValue()}}));
         }
         if(same){lastMeasurements=L"";return;}
         auto json=report.Stringify();if(json==lastMeasurements)return;lastMeasurements=json;

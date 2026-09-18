@@ -90,7 +90,7 @@ void LayersView::init(){
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
     auto import=footerButton(L"image",L"Import image as layer",L"layer-import",[weak]{if(auto self=weak.lock()){
-        self->data->document(R"({"operation":"request_import"})");
+        self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"import_image")}}));
     }});
     controls.emplace_back([data=data,import](J,J){
         auto file=object(data->state,L"document_file");
@@ -218,8 +218,15 @@ void LayersView::context(double id,bool mask,UIElement const& anchor,std::option
 }
 
 }
-FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight){
+FrameworkElement LayersPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,std::function<double()>* contentHeight,std::function<J()>* scrollMetrics){
     auto view=std::make_shared<LayersView>();view->data=data;view->init();bindings.emplace_back([view]{view->refresh();});
+    if(scrollMetrics)*scrollMetrics=[weak=std::weak_ptr(view)]{
+        if(auto view=weak.lock()){
+            auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
+            double unit=0;for(auto const& [key,row]:view->rows)if(row->root.IsLoaded()&&row->root.ActualHeight()>0){auto margin=row->root.Margin();unit=row->root.ActualHeight()+margin.Top+margin.Bottom;break;}
+            return O({{L"fixed_height",N(height(view->header)+height(view->footerFrame))},{L"unit_height",N(unit)}});
+        }return J{};
+    };
     if(contentHeight)*contentHeight=[weak=std::weak_ptr(view)]{
         if(auto view=weak.lock()){
             auto height=[](FrameworkElement const& item){return item.Visibility()==Visibility::Visible?item.ActualHeight():0.;};
