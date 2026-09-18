@@ -688,7 +688,7 @@ fn left_mask(id: u64) -> LayerMask {
     m
 }
 
-fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
+pub(crate) fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
     let brush = layer_core::default_brush(preset);
     DabStyle {
         brush_to_layer: layer_core::Affine::IDENTITY,

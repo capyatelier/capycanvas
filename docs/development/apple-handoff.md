@@ -171,6 +171,21 @@ similar G-Pen size. This reopens no document blocker; the next performance work
 must separate brush evaluation from composition/submission and fix the measured
 cause in shared code where possible.
 
+## Full-pressure wide-brush follow-up — 2026-09-18
+
+The user completed the preceding 2000 px Pencil retest and still reports visible
+lag, rising to roughly 100 ms p99 at full pressure. Shared capsule tile culling,
+sparse prediction retirement and batched Float32 dry-brush dispatch now reduce
+the physical iPad replay median/p99 from 65.595/96.308 to 41.976/65.862 ms.
+Retained artwork and Undo/Redo are exact, omitted tiles are verified empty,
+zoom timing is unchanged and thermals stay nominal. Thirty focused checks,
+both Release builds and Web compilation pass. The new iPad Release is open at
+Recovered Drawings with all 14 recoveries and 147 original support/document files
+preserved; the Mac review is untouched. The user reports improved drawing with roughly 60 ms p99 at maximum
+pressure, and requests further algorithmic assessment; no physical floor is established. See the [current analysis](apple-drawing-performance-review.md#current-full-pressure-drawing-correction--2026-09-18)
+and `artifacts/apple-large-brush-attribution-v1/` for attribution, rejected probes
+and measurement limits. This supersedes the pending retest below; R6 remains open.
+
 ## Shared G-Pen preparation and prediction — 2026-09-17
 
 The latest user clarification is approximately **2000 px**, with visible lag and

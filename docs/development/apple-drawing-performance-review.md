@@ -1,12 +1,93 @@
 # Large-photo drawing: algorithm review — 2026-09-17
 
+## Current full-pressure drawing correction — 2026-09-18
+
+The user completed the preceding iPad retest and still sees visible lag, reaching
+roughly **100 ms p99 at full pressure** with the approximately 2000 px G-Pen on
+the 61 MP photo. That supersedes the earlier pending retest. Brush size/pressure
+increases the swept pixel area, but the measured delay is not a proven hardware
+floor or evidence that G-Pen's contact equation alone is the bottleneck.
+
+A controlled replay splits completion before scene composition: roughly 22 ms
+median belongs to preceding brush/prediction work and 28 ms to the remaining
+composition. Additional completion boundaries show native backing conversion is
+negligible during the continuous stroke; publication at stroke end remains a
+separate cost. These artificial boundaries include command finalization and GPU
+waits, alter overlap, and do not measure shader arithmetic or physical latency.
+
+Two shared changes remove measured unnecessary work:
+
+- Dry contact planning rejects tiles outside the conservative capsule swept by
+  the contact's largest supported radius. The radius retains roughness, pooling,
+  antialiasing and interpolated nib support. Inverse-transformed tile bounds keep
+  this conservative for rotated, scaled and sheared layers. Prediction retirement
+  retains the sparse tile set instead of restoring its enclosing rectangle.
+- Float32 dry destination brushes dispatch bounded groups of tiles in compute
+  passes, calling the same pixel evaluator as fragment rendering. Color and
+  coverage retain their existing precision and ping-pong ownership. Each tile
+  owns immutable contact parameters; prediction can write color without changing
+  persistent coverage. Groups remain within the existing source-slot ceiling.
+  Deferred startup prepares these kernels before enabling input. The existing
+  attachment path handles other materials and legacy sRGB attachments.
+
+There is no preset, pressure or brush-size cutoff, Apple-specific rendering
+branch, larger cache, reduced sampling rate or lower-precision brush calculation.
+The tile-planning and parameter-lifetime improvements apply across shared hosts;
+the batched path applies to hosts using the Float32 working renderer.
+
+The physical iPad's matched full-pressure replay improves median completion
+**65.595 → 41.976 ms (36%)**, and p99 **96.308 → 65.862 ms (32%)**. Both runs
+remain thermally nominal. Cached zoom median is unchanged at about **1.804 ms**.
+Each run supplies 180 updates of eight samples at 240 Hz, manual 8 ms prediction,
+then 360 zoom updates, with a fixed 768 MiB display allowance and offscreen
+presentation. Reported p99 uses sorted index `floor(0.99 * (n - 1))`; these short
+runs do not establish sustained latency or predict live Diagnostics p99.
+
+Final diagnostic-free Mac replay median/p99 improve **54.043/108.055 →
+38.363/61.126 ms** at 2000 px. The 96 px control improves **4.705/6.288 →
+3.743/5.933 ms**. These use the same p99 convention and preserve exact history.
+
+All **776 retained native tiles match exactly** before/after on iPad; the 39
+omitted tiles are verified entirely zero. The Mac full-pixel comparison has the
+same result. Cross-device hash identity is not required: 82 tiles already differ
+between Mac and iPad in the baseline, with the same platform differences after
+the change. Both physical runs preserve exact Undo/Redo. Median composition work
+falls from 10.13 to 8.32 million pixels per update.
+
+Thirty distinct focused checks pass, including 240 native/legacy material
+image comparisons with zero output-channel error, native color/coverage precision,
+contact continuity, transformed support bounds, prediction/cancellation, cached
+display versus full recomposition, and shader startup. Both Apple Release builds
+pass without compiler warnings. Web checking passes using the documented LLVM
+compiler; the initial system-clang attempt cannot compile WebAssembly.
+
+The corrected normal iPad Release is open at Recovered Drawings. All 14 complete
+recoveries and 147 original Application Support/document files remain byte-identical;
+disposable replay output is removed and other editor apps are unchanged. The Mac
+review process is untouched. The user now confirms improved drawing, with roughly 60 ms p99 at maximum
+pressure, and requests an algorithmic assessment of further headroom. This does
+not establish a physical floor or full perceptual acceptance; R6 remains open.
+
+Rejected probes are retained, not shipped: skipping saturated contact arithmetic
+had no useful benefit; regrouping compositor output did not help; a fourfold
+source-cache increase cost 192 MiB for only about 6 ms; bypassing display reduction
+also isolates about 6 ms but intentionally produces invalid display pixels.
+The initial batching probe reused mutable tile parameters and failed pixel
+identity; immutable parameters correct that failure. A restore precheck initially
+required cross-device hash equality; the corrected check verifies before/after
+identity on each device and zero omitted tiles before any restoration mutation.
+Private evidence is `artifacts/apple-large-brush-attribution-v1/`, based on
+published `24205989` plus this shared renderer correction.
+
+
 ## Current 2000 px footprint correction
 
 The user clarifies that the current workload is an approximately 2000 px G-Pen
 on the 61 MP photo (the retained control shows 2048 px), still visibly slower
 than Clip Studio Paint with roughly 54 ms Diagnostics p99. The earlier 570 px
-results do not qualify that workload. The corrected physical Pencil retest is
-pending; no comparison to Clip Studio Paint's internal implementation is claimed.
+results do not qualify that workload. The subsequent full-pressure report and correction above supersede this
+record's pending Pencil retest; no comparison to Clip Studio Paint's internal
+implementation is claimed.
 
 The shared contact planner used the generic swept-contact bound: the largest
 endpoint radius multiplied by 1.5, regardless of the brush's edge parameters.

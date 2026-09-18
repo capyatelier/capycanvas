@@ -70,6 +70,27 @@ one UIKit appearance-transition warning belongs to the private fixture's root
 controller replacement. No severe stall is reproduced. Both revised review apps
 are restored with the original drawings; live Pencil verification remains open.
 
+## Full-pressure 2000 px G-Pen — 2026-09-18
+
+The user reports continued visible iPad lag after the earlier footprint correction,
+with roughly 100 ms Diagnostics p99 at full pressure. Shared capsule tile planning,
+sparse prediction retirement and batched Float32 dry-brush updates reduce matched
+physical iPad replay median/p99 from **65.595/96.308 to 41.976/65.862 ms**.
+Cached zoom median remains **1.804 ms** and both runs stay thermally nominal.
+All 776 retained native tiles match exactly; 39 omitted tiles are verified empty.
+Both runs preserve exact Undo/Redo. No cache expansion or precision reduction ships.
+
+This uses 180 updates of eight synthetic samples at 240 Hz on the 61 MP source,
+manual 8 ms prediction, 360 subsequent zoom updates and fixed 768 MiB display
+admission. Completion includes offscreen presentation and queue waits; it does
+not measure live Pencil-to-display latency. P99 uses sorted index
+`floor(0.99 * (n - 1))`. The user reports improved drawing with roughly 60 ms p99 at maximum pressure
+on the updated normal iPad Release. Algorithmic headroom remains under assessment;
+all 14 recoveries and 147 original files were preserved. Both Release
+builds, Web compilation and 30 distinct focused checks pass. The [algorithm review](../../docs/development/apple-drawing-performance-review.md#current-full-pressure-drawing-correction--2026-09-18)
+records attribution, exact output qualification and rejected probes. Evidence is
+`artifacts/apple-large-brush-attribution-v1/`, based on `24205989` plus this correction.
+
 ## Large-photo fast strokes and repeated zoom — 2026-09-16
 
 The user reproduced the two reported stalls on the physical iPad while an

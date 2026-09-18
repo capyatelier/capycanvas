@@ -33,6 +33,7 @@ mod color_sample;
 mod source_access;
 mod material_sources;
 mod brush_tiles;
+mod dry_material;
 use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
@@ -689,6 +690,7 @@ struct TextureSet {
 }
 
 struct Pipelines {
+    dry_material: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
         MaterialOperation::ALL.len() * MaterialPipelineKind::COUNT],
@@ -705,6 +707,9 @@ struct Pipelines {
 
 impl Pipelines {
     fn compile_all(&self) {
+        if let Some(dry) = &self.dry_material {
+            for p in &dry.kernels { p.compile(); }
+        }
         for p in self
             .direct
             .iter()
@@ -801,6 +806,7 @@ pub struct WgpuRasterizer {
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
+    preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<LayerId>,
     preview_requires_base: bool,
     preview_direct_to_composite: bool,
@@ -1169,6 +1175,7 @@ impl WgpuRasterizer {
             preview_coverage_pages: Vec::with_capacity(8),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
+            preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
             preview_direct_to_composite: false,
@@ -1569,6 +1576,7 @@ impl WgpuRasterizer {
             self.composite_bind_group = None;
             self.live_display = None;
             self.preview_damage = PixelRect::EMPTY;
+            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
@@ -1705,6 +1713,7 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         preview: bool,
         gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
+        metadata: Option<&wgpu::Buffer>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
@@ -1761,7 +1770,7 @@ impl WgpuRasterizer {
             &self.dab_buffer,
             coverage,
             gathered.map_or(auxiliary, |g| g.0),
-            gathered.map_or(&self.material_source_meta, |g| g.1),
+            metadata.unwrap_or_else(|| gathered.map_or(&self.material_source_meta, |g| g.1)),
         ))
     }
 
@@ -2791,6 +2800,7 @@ impl WgpuRasterizer {
             });
         }
         let texture_key = Self::texture_set_key(&batch.style);
+        let mut compute_jobs = Vec::new();
         for job in &jobs {
             let source_bind_group = self.material_source_binding(
                 batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), false, encoder,
@@ -2829,6 +2839,15 @@ impl WgpuRasterizer {
                     &coverage.primary.view
                 }
             });
+            if self.compute_dry_material(batch) {
+                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &destination.view, coverage_view);
+                compute_jobs.push((output, source_bind_group, job.coordinate, coverage_view.is_some()));
+                if compute_jobs.len() == SOURCE_SLOTS {
+                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                    compute_jobs.clear();
+                }
+                continue;
+            }
             let scalar_state_view = job.has_scalar_state.then(|| {
                 if plan.state.watercolor_wetness {
                     let page = self.paint_layers[layer_index]
@@ -2907,6 +2926,8 @@ impl WgpuRasterizer {
             pass.draw(0..3, 0..1);
         }
 
+        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+
         // Reservoir exchange samples the immutable pre-batch canvas. Keep a
         // bind group to that generation before the page ping-pong state flips.
         let reservoir_exchange = if plan.reservoir {
@@ -2924,6 +2945,7 @@ impl WgpuRasterizer {
                         batch,
                         coordinate,
                         false,
+                        None,
                         None,
                         encoder,
                     )
@@ -3574,6 +3596,7 @@ impl WgpuRasterizer {
         let plan = BrushPassPlan::for_style(&batch.style);
         let texture_key = Self::texture_set_key(&batch.style);
         let damage = damage.intersect(self.preview_damage);
+        let mut compute_jobs = Vec::new();
         for coordinate in page_coordinates(damage) {
             let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
                 .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
@@ -3594,6 +3617,15 @@ impl WgpuRasterizer {
                 damage.intersect(page_rect(coordinate)).page_local(coordinate)
             };
             if local.is_empty() {
+                continue;
+            }
+            if self.compute_dry_material(batch) && self.preview_full_pages {
+                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &page.primary.view, None);
+                compute_jobs.push((output, source_bind_group, coordinate, false));
+                if compute_jobs.len() == SOURCE_SLOTS {
+                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                    compute_jobs.clear();
+                }
                 continue;
             }
             let texture_set = self
@@ -3638,6 +3670,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
         Ok(())
     }
 
@@ -4104,6 +4137,7 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_coverage_pages.clear();
             self.preview_watercolor_wetness_pages.clear();
             self.preview_damage = PixelRect::EMPTY;
+            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
@@ -4150,6 +4184,8 @@ impl CanvasRenderer for WgpuRasterizer {
         self.ensure_paint_state_pages(packet.dab_batches, &batch_tiles)?;
 
         let old_preview_damage = self.preview_damage;
+        let old_preview_contact_tiles = self.preview_contact_tiles.take();
+        let mut new_preview_contact_tiles = Some(std::collections::BTreeSet::new());
         let old_preview_layer = self.preview_layer_id;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
         let mut dirty = old_preview_damage.union(watercolor_style_dirty);
@@ -4201,6 +4237,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 continue;
             }
             if batch.kind == DabBatchKind::Preview {
+                if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some()
+                    && !batch.style.rendering.edge_after_stroke {
+                    if let Some(sparse) = &mut new_preview_contact_tiles {
+                        sparse.extend(tiles.iter().map(|tile| tile.coordinate));
+                    }
+                } else { new_preview_contact_tiles = None; }
                 if new_preview_layer.is_some_and(|id| id != batch.layer_id) {
                     return Err(GpuRasterError::MultiplePreviewLayers);
                 }
@@ -4518,6 +4560,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
 
         self.preview_damage = new_preview_damage;
+        self.preview_contact_tiles = new_preview_contact_tiles;
         // Scene composition, placement mips and exact queries consume whole
         // local pages. Direct material prediction writes unchanged pixels too.
         self.preview_full_pages = scene_required || !new_preview_from_persistent;
@@ -4789,7 +4832,11 @@ impl CanvasRenderer for WgpuRasterizer {
                 dirty = dirty.union(bounds);
                 tiles.extend(page_coordinates(bounds));
             };
-            if let Some(id) = old_preview_layer { include(id, old_preview_damage); }
+            if let Some(id) = old_preview_layer {
+                if let Some(sparse) = &old_preview_contact_tiles {
+                    for &coordinate in sparse { include(id, page_rect(coordinate)); }
+                } else { include(id, old_preview_damage); }
+            }
             for (batch, planned) in original_batches.iter().zip(&batch_tiles) {
                 for tile in planned { include(batch.layer_id, page_rect(tile.coordinate)); }
             }
@@ -5578,7 +5625,7 @@ fn create_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let texture = wgpu::BindGroupLayoutEntry {
         binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -5592,7 +5639,7 @@ fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
     }
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: 5,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     });
@@ -5608,7 +5655,7 @@ fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -5618,7 +5665,7 @@ fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -5635,7 +5682,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     for binding in 0..9 {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -5646,7 +5693,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     }
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: 9,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Storage { read_only: true },
             has_dynamic_offset: false,
@@ -5657,7 +5704,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     for binding in 10..12 {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -5667,7 +5714,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         });
     }
     entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 12, visibility: wgpu::ShaderStages::FRAGMENT,
+        binding: 12, visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false, min_binding_size: NonZeroU64::new(160) }, count: None,
     });
@@ -6110,6 +6157,8 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
+    let dry_material = (device.working_format() == wgpu::TextureFormat::Rgba32Float)
+        .then(|| dry_material::Pipelines::new(device, &layouts, &material_shader));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {
@@ -6560,6 +6609,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         })
     };
     Pipelines {
+        dry_material,
         direct,
         material,
         material_gather,

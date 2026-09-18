@@ -782,8 +782,7 @@ fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<
     return value + textureLoad(reservoir_texture, vec2<i32>(floor(position.xy)), 0);
 }
 
-@fragment
-fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
+fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
     if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
         let p = vec2<u32>(fragment_position.xy);
         let bounds = material_sources.pages[0];
@@ -843,4 +842,22 @@ fn reservoir_fragment(@builtin(position) fragment_position: vec4<f32>) -> @locat
         );
     }
     return carried;
+}
+
+@fragment
+fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
+    return material_result(fragment_position);
+}
+@group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var material_coverage_output: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(8, 8)
+fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
+    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
+    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+}
+@compute @workgroup_size(8, 8)
+fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
+    let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
+    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    textureStore(material_coverage_output, vec2<i32>(id.xy), result.coverage);
 }

@@ -63,6 +63,11 @@ impl Requirements {
             return;
         }
         let plan = BrushPassPlan::for_style(style);
+        if style.execution == BrushExecution::Dry && plan.direct.is_none()
+            && let Some(dry) = &r.pipelines.dry_material {
+            self.compute.push(dry.kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+            if preview { self.compute.push(dry.kernels[plan.material as usize * 2].clone()); }
+        }
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());
         } else {
@@ -392,6 +397,9 @@ impl WgpuRasterizer {
             {
                 startup.compiler.pipeline(p, OTHER);
             }
+            if let Some(dry) = &self.pipelines.dry_material {
+                for p in &dry.kernels { startup.compiler.pipeline(p, OTHER); }
+            }
             for p in [
                 &self.selection_clip.crossings,
                 &self.selection_clip.fill,
@@ -562,6 +570,7 @@ mod gpu_tests {
                 .pipelines()
                 .all(|p| !p.ready())
         );
+        assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels.iter().all(|p| !p.ready()));
         let document = Document::new("native staged startup", 128, 128);
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.prepare_startup(&document, &brush, false).unwrap();
@@ -588,6 +597,10 @@ mod gpu_tests {
                 .pipelines()
                 .all(Deferred::ready)
         );
+        for index in [2, 3] {
+            assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels[index].ready(),
+                "G-Pen commit and prediction kernels must be ready before input is enabled");
+        }
     }
     #[test]
     fn region_requests_wait_for_compilation_without_blocking_or_allocating_images() {
