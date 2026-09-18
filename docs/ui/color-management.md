@@ -245,8 +245,11 @@ capability-unknown. Extend existing exposure/curves, picker and histogram contro
 above reference white; do not make HDR an unrelated editing application. Users
 can edit on an SDR monitor without silently losing HDR source data.
 
-**Preview on SDR Display** is a view toggle. **SDR Rendition…** edits the saved
-brightness/contrast/highlight mapping used for SDR output. HDR export offers at
+**View → Preview SDR** is a temporary comparison, enabled only when the canvas
+can actually show HDR and a print proof is not active. **SDR Appearance…**,
+reached through Document Properties, Export or Proof Setup, previews the saved
+exposure/contrast/highlight mapping live. Cancel restores the view; Apply saves
+one undoable change used by SDR viewing, delivery and print proofing. HDR export offers at
 least one tested route, with an authored SDR base for gain-map delivery where
 supported. Pixel edits must update the gain map; an imported map is not reusable
 unchanged merely because its metadata was retained.
@@ -254,10 +257,19 @@ unchanged merely because its metadata was retained.
 GTK's review implementation uses linear half-float storage with Float32
 processing and fixed reference white of 203 cd/m². It supports noninterlaced
 16-bit PQ PNG input and BT.2020 PQ PNG output, plus authored SDR PNG/TIFF/JPEG.
-The footer reports HDR headroom or mapped SDR presentation. The SDR preview
-switch is transient; rendition changes are saved and undoable. Numeric Linear
-RGB/HDR entry accepts above-white and negative values; the graphical wheel
-retains its SDR range. Other hosts explicitly reject HDR masters for now.
+The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for display
+and reference-white details. New Drawing offers an **HDR drawing** preset.
+HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
+values. The color panel adds peak-channel **Brightness (EV)**; hue changes retain
+above-white brightness, while field/value picking chooses a new brightness.
+Curves and the histogram mark SDR white; curve processing options are in Advanced.
+
+Export chooses **Dynamic range: SDR or HDR** separately from format. HDR exposes
+its fixed PNG / BT.2020 PQ / 16-bit / retained-transparency contract and an
+explicit **Advanced → Clip out-of-range colors** switch. Its images are labeled
+SDR previews; a cancellable full-size range check gates export, and the writer
+checks again. SDR files use the saved SDR appearance. Other hosts explicitly
+reject HDR masters for now.
 See [the GTK validation and limits](../history/color-management-gtk-m4-validation.md)
 for the qualified workflow and outstanding physical-display/device evidence.
 
