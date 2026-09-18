@@ -17,7 +17,7 @@ impl HdrIntensityArc {
         let gap = wheel.inner - wheel.disc_radius();
         let radius = wheel.outer + gap + width * 0.5;
         // Keep the round caps inside the panel at large widths as the gap grows.
-        let end_angle = 40f32
+        let end_angle = 43f32
             .to_radians()
             .max(((size - width) * 0.5 / radius).clamp(0., 1.).acos());
         Some(Self {

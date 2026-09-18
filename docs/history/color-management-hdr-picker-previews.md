@@ -62,3 +62,9 @@ The earlier numerical, save/reopen, delivery and 60 MP evidence remains in the
 preceding review manifest. Physical luminance/calibration, mixed-monitor moves,
 physical touch/pen and other device classes remain unqualified. Browser HDR is
 unsupported. The known older SDR hue-guide tolerance failure is unchanged.
+
+The subsequent width adjustment moves each arc end inward another 3° (43° end
+angle), preserving thickness, radius and spacing. The existing geometry test
+passes and the GTK release build is refreshed; see `hdr-arc-shorter-geometry.log`
+and `hdr-arc-shorter-build.log`. The earlier native/device evidence above was
+not rerun for this width-only adjustment.
