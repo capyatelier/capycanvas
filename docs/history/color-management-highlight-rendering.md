@@ -1,5 +1,8 @@
 # HDR highlight rendering review — 2026-09-18
 
+The later [unified SDR controls](color-management-unified-sdr.md) supersede the
+method selector described here; legacy recipes remain unchanged.
+
 The initial audit below describes the pre-change renderer at `14c26bd0`.
 The [implemented follow-up](#implemented-photographic-follow-up) records the
 subsequent rendering change; neither change migrates saved SDR recipes on open.

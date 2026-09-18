@@ -108,7 +108,7 @@ mod tests {
     #[cfg(all(feature="heif",target_os="linux"))]
     #[test]
     #[ignore="requires pinned native HDR codec bundle"]
-    fn photographic_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
+    fn unified_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
         let cancel=AtomicBool::new(false);
         for format in [GainMapFormat::Jpeg,GainMapFormat::Avif] {
             let mut samples=Vec::new();
@@ -119,7 +119,7 @@ mod tests {
                 let (_,hdr,base,stats)=preview_gainmap_rows([32,32],[32,32],RgbSpace::Srgb,recipe,format,100,None,&cancel,read).unwrap();
                 assert_eq!(stats.clipped_channels,0);
                 let p=hdr[0];
-                eprintln!("PHOTOGRAPHIC_GAINMAP {format:?} color={highlight_color} hdr={p:?} base={:?}",base[0]);
+                eprintln!("UNIFIED_GAINMAP {format:?} color={highlight_color} hdr={p:?} base={:?}",base[0]);
                 assert!((p[0]/p[3]-8.).abs()<0.10 && (p[1]/p[3]).abs()<0.07 && (p[2]/p[3]).abs()<0.07,"HDR color reconstruction: {p:?}");
                 assert!((p[3]-alpha).abs()<0.002);
                 samples.push(base[0]);
@@ -149,7 +149,9 @@ mod tests {
         let cancel=AtomicBool::new(false);let extent=[32,24];
         for format in [GainMapFormat::Jpeg,GainMapFormat::Avif] {
             let mut fallbacks=Vec::new();
-            for exposure in [0.,-1.] {
+            // Bounded SDR brightness preserves white; use a 50% adjustment
+            // to exercise a clearly different fallback at this bright input.
+            for exposure in [0.,-2.] {
                 let rendition=SdrRendition{exposure,..Default::default()};
                 let read=|_:u32,row:&mut [[f32;4]]|{row.fill([2.,2.,2.,1.]);Ok(())};
                 let (_,hdr,base,stats)=preview_gainmap_rows(extent,extent,RgbSpace::Srgb,rendition,format,90,None,&cancel,read).unwrap();
@@ -183,7 +185,7 @@ mod tests {
                     }
                 }
             }
-            assert!(fallbacks[0]-fallbacks[1]>0.1,"SDR exposure must change the encoded base: {fallbacks:?}");
+            assert!(fallbacks[0]-fallbacks[1]>0.1,"SDR brightness must change the encoded base: {fallbacks:?}");
         }
         fn half_value(b:&[u8])->f32 {layer_core::color::hdr::decode_pixel([u16::from_le_bytes([b[0],b[1]]),0,0,0x3c00]).unwrap()[0]}
     }
