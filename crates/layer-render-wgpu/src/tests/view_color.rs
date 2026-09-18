@@ -484,11 +484,7 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
                         presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
                         presenter.present(&r,&output,view(),[0.;4]).unwrap();
                         let mut expected=if headroom==1. || proof {recipe.map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
-                        else {
-                            let rgb=[p[0],p[1],p[2]];let peak=rgb.into_iter().map(f32::abs).fold(0.,f32::max);
-                            let knee=headroom*0.75;let mapped=if peak<=knee {peak}else{headroom-(headroom-knee).powi(2)/(peak+headroom-2.*knee)};
-                            let rgb=rgb.map(|v|if peak>0.{v/peak*mapped*p[3]}else{0.});[rgb[0],rgb[1],rgb[2],p[3]]
-                        };
+                        else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
                         if proof {expected=lut.apply_premultiplied(expected,true,false);}
                         let rgb=rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from));
                         let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));

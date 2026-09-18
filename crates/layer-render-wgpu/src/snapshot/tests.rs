@@ -31,6 +31,18 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();
     let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
     assert_eq!(bytes, expected, "flattening a floating master must retain HDR values");
+    let master = renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, 49.).unwrap();
+    for (actual, p) in master.pixels.iter().zip(input) {
+        for c in 0..3 { assert!((actual[c] - 2. * p[c] * p[3]).abs() < 1e-6, "HDR preview changed the master: {actual:?}"); }
+        assert_eq!(actual[3], p[3]);
+    }
+    let sdr = renderer.preview_document([3, 1], RgbSpace::Srgb).unwrap();
+    assert!(sdr.pixels[0][0] < 1.);
+    assert!(master.pixels[0][0] > 1.);
+    renderer.sdr_rendition = Some(hdr::SdrRendition::default());
+    assert_eq!(renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, 49.).unwrap().pixels, master.pixels,
+        "saved SDR appearance must not affect the HDR master preview");
+    assert!(renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, f32::NAN).is_err());
 }
 
 fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {

@@ -33,6 +33,20 @@ pub fn decode_pixel(bits: [u16; 4]) -> Result<[f32; 4], &'static str> {
     Ok(pixel)
 }
 
+/// HDR display shoulder, matching `hdr_view.wgsl`. Signed RGB is scaled together
+/// and coverage is unchanged. This is a viewing derivative, never editing data.
+pub fn map_display_premultiplied(p: [f32; 4], headroom: f32) -> [f32; 4] {
+    if p[3] <= 0. { return p; }
+    let rgb = [p[0] / p[3], p[1] / p[3], p[2] / p[3]];
+    let peak = rgb.into_iter().map(f32::abs).fold(0., f32::max);
+    if peak == 0. { return [0., 0., 0., p[3]]; }
+    let knee = headroom * 0.75;
+    let mapped = if peak <= knee { peak }
+        else { headroom - (headroom - knee).powi(2) / (peak + headroom - 2. * knee) };
+    let rgb = rgb.map(|v| v / peak * mapped * p[3]);
+    [rgb[0], rgb[1], rgb[2], p[3]]
+}
+
 /// A deliberate SDR rendition, owned by the document and shared by viewing,
 /// proofing and delivery. The shoulder begins at `knee` and tends toward white;
 /// negative channels are mapped to black in this rendition only.

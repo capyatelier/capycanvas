@@ -17,7 +17,7 @@ mod metadata_tests;
 mod orientation;
 mod png_io;
 mod hdr_png;
-pub use hdr_png::{inspect_hdr_rows, write_hdr_png_rows};
+pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
 mod tiff_io;
 mod raster_io;
 mod bmp_io;

@@ -583,3 +583,138 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     assert_eq!(snapshot(&w), before);
     w.window.destroy(); pump(100);
 }
+
+#[test]
+#[ignore = "Wayland/GPU; LAYER_EXPECT_HDR=1 also verifies HDR texture and GSK transport"]
+fn native_hdr_export_preview_preserves_master_and_tracks_display() {
+    use layer_core::color::{ColorProfile, source::*};
+    let app = native_test_app("art.capycanvas.HdrExportPreview");
+    let mut p = new_drawing(64, 64).unwrap();
+    p.document.color.depth = SampleDepth::F16;
+    p.document.layers[1].visible = false;
+    p.document.sdr_rendition.exposure = -4.;
+    let mut source = SourceBuilder::new([64, 64], SourceInterpretation {
+        channels: SourceChannels::Rgba, depth: SampleDepth::F16,
+        profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
+    }, 1024 * 1024).unwrap();
+    let bits = layer_core::color::hdr::encode_pixel([8., 2., 0.5, 0.5]).unwrap();
+    let row = bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(64);
+    for _ in 0..64 { source.push_row(&row).unwrap(); }
+    p.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    let w = Workspace::with_project(&app, Some((p, None)));
+    w.window.present(); ready(&w); pump(300);
+    let original = snapshot(&w);
+    let physical = std::env::var_os("LAYER_EXPECT_HDR").is_some();
+    let headroom = w.gpu.borrow().as_ref().unwrap().session.engine().backend().display_headroom;
+    if physical {
+        assert!(headroom > 1.);
+        // Temporary canvas SDR viewing must not replace the export master.
+        invoke(&w, CommandId::PreviewSdr); ready(&w);
+    }
+    invoke(&w, CommandId::ExportDocument);
+    let picture = |name: &str| find_named(w.window.visible_dialog().unwrap().upcast_ref(), name)
+        .unwrap().downcast::<gtk::Picture>().unwrap();
+    let texture = |name: &str| picture(name).paintable().and_downcast::<gdk::Texture>().unwrap();
+    let wait = || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            pump(30);
+            if picture("color-preview-before").paintable().is_some() && picture("color-preview-after").paintable().is_some() && super::new_photo::export_enabled(&w) { break; }
+            assert!(Instant::now() < deadline, "HDR export preview did not finish");
+        }
+    };
+    let pixel = |texture: &gdk::Texture| {
+        let mut download = gdk::TextureDownloader::new(texture);
+        download.set_color_state(&gdk::ColorState::srgb_linear());
+        download.set_format(gdk::MemoryFormat::R32g32b32a32Float);
+        let (bytes, stride) = download.download_bytes();
+        let index = texture.height() as usize / 2 * stride + texture.width() as usize / 2 * 16;
+        std::array::from_fn::<_, 4, _>(|c| f32::from_ne_bytes(bytes[index+c*4..index+c*4+4].try_into().unwrap()))
+    };
+    wait();
+    pump(250); // Let GTK snapshot the newly published texture.
+    let master = texture("color-preview-before");
+    assert!(pixel(&texture("color-preview-after"))[0] < 1., "SDR delivery must stay SDR");
+    if physical {
+        assert_eq!(master.color_state(), gdk::ColorState::rec2100_linear());
+        assert!((pixel(&master)[0] - 4.47).abs() < 0.01, "HDR master lost above-white/alpha values: {:?}", pixel(&master));
+        let image = picture("color-preview-before");
+        let snapshot = gtk::Snapshot::new();
+        gtk::WidgetPaintable::new(Some(&image)).snapshot(&snapshot, image.width() as f64, image.height() as f64);
+        let rendered = w.window.renderer().unwrap().render_texture(&snapshot.to_node().unwrap(), None);
+        // GTK scales the checker; the center can interpolate its two tones.
+        for (c, base) in [4., 1., 0.25].into_iter().enumerate() {
+            assert!((base + 0.395..=base + 0.475).contains(&pixel(&rendered)[c]), "GSK lost HDR values: {:?}", pixel(&rendered));
+        }
+        eprintln!("HDR_PREVIEW_MASTER {:?}; GSK {:?}", pixel(&master), pixel(&rendered));
+    } else {
+        assert_ne!(master.color_state(), gdk::ColorState::rec2100_linear());
+        assert!(pixel(&master)[0] <= 1.);
+    }
+    combo(&w, "export-range").set_selected(1); wait();
+    if physical {
+        let output = texture("color-preview-after");
+        assert_eq!(output.color_state(), gdk::ColorState::rec2100_linear());
+        for c in 0..3 { assert!((pixel(&output)[c] - pixel(&master)[c]).abs() < 0.01); }
+        let directory = std::env::var_os("LAYER_HDR_OUTPUT").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/hdr-preview-desktop"));
+        std::fs::create_dir_all(&directory).unwrap();
+        capture_ui(&w, &directory, "hdr-export-preview.png");
+        // Inject a capability transition, not a change to OS display settings.
+        w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = 1.;
+        pump(400); wait();
+        assert_ne!(texture("color-preview-before").color_state(), gdk::ColorState::rec2100_linear());
+        assert_eq!(picture("color-preview-before").alternative_text().as_deref(), Some("Master (SDR preview)"));
+        w.gpu.borrow_mut().as_mut().unwrap().session.renderer_mut().display_headroom = headroom;
+        pump(400); wait();
+        assert_eq!(texture("color-preview-before").color_state(), gdk::ColorState::rec2100_linear());
+    }
+    response(&w, "cancel"); finish(&w);
+    assert_eq!(snapshot(&w), original);
+    w.window.destroy(); pump(100);
+}
+
+#[test]
+#[ignore = "Wayland/GPU and LAYER_HDR_LARGE_INPUT pointing to a retained 60 MP HDR fixture"]
+fn native_hdr_large_export_preview_and_cancellation() {
+    let path = std::env::var_os("LAYER_HDR_LARGE_INPUT").expect("60 MP fixture path");
+    let p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+    assert_eq!(p.document.color.depth, SampleDepth::F16);
+    assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
+    let app = native_test_app("art.capycanvas.HdrLargePreview");
+    let w = Workspace::with_project(&app, Some((p, None)));
+    w.window.present(); ready(&w);
+    let revision = w.gpu.borrow().as_ref().unwrap().session.engine().document().revision;
+    invoke(&w, CommandId::ExportDocument);
+    combo(&w, "export-range").set_selected(1);
+    let dialog = w.window.visible_dialog().unwrap();
+    let after = find_named(dialog.upcast_ref(), "color-preview-after").unwrap().downcast::<gtk::Picture>().unwrap();
+    let status = find_named(dialog.upcast_ref(), "color-preview-status").unwrap().downcast::<gtk::Label>().unwrap();
+    let start = Instant::now();
+    let heartbeat = Rc::new(RefCell::new((Instant::now(), 0u64, 0u128)));
+    let timer = glib::timeout_add_local(std::time::Duration::from_millis(10), {
+        let heartbeat = heartbeat.clone();
+        move || {
+            let mut h = heartbeat.borrow_mut();
+            h.2 = h.2.max(h.0.elapsed().as_micros()); h.0 = Instant::now(); h.1 += 1;
+            glib::ControlFlow::Continue
+        }
+    });
+    while after.paintable().is_none() {
+        pump(5);
+        assert!(start.elapsed().as_secs() < 90, "60 MP preview: {}", status.text());
+    }
+    timer.remove();
+    eprintln!("HDR_LARGE_PREVIEW elapsed_ms={:.2} heartbeat_count={} max_heartbeat_gap_ms={:.2} status={}",
+        start.elapsed().as_secs_f64()*1000., heartbeat.borrow().1, heartbeat.borrow().2 as f64/1000., status.text());
+    assert!(heartbeat.borrow().1 > 10, "no UI heartbeat while previewing");
+    assert!(heartbeat.borrow().2 < 500_000, "main-thread stall during preview");
+    for _ in 0..8 { combo(&w, "export-range").set_selected(0); combo(&w, "export-range").set_selected(1); }
+    pump(50);
+    let cancel = Instant::now();
+    response(&w, "cancel"); finish(&w);
+    eprintln!("HDR_LARGE_PREVIEW cancel_ms={:.2}", cancel.elapsed().as_secs_f64()*1000.);
+    assert!(cancel.elapsed().as_secs_f64() < 3.);
+    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().revision, revision);
+    w.window.destroy(); pump(100);
+}

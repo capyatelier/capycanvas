@@ -4,11 +4,19 @@ use super::*;
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use std::cell::{Cell, RefCell};
 
+pub(super) fn display_headroom(w: &Workspace) -> f32 {
+    // Cairo cannot preserve HDR through its 8-bit render target. Temporary
+    // canvas SDR/proof toggles do not change the master shown in Export.
+    if !w.window.renderer().is_some_and(|r| matches!(r.type_().name(), "GskVulkanRenderer" | "GskGLRenderer")) { return 1.; }
+    w.gpu.borrow().as_ref().map_or(1., |g| g.session.engine().backend().display_headroom)
+}
+
 struct Image {
     extent: [u32; 2],
     bytes: Vec<u8>,
     clipped: Option<u64>,
     hdr: bool,
+    display_hdr: bool,
     range_blocked: bool,
 }
 fn thumbnail(
@@ -18,52 +26,59 @@ fn thumbnail(
     time: f32,
     control: CaptureControl,
     view: crate::display_color::ViewColor,
+    headroom: f32,
     output: Option<ExportRecipe>,
 ) -> Result<Image, String> {
+    let hdr_document = project.document.color.depth.is_float();
     let mut renderer =
         gpu.capture(project, background, time, Default::default(), control)
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
-    let mut hdr_clipped = None;
+    let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
     let mut range_blocked = false;
-    if let Some(recipe) = output.as_ref().filter(|r| r.format.is_hdr()) {
-        renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
-        let count = renderer.inspect_hdr_output()?.clipped_channels;
-        range_blocked = count > 0 && !recipe.format.maps_hdr_range();
-        hdr_clipped = Some(count);
-    }
-    let (preview, clipped) = if let Some(recipe) = output.filter(|r| !r.format.is_hdr()) {
+    let (preview, clipped) = if let Some(recipe) = output {
         recipe.validate()?;
         renderer.set_output_extent(recipe.size.extent(renderer.extent())?)?;
-        let (preview, statistics) = renderer.preview_output(
-            [220, 160],
-            view.space(),
-            &recipe.interpretation(),
-            recipe.encoding,
-            recipe.background.matte(),
-        )?;
-        (preview, Some(statistics.clipped_channels))
+        if recipe.format.is_hdr() {
+            let (preview, stats) = renderer.preview_hdr_output([220, 160], view.space(), headroom)?;
+            range_blocked = stats.clipped_channels > 0 && !recipe.format.maps_hdr_range();
+            (preview, Some(stats.clipped_channels))
+        } else {
+            let (preview, stats) = renderer.preview_output(
+                [220, 160], view.space(), &recipe.interpretation(), recipe.encoding, recipe.background.matte(),
+            )?;
+            (preview, Some(stats.clipped_channels))
+        }
     } else {
-        (renderer.preview_document([220, 160], view.space())?, hdr_clipped)
+        (renderer.preview_document_for_display([220, 160], view.space(), headroom)?, None)
     };
-    let mut bytes = Vec::with_capacity(preview.pixels.len() * 4);
-    // Match the canvas's linear alpha-over-checker. Opaque, tagged bytes keep
-    // GTK/theme composition from changing the artwork's translucent edges.
+    let mut bytes = Vec::with_capacity(preview.pixels.len() * if display_hdr { 8 } else { 4 });
+    // Match the canvas's linear alpha-over-checker. Opaque, tagged textures keep
+    // GTK/theme composition from changing translucent artwork edges. HDR uses
+    // half-float display transport, like the canvas, after Float32 processing.
+    let to_srgb = preview.space.linear_transform(layer_core::color::RgbSpace::Srgb);
+    let to_2020 = layer_core::color::hdr::srgb_to_bt2020();
     for (i, pixel) in preview.pixels.iter().enumerate() {
         let x = i as u32 % preview.extent[0];
         let y = i as u32 / preview.extent[0];
         let checker = if (x / 8 + y / 8) % 2 == 0 { 0.94 } else { 0.80 };
-        for c in &pixel[..3] {
-            let linear = f64::from(*c) + checker * (1. - f64::from(pixel[3]));
-            bytes.push((preview.space.encode(linear).clamp(0., 1.) * 255.).round() as u8);
+        let rgb = std::array::from_fn(|c| f64::from(pixel[c]) + checker * (1. - f64::from(pixel[3])));
+        if display_hdr {
+            let rgb = layer_core::color::rgb::apply(to_2020, layer_core::color::rgb::apply(to_srgb, rgb));
+            for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([1.]) {
+                bytes.extend_from_slice(&half::f16::from_f32(v).to_bits().to_ne_bytes());
+            }
+        } else {
+            for v in rgb { bytes.push((preview.space.encode(v).clamp(0., 1.) * 255.).round() as u8); }
+            bytes.push(255);
         }
-        bytes.push(255);
     }
     Ok(Image {
         extent: preview.extent,
         bytes,
         clipped,
         hdr,
+        display_hdr,
         range_blocked,
     })
 }
@@ -86,6 +101,8 @@ pub(super) struct Comparison {
     labels: [gtk::Label; 2],
     pub status: gtk::Label,
     original: RefCell<Option<Project>>,
+    before_ready: Cell<bool>,
+    headroom: Cell<f32>,
     pending: RefCell<Option<Pending>>,
     control: RefCell<Option<CaptureControl>>,
     running: Cell<bool>,
@@ -112,7 +129,7 @@ impl Comparison {
         let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         pictures.set_homogeneous(true);
         pictures.set_halign(gtk::Align::Center);
-        let labels = labels.map(|label| gtk::Label::new(Some(label)));
+        let labels = labels.map(|label| gtk::Label::builder().label(label).wrap(true).build());
         let make = |label: &gtk::Label, name: &str| {
             let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
             let picture = gtk::Picture::new();
@@ -149,6 +166,8 @@ impl Comparison {
             labels,
             status,
             original: RefCell::new(Some(original)),
+            before_ready: Cell::new(false),
+            headroom: Cell::new(1.),
             pending: RefCell::new(None),
             control: RefCell::new(None),
             running: Cell::new(false),
@@ -188,10 +207,33 @@ impl Comparison {
     pub fn request(self: &Rc<Self>, project: Project, background: [f32; 4], time: f32) {
         self.request_image(project, background, time, None);
     }
+    pub fn set_headroom(&self, headroom: f32) -> bool {
+        if self.headroom.replace(headroom) == headroom { return false; }
+        self.before_ready.set(false);
+        self.before.set_paintable(None::<&gtk::gdk::Paintable>);
+        true
+    }
+    pub fn follow_display(self: &Rc<Self>, w: &Rc<Workspace>, refresh: Rc<dyn Fn()>) {
+        glib::timeout_add_local(std::time::Duration::from_millis(250), glib::clone!(
+            #[weak(rename_to = this)] self, #[weak] w, #[upgrade_or] glib::ControlFlow::Break,
+            move || {
+                if this.closed.get() { return glib::ControlFlow::Break; }
+                if this.set_headroom(display_headroom(&w)) { refresh(); }
+                glib::ControlFlow::Continue
+            }
+        ));
+    }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
-        self.labels[0].parent().unwrap().set_visible(!recipe.format.is_hdr());
-        let labels = if recipe.format.is_hdr() { ["SDR master preview", "SDR preview"] } else { ["Master", "Output"] };
-        for (label, text) in self.labels.iter().zip(labels) { label.set_label(text); }
+        let hdr_document = snapshot.project.document.color.depth.is_float();
+        let hdr_view = self.headroom.get() > 1.;
+        let labels = [
+            if hdr_document { if hdr_view { "HDR master" } else { "Master (SDR preview)" } } else { "Master" },
+            if recipe.format.is_hdr() { if hdr_view { "HDR output" } else { "Output (SDR preview)" } }
+                else if hdr_document { "SDR output" } else { "Output" },
+        ];
+        for ((label, picture), text) in self.labels.iter().zip([&self.before, &self.after]).zip(labels) {
+            label.set_label(text); picture.set_alternative_text(Some(text));
+        }
         self.request_image(
             snapshot.project.clone(),
             snapshot.background,
@@ -228,12 +270,13 @@ impl Comparison {
                 }
                 let control = CaptureControl::default();
                 *this.control.borrow_mut() = Some(control.clone());
-                let original = this.original.borrow().clone();
+                let original = (!this.before_ready.get()).then(|| this.original.borrow().clone()).flatten();
+                let headroom = this.headroom.get();
                 let serial = next.serial;
                 let view = this.view;
                 let gpu = this.gpu.clone();
                 let result = gio::spawn_blocking(move || {
-                    let before = original.filter(|_| !next.output.as_ref().is_some_and(|r| r.format.is_hdr()))
+                    let before = original
                         .map(|project| {
                             thumbnail(
                                 &gpu,
@@ -242,6 +285,7 @@ impl Comparison {
                                 next.time,
                                 control.clone(),
                                 view,
+                                headroom,
                                 None,
                             )
                         })
@@ -253,6 +297,7 @@ impl Comparison {
                         next.time,
                         control,
                         view,
+                        headroom,
                         next.output,
                     )?;
                     Ok::<_, String>((before, after))
@@ -267,11 +312,19 @@ impl Comparison {
                 match result {
                     Ok((before, after)) => {
                         let set = |picture: &gtk::Picture, image: Image| {
-                            picture.set_paintable(Some(&view.rgba8(image.extent, image.bytes)));
+                            let texture = if image.display_hdr {
+                                gtk::gdk::MemoryTextureBuilder::new()
+                                    .set_width(image.extent[0] as i32).set_height(image.extent[1] as i32)
+                                    .set_format(gtk::gdk::MemoryFormat::R16g16b16a16Float)
+                                    .set_stride(image.extent[0] as usize * 8)
+                                    .set_color_state(&gtk::gdk::ColorState::rec2100_linear())
+                                    .set_bytes(Some(&glib::Bytes::from_owned(image.bytes))).build()
+                            } else { view.rgba8(image.extent, image.bytes) };
+                            picture.set_paintable(Some(&texture));
                         };
                         if let Some(before) = before {
                             set(&this.before, before);
-                            this.original.borrow_mut().take();
+                            this.before_ready.set(true);
                         }
                         let ready = !after.range_blocked;
                         this.range_exceeded.set(after.range_blocked);
@@ -280,9 +333,9 @@ impl Comparison {
                             Some(_) => "Output preview · some colors exceed the output gamut",
                             None => "Complete canvas",
                         } };
+                        let viewing = if after.display_hdr { "HDR view".to_string() } else { format!("{} view", view.space().name()) };
                         set(&this.after, after);
-                        this.status
-                            .set_label(&format!("{description} · {} view", view.space().name()));
+                        this.status.set_label(&format!("{description} · {viewing}"));
                         this.mark_ready(ready);
                     }
                     Err(error) => {

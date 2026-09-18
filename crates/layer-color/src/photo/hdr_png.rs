@@ -95,6 +95,52 @@ fn output_nits(p: &[f32; 4], to_srgb: rgb::Matrix3, to_2020: rgb::Matrix3) -> Re
     Ok(nits)
 }
 
+fn output_codes(p: &[f32; 4], to_srgb: rgb::Matrix3, to_2020: rgb::Matrix3, clip: bool, statistics: &mut crate::OutputStatistics) -> Result<[u16; 4], String> {
+    let rgb = output_nits(p, to_srgb, to_2020)?;
+    let mut codes = [0; 4];
+    for c in 0..3 {
+        if !(0. ..=10000.).contains(&rgb[c]) {
+            if !clip {
+                return Err("Artwork exceeds BT.2020 PQ gamut or 10000 cd/m². Choose “Clip out-of-range colors” or adjust the HDR artwork.".into());
+            }
+            statistics.clipped_channels += 1;
+        }
+        codes[c] = (hdr::pq_encode(rgb[c].clamp(0., 10000.)) * 65535.).round() as u16;
+    }
+    codes[3] = (p[3] * 65535.).round() as u16;
+    Ok(codes)
+}
+
+/// Simulate the exact PQ/alpha codes before area reduction. Returns linear
+/// premultiplied sRGB with extended values; no SDR rendition or display clamp.
+/// Out-of-range samples are counted and clipped in this preview only. The host
+/// must still gate strict delivery using these statistics.
+pub fn preview_hdr_rows(
+    extent: [u32; 2], bounds: [u32; 2], space: RgbSpace,
+    mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
+) -> Result<([u32; 2], Vec<[f32; 4]>, crate::OutputStatistics), String> {
+    validate_extent(extent, 32768)?;
+    let mut preview = crate::AreaPreview::new(extent, bounds)?;
+    let mut row = vec![[0.; 4]; extent[0] as usize];
+    let to_srgb = space.linear_transform(RgbSpace::Srgb);
+    let from_2020 = hdr::bt2020_to_srgb();
+    let to_2020 = hdr::srgb_to_bt2020();
+    let mut statistics = crate::OutputStatistics::default();
+    let table: Vec<_> = (0..=65535).map(|code| hdr::pq_decode(code as f64 / 65535.) / f64::from(hdr::REFERENCE_WHITE_NITS)).collect();
+    for y in 0..extent[1] {
+        read(y, &mut row)?;
+        for p in &mut row {
+            let codes = output_codes(p, to_srgb, to_2020, true, &mut statistics)?;
+            let rgb = rgb::apply(from_2020, [table[codes[0] as usize], table[codes[1] as usize], table[codes[2] as usize]]);
+            let a = codes[3] as f32 / 65535.;
+            *p = [rgb[0] as f32 * a, rgb[1] as f32 * a, rgb[2] as f32 * a, a];
+        }
+        preview.push(&row)?;
+    }
+    let (extent, pixels) = preview.finish()?;
+    Ok((extent, pixels, statistics))
+}
+
 /// Full-resolution range inspection without encoding a PNG or changing samples.
 /// The row provider owns cancellation and bounded composition/resampling.
 pub fn inspect_hdr_rows(
@@ -156,22 +202,8 @@ pub fn write_hdr_png_rows(
         for y in 0..extent[1] {
             read(y, &mut pixels)?;
             for (p, o) in pixels.iter().zip(row.chunks_exact_mut(8)) {
-                let rgb = output_nits(p, to_srgb, to_2020)?;
-                for c in 0..3 {
-                    let nits = rgb[c];
-                    if !nits.is_finite() {
-                        return Err("Non-finite HDR output".into());
-                    }
-                    if !(0. ..=10000.).contains(&nits) {
-                        if !map_out_of_range {
-                            return Err("Artwork exceeds BT.2020 PQ gamut or 10000 cd/m². Choose “Clip out-of-range colors” or adjust the HDR artwork.".into());
-                        }
-                        statistics.clipped_channels += 1;
-                    }
-                    let code = (hdr::pq_encode(nits.clamp(0., 10000.)) * 65535.).round() as u16;
-                    o[c * 2..c * 2 + 2].copy_from_slice(&code.to_be_bytes());
-                }
-                o[6..].copy_from_slice(&((p[3] * 65535.).round() as u16).to_be_bytes());
+                let codes = output_codes(p, to_srgb, to_2020, map_out_of_range, &mut statistics)?;
+                for (out, code) in o.chunks_exact_mut(2).zip(codes) { out.copy_from_slice(&code.to_be_bytes()); }
             }
             stream.write_all(&row).map_err(err)?;
         }
@@ -185,6 +217,35 @@ pub fn write_hdr_png_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hdr_preview_matches_delivered_codes_before_reduction() {
+        let input = [[1., 1., 1., 1.], [4., 1., 0.25, 0.5], [80., -2., 4., 1.], [0.; 4]];
+        let read = |_: u32, row: &mut [[f32; 4]]| { row.copy_from_slice(&input); Ok(()) };
+        let mut png = Vec::new();
+        let written = write_hdr_png_rows(&mut png, [4, 1], RgbSpace::Srgb, None, true, read).unwrap();
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let row = decoder.next_row().unwrap().unwrap();
+        let expected: Vec<[f32; 4]> = row.data().chunks_exact(8).map(|p| {
+            let code = |c: usize| u16::from_be_bytes([p[c * 2], p[c * 2 + 1]]);
+            let rgb = rgb::apply(hdr::bt2020_to_srgb(), [0, 1, 2].map(|c| hdr::pq_decode(code(c) as f64 / 65535.) / 203.));
+            let a = code(3) as f32 / 65535.;
+            [rgb[0] as f32 * a, rgb[1] as f32 * a, rgb[2] as f32 * a, a]
+        }).collect();
+        for bounds in [[4, 1], [2, 1]] {
+            let (extent, pixels, stats) = preview_hdr_rows([4, 1], bounds, RgbSpace::Srgb, read).unwrap();
+            assert_eq!(extent, bounds);
+            assert_eq!(stats.clipped_channels, written.clipped_channels);
+            let samples = 4 / bounds[0] as usize;
+            for (pixel, source) in pixels.iter().zip(expected.chunks_exact(samples)) {
+                for c in 0..4 {
+                    let value = source.iter().map(|p| p[c]).sum::<f32>() / samples as f32;
+                    assert!((pixel[c] - value).abs() < 1e-5, "{pixel:?} != {value}");
+                }
+            }
+            assert!(pixels.iter().any(|p| p[0] > 1.));
+        }
+        assert!(preview_hdr_rows([4, 1], [2, 1], RgbSpace::Srgb, |_, _| Err("cancelled".into())).unwrap_err().contains("cancelled"));
+    }
     #[test]
     fn range_inspection_agrees_with_writer_and_propagates_cancellation() {
         for space in RgbSpace::ALL {

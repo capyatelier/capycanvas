@@ -36,6 +36,15 @@ impl SnapshotRenderer {
         bounds: [u32; 2],
         space: RgbSpace,
     ) -> Result<SnapshotPreview, String> {
+        self.preview_document_for_display(bounds, space, 1.)
+    }
+
+    /// Same composition as the canvas. Headroom above one uses the HDR display
+    /// shoulder; one uses the document's saved SDR appearance. Neither edits it.
+    pub fn preview_document_for_display(
+        &mut self, bounds: [u32; 2], space: RgbSpace, headroom: f32,
+    ) -> Result<SnapshotPreview, String> {
+        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err("Invalid display HDR headroom".into()); }
         self.check_cancelled().map_err(|e| e.to_string())?;
         let extent = self.extent;
         let matrix = self.color().space.linear_transform(space);
@@ -48,13 +57,44 @@ impl SnapshotRenderer {
         // Linear primary/adaptation matrices commute with area averaging and
         // associated alpha. No encoded or bounded sRGB intermediate is used.
         for pixel in &mut image.pixels {
-            if let Some(r) = rendition { *pixel = r.map_premultiplied(*pixel); }
+            if let Some(r) = rendition {
+                *pixel = if headroom > 1. { layer_core::color::hdr::map_display_premultiplied(*pixel, headroom) }
+                    else { r.map_premultiplied(*pixel) };
+            }
             let rgb: [f64; 3] = std::array::from_fn(|c| f64::from(pixel[c]));
             for (out, row) in pixel[..3].iter_mut().zip(matrix) {
                 *out = row.iter().zip(rgb).map(|(m, v)| m * v).sum::<f64>() as f32;
             }
         }
         Ok(image)
+    }
+
+    /// Preview resized PQ delivery, including actual 16-bit RGB/alpha codes and
+    /// range failures. Reduction and display mapping happen after output coding.
+    pub fn preview_hdr_output(
+        &mut self, bounds: [u32; 2], space: RgbSpace, headroom: f32,
+    ) -> Result<(SnapshotPreview, layer_color::OutputStatistics), String> {
+        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) { return Err("Invalid display HDR headroom".into()); }
+        let mut result = None;
+        let statistics = self.hdr_rows(|extent, working, read| {
+            let (extent, pixels, stats) = layer_color::photo::preview_hdr_rows(extent, bounds, working, read)?;
+            result = Some(SnapshotPreview { extent, space, pixels });
+            Ok(stats)
+        })?;
+        let mut image = result.expect("successful HDR preview produced pixels");
+        let working = self.color().space;
+        let to_working = RgbSpace::Srgb.linear_transform(working);
+        let matrix = working.linear_transform(space);
+        let rendition = self.sdr_rendition.unwrap_or_default();
+        for pixel in &mut image.pixels {
+            let rgb = layer_core::color::rgb::apply(to_working, [pixel[0], pixel[1], pixel[2]].map(f64::from));
+            pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
+            *pixel = if headroom > 1. { layer_core::color::hdr::map_display_premultiplied(*pixel, headroom) }
+                else { rendition.map_premultiplied(*pixel) };
+            let rgb = layer_core::color::rgb::apply(matrix, [pixel[0], pixel[1], pixel[2]].map(f64::from));
+            pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
+        }
+        Ok((image, statistics))
     }
 
     /// Simulate the actual encoded output rows, including delivery resizing,

@@ -756,6 +756,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     ));
     let comparison =
         super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color());
+    comparison.set_headroom(super::preview::display_headroom(w));
     let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[weak]
         export,
@@ -836,6 +837,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
             }
         )
     });
+    comparison.follow_display(w, refresh_preview.clone());
     for row in [
         &preset,
         &size,
