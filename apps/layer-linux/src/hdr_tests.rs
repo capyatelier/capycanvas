@@ -54,8 +54,8 @@ fn appearance_button(window: &gtk::Window, name: &str) {
 }
 fn appearance_exposure(window: &gtk::Window, value: f64) {
     let control = find_named(window.upcast_ref(), "sdr-appearance-exposure").unwrap()
-        .downcast::<crate::number_control::NumberControl>().unwrap();
-    control.set_value(value); control.emit_by_name::<()>("value-changed", &[]);
+        .downcast::<gtk::Scale>().unwrap();
+    control.set_value(value);
     pump(100);
 }
 
@@ -313,9 +313,9 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let default = project(&photo).document.sdr_rendition;
     invoke(&photo, CommandId::SdrRendition);
     let window = appearance(&photo);
-    let highlight=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
+    let highlight=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<gtk::Scale>().unwrap();
     assert!(highlight.is_mapped());
-    highlight.set_value(0.65);highlight.emit_by_name::<()>("value-changed",&[]);pump(50);
+    highlight.set_value(0.65);pump(50);
     assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
     assert_eq!(pixels(&photo),painted);
     invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
@@ -333,9 +333,10 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(project(&photo).document.sdr_rendition,saved);
     mode.set_active_name(Some("sdr"));pump(50);
     assert!(find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-method").is_none());
-    let shoulder=find_named(photo.proof_panel.root.upcast_ref(),"sdr-tone-pad-tone").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
-    shoulder.set_value(0.75);shoulder.emit_by_name::<()>("value-changed",&[]);pump(50);
-    assert_eq!(project(&photo).document.sdr_rendition.tone,0.75);
+    let field=find_named(photo.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
+    let controllers=field.observe_controllers();let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
+    keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);keys.emit_by_name::<()>("key-released",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);pump(50);
+    assert!(project(&photo).document.sdr_rendition.tone>default.tone);
     assert_eq!(project(&photo).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::LocalLaplacian);
     assert_eq!(pixels(&photo),painted);
     // Opening a previous method keeps its exact recipe; migration is explicit,
@@ -344,9 +345,8 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let change=photo.gpu.borrow_mut().as_mut().unwrap().session.set_sdr_rendition(legacy);
     photo.changed(change);ready(&photo);
     assert_eq!(project(&photo).document.sdr_rendition,legacy);
-    assert!(!highlight.is_mapped());
-    let update=find_named(photo.proof_panel.root.upcast_ref(),"sdr-appearance-update").unwrap().downcast::<gtk::Button>().unwrap();
-    assert!(update.is_mapped());update.emit_clicked();ready(&photo);
+    assert!(highlight.is_mapped());
+    appearance_button(&window,"reset");ready(&photo);
     assert_eq!(project(&photo).document.sdr_rendition,default);assert!(highlight.is_mapped());
     invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,legacy);
     invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
@@ -777,12 +777,11 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
         p.document.layers[0].source=Some(std::sync::Arc::new(source.finish().unwrap()));
         if transparent { p.document.sdr_rendition.method=layer_core::color::hdr::SdrMethod::ToneMap; }
         let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);
-        invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"auto");
-        let deadline=Instant::now()+Duration::from_secs(30);
-        loop {pump(20);let b=find_named(panel.upcast_ref(),"sdr-appearance-auto").unwrap().downcast::<gtk::Button>().unwrap();if b.label().as_deref()==Some("Auto"){break;}assert!(Instant::now()<deadline);}
+        let headroom=project(&w).document.sdr_rendition.headroom;
+        invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"reset");
+        assert!(find_named(panel.upcast_ref(),"sdr-appearance-auto").is_none());
         assert_eq!(project(&w).document.sdr_rendition.method,layer_core::color::hdr::SdrMethod::LocalLaplacian);
-        let expected_peak=layer_core::color::rgb::apply(layer_core::color::hdr::to_bt2020(RgbSpace::Srgb),[4.,0.5,0.2]).into_iter().zip(layer_core::color::hdr::BT2020_LUMA).map(|(v,w)|v*f64::from(w)).sum::<f64>().max(1.).log2();
-        assert!((project(&w).document.sdr_rendition.headroom as f64-expected_peak).abs()<0.002);
+        assert_eq!(project(&w).document.sdr_rendition.headroom,headroom,"Reset preserves the source range");
         let original=snapshot(&w);
         invoke(&w,CommandId::ExportDocument);
         let wait=|| {let deadline=Instant::now()+Duration::from_secs(40);while !super::new_photo::export_enabled(&w){pump(20);assert!(Instant::now()<deadline,"encoded preview");}};
@@ -812,7 +811,7 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
 fn native_local_tone_pad_and_five_hdr_photos() {
     let app=native_test_app("art.capycanvas.LocalToneReview");
     let directory=std::path::Path::new("../../artifacts/color-m4/local-tone/images/review").canonicalize().unwrap();
-    let evidence=std::path::Path::new("../../artifacts/color-m4/local-tone/native");std::fs::create_dir_all(evidence).unwrap();let evidence=evidence.canonicalize().unwrap();
+    let evidence=std::path::Path::new("../../artifacts/color-m4/proof-dial/native");std::fs::create_dir_all(evidence).unwrap();let evidence=evidence.canonicalize().unwrap();
     for name in ["abandoned_hall_01","venice_sunset","neon_photostudio","kiara_1_dawn","studio_small_09"] {
         let path=directory.join(format!("{name}_2k.capy"));
         let p=layer_core::Project::read(std::fs::File::open(&path).unwrap(),Default::default()).unwrap();
@@ -826,9 +825,12 @@ fn native_local_tone_pad_and_five_hdr_photos() {
         let controllers=pad.observe_controllers();let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
         let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
         let clicks=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureClick>()).unwrap();
-        let gesture=Instant::now();drag.emit_by_name::<()>("drag-begin",&[&20f64,&80f64]);
-        for i in 0..30 {drag.emit_by_name::<()>("drag-update",&[&(i as f64*3.),&(-i as f64)]);pump(5);}
-        drag.emit_by_name::<()>("drag-end",&[&87f64,&-29f64]);ready(&w);
+        let geometry=layer_ui::parameter_pad::ParameterDialGeometry::new(pad.width().min(pad.height()) as f32).unwrap();
+        let start=geometry.field.disc_marker([0.2,0.5]);let end=geometry.field.disc_marker([0.8,0.9]);
+        let delta=[(end[0]-start[0]) as f64,(end[1]-start[1]) as f64];
+        let gesture=Instant::now();drag.emit_by_name::<()>("drag-begin",&[&(start[0] as f64),&(start[1] as f64)]);
+        for i in 1..=30 {drag.emit_by_name::<()>("drag-update",&[&(delta[0]*i as f64/30.),&(delta[1]*i as f64/30.)]);pump(5);}
+        drag.emit_by_name::<()>("drag-end",&[&delta[0],&delta[1]]);ready(&w);
         eprintln!("LOCAL_PHOTO {name} 30_pad_updates_ms={:.2}",gesture.elapsed().as_secs_f64()*1000.);
         let edited=project(&w).document.sdr_rendition;assert_ne!(edited.tone,recipe.tone);assert_ne!(edited.detail,recipe.detail);
         assert_eq!(w.local_tone.ready_count(),count,"pad must reuse analysis");
@@ -842,10 +844,81 @@ fn native_local_tone_pad_and_five_hdr_photos() {
         assert_eq!(project(&w).document.layers[0].source,source,"proof must not edit source");
         assert_eq!(w.local_tone.ready_count(),count);
         if name=="abandoned_hall_01" {
+            assert!(find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-auto").is_none());
+            assert!(find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-tone").is_none());
+            for (i,key) in ["exposure","highlight_color"].into_iter().enumerate() {
+                let arc=find_named(w.proof_panel.root.upcast_ref(),&format!("sdr-appearance-{key}")).unwrap().downcast::<gtk::Scale>().unwrap();
+                let geometry=layer_ui::parameter_pad::ParameterDialGeometry::new(arc.width().min(arc.height()) as f32).unwrap();
+                let g=geometry.arcs[i];
+                let parent=arc.parent().unwrap();
+                let point=arc.compute_point(&parent,&gtk::graphene::Point::new(g.point(0.5)[0],g.point(0.5)[1])).unwrap();
+                let picked=parent.pick(point.x() as f64,point.y() as f64,gtk::PickFlags::DEFAULT).unwrap();
+                assert!(picked==arc.clone().upcast::<gtk::Widget>() || picked.is_ancestor(&arc),"visible arc must receive its own pointer hits: {}",picked.widget_name());
+                assert!(!arc.contains(g.center[0] as f64,g.center[1] as f64),"arc cannot steal circle contacts");
+                let controllers=arc.observe_controllers();
+                let drag=(0..controllers.n_items()).filter_map(|j|controllers.item(j).and_downcast::<gtk::GestureDrag>()).find(|g|g.propagation_phase()==gtk::PropagationPhase::Capture).unwrap();
+                let from=g.point(0.2);let to=g.point(0.8);let delta=[(to[0]-from[0]) as f64,(to[1]-from[1]) as f64];
+                let before=project(&w).document.sdr_rendition;
+                drag.emit_by_name::<()>("drag-begin",&[&(from[0] as f64),&(from[1] as f64)]);
+                drag.emit_by_name::<()>("drag-update",&[&delta[0],&delta[1]]);
+                drag.emit_by_name::<()>("drag-end",&[&delta[0],&delta[1]]);pump(60);
+                let edited=project(&w).document.sdr_rendition;
+                assert_ne!(edited,before);assert_eq!((edited.tone,edited.detail,edited.headroom),(before.tone,before.detail,before.headroom));
+                invoke(&w,CommandId::Undo);ready(&w);assert_eq!(project(&w).document.sdr_rendition,before,"one undo per arc gesture");
+                drag.emit_by_name::<()>("drag-begin",&[&(to[0] as f64),&(to[1] as f64)]);
+                let keys=(0..controllers.n_items()).filter_map(|j|controllers.item(j).and_downcast::<gtk::EventControllerKey>()).find(|g|g.propagation_phase()==gtk::PropagationPhase::Capture).unwrap();
+                keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Escape,&0u32,&gdk::ModifierType::empty()]);pump(30);
+                assert_eq!(project(&w).document.sdr_rendition,before,"Escape cancels arc gesture");
+                assert_eq!(w.local_tone.ready_count(),count,"arcs reuse full-image analysis");
+            }
             invoke(&w,CommandId::ExportDocument);combo(&w,"export-output").set_selected(0);
             let deadline=Instant::now()+Duration::from_secs(60);while !super::new_photo::export_enabled(&w){pump(20);assert!(Instant::now()<deadline);}
             capture_ui(&w,&evidence,"local-sdr-export.png");response(&w,"cancel");finish(&w);
         }
         w.window.destroy();pump(100);
     }
+}
+
+#[test]
+#[ignore = "private Wayland/GPU and LAYER_HDR_LARGE_INPUT 60 MP fixture"]
+fn native_hdr_large_proof_dial_responsiveness() {
+    let app = native_test_app("art.capycanvas.LargeProofDial");
+    let path = std::env::var_os("LAYER_HDR_LARGE_INPUT").unwrap();
+    let mut p = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+    assert!(u64::from(p.document.width) * u64::from(p.document.height) >= 59_000_000);
+    p.document.sdr_rendition = Default::default();
+    let layers = p.document.layers.clone();
+    let w = Workspace::with_project(&app, Some((p, None)));
+    w.window.present(); ready(&w); invoke(&w, CommandId::SdrRendition); appearance(&w);
+    let heartbeat = Rc::new(RefCell::new((Instant::now(), 0u128)));
+    let timer = glib::timeout_add_local(std::time::Duration::from_millis(10), {
+        let heartbeat=heartbeat.clone(); move || {
+            let mut h=heartbeat.borrow_mut(); h.1=h.1.max(h.0.elapsed().as_micros());h.0=Instant::now();glib::ControlFlow::Continue
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while w.local_tone.ready_count().is_none() { pump(10); assert!(Instant::now()<deadline); }
+    let count=w.local_tone.ready_count();
+    let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
+    let geometry=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
+    let start=geometry.field.disc_marker([0.2,0.4]);let end=geometry.field.disc_marker([0.8,0.9]);
+    let controllers=field.observe_controllers();
+    let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
+    let rendition=||w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
+    let before=rendition();
+    let started=Instant::now();
+    drag.emit_by_name::<()>("drag-begin",&[&(start[0] as f64),&(start[1] as f64)]);
+    for i in 1..=60 {
+        drag.emit_by_name::<()>("drag-update",&[&((end[0]-start[0]) as f64*i as f64/60.),&((end[1]-start[1]) as f64*i as f64/60.)]);pump(16);
+    }
+    drag.emit_by_name::<()>("drag-end",&[&((end[0]-start[0]) as f64),&((end[1]-start[1]) as f64)]);pump(100);
+    let elapsed=started.elapsed().as_secs_f64()*1000.;
+    timer.remove();
+    eprintln!("PROOF_DIAL_60MP updates=60 elapsed_ms={elapsed:.2} max_heartbeat_gap_ms={:.2}",heartbeat.borrow().1 as f64/1000.);
+    assert!(heartbeat.borrow().1<500_000,"UI stalled during local proof adjustment");
+    assert_eq!(w.local_tone.ready_count(),count,"drag must not rescan the 60 MP master");
+    assert_ne!(rendition(),before);
+    invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before);
+    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers,layers,"Proof must preserve the master");
+    w.window.destroy();pump(100);
 }

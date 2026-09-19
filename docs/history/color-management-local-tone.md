@@ -3,6 +3,8 @@
 September 2026. GTK review implementation; physical display qualification remains
 separate. Supersedes the four global controls described in
 [color-management-unified-sdr.md](color-management-unified-sdr.md).
+The later [circular Proof control](color-management-proof-dial.md) replaces the
+panel layout and remaps Strength/Balance onto this same tone/detail algorithm.
 
 ## User behavior
 

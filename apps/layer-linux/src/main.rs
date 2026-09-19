@@ -19,7 +19,7 @@ mod layers;
 mod navigator;
 mod number_control;
 mod panel_controls;
-mod parameter_pad;
+mod proof_dial;
 mod local_tone_view;
 mod preferences;
 mod previews;

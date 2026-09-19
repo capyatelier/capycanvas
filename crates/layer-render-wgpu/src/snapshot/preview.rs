@@ -29,6 +29,18 @@ fn reduce(
 }
 
 impl SnapshotRenderer {
+    /// A bounded, Float32 native-space source for interactive UI previews.
+    /// No tone mapping or gamut clipping is baked into this disposable cache.
+    pub fn preview_linear_document(&mut self, bounds: [u32; 2]) -> Result<SnapshotPreview, String> {
+        self.check_cancelled().map_err(|e| e.to_string())?;
+        let extent = self.extent;
+        let space = self.color().space;
+        let mut rows = Rows::new(self);
+        reduce(extent, bounds, space, |y, target| {
+            target.copy_from_slice(rows.read(y)?);
+            Ok(())
+        })
+    }
     /// Reduce the complete native composition before mapping its linear RGB to
     /// the requested viewing space. This does not apply delivery choices.
     pub fn preview_document(

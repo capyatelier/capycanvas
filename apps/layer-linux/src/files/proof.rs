@@ -1,17 +1,11 @@
 //! Live Proof panel. Viewing is transient; rendition/profile edits are saved
 //! document edits. Native controls and shared Rust history own their behavior.
 use super::*;
-use crate::{number_control::NumberControl, panel_controls};
-use layer_core::color::{
-    DocumentColor, ProofRecipe, RgbSpace,
-    hdr::{SdrMethod, SdrRendition},
-};
+use crate::panel_controls;
+use layer_core::color::{DocumentColor, ProofRecipe, RgbSpace};
 use layer_ui::{
     ProofMode,
-    proof_panel::{
-        PROOF_INTENTS, PrintProofControl, PrintProofSettings, ProofSimulation, sdr_number_controls,
-        sdr_tone_pad,
-    },
+    proof_panel::{PROOF_INTENTS, PrintProofControl, PrintProofSettings, ProofSimulation},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -59,7 +53,7 @@ struct Model {
     views: RefCell<Vec<Weak<ProofPanel>>>,
     export_wait: Cell<bool>,
     completed: Cell<u64>,
-    analysis: RefCell<Option<layer_render_wgpu::snapshot::CaptureControl>>,
+    preview: RefCell<Option<Arc<crate::proof_dial::PreviewSource>>>,
 }
 pub(crate) struct ProofPanel {
     pub root: gtk::Box,
@@ -69,12 +63,8 @@ pub(crate) struct ProofPanel {
 struct Form {
     mode: adw::ToggleGroup,
     stack: gtk::Stack,
-    controls: [NumberControl; 2],
-    pad: Rc<crate::parameter_pad::ParameterPad>,
-    recipe: Cell<SdrRendition>,
-    upgrade: gtk::Button,
+    dial: Rc<crate::proof_dial::ProofDial>,
     back: gtk::Button,
-    auto: gtk::Button,
     chooser: profile::ProfilePicker,
     intent: gtk::DropDown,
     bpc: gtk::CheckButton,
@@ -103,6 +93,14 @@ impl ProofPanel {
         });
         model.views.borrow_mut().push(Rc::downgrade(&p));
         p
+    }
+    pub fn set_preview(&self, source: Option<Arc<crate::proof_dial::PreviewSource>>) {
+        *self.model.preview.borrow_mut() = source.clone();
+        for view in self.views() {
+            if let Some(form) = view.form.borrow().as_ref() {
+                form.dial.set_preview(source.clone());
+            }
+        }
     }
     pub fn duplicate(&self, w: &Rc<Workspace>) -> Rc<Self> {
         let p = Self::with_model(self.model.clone());
@@ -154,11 +152,9 @@ impl ProofPanel {
         };
         if self.model.identity.get() != Some(identity) {
             self.cancel_job();
-            if let Some(c) = self.model.analysis.borrow().as_ref() {
-                c.cancel();
-            }
             self.finish_export();
             self.model.identity.set(Some(identity));
+            self.set_preview(None);
             self.model.page.set(match mode {
                 ProofMode::Off => Page::Off,
                 ProofMode::Sdr => Page::Sdr,
@@ -273,11 +269,6 @@ impl ProofPanel {
         Ok(())
     }
     fn set_page(self: &Rc<Self>, w: &Rc<Workspace>, page: Page) {
-        if page != Page::Sdr {
-            if let Some(c) = self.model.analysis.borrow().as_ref() {
-                c.cancel();
-            }
-        }
         if self.model.page.replace(page) != page {
             self.model
                 .serial
@@ -299,29 +290,11 @@ impl ProofPanel {
         }
         self.update_all(w);
     }
-    fn sdr_recipe(form: &Form) -> SdrRendition {
-        SdrRendition {
-            exposure: form.controls[0].value() as f32,
-            contrast: 1.,
-            highlights: 0.,
-            tone: form.pad.values()[0] as f32,
-            detail: form.pad.values()[1] as f32,
-            headroom: form.recipe.get().headroom,
-            highlight_color: form.controls[1].value() as f32,
-            method: SdrMethod::LocalLaplacian,
-        }
-    }
     fn edit_sdr(&self, w: &Rc<Workspace>, form: &Form, phase: Option<ContactPhase>) {
-        if form.updating.get() || !form.recipe.get().is_local() {
+        if form.updating.get() {
             return;
         }
-        let recipe = Self::sdr_recipe(form);
-        let phase = phase.or_else(|| {
-            form.controls
-                .iter()
-                .any(NumberControl::is_interacting)
-                .then_some(ContactPhase::Move)
-        });
+        let recipe = form.dial.recipe();
         let result = w
             .gpu
             .borrow_mut()
@@ -351,99 +324,8 @@ impl ProofPanel {
     }
     /// Export must freeze the recipe the user just selected, including a profile
     /// whose validation is still finishing. One bounded worker owns that work.
-    fn fit_sdr(self: &Rc<Self>, w: &Rc<Workspace>) {
-        if let Some(c) = self.model.analysis.borrow().as_ref() {
-            c.cancel();
-            return;
-        }
-        let snapshot = (|| {
-            let gpu = w.gpu.borrow();
-            let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-            Ok::<_, String>((
-                session.capture_project_recovery()?,
-                session.state().camera.view().background_rgba_linear,
-                session.engine().animation_time(),
-                session.state().document_file.epoch,
-                w.snapshot_gpu()?,
-            ))
-        })();
-        let (mut project, background, time, epoch, gpu) = match snapshot {
-            Ok(v) => v,
-            Err(e) => {
-                self.issue(w, e);
-                return;
-            }
-        };
-        let revision = project.document.revision;
-        let previous = project.document.sdr_rendition;
-        let previous = if previous.is_local() {
-            previous
-        } else {
-            SdrRendition::default()
-        };
-        // Auto intentionally starts the local controls for a legacy recipe;
-        // measure that mapper's luminance domain in the immutable snapshot too.
-        project.document.sdr_rendition = previous;
-        let control = layer_render_wgpu::snapshot::CaptureControl::default();
-        *self.model.analysis.borrow_mut() = Some(control.clone());
-        self.update_all(w);
-        let panel = self.clone();
-        let w = w.clone();
-        glib::spawn_future_local(async move {
-            let close = w.window.connect_destroy(glib::clone!(
-                #[strong]
-                control,
-                move |_| control.cancel()
-            ));
-            let worker_control = control.clone();
-            let result = gio::spawn_blocking(move || {
-                gpu.capture(
-                    project,
-                    background,
-                    time,
-                    Default::default(),
-                    worker_control,
-                )
-                .map_err(|e| e.to_string())?
-                .hdr_headroom()
-            })
-            .await
-            .map_err(|_| "HDR analysis failed".to_string())
-            .and_then(|r| r);
-            w.window.disconnect(close);
-            panel.model.analysis.borrow_mut().take();
-            if !control.cancellation_flag().load(Ordering::Acquire) {
-                let current = w.gpu.borrow().as_ref().is_some_and(|g| {
-                    g.session.state().document_file.epoch == epoch
-                        && g.session.engine().document().revision == revision
-                });
-                if current {
-                    match result {
-                        Ok(headroom) => {
-                            let change = w
-                                .gpu
-                                .borrow_mut()
-                                .as_mut()
-                                .unwrap()
-                                .session
-                                .set_sdr_rendition(SdrRendition {
-                                    headroom,
-                                    exposure: 0.,
-                                    contrast: 1.,
-                                    ..previous
-                                });
-                            w.changed(change);
-                        }
-                        Err(e) => panel.issue(&w, e),
-                    }
-                }
-            }
-            panel.update_all(&w);
-        });
-    }
     pub async fn finish_pending(&self, w: &Rc<Workspace>) -> Result<(), String> {
-        while (self.model.analysis.borrow().is_some()
-            || self.model.busy.get()
+        while (self.model.busy.get()
             || self
                 .form
                 .borrow()
@@ -619,30 +501,9 @@ impl ProofPanel {
         if page != Page::Print {
             self.cancel_job();
         }
-        if page != Page::Sdr {
-            if let Some(c) = self.model.analysis.borrow().as_ref() {
-                c.cancel();
-            }
-        }
         f.mode.set_active_name(Some(page.name()));
         f.stack.set_visible_child_name(page.name());
-        for (c, v) in f
-            .controls
-            .iter()
-            .zip([recipe.exposure, recipe.highlight_color])
-        {
-            c.set_value(v.into());
-        }
-        f.recipe.set(recipe);
-        f.pad.set_values([recipe.tone as f64, recipe.detail as f64]);
-        let unified = recipe.is_local();
-        f.pad.root.set_visible(unified);
-        for c in &f.controls {
-            if let Some(row) = c.parent() {
-                row.set_visible(unified);
-            }
-        }
-        f.upgrade.set_visible(!unified);
+        f.dial.set_recipe(recipe);
         f.back.set_visible(self.model.export_wait.get());
         let p = self.model.print.borrow();
         if let Some(profile) = &p.profile {
@@ -666,11 +527,6 @@ impl ProofPanel {
         );
         f.warning.set_sensitive(has_proof);
         f.warning.set_active(warning);
-        f.auto.set_label(if self.model.analysis.borrow().is_some() {
-            "Cancel"
-        } else {
-            "Auto"
-        });
         f.progress.set_visible(self.model.busy.get());
         f.progress.set_spinning(self.model.busy.get());
         let error = self.model.error.borrow();
@@ -698,51 +554,9 @@ impl Form {
             .build();
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
-        let sdr = panel_controls::column();
-        let method_row = panel_controls::action_row();
-        let upgrade = gtk::Button::with_label("Update controls");
-        upgrade.set_widget_name("sdr-appearance-update");
-        upgrade.set_tooltip_text(Some("Keep the saved appearance until you choose to update. Updating starts local tone mapping; Undo restores the saved appearance."));
-        method_row.append(&upgrade);
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        method_row.append(&spacer);
-        sdr.append(&method_row);
-        let pad = crate::parameter_pad::ParameterPad::new("sdr-tone-pad", sdr_tone_pad());
-        pad.area.set_tooltip_text(Some("Tone: compress lighting differences from left to right. Detail: soften to emphasize texture from bottom to top. Double-click resets."));
-        sdr.append(&pad.root);
-        let controls = sdr_number_controls().map(|definition| {
-            let (title, name, spec) = (definition.label, definition.key, definition.numeric);
-            let c = NumberControl::inline(spec, title);
-            c.set_widget_name(&format!("sdr-appearance-{name}"));
-            let row = panel_controls::row(title, &c);
-            c.set_tooltip_text(Some(match name {
-                "exposure" => "Brighten ordinary tones while keeping black and white fixed",
-                "contrast" => "Separate midtones around 18% gray",
-                "highlights" => "Detail compresses the shoulder earlier; Bright keeps highlights brighter",
-                _ => "White preserves highlight brightness; Color retains saturation by lowering brightness",
-            }));
-            sdr.append(&row);
-            c
-        });
-        let reset = gtk::Button::from_icon_name("view-refresh-symbolic");
-        reset.set_tooltip_text(Some("Reset SDR appearance"));
-        reset.update_property(&[gtk::accessible::Property::Label("Reset SDR appearance")]);
-        reset.set_widget_name("sdr-appearance-reset");
-        reset.set_halign(gtk::Align::End);
-        let auto = gtk::Button::with_label("Auto");
-        auto.set_widget_name("sdr-appearance-auto");
-        auto.set_tooltip_text(Some("Measure the edited image range and reset brightness"));
-        auto.connect_clicked(glib::clone!(
-            #[weak]
-            panel,
-            #[weak]
-            w,
-            move |_| panel.fit_sdr(&w)
-        ));
-        method_row.append(&auto);
-        method_row.append(&reset);
-        stack.add_named(&crate::workspace::scroll(&sdr), Some("sdr"));
+        let dial = crate::proof_dial::ProofDial::new();
+        dial.set_preview(panel.model.preview.borrow().clone());
+        stack.add_named(&dial.root, Some("sdr"));
         let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");
         let chooser = profile::ProfilePicker::compact(
@@ -795,10 +609,7 @@ impl Form {
         let f = Rc::new(Self {
             mode,
             stack,
-            controls,
-            pad,
-            recipe: Cell::new(SdrRendition::default()),
-            upgrade: upgrade.clone(),
+            dial,
             back,
             chooser,
             intent,
@@ -806,7 +617,6 @@ impl Form {
             simulation,
             warning,
             progress,
-            auto,
             error,
             updating: Cell::new(false),
         });
@@ -830,7 +640,7 @@ impl Form {
                 }
             }
         ));
-        f.pad.connect_changed(glib::clone!(
+        f.dial.connect_changed(glib::clone!(
             #[weak]
             panel,
             #[weak]
@@ -838,47 +648,6 @@ impl Form {
             #[weak]
             f,
             move |phase, _| panel.edit_sdr(&w, &f, Some(phase))
-        ));
-        for c in &f.controls {
-            c.connect_value_changed(glib::clone!(
-                #[weak]
-                panel,
-                #[weak]
-                w,
-                #[weak]
-                f,
-                move |_| panel.edit_sdr(&w, &f, None)
-            ));
-            c.connect_interaction(glib::clone!(
-                #[weak]
-                panel,
-                #[weak]
-                w,
-                #[weak]
-                f,
-                move |_, phase| panel.edit_sdr(&w, &f, Some(phase))
-            ));
-        }
-        upgrade.connect_clicked(glib::clone!(
-            #[weak]
-            reset,
-            move |_| reset.emit_clicked()
-        ));
-        reset.connect_clicked(glib::clone!(
-            #[weak]
-            panel,
-            #[weak]
-            w,
-            move |_| {
-                let result = w
-                    .gpu
-                    .borrow_mut()
-                    .as_mut()
-                    .ok_or("Canvas unavailable".into())
-                    .and_then(|g| g.session.set_sdr_rendition(SdrRendition::default()));
-                w.changed(result);
-                panel.update_all(&w);
-            }
         ));
         f.back.connect_clicked(glib::clone!(
             #[weak]

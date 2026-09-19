@@ -1004,7 +1004,7 @@ fn native_desktop_file_picker_uses_portal() {
 #[test]
 #[ignore = "isolated Wayland display and GPU"]
 fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
-    let output=std::path::Path::new("../../artifacts/color-m4/local-tone/layout");
+    let output=std::path::Path::new("../../artifacts/color-m4/proof-dial/layout");
     std::fs::create_dir_all(output).unwrap();
     let app=native_test_app("art.capycanvas.ProofPanel");
     let mut p=new_drawing(512,384).unwrap();p.document.color.depth=SampleDepth::F16;
@@ -1019,15 +1019,26 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
         assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
-        for name in ["sdr-appearance-exposure","sdr-tone-pad-surface","sdr-tone-pad-tone","sdr-tone-pad-detail","sdr-appearance-highlight_color","proof-mode"] {
+        for name in ["sdr-appearance-exposure","sdr-tone-pad-surface","sdr-appearance-reset","sdr-appearance-highlight_color","proof-mode"] {
             let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
             let b=widget.compute_bounds(&viewport).unwrap();
             assert!(b.x()>=0. && b.x()+b.width()<=viewport.width() as f32+1.,"{name}: {b:?} vs {}",viewport.width());
             assert!(b.y()>=0. && b.y()+b.height()<=viewport.height() as f32+1.,"{name} should fit without scrolling: {b:?} vs {}",viewport.height());
         }
+        let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
+        let geometry=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
+        for (i,name) in ["sdr-appearance-exposure","sdr-appearance-highlight_color"].iter().enumerate() {
+            let arc=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();
+            assert_eq!((arc.width(),arc.height()),(field.width(),field.height()),"arc CSS must preserve the shared circle coordinates in compact panels");
+            let parent=arc.parent().unwrap();
+            let p=geometry.arcs[i].point(0.5);
+            let p=arc.compute_point(&parent,&gtk::graphene::Point::new(p[0],p[1])).unwrap();
+            let hit=parent.pick(p.x() as f64,p.y() as f64,gtk::PickFlags::DEFAULT).unwrap();
+            assert!(hit==arc || hit.is_ancestor(&arc),"{name}: visible arc must receive input");
+        }
         let before=snapshot(&w);
-        let control=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-exposure").unwrap().downcast::<crate::number_control::NumberControl>().unwrap();
-        control.set_value(-1.);control.emit_by_name::<()>("value-changed",&[]);pump(50);
+        let control=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-exposure").unwrap().downcast::<gtk::Scale>().unwrap();
+        control.set_value(-1.);pump(50);
         let edited=snapshot(&w);assert_ne!(edited,before);
         let mode=find_named(w.proof_panel.root.upcast_ref(),"proof-mode").unwrap().downcast::<adw::ToggleGroup>().unwrap();
         mode.set_active_name(Some("off"));pump(50);assert!(!state(&w).preview_sdr);assert_eq!(snapshot(&w),edited);

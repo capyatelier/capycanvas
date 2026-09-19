@@ -250,22 +250,30 @@ control. In the Paint and Photo
 starting layouts it shares Color's tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
-For HDR artwork, **Proof → SDR** has a **Tone × Detail pad**, plus compact
-**Brightness** and **Highlight color** controls. Move right to compress broad
-lighting differences around middle gray; move up to emphasize texture. Move left
-to retain more lighting contrast, or down to soften detail. The default preserves
-extracted detail at 100%. Brightness adjusts final SDR midtones with fixed black
-and white. Highlight color trades bright, increasingly white highlights for more
-of their color. These controls author the SDR rendition, not the HDR master.
+For HDR artwork, **Proof → SDR** uses a circular control with a small live SDR
+preview of the image. Move **up** to increase local tone-mapping **Strength**.
+Move **right** to favor texture, or **left** to favor smoother tone compression.
+The center balance preserves extracted detail at its original strength. Zero
+Strength uses the basic global HDR-to-SDR conversion.
 
-The pad supports drag, arrow keys (Shift for larger steps), numeric entry beside
-it, Escape to cancel and double-click to reset its two axes. **Auto** measures the
-edited HDR luminance range and resets Brightness, keeping Tone, Detail and
-Highlight color. **Reset** restores the starting local rendition. Existing saved
-global recipes reopen unchanged; **Update controls** or Auto explicitly switches
-them to local tone mapping, with Undo available. The
+The **top arc** adjusts Brightness, keeping black and white fixed. The **bottom
+arc** adjusts Color intensity: left lets bright highlights become white; right
+retains more color by lowering their brightness. Their ramps show dark-to-light
+and white-to-scene-color respectively. Small curved readouts show the values;
+hover or focus identifies the controls. No labels or Auto button occupy the panel.
+
+Drag, use arrow keys (Shift for larger steps), or double-click a control to reset
+it. Escape cancels an adjustment. The small refresh icon resets all appearance
+controls while preserving the stored HDR range. Existing saved recipes reopen
+unchanged; a recipe outside the new Strength/Balance range shows dashes and no
+circle marker until the user moves the circle or resets it. Brightness and Color
+intensity can still be adjusted without changing that saved tone/detail recipe.
+The small preview is a cached, reduced central crop; use the canvas and export
+preview to judge fine detail and the complete image. The
 [algorithm, fixtures and qualification notes](../history/color-management-local-tone.md)
 explain the bounded local-Laplacian approximation and its limits.
+The [circular-control review](../history/color-management-proof-dial.md) records
+its control mapping, compatibility and GTK validation.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.

@@ -32,6 +32,15 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
     assert_eq!(bytes, expected, "flattening a floating master must retain HDR values");
     let master = renderer.preview_document_for_display([3, 1], RgbSpace::Srgb, 49.).unwrap();
+    let linear = renderer.preview_linear_document([3, 1]).unwrap();
+    assert_eq!(linear.pixels, master.pixels, "Proof control cache must not bake SDR mapping into HDR samples");
+    let reduced = renderer.preview_linear_document([1, 1]).unwrap();
+    for c in 0..4 {
+        let mean = linear.pixels.iter().map(|p| p[c]).sum::<f32>() / 3.;
+        assert!((reduced.pixels[0][c] - mean).abs() < 1e-6, "linear alpha-aware reduction {c}");
+    }
+    assert!(renderer.preview_linear_document([0, 128]).is_err());
+    assert!(renderer.preview_linear_document([1025, 128]).is_err());
     for (actual, p) in master.pixels.iter().zip(input) {
         for c in 0..3 { assert!((actual[c] - 2. * p[c] * p[3]).abs() < 1e-6, "HDR preview changed the master: {actual:?}"); }
         assert_eq!(actual[3], p[3]);
