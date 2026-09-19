@@ -1,73 +1,63 @@
-# Android HDR display and footer follow-up — 2026-09-19
+# Android HDR display and footer
 
-The Wacom MovinkPad Pro 14 (DTHA140, Android 15) advertises HDR10/HLG,
-wide color and a desired maximum luminance of 1000 cd/m². The old Android
-canvas nevertheless selected an 8-bit sRGB Vulkan surface and passed `1.0`
-headroom to the shared presenter every frame. The “mapped SDR display” label
-was an accurate description of that application path, not of the panel hardware.
+The reviewed Wacom MovinkPad Pro 14 (DTHA140, Android 15) uses a floating-point
+BT.2100 PQ canvas. The user accepted its physical appearance on 2026-09-19.
+Instrumented luminance/colorimetry and sustained thermal qualification remain
+separate from that visual acceptance.
 
-## Implemented path
+## Current implementation
 
-Android 15 or newer now negotiates the exact `Rgba16Float` /
-`ExtendedSrgbLinear` surface pair when Vulkan offers it and Android exposes an
-HDR display with an available HDR/SDR ratio. `SurfaceView.setDesiredHdrHeadroom`
-requests the artwork's range on the canvas buffer layer. Android supplies the
-current ratio; the existing shared Rust/GTK HDR presenter receives the lesser
-of that ratio and the requested range. This Android encoding is SDR-relative
-linear extended sRGB; it does not use Windows' fixed scRGB reference-white scale.
-The ordinary Compose controls remain SDR. The follow-up below corrects the
-near-SDR policy and verifies actual floating-point pixels.
+For HDR artwork with Proof Off, Android presents PQ without applying the
+shared display-headroom shoulder first. The shared Rust encoder converts
+working primaries to BT.2020 with artwork RGB 1 at 203 cd/m². This viewing
+output is bounded to PQ's 0–10,000 cd/m² signal range and BT.2020 channels;
+it never changes the editable HDR master.
 
-Off presents HDR when available. SDR, Print, gamut warning and temporary SDR
-appearance previews use one-times headroom and the existing shared mapping.
-Opening a new document and replacing the GPU retain the negotiated encoding.
-Display changes invalidate an idle frame without changing the artwork or its
-history. JNI diagnostics distinguish selected format/encoding, current policy
-and the headroom of the last submitted frame.
+Android 15+, HDR10/HDR10+ display support and an exact float/PQ Vulkan pair are
+required. The host also requires sRGB support for that float format so Proof
+can switch encoding safely. `SurfaceView.setDesiredHdrHeadroom(0)` uses normal
+Android HDR brightness policy. Separate mastering/MaxCLL metadata is not sent;
+Android uses PQ's absolute encoding and its platform tone-mapping defaults.
 
-Web and Android place a compact display button on the left of the footer.
-Padding, text and rounded background match the zoom/rotation readout on the
-right. Clicking/tapping opens Display Details, following GTK. Android reports
-**Showing SDR** below 1.05×, retaining the authored SDR appearance. Display
-Details shows the actual reported ratio and the switching threshold.
-Web still reports **Showing SDR** and explicitly explains its SDR canvas.
+Proof SDR, Print, gamut warnings, appearance drafts and SDR documents select
+an sRGB surface and the shared SDR mapper, with headroom request 1. Display
+capability loss also returns to SDR. Canvas and Navigator share the presenter
+and surface. Document adoption and GPU recovery preserve the encoding.
+GTK's linear/scRGB shoulder remains in use by GTK; it is not an obsolete
+Android experiment and is retained in the shared renderer.
 
-Older Android versions, missing headroom APIs and devices lacking the matching
-Vulkan format/encoding use the existing mapped SDR path. Advertising an HDR
-video decoder alone does not qualify the canvas. External-display changes,
-physical luminance/colorimetry and sustained thermal behavior remain unqualified.
+The left footer shows **HDR**, **SDR preview**, **Print proof**, or **Showing SDR**,
+with the zoom/rotation bubble styling. Display Details explains the current view
+and how to switch Proof. Color controls and layer thumbnails remain SDR previews.
+Web remains mapped SDR.
 
-## Device-side limit
+## PQ display validation
 
-On the attached tablet, SurfaceFlinger confirms a 16-bit float canvas in
-`V0_SCRGB_LINEAR`, and DisplayManager reports `mIsHdrLayerPresent=true`,
-`mHdrVisible=true` and HDR high-brightness mode. The test artwork requests
-**4.926108×** (the stored endpoint is 2.300448 stops), but Android grants only
-**1.004000×**. The earlier integration mistakenly sent stops as a ratio. Both SDR and Print return
-the submitted headroom to 1.0 and clear the active HDR-layer state.
+The shared GPU oracle checks PQ against independent Float64 math for F16/F32,
+sRGB/ProPhoto, alpha, negative/bright samples, different SDR recipes, retained
+viewing captures, normal HDR shoulders and explicit proof.
 
-The read-only vendor configuration
-`/vendor/etc/displayconfig/display_id_4630947011706244995.xml` explains the
-observed limit: `sdrHdrRatioMap` is 1.0 through 398 nits and 1.004 at 400 nits.
-The current SDR white is reported as 400 nits. A separate brightness map reaches
-920 nits, and the advertised HDR maximum is 1000 nits; neither value establishes
-that this firmware grants that brightness to this window. No vendor settings,
-brightness override or system configuration is changed by this fix. These are
-OS reports, not measured screen luminance. The app-side missing HDR path is fixed;
-the firmware's available headroom remains very small.
+On the Wacom, SurfaceFlinger confirms `BT2020_PQ` / `RGBA16161616F_UBWC` for
+HDR and `V0_SRGB` for SDR proof. The final device regression checks above-white
+canvas/Navigator pixels, an SDR display fallback and exact HDR restoration,
+SDR/Print switching, idle tone-guide presentation, GPU recovery, footer geometry
+and the concise HDR label. HDR editing/delivery/recovery and print portability
+cover pen painting, touch/pen cancellation, undo, native save/reopen, EXR/PQ/SDR
+delivery and Activity/GPU recovery. The real Chrome HDR workflow covers the
+shared Web path.
 
-Android's documented [HDR UI guidance](https://android-developers.googleblog.com/2025/09/hdr-and-user-interfaces.html)
-explains independent SurfaceView headroom and SDR UI. The
-[SurfaceView API](https://developer.android.com/reference/android/view/SurfaceView#setDesiredHdrHeadroom(float))
-defines the Android 15 request; [Display](https://developer.android.com/reference/android/view/Display#getHdrSdrRatio())
-provides the current HDR/SDR ratio.
+The earlier PQ review captured canvas/Navigator maxima of 1.2783/1.53125 via
+Android float PixelCopy. These captures convert PQ and do not measure luminance.
+Android still reported 1.004× headroom, with a 400-nit white point and
+`dimmingRatio=1` for both layers. Those reports do not cap the application’s PQ
+pixels. The final code no longer reads, stores or republishes the unused ratio,
+nor injects simulated headroom. It retains actual format, submitted HDR mode
+and tone-generation diagnostics because they verify displayed frames.
 
-## Reproduction and evidence
-
-Local evidence/builds are under `artifacts/android-hdr-display/`; the `review/`
-bundle provides runnable regular/isolated APKs, the static Web archive, source
-and build checksums, screenshots and validation results. Private regular-app
-recovery backups are excluded from that review bundle and from Git.
+Runnable final APKs, the Web package and raw evidence are under
+`artifacts/android-hdr-final/review/`. The accepted PQ review is preserved under
+`artifacts/android-hdr-compositor/review/`. Private drawing backups are outside
+review bundles and Git.
 
 ```sh
 ANDROID_HOME=/path/to/Android/Sdk apps/layer-android/gradlew -p apps/layer-android \
@@ -81,76 +71,29 @@ LAYER_WASM_BINDGEN=/path/to/wasm-bindgen \
   tools/performance/workspace-motion.sh web --hdr
 ```
 
-`hdrDisplayNegotiation` checks the actual surface, last submitted headroom,
-idle headroom decrease/restoration, unchanged document revision, SDR/Print,
-GPU recovery and footer position/style/details. It records Android display and
-SurfaceFlinger state along with screenshots. Screenshots are SDR captures and
-cannot prove physical HDR brightness. Existing real-codec HDR editing/delivery,
-Print/persistence/recovery and large-document tests remain part of validation.
-
-The HDR surface regression and existing editing/Print workflows pass on the
-attached tablet; the headed Chrome HDR workflow also checks footer geometry,
-computed styling and opening/closing details. The 24 MP HDR-surface benchmark
-opened/analyzed the dense fixture and completed its first pen run, but Android
-repeatedly rejected the subsequent injected touch sequence (`ACTION_OUTSIDE`).
-Ending synthetic pen proximity did not resolve it. Those incomplete runs are
-retained: observed readiness was 7.1–8.1 s and sampled peak process PSS was
-0.64–0.75 GiB up to failure. They do **not** qualify the full mixed-input,
-concurrent-save/cancellation or sustained HDR-surface performance workload.
-The previous complete mapped-SDR workload results remain historical evidence.
-
-
 ## Canvas, Navigator and layer-thumbnail follow-up
 
-The reported picker/canvas mismatch was real, but the picker was an SDR
-`ARGB_8888` bitmap. It did not establish physical HDR output. At 1.004×, the
-canvas and Navigator abandoned the saved SDR rendition for the shared HDR
-shoulder, with almost no additional brightness available. Android now retains
-the saved SDR appearance below 1.05×. This is an explicit host presentation
-policy, not a change to the shared GTK shoulder or saved rendition algorithms.
-Useful reported headroom still selects the floating HDR path.
+Earlier investigation found missing redraw publication: Proof actions ignored
+their shared `UiChange`, and completed tone analysis did not dirty an idle canvas.
+Both publish presentation updates. Submitted tone-generation diagnostics prevent
+a ready worker from being mistaken for a displayed result.
 
-The deeper audit also found missing redraw publication: native Proof actions
-ignored their `UiChange`, and completed tone analysis did not dirty an idle
-canvas. Both now schedule presentation. Diagnostics include the tone-analysis
-generation actually submitted to the surface, so a ready worker cannot be
-mistaken for a displayed result.
+Web/Android thumbnails and filter previews now receive GTK's shared SDR recipe.
+Painted and retained-photo previews use that mapping; masks remain neutral.
+Appearance drafts invalidate thumbnail revisions and cancellation restores them.
+Native cold-photo thumbnail preparation uses GTK's four-tile batches.
 
-Web and Android also omitted GTK's `set_ui_rendition` call for layer thumbnails
-and filter previews. They now supply the shared SDR recipe before requesting
-these byte previews. Painted and retained-photo thumbnails use that mapping;
-masks remain neutral. A transient appearance draft invalidates thumbnail
-revisions, and cancellation restores the original revision without editing the
-master. Native cold-photo thumbnails use GTK's four-tile background batches
-rather than scanning the whole photo on the render owner.
+The earlier complete 24 MP workload recorded 6.856 s readiness, 678 MiB sampled
+peak process PSS and 618 MiB tracked canvas residency. Histogram/export/Open
+cancellation took 297/288/2 ms. The three pen/touch/pen runs and concurrent
+save/reopen completed. These historical measurements are in
+`artifacts/android-hdr-consistency/review/`; they are not a new sustained PQ
+or physical-input/thermal qualification.
 
-The float `PixelCopy` test uses `RGBA_F16`/linear extended sRGB. On the actual
-1.004× feedback, canvas and Navigator contain no above-SDR samples. With
-**simulated 4× feedback**, their surface buffers reach approximately **3.83×**
-and **3.93×** respectively, including signed wide-gamut values. This verifies
-above-white GPU presentation in both views; the simulated allowance does not
-prove that the tablet emits those luminances. Real HDR brightness, the remaining
-SDR Compose picker on a display with useful HDR headroom, and physical colorimetry
-remain separate qualifications. Layer thumbnails intentionally match GTK's SDR
-preview route, rather than claiming to be HDR surfaces.
+The superseded extended-linear experiment used a reported-headroom threshold
+and synthetic ratio tests. That policy was replaced by PQ after review; its
+raw evidence remains in the earlier artifact bundles, not as an active fallback.
 
-Follow-up evidence and runnable builds are in
-`artifacts/android-hdr-consistency/review/`. The renderer pixel oracle covers
-painted and retained-photo thumbnails, changing/restoring the SDR recipe, and
-unchanged master pixels. Host tests cover visible thumbnail updates through
-undo/redo, tone-generation presentation, Proof, persistence and recovery. On this
-limited display, float captures of Proof Off and SDR match exactly in both the
-canvas and Navigator after the tone analysis has actually been presented.
-
-
-The follow-up 24 MP native run completed all three injected contacts (pen,
-touch, pen), concurrent save/reopen and the histogram/export/Open cancellation
-checks. Readiness was 6.856 s; sampled peak process PSS was 711,104,512 bytes
-(678 MiB), and tracked canvas residency was 647,978,412 bytes (618 MiB).
-Cold UI heartbeat maximum was 148 ms; the later maximum was 76 ms. Histogram,
-export and Open cancellation took 297, 288 and 2 ms. Save took 55 ms. Input CPU
-p99 was 0.040 / 0.050 / 0.061 ms and render-owner queue p99 was 9.37 / 0.57 /
-8.76 ms. These are injected host timings, not physical pen latency. GPU timer
-samples were unavailable in this run. This successful limited-headroom run
-does not establish why the earlier injection attempts failed or qualify
-sustained physical HDR/thermal behavior.
+References: [SurfaceView automatic headroom](https://developer.android.com/reference/android/view/SurfaceView#setDesiredHdrHeadroom(float)),
+[Android mixed SDR/HDR composition](https://source.android.com/docs/core/display/mixed-sdr-hdr),
+[Android tone mapping](https://source.android.com/docs/core/display/tone-mapping).

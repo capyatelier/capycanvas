@@ -1565,7 +1565,7 @@ impl Scene {
             // no intermediate reads, target the composite directly. Adjacent
             // tiles then share one render pass in encode_jobs, including their
             // background clears, rather than opening a pass and copying each.
-            if self.cached_composition()
+            if !r.device.portable_blend() && self.cached_composition()
                 && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, clear_composite)
             {
                 self.free(output);
@@ -1764,12 +1764,12 @@ impl Scene {
                 Job::Draw { target, .. }
                 | Job::Effect { target, .. }
                 | Job::Watercolor { target, .. } => {
-                    let end = (i + 1..self.jobs.len())
+                    let end = if r.device.portable_blend() { i + 1 } else { (i + 1..self.jobs.len())
                         .find(|&j| !matches!(&self.jobs[j],
                             Job::Draw { target: next, .. }
                             | Job::Effect { target: next, .. }
                             | Job::Watercolor { target: next, .. } if next == target))
-                        .unwrap_or(self.jobs.len());
+                        .unwrap_or(self.jobs.len()) };
                     let load = if i > 0
                         && let Job::Clear(previous, color) = &self.jobs[i - 1]
                         && previous == target
@@ -1778,7 +1778,13 @@ impl Scene {
                     } else {
                         wgpu::LoadOp::Load
                     };
-                    let attachments = [Some(attachment(target, load))];
+                    let portable = r.device.portable_blend() && matches!(job, Job::Draw { over: true, .. } | Job::Watercolor { .. });
+                    let source = portable.then(|| r.portable_blend.source(&r.device,target,r.device.working_format()));
+                    if portable && let wgpu::LoadOp::Clear(color) = load {
+                        let attachments = [Some(attachment(target,wgpu::LoadOp::Clear(color)))];
+                        let _pass = encoder.begin_render_pass(&descriptor(&attachments));
+                    }
+                    let attachments = [Some(attachment(source.as_ref().unwrap_or(target), if portable { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { load }))];
                     let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
                     if self.jobs[i..end]
                         .iter()
@@ -1869,6 +1875,10 @@ impl Scene {
                             clip.height(),
                         );
                         pass.draw(0..3, 0..1);
+                    }
+                    drop(pass);
+                    if let Some(source) = source {
+                        r.portable_blend.apply(&r.device,encoder,&source,target,PixelRect::full([target.texture().width(),target.texture().height()]),0);
                     }
                     encoded_through = end;
                 }

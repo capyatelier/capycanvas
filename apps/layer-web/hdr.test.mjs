@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -32,6 +33,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await open('hdr-pq.png');
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
     await wait(`document.querySelector("#hdr-status").textContent==="Showing SDR"`);
     const footer=await evaluate(`(()=>{const info=document.querySelector('#hdr-status'),zoom=document.querySelector('#view-info'),bar=document.querySelector('#canvas-status');const a=info.getBoundingClientRect(),b=zoom.getBoundingClientRect(),c=bar.getBoundingClientRect();const style=n=>{const s=getComputedStyle(n);return [s.fontSize,s.fontWeight,s.lineHeight,s.padding,s.borderRadius,s.backgroundColor]};return {left:a.left-c.left,right:c.right-b.right,height:[a.height,b.height],styles:[style(info),style(zoom)]}})()`);

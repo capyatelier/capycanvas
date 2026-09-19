@@ -30,7 +30,7 @@ pub(crate) struct PipelineDevice {
     working_space: layer_core::color::RgbSpace,
     hdr: bool,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] // pending browser owner migration
+    pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
     pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::local_tone::Pipelines>>>,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
@@ -40,6 +40,7 @@ impl From<wgpu::Device> for PipelineDevice {
         Self {
             device,
             tone_pipelines: Default::default(),
+            blend_pipelines: Default::default(),
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
             hdr: false,
@@ -72,6 +73,14 @@ impl PipelineDevice {
         self.working_space = space;
         self
     }
+    pub fn portable_blend(&self) -> bool {
+        self.working_format == wgpu::TextureFormat::Rgba32Float
+            && !self.features().contains(wgpu::Features::FLOAT32_BLENDABLE)
+    }
+    pub fn attachment_blend(&self, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>) -> Option<wgpu::BlendState> {
+        if matches!(format, wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::R32Float)
+            && !self.features().contains(wgpu::Features::FLOAT32_BLENDABLE) { None } else { blend }
+    }
     pub fn scalar_format(&self) -> wgpu::TextureFormat {
         if self.working_format == wgpu::TextureFormat::Rgba32Float {
             wgpu::TextureFormat::R32Float
@@ -86,7 +95,7 @@ impl PipelineDevice {
         let required = match format {
             wgpu::TextureFormat::Rgba8UnormSrgb => wgpu::Features::empty(),
             wgpu::TextureFormat::Rgba32Float => {
-                wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::FLOAT32_BLENDABLE
+                wgpu::Features::FLOAT32_FILTERABLE
             }
             _ => {
                 return Err(super::GpuRasterError::Color(
@@ -96,7 +105,7 @@ impl PipelineDevice {
         };
         if !self.features().contains(required) {
             return Err(super::GpuRasterError::Color(
-                "This device cannot sample and blend Float32 working tiles".into(),
+                "This device cannot sample Float32 working tiles".into(),
             ));
         }
         self.working_format = format;
@@ -114,6 +123,7 @@ impl PipelineDevice {
             device,
             cache,
             tone_pipelines: Default::default(),
+            blend_pipelines: Default::default(),
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
             hdr: false,

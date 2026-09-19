@@ -1,6 +1,8 @@
 // headroom.x>1 requires a host-negotiated linear HDR surface and compositor headroom.
+// headroom.w selects uncompressed PQ delivery to the OS's tone mapper.
 struct HdrView { rendition: vec4<f32>, headroom: vec4<f32> }
 @group(0) @binding(9) var<uniform> hdr_view: HdrView;
+fn compositor_hdr()->bool {return VIEW_PQ && hdr_view.headroom.w!=0.;}
 struct LocalToneGuide { size:vec4<u32>, samples:array<vec4<f32>> }
 @group(0) @binding(10) var<storage,read> local_tone:LocalToneGuide;
 fn local_tone_artwork(paint:vec4<f32>,position:vec2<f32>)->vec4<f32> {
@@ -23,6 +25,7 @@ fn local_tone_artwork(paint:vec4<f32>,position:vec2<f32>)->vec4<f32> {
     return hdr_tone_sdr_base(paint,hdr_view.rendition,vec4(hdr_view.headroom.yz,0.,0.),base);
 }
 fn hdr_artwork(paint:vec4<f32>)->vec4<f32> {
+    if compositor_hdr() {return paint;}
     if hdr_view.headroom.x<=1. {return hdr_map_sdr(paint,hdr_view.rendition,vec4(hdr_view.headroom.yz,0.,0.));}
     if paint.a<=0. {return paint;}
     // Signed scRGB channels carry wide-gamut colors outside the sRGB cube.

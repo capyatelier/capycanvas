@@ -9,7 +9,7 @@ internal object Native {
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
     @JvmStatic external fun displayStatus(handle: Long): String
-    @JvmStatic external fun displayInfo(handle: Long, available: Boolean, headroom: Float)
+    @JvmStatic external fun displayInfo(handle: Long, available: Boolean)
     @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun resetGpu(handle: Long)
     external fun destroyGpuForTest(handle: Long)
@@ -80,8 +80,9 @@ internal object Native {
     @JvmStatic external fun proofControl(handle: Long, action: String)
     @JvmStatic external fun toneStatus(handle: Long): String
     @JvmStatic external fun toneTask(handle: Long, control: Long): Long
+    @JvmStatic external fun toneReferenceDifference(task: Long): String
     @JvmStatic external fun toneWork(task: Long)
-    @JvmStatic external fun toneApply(handle: Long, task: Long)
+    @JvmStatic external fun toneApply(handle: Long, task: Long): Boolean
     @JvmStatic external fun toneFailed(handle: Long, generation: Int, error: String)
     @JvmStatic external fun toneRelease(task: Long)
     @JvmStatic external fun proofStatus(handle: Long): String
@@ -94,6 +95,7 @@ internal object Native {
     @JvmStatic external fun proofApply(handle: Long, task: Long, preserved: Boolean)
     @JvmStatic external fun proofFailed(handle: Long, task: Long, error: String)
     @JvmStatic external fun proofRelease(task: Long)
+    @JvmStatic external fun captureCancelled(control: Long): Boolean
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)
     @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long

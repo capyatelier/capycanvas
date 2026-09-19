@@ -5,6 +5,15 @@ accepted = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-3-Clause
 targets = ["wasm32-unknown-unknown"]
 ignore-dev-dependencies = true
 
+# The decoder's archive omits LICENSE; use the original at its recorded Git
+# revision, identical to the notice retained with our vendored core/encoder.
+[zrip-decode.clarify]
+license = "MIT"
+[[zrip-decode.clarify.git]]
+path = "LICENSE"
+license = "MIT"
+checksum = "c401ab3834bcd60cfaf717b5977d9ba89199f86e111375e0e268878fbb1cb221"
+
 # exr ships both its own and the format project's original BSD notices in one
 # file. Pin that complete file instead of substituting a generic license text.
 [exr.clarify]

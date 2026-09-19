@@ -28,7 +28,8 @@ pub(crate) struct Surface {
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
     color: SdrSurfaceColor,
-    presented_headroom: Option<f32>,
+    hdr_capable: bool,
+    presented_hdr: Option<bool>,
     presented_tone_generation: Option<u32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
     _instance: wgpu::Instance,
@@ -51,10 +52,9 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
             serde_json::json!({
                 "format": format!("{:?}", surface.config.format),
                 "color_space": format!("{:?}", surface.config.color_space),
-                "hdr_capable": surface.color == SdrSurfaceColor::ExtendedLinearSrgb,
-                "headroom": a.hdr_headroom(),
-                "reported_headroom": a.display_headroom,
-                "presented_headroom": surface.presented_headroom,
+                "hdr_capable": a.hdr_capable(),
+                "hdr_output": a.hdr_output(),
+                "presented_hdr": surface.presented_hdr,
                 "presented_tone_generation": surface.presented_tone_generation,
                 "formats": caps.format_capabilities.iter().map(|f| serde_json::json!({
                     "format": format!("{:?}", f.format),
@@ -69,14 +69,12 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
-    _: JNIEnv, _: JClass, handle: jlong, available: jboolean, headroom: jfloat,
+    _: JNIEnv, _: JClass, handle: jlong, available: jboolean,
 ) {
     let a = unsafe { app(handle) };
     let available = available != 0;
-    let headroom = if headroom.is_finite() { headroom.clamp(1., 100.) } else { 1. };
-    if a.display_hdr_available != available || a.display_headroom != headroom {
+    if a.display_hdr_available != available {
         a.display_hdr_available = available;
-        a.display_headroom = headroom;
         // Display policy is transient, but an idle canvas must present it too.
         a.host.dirty = true;
         a.sync_hdr_display();
@@ -92,22 +90,16 @@ pub(crate) struct OverviewSlot {
 
 impl App {
     fn sync_hdr_display(&mut self) {
-        self.host.session.set_hdr_display_available(self.hdr_capable()
-            && crate::display::presentation_headroom(self.display_headroom, 100.) > 1.);
+        self.host.session.set_hdr_display_available(self.hdr_capable());
     }
     pub(crate) fn hdr_capable(&self) -> bool {
-        self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.color==SdrSurfaceColor::ExtendedLinearSrgb)
+        self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.hdr_capable)
     }
-    pub(crate) fn requested_headroom(&self) -> f32 {
-        if self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
+    pub(crate) fn hdr_output(&self) -> bool {
+        self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
             && self.host.session.proof_panel_mode()==layer_ui::ProofMode::Off
             && !self.host.session.state().gamut_warning
-            && self.host.session.state().sdr_appearance_preview.is_none() {
-            crate::display::requested_headroom(self.host.session.effective_sdr_rendition().headroom)
-        } else {1.}
-    }
-    pub(crate) fn hdr_headroom(&self) -> f32 {
-        crate::display::presentation_headroom(self.display_headroom, self.requested_headroom())
+            && self.host.session.state().sdr_appearance_preview.is_none()
     }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
         let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
@@ -245,11 +237,13 @@ impl App {
         {
             config.format = format;
         }
-        let color=if crate::display::hdr_surface(self.display_hdr_available,&caps) {
+        let hdr_capable=crate::display::hdr_surface(&caps);
+        if hdr_capable {
             config.format=wgpu::TextureFormat::Rgba16Float;
-            config.color_space=wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
-            SdrSurfaceColor::ExtendedLinearSrgb
-        } else { SdrSurfaceColor::Srgb };
+        }
+        // Start with SDR; the first document frame selects PQ for HDR artwork with Proof Off.
+        let color=SdrSurfaceColor::Srgb;
+        config.color_space=color.surface_color_space();
         surface.configure(gpu.device(), &config);
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
         self.surface = Some(Surface {
@@ -257,7 +251,8 @@ impl App {
             config,
             presenter,
             color,
-            presented_headroom: None,
+            hdr_capable,
+            presented_hdr: None,
             presented_tone_generation: None,
             first_frame_complete: None,
             _instance: instance,
@@ -361,15 +356,29 @@ impl App {
                 })
             })
             .collect();
+        self.tone.clear_incompatible(&self.host.session, self.gpu_generation);
         let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
-        let headroom=self.hdr_headroom();
+        let hdr_output=self.hdr_output();
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
+        let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {SdrSurfaceColor::Srgb};
+        if surface.color!=color {
+            let presenter=ViewportPresenter::for_surface(gpu,surface.config.format,color).map_err(error)?;
+            surface.config.color_space=color.surface_color_space();
+            surface.surface.configure(gpu.device(),&surface.config);
+            surface.presenter=presenter;
+            surface.color=color;
+        }
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
-        surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
-        surface.presenter.set_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
+        if hdr_output {
+            surface.presenter.set_compositor_hdr_view(gpu,rendition.expect("HDR document rendition")).map_err(error)?;
+        } else {
+            surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
+        }
+        surface.presenter.set_gpu_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
+
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
             surface.config.width = extent[0];
@@ -410,8 +419,8 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
-        surface.presented_headroom = Some(headroom);
-        surface.presented_tone_generation = self.tone.guide.as_ref().map(|_| self.tone.generation);
+        surface.presented_hdr = Some(hdr_output);
+        surface.presented_tone_generation = self.tone.published_generation;
         if surface.first_frame_complete.is_none() {
             let complete = Arc::new(AtomicBool::new(false));
             surface.first_frame_complete = Some(complete.clone());
@@ -645,7 +654,13 @@ pub extern "system" fn Java_art_capycanvas_Native_input(
 ) -> jstring {
     let result = read(&mut env, &input)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|input| unsafe { app(handle) }.host.input(input))
+        .and_then(|input| {
+            let a = unsafe { app(handle) };
+            if matches!(&input, layer_ui::UiInput::Pointer { phase: layer_ui::ContactPhase::Down, .. }) {
+                if let Some(control) = a.tone.pending.take() { control.cancel(); }
+            }
+            a.host.input(input)
+        })
         .and_then(|reply| serde_json::to_string(&reply).map_err(error));
     string(&mut env, result)
 }
@@ -687,6 +702,9 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
+                if predicted == 0 && data.chunks_exact(9).any(|sample| sample[8] == 1.) {
+                    if let Some(control) = app.tone.pending.take() { control.cancel(); }
+                }
                 app.host.pointer(
                     id.max(0) as u64,
                     tool as u8,

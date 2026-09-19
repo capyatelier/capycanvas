@@ -560,28 +560,33 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{balance:-1.,contrast:0.5,..Default::default()},SdrRendition{balance:1.,contrast:2.,exposure:1.3,highlight_color:0.8,..Default::default()},SdrRendition{highlight_color:1.,headroom:4.,..Default::default()}] {
                 for headroom in [1.,4.] {
-                    for proof in [false,true] {
-                        presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
-                        presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
-                        // Retained captures share proof buffers. HDR uniforms must
-                        // still update when the proof inheritance shortcut applies.
-                        capture.inherit_proof(&r,&presenter);
-                        capture.present(&r,&output,view(),[0.;4]).unwrap();
-                        let mut expected=if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
-                        else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
-                        if proof {expected=lut.apply_premultiplied(expected,true,false);}
-                        let rgb=if headroom==1. && !proof {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
-                        let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
-                        let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
-                        else if surface == SdrSurfaceColor::ExtendedLinearSrgb { expected }
-                        else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
-                        let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
-                        // PQ encode/decode uses hardware Float32 powers. The independent
-                        // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
-                        // 203/80. Both tolerances remain well below one 8-bit code.
-                        let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else if surface==SdrSurfaceColor::ExtendedLinearSrgb{0.00015}else{0.00008}}else{0.};
-                        for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
-                        assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
+                    for compositor in [false, true] {
+                        if compositor && (surface != SdrSurfaceColor::Bt2100Pq || headroom != 1.) {continue;}
+                        for proof in [false,true] {
+                            if compositor {presenter.set_compositor_hdr_view(&r,recipe).unwrap();}
+                            else {presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();}
+                            presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
+                            // Retained captures share proof buffers. HDR uniforms must
+                            // still update when the proof inheritance shortcut applies.
+                            capture.inherit_proof(&r,&presenter);
+                            capture.present(&r,&output,view(),[0.;4]).unwrap();
+                            let mut expected=if compositor && !proof {[p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]]}
+                            else if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
+                            else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
+                            if proof {expected=lut.apply_premultiplied(expected,true,false);}
+                            let rgb=if headroom==1. && !proof && !compositor {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
+                            let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
+                            let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
+                            else if surface == SdrSurfaceColor::ExtendedLinearSrgb { expected }
+                            else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
+                            let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
+                            // PQ encode/decode uses hardware Float32 powers. The independent
+                            // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
+                            // 203/80. Both tolerances remain well below one 8-bit code.
+                            let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else if surface==SdrSurfaceColor::ExtendedLinearSrgb{0.00015}else{0.00008}}else{0.};
+                            for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
+                            assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
+                        }
                     }
                 }
             }

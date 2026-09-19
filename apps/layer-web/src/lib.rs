@@ -804,6 +804,7 @@ impl WebApp {
         if let layer_ui::UiInput::Pointer { id, phase, .. } = &input {
             use layer_ui::ContactPhase;
             if *phase == ContactPhase::Down {
+                if let Some(control) = self.tone.pending.take() { control.cancel(); }
                 self.deferred_contacts.remove(id);
                 if !self.brush_ready() {
                     self.deferred_contacts.insert(*id);
@@ -937,6 +938,9 @@ impl WebApp {
                     _ => ToolKind::Pen,
                 },
             };
+            if event.phase == PenPhase::Down {
+                if let Some(control) = self.tone.pending.take() { control.cancel(); }
+            }
             if self.session.pen(event).is_err() {
                 return Ok(index as u32);
             }
@@ -1025,6 +1029,7 @@ impl WebApp {
         let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
+        self.clear_incompatible_tone()?;
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
             gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
             gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;

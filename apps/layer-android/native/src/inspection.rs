@@ -180,3 +180,8 @@ pub(crate) fn preview_bytes(
     bytes.extend(preview.srgb_bytes()?);
     Ok(bytes)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_captureCancelled(_: JNIEnv, _: JClass, control: jlong) -> jni::sys::jboolean {
+    self::control(control).is_cancelled() as jni::sys::jboolean
+}
