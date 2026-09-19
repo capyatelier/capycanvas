@@ -33,7 +33,13 @@ export async function checkHdr({call,evaluate,settle}) {
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
-    await wait(`document.querySelector("#hdr-status").textContent.includes("mapped SDR")`);
+    await wait(`document.querySelector("#hdr-status").textContent==="Showing SDR"`);
+    const footer=await evaluate(`(()=>{const info=document.querySelector('#hdr-status'),zoom=document.querySelector('#view-info'),bar=document.querySelector('#canvas-status');const a=info.getBoundingClientRect(),b=zoom.getBoundingClientRect(),c=bar.getBoundingClientRect();const style=n=>{const s=getComputedStyle(n);return [s.fontSize,s.fontWeight,s.lineHeight,s.padding,s.borderRadius,s.backgroundColor]};return {left:a.left-c.left,right:c.right-b.right,height:[a.height,b.height],styles:[style(info),style(zoom)]}})()`);
+    assert.equal(footer.left,4);assert.equal(footer.right,4);assert.deepEqual(footer.height,[footer.height[0],footer.height[0]]);assert.deepEqual(footer.styles[0],footer.styles[1]);
+    await evaluate(`document.querySelector('#hdr-status').click()`);
+    await wait(`!!document.querySelector('dialog[aria-label="Display Details"][open]')`);
+    assert.ok(await evaluate(`document.querySelector('dialog[aria-label="Display Details"]').textContent.includes('HDR presentation is not enabled')`));
+    await capture('display-details');await click('Close');
     mark('Independent FFmpeg PQ input opens as HDR, retains above-white samples, and completes mapped SDR analysis');
     // The GTK corner edit action, no palette footer, and HDR numeric fields.
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}})`);

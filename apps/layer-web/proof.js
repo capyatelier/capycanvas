@@ -31,13 +31,21 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   let tone=null,toneGeneration=-1,toneChanged=0;
   const label=element("output","proof-status");label.id="proof-status";label.hidden=true;
   document.getElementById("canvas-status").prepend(label);
-  const hdrLabel=element("output","proof-status");hdrLabel.id="hdr-status";hdrLabel.hidden=true;
+  function displayDetails(){
+    const dialog=element('dialog','document-dialog display-details');dialog.setAttribute('aria-label','Display Details');
+    const status=app.tone_status(),body=element('p');
+    body.textContent=(status.error?`SDR preview unavailable: ${status.error}`:'Showing the saved SDR appearance on a mapped SDR display.')+
+      '\n\nThis browser canvas uses an SDR surface. HDR presentation is not enabled, even when the screen supports HDR.\n\nArtwork reference white: 203 cd/m². The HDR master is preserved.';
+    const footer=element('footer');footer.append(button('Close',()=>dialog.close()));
+    dialog.append(element('h2','','Display Details'),body,footer);dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
+  }
+  const hdrLabel=button('Showing SDR',displayDetails);hdrLabel.className='proof-status';hdrLabel.id="hdr-status";hdrLabel.hidden=true;hdrLabel.title='Display details';
   document.getElementById("canvas-status").prepend(hdrLabel);
   function syncTone(){
     if(!app.gpu_ready())return;
     const status=app.tone_status();
     hdrLabel.hidden=!status.hdr;
-    hdrLabel.textContent=status.error?`SDR preview unavailable: ${status.error}`:status.ready?"HDR artwork · mapped SDR display":"HDR artwork · preparing SDR preview…";
+    hdrLabel.textContent=status.error?"SDR preview unavailable":status.ready?"Showing SDR":"Preparing SDR…";
     if(status.generation!==toneGeneration){toneGeneration=status.generation;toneChanged=performance.now();tone?.cancel();wake();}
     if(document.hidden){tone?.cancel();return;}
     if(!status.needed||tone||performance.now()-toneChanged<180)return;

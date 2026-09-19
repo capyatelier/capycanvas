@@ -303,3 +303,13 @@ rendered Color/Proof contents, restored Paint/Photo layouts, held-key/contact
 history, shared color feedback, Print draft/preservation and Export ordering,
 and browser GPU replacement. Runnable packages and comparison evidence include
 the regular Android app, not only the isolated HDR test package.
+
+## Android HDR display follow-up — 2026-09-19
+
+The [tablet display investigation](../development/android-hdr-display.md) replaces
+the Android hardcoded SDR surface with Android 15 extended-linear float
+presentation, negotiated headroom and idle/lifecycle refresh. The attached Wacom
+now activates a real HDR layer, but its firmware grants only 1.004× headroom
+for the 2.300448× test request. Web remains mapped SDR. Both hosts use the GTK
+left-side footer display button with matching zoom/rotation styling and details.
+Physical luminance, other displays and sustained thermal qualification remain open.

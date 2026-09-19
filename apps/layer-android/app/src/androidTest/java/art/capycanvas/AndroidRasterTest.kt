@@ -69,6 +69,22 @@ class AndroidRasterTest {
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
+    @Test fun displaySurfaceCapabilities() {
+        val report=native{JSONObject(Native.displayStatus(it))}
+        compose.runOnIdle {
+            val display=activity.display!!
+            report.put("display_hdr",display.isHdr)
+            val capabilities=display.hdrCapabilities
+            val types=if(android.os.Build.VERSION.SDK_INT>=34)display.mode.supportedHdrTypes else capabilities?.supportedHdrTypes?:intArrayOf()
+            report.put("android_hdr_types",org.json.JSONArray(types.toList()))
+            report.put("desired_max_luminance",capabilities?.desiredMaxLuminance)
+            if(android.os.Build.VERSION.SDK_INT>=34)report.put("hdr_sdr_ratio",display.hdrSdrRatio)
+            report.put("wide_color_gamut",display.isWideColorGamut)
+        }
+        File(activity.filesDir,"display-capabilities.json").writeText(report.toString(2))
+        assertFalse(report.has("error"))
+        assertTrue(report.getJSONArray("formats").length()>0)
+    }
     @Test fun diagnosticsSampleInOpenColumns() {
         fun action(value: JSONObject) {
             val done = java.util.concurrent.CountDownLatch(1)
@@ -291,6 +307,62 @@ class AndroidRasterTest {
         open(File(files,"hdr-pq.png"));refresh();ready();assertEquals("F16",JSONObject(histogram()).getJSONObject("color").getString("depth"))
         open(File(files,"hdr-sdr.png"));refresh();assertEquals("U8",JSONObject(histogram()).getJSONObject("color").getString("depth"))
         println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; cancelled analysis; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
+    }
+
+    @Test fun hdrDisplayNegotiation() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
+        requireNotNull(sourcePath){"Supply -e hdrFile for the display regression"}
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command:String)=ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use{it.readBytes()}
+        val output=File(activity.getExternalFilesDir(null),"display").apply{mkdirs()}
+        val input=File(files,"display-hdr.png").apply{writeBytes(shell("cat $sourcePath"))}
+        fun tone()=native{JSONObject(Native.toneStatus(it))}
+        fun presented()=native{JSONObject(Native.displayStatus(it)).optDouble("presented_headroom",0.0)}
+        fun mode(value:String){native{Native.proofControl(it,obj("type" to "mode","mode" to value).toString())};compose.runOnUiThread{host.documentChanged()};tick()}
+        fun record(name:String){
+            File(output,"$name.json").writeText(tone().put("surface",native{JSONObject(Native.displayStatus(it))}).toString(2))
+            File(output,"$name-display.txt").writeBytes(shell("dumpsys display"))
+            File(output,"$name-surfaceflinger.txt").writeBytes(shell("dumpsys SurfaceFlinger"))
+            automation.takeScreenshot()?.let{shot->File(output,"$name.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        }
+        open(input);mode("off")
+        compose.waitUntil(30_000){tone().getBoolean("ready")}
+        // Record even if this device withholds headroom, so failure is diagnosable.
+        val deadline=SystemClock.uptimeMillis()+15_000
+        while(SystemClock.uptimeMillis()<deadline&&tone().getDouble("display_headroom")<=1.0)SystemClock.sleep(200)
+        record("hdr-off")
+        val supports=tone().getBoolean("display_hdr")
+        if(InstrumentationRegistry.getArguments().getString("requireHdr")=="true")assertTrue("Expected a negotiated HDR surface",supports)
+        if(supports) {
+            assertTrue("Android granted HDR headroom: ${tone()}",tone().getDouble("display_headroom")>1.0)
+            compose.waitUntil(5_000){presented()>1.0}
+            // An idle display-policy update must repaint without artwork input.
+            val granted=tone().getDouble("display_headroom").toFloat()
+            val revision=native{state(it).getJSONObject("document_file").getLong("revision")}
+            compose.runOnUiThread{host.displayInfo(true,1f)}
+            compose.waitUntil(5_000){presented()==1.0}
+            compose.runOnUiThread{host.displayInfo(true,granted)}
+            compose.waitUntil(5_000){presented()>1.0}
+            assertEquals(revision,native{state(it).getJSONObject("document_file").getLong("revision")})
+        }
+        val info=compose.onNodeWithTag("hdr-status").fetchSemanticsNode().boundsInRoot
+        val zoom=compose.onNodeWithTag("camera-readout").fetchSemanticsNode().boundsInRoot
+        assertTrue("Display status belongs on the left",info.right<zoom.left)
+        assertEquals("Matching footer bubble height",zoom.height,info.height,1f)
+        compose.onNodeWithTag("hdr-status").performClick()
+        compose.onNodeWithText("Display Details").assertExists()
+        record("display-details")
+        compose.onNodeWithText("Close").performClick()
+        mode("sdr");compose.waitUntil(5_000){tone().getDouble("display_headroom")==1.0&&presented()==1.0};record("sdr-proof")
+        assertEquals(1.0,tone().getDouble("requested_headroom"),0.0)
+        mode("print");compose.waitUntil(5_000){presented()==1.0};record("print-proof");assertEquals(1.0,tone().getDouble("display_headroom"),0.0)
+        mode("off")
+        compose.runOnUiThread{host.restartCanvas()}
+        compose.waitUntil(60_000){host.failure!=null||host.snapshot?.optBoolean("brush_ready")==true}
+        assertNull(host.failure)
+        compose.waitUntil(15_000){!supports||(tone().getDouble("display_headroom")>1.0&&presented()>1.0)}
+        record("hdr-recovered")
+        assertEquals(supports,tone().getBoolean("display_hdr"))
     }
 
     @Test fun hdrLargeDocumentMeasurements() {
@@ -577,6 +649,11 @@ class AndroidRasterTest {
         var origin=androidx.compose.ui.geometry.Offset.Zero
         scenario.onActivity { origin=host.surfaceOrigin }
         val cx=(center.first*zoom+translation.getDouble(0)+origin.x).toFloat();val cy=(center.second*zoom+translation.getDouble(1)+origin.y).toFloat()
+        if(steps>=180) {
+            val output=File(activity.getExternalFilesDir(null),"motion-start-$tool")
+            output.resolveSibling(output.name+".json").writeText(obj("camera" to camera,"x" to cx,"y" to cy).toString(2))
+            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->output.resolveSibling(output.name+".png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        }
         val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
         measurements(true)
         val duration = if (steps >= 180) InstrumentationRegistry.getArguments()
@@ -589,9 +666,16 @@ class AndroidRasterTest {
             val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
             val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
-            try {assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
+            try {assertTrue("Injected tool=$tool phase=$phase at (${coords[0].x}, ${coords[0].y})",InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
             if (phase == android.view.MotionEvent.ACTION_UP) break
             i++; SystemClock.sleep(4)
+        }
+        if(tool==android.view.MotionEvent.TOOL_TYPE_STYLUS) {
+            // Finish virtual pen proximity before the next independent touch run.
+            val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply{id=7;toolType=tool})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply{x=cx;y=cy;pressure=0f})
+            val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),android.view.MotionEvent.ACTION_HOVER_EXIT,1,properties,coords,0,0,1f,1f,0,0,source,0)
+            try{InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,true)}finally{event.recycle()}
         }
         // The host's Choreographer is the only frame producer during
         // motion. Capture its timeline independently of GPU timings.

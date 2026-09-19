@@ -334,6 +334,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         "facts" to chromeFacts, "viewport" to JSONArray(listOf(logicalWidth, logicalHeight)))
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
+    internal fun displayInfo(available:Boolean,headroom:Float) = post {
+        Native.displayInfo(handle,available,headroom);publish(true);wake()
+    }
+
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
         proof.resume()
         hdr.resume()

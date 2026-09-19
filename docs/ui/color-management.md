@@ -405,7 +405,13 @@ manual availability is evidence of expectations, not a substitute for these chec
 
 Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
 records their supported HDR editing and delivery routes. Both reuse the GTK
-picker placement and shared Proof dial; displays currently show mapped SDR.
+picker placement and shared Proof dial. Web displays mapped SDR. Android 15+
+negotiates a floating-point HDR canvas when the display and Vulkan surface both
+support it, respecting Android's current headroom; older/unsupported hosts retain
+mapped SDR. The left footer button matches zoom/rotation styling and opens
+Display Details. **HDR (limited)** means Android grants less than 1.05× headroom.
+The [tablet display investigation](../development/android-hdr-display.md) records
+the Wacom firmware's observed 1.004× limit and separates it from app support.
 Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
 open artwork. Neither host currently offers gain-map output or physical HDR
 presentation. Proof shares Color's Paint/Photo tab group and supports the normal

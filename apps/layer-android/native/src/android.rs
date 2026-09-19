@@ -6,7 +6,7 @@ use jni::{
     objects::{JClass, JDoubleArray, JObject, JString},
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer, SdrSurfaceColor};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -27,12 +27,57 @@ pub(crate) struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
+    color: SdrSurfaceColor,
+    presented_headroom: Option<f32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
     _instance: wgpu::Instance,
     _window: Window,
 }
 pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// Query the actual Vulkan surface, rather than inferring output support from
+/// document depth or from Android's video HDR capabilities alone.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
+    mut env: JNIEnv, _: JClass, handle: jlong,
+) -> jstring {
+    let a = unsafe { app(handle) };
+    let value = match (&a.surface, &a.host.session.engine().backend().0) {
+        (Some(surface), Some(gpu)) => {
+            let caps = surface.surface.get_capabilities(gpu.adapter());
+            serde_json::json!({
+                "format": format!("{:?}", surface.config.format),
+                "color_space": format!("{:?}", surface.config.color_space),
+                "hdr_capable": surface.color == SdrSurfaceColor::ExtendedLinearSrgb,
+                "headroom": a.hdr_headroom(),
+                "presented_headroom": surface.presented_headroom,
+                "formats": caps.format_capabilities.iter().map(|f| serde_json::json!({
+                    "format": format!("{:?}", f.format),
+                    "color_spaces": format!("{:?}", f.color_spaces),
+                })).collect::<Vec<_>>(),
+            })
+        }
+        _ => serde_json::json!({"error": "Canvas surface is unavailable"}),
+    };
+    string(&mut env, Ok(value.to_string()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_displayInfo(
+    _: JNIEnv, _: JClass, handle: jlong, available: jboolean, headroom: jfloat,
+) {
+    let a = unsafe { app(handle) };
+    let available = available != 0;
+    let headroom = if headroom.is_finite() { headroom.clamp(1., 100.) } else { 1. };
+    if a.display_hdr_available != available || a.display_headroom != headroom {
+        a.display_hdr_available = available;
+        a.display_headroom = headroom;
+        // Display policy is transient, but an idle canvas must present it too.
+        a.host.dirty = true;
+        a.sync_hdr_display();
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -43,6 +88,23 @@ pub(crate) struct OverviewSlot {
 }
 
 impl App {
+    fn sync_hdr_display(&mut self) {
+        self.host.session.set_hdr_display_available(self.hdr_capable() && self.display_headroom > 1.);
+    }
+    pub(crate) fn hdr_capable(&self) -> bool {
+        self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.color==SdrSurfaceColor::ExtendedLinearSrgb)
+    }
+    pub(crate) fn requested_headroom(&self) -> f32 {
+        if self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
+            && self.host.session.proof_panel_mode()==layer_ui::ProofMode::Off
+            && !self.host.session.state().gamut_warning
+            && self.host.session.state().sdr_appearance_preview.is_none() {
+            self.host.session.effective_sdr_rendition().headroom.clamp(1.,100.)
+        } else {1.}
+    }
+    pub(crate) fn hdr_headroom(&self) -> f32 {
+        self.display_headroom.min(self.requested_headroom())
+    }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
         let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
             (Some(surface), Some(renderer)) => surface.presenter.gpu_timings(renderer, enabled),
@@ -61,12 +123,14 @@ impl App {
             complete: false,
         };
         if let Some(surface) = &mut self.surface {
-            surface.presenter = ViewportPresenter::for_renderer(
+            surface.presenter = ViewportPresenter::for_surface(
                 self.host.session.renderer_mut().0.as_ref().unwrap(),
                 surface.config.format,
-            );
+                surface.color,
+            ).expect("The negotiated surface encoding remains valid");
         }
         self.blank_presented = true;
+        self.sync_hdr_display();
     }
 
     fn attach(
@@ -177,16 +241,24 @@ impl App {
         {
             config.format = format;
         }
+        let color=if crate::display::hdr_surface(self.display_hdr_available,&caps) {
+            config.format=wgpu::TextureFormat::Rgba16Float;
+            config.color_space=wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
+            SdrSurfaceColor::ExtendedLinearSrgb
+        } else { SdrSurfaceColor::Srgb };
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::for_renderer(gpu, config.format);
+        let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
         self.surface = Some(Surface {
             surface,
             config,
             presenter,
+            color,
+            presented_headroom: None,
             first_frame_complete: None,
             _instance: instance,
             _window: window,
         });
+        self.sync_hdr_display();
         self.host.error = None;
         self.host.dirty = true;
         Ok(())
@@ -287,10 +359,11 @@ impl App {
         let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
+        let headroom=self.hdr_headroom();
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
-        surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
+        surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
         surface.presenter.set_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
@@ -332,6 +405,7 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
+        surface.presented_headroom = Some(headroom);
         if surface.first_frame_complete.is_none() {
             let complete = Arc::new(AtomicBool::new(false));
             surface.first_frame_complete = Some(complete.clone());
