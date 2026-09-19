@@ -83,10 +83,10 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         bool interior=selected>0&&selected+1<int(all.Size());positionGate.IsEnabled(interior);remove.IsEnabled(interior);
         for(auto const& update:positionBindings)update();for(auto const& update:fields)update();
         double width=std::max(0.,bar.ActualWidth()-12);
-        auto next=O({{L"stops",all},{L"width",N(width)},{L"selected",N(selected)}}).Stringify();
+        auto next=O({{L"stops",all},{L"width",N(width)},{L"selected",N(selected)},{L"color_context",object(data->model,L"color_panel")}}).Stringify();
         if(next==drawn)return;drawn=next;ramp.Width(width);brush.GradientStops().Clear();dots.Children().Clear();
         auto samples=colorUi(O({{L"type",S(L"gradient")},{L"stops",all},
-            {L"document_space",S(str(object(data->model,L"color_panel"),L"rgb_space",L"Srgb"))}})).GetArray();
+            {L"document_space",S(str(object(data->model,L"color_panel"),L"rgb_space",L"Srgb"))},{L"rendition",object(data->model,L"color_panel").GetNamedValue(L"rendition",JsonValue::CreateNullValue())}})).GetArray();
         for(uint32_t i=0;i<samples.Size();++i){GradientStop entry;entry.Offset(double(i)/(samples.Size()-1));
             entry.Color(displayColor(samples.GetObjectAt(i)));brush.GradientStops().Append(entry);}
         for(uint32_t i=0;i<all.Size();i++){

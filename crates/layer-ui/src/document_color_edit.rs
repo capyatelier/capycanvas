@@ -181,7 +181,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .engine
             .prepare_color_transition(transition)
             .map_err(error)?;
-        if self.state.platform != Platform::Gtk { crate::require_sdr_host(prepared.document(), "this host")?; }
+        if !matches!(self.state.platform, Platform::Gtk | Platform::Windows) { crate::require_sdr_host(prepared.document(), "this host")?; }
         let project = Project::snapshot(prepared.document(), &self.files.assets)?;
         Ok((prepared, project))
     }

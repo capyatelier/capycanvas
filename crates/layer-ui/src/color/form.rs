@@ -16,13 +16,17 @@ pub enum ColorUiRequest {
     Preview {
         colors: Vec<RgbColor>,
         #[serde(default)]
+        document_space: RgbSpace,
+        #[serde(default)]
         display_space: RgbSpace,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
     },
     Gradient {
         stops: Vec<layer_core::GradientStop>,
         document_space: RgbSpace,
         #[serde(default)]
         display_space: RgbSpace,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
     },
 }
 pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
@@ -43,7 +47,9 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
         ColorUiRequest::Form { request } => serde_json::to_value(color_form(request)?),
         ColorUiRequest::Preview {
             colors,
+            document_space,
             display_space,
+            rendition,
         } => {
             if colors.len() > 1024 {
                 return Err("Too many color previews".into());
@@ -51,7 +57,7 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             serde_json::to_value(
                 colors
                     .into_iter()
-                    .map(|color| color_preview(color, display_space))
+                    .map(|color| mapped_preview(color, document_space, display_space, rendition))
                     .collect::<Result<Vec<_>, _>>()?,
             )
         }
@@ -59,6 +65,7 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
             stops,
             document_space,
             display_space,
+            rendition,
         } => {
             if stops.len() > 64 {
                 return Err("Too many gradient stops".into());
@@ -69,7 +76,7 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
                 .map(|i| {
                     let color =
                         layer_core::gradient_value(&stops, i as f32 / 256., document_space)?;
-                    color_preview(color, display_space)
+                    mapped_preview(color, document_space, display_space, rendition)
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             serde_json::to_value(samples)
@@ -93,6 +100,8 @@ pub struct ColorFormRequest {
     pub change_model: Option<ColorInputModel>,
     pub intensity: Option<f32>,
     pub change_intensity: Option<f32>,
+    #[serde(default)]
+    pub change_intensity_text: Option<String>,
     pub rendition: Option<layer_core::color::hdr::SdrRendition>,
 }
 
@@ -156,7 +165,9 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
         }
     }
     let mut error = None;
-    if let Some(stops) = request.change_intensity {
+    let typed_intensity = request.change_intensity_text.as_deref().map(|s| s.trim().parse::<f32>().map_err(|_| "Enter a finite HDR intensity in EV".to_string())).transpose();
+    let change_intensity = match typed_intensity { Ok(value) => value.or(request.change_intensity), Err(message) => { error = Some(message); None } };
+    if let Some(stops) = change_intensity {
         if let Err(message) = editor.set_intensity(stops) { error = Some(message); }
     }
     if let Some(model) = request.change_model {
@@ -185,6 +196,7 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
             change_model: None,
             intensity: editor.intensity(),
             change_intensity: None,
+            change_intensity_text: request.change_intensity_text.clone().filter(|_| error.is_some()),
             rendition: request.rendition,
         },
         models: ColorInputModel::ALL
@@ -215,6 +227,7 @@ mod tests {
             change_model: None,
             intensity: None,
             change_intensity: None,
+            change_intensity_text: None,
             rendition: None,
         }
     }
@@ -252,4 +265,39 @@ mod tests {
         assert_eq!(form.draft.model, ColorInputModel::Oklch);
         assert_eq!(form.draft.color, color);
     }
+    #[test]
+    fn native_hdr_intensity_text_preserves_precision_and_invalid_drafts() {
+        let color=RgbColor::new(RgbSpace::ProPhoto,[1.;4]).unwrap();
+        for depth in [layer_core::color::SampleDepth::F16,layer_core::color::SampleDepth::F32] {
+            let mut draft=request(color);draft.document_depth=Some(depth);draft.intensity=Some(0.);
+            draft.change_intensity_text=Some("18".into());
+            let form=color_form(draft).unwrap();
+            if depth==layer_core::color::SampleDepth::F32 {
+                assert!(form.error.is_none());assert_eq!(form.value.unwrap().linear_in(RgbSpace::ProPhoto).unwrap()[0],262144.);
+            } else {assert!(form.error.is_some());assert_eq!(form.draft.change_intensity_text.as_deref(),Some("18"));}
+        }
+        for text in ["not a number","NaN","inf"] {
+            let mut draft=request(color);draft.document_depth=Some(layer_core::color::SampleDepth::F32);draft.intensity=Some(0.);draft.change_intensity_text=Some(text.into());
+            let form=color_form(draft).unwrap();assert!(form.error.is_some());assert_eq!(form.draft.change_intensity_text.as_deref(),Some(text));
+        }
+    }
+
+    #[test]
+    fn hdr_palette_and_gradient_previews_follow_the_saved_appearance() {
+        let color=RgbColor::from_linear(RgbSpace::DisplayP3,[4.,2.,0.5,0.5]).unwrap();
+        let mut request=serde_json::json!({"type":"preview","colors":[color],"document_space":"DisplayP3"});
+        let unmapped=color_ui(serde_json::from_value(request.clone()).unwrap()).unwrap();
+        let recipe=layer_core::color::hdr::SdrRendition::default();
+        request["rendition"]=serde_json::to_value(recipe).unwrap();
+        let mapped=color_ui(serde_json::from_value(request.clone()).unwrap()).unwrap();
+        assert_ne!(mapped,unmapped);
+        assert_eq!(mapped[0]["rgba"][3],serde_json::json!(0.5));
+        let gradient=color_ui(serde_json::from_value(serde_json::json!({"type":"gradient","stops":[{"position":0.,"color":color},{"position":1.,"color":color}],"document_space":"DisplayP3","rendition":recipe})).unwrap()).unwrap();
+        // Gradient interpolation returns through encoded document RGB; allow Float32 roundoff.
+        for at in [0,256] {for channel in 0..4 {assert!((gradient[at]["rgba"][channel].as_f64().unwrap()-mapped[0]["rgba"][channel].as_f64().unwrap()).abs()<1e-6);}}
+        request["rendition"]["exposure"]=serde_json::json!(-1.);
+        assert_ne!(color_ui(serde_json::from_value(request).unwrap()).unwrap(),mapped);
+        for (actual,expected) in color.linear_in(RgbSpace::DisplayP3).unwrap().into_iter().zip([4.,2.,0.5,0.5]) {assert!((actual-expected).abs()<1e-6);}
+    }
+
 }

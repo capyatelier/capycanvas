@@ -28,6 +28,7 @@ mod proof;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
     Describe,
+    SdrOptions { recipe: layer_core::color::hdr::SdrRendition, pad: [f64; 2] },
     ProofOptions {
         settings: layer_ui::proof_panel::PrintProofSettings,
         profile_id: Option<String>,
@@ -85,6 +86,7 @@ impl Drop for Import {
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 enum Payload {
     Profiles,
+    Sdr { form: Value, epoch: u64, revision: u64, recipe: layer_core::color::hdr::SdrRendition },
     Proof(Box<proof::Task>),
     Export(Box<export::Task>),
     Import(Import),
@@ -133,6 +135,12 @@ impl Task {
             .ok_or("Request expired")?
             .kind;
         let (kind, payload) = match request {
+            HostRequestKind::SdrRendition => ("sdr", Payload::Sdr {
+                form: layer_ui::proof_workflow::proof_form(session),
+                epoch: session.state().document_file.epoch,
+                revision: session.engine().document().revision,
+                recipe: session.engine().document().sdr_rendition,
+            }),
             HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id)?))),
             HostRequestKind::Document {
                 request: DocumentRequest::Export { .. },
@@ -264,6 +272,7 @@ impl Task {
     }
     fn describe(&mut self) -> Result<(), String> {
         self.details = match &mut self.payload {
+            Payload::Sdr { form, .. } => form.clone(),
             Payload::Profiles => {
                 json!({"profiles":crate::color_storage::list(self.control.cancellation_flag())?})
             }
@@ -325,7 +334,8 @@ impl Task {
                         self.control.clone(),
                     )
                     .map_err(|e| e.to_string())?;
-                json!({"histogram":renderer.histogram().map_err(|e| e.to_string())?,"sampled_time":sampled_time})
+                let histogram=renderer.histogram().map_err(|e| e.to_string())?;
+                json!({"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})
             }
         };
         Ok(())
@@ -337,6 +347,15 @@ impl Task {
                 return Err("Document operation cancelled".into());
             }
             match action {
+                Action::SdrOptions { recipe, pad } => {
+                    let Payload::Sdr { recipe: saved, .. } = &mut self.payload else { return Err("No SDR appearance request".into()); };
+                    if !pad.iter().all(|v| v.is_finite() && (-1. ..=1.).contains(v)) { return Err("Invalid SDR tone settings".into()); }
+                    recipe.validate().map_err(str::to_string)?;
+                    *saved = layer_ui::proof_panel::sdr_from_pad(recipe, pad);
+                    saved.validate().map_err(str::to_string)?;
+                    self.stage = "commit";
+                    Ok(())
+                }
                 Action::Describe if self.kind == "history" => {
                     if let Payload::Color(task) = &mut self.payload {
                         task.work(None, false, self.control.clone())?;
@@ -588,6 +607,17 @@ impl Task {
             return Err("Preview the result before applying it".into());
         }
         match &mut self.payload {
+            Payload::Sdr { epoch, revision, recipe, .. } => {
+                if self.control.is_cancelled() || host.session.state().document_file.epoch != *epoch
+                    || host.session.engine().document().revision != *revision
+                    || !host.session.state().requests.iter().any(|r| r.id == self.id && matches!(r.kind, HostRequestKind::SdrRendition)) {
+                    return Err("SDR appearance request changed or was cancelled".into());
+                }
+                let previous = host.session.state().revision;
+                let change = host.session.set_sdr_rendition(*recipe)?;
+                host.apply_change(previous, change);
+                host.dispatch(layer_ui::UiAction::CompleteRequest { id: self.id, error: None })
+            }
             Payload::Import(task) => {
                 let session = &mut host.session;
                 session.validate_image_placement(&task.context)?;
@@ -620,7 +650,7 @@ impl Task {
         if self.id == 0 {
             return Ok(());
         }
-        if matches!(self.kind, "histogram" | "proof") {
+        if matches!(self.kind, "histogram" | "proof" | "sdr") {
             host.dispatch(layer_ui::UiAction::CompleteRequest {
                 id: self.id,
                 error: None,
@@ -995,4 +1025,7 @@ mod tests {
         assert_eq!(host.session.engine().document().proof, Some(replacement_recipe));
         assert_eq!(pixels(host.session.renderer_mut().0.as_mut().unwrap()), source_pixels);
     }
+    #[cfg(target_os = "windows")]
+    include!("document_hdr_tests.rs");
+
 }

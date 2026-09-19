@@ -311,6 +311,20 @@ pub struct ExportDraft {
     pub dithers: Vec<layer_core::color::OutputDither>,
 }
 impl ExportRecipe {
+    pub fn draft_for_color(self, color: DocumentColor, action: ExportDraftAction) -> ExportDraft {
+        let mut draft = self.draft(action);
+        if draft.recipe.format == ExportFormat::Exr {
+            draft.recipe.profile = ExportProfile::builtin(color.space);
+        }
+        draft.formats = if draft.recipe.profile.channels == ProfileChannels::Cmyk {
+            vec![ExportFormat::Tiff, ExportFormat::Jpeg]
+        } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] };
+        if color.depth.is_float() {
+            draft.formats.extend([ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::Exr,
+                ExportFormat::JpegHdr, ExportFormat::AvifHdr]);
+        }
+        draft
+    }
     pub fn draft(mut self, action: ExportDraftAction) -> ExportDraft {
         use layer_core::color::OutputDither;
         match action {
@@ -332,6 +346,7 @@ impl ExportRecipe {
             if self.format.gainmap()!=Some(layer_color::photo::GainMapFormat::Jpeg) { self.background = ExportBackground::Preserve; }
             self.encoding = Default::default();
         }
+        if !self.format.is_hdr() && self.depth.is_float() { self.depth = SampleDepth::U16; }
         let cmyk = self.profile.channels == ProfileChannels::Cmyk;
         if cmyk && self.format == ExportFormat::Png { self.format = ExportFormat::Tiff; }
         let jpeg = self.format == ExportFormat::Jpeg;
@@ -384,7 +399,7 @@ impl ExportForm {
                 ("Web / Share", ExportRecipe::web_share()),
                 ("Wide-color image", ExportRecipe::wide_color()),
                 (
-                    if document.color.depth.is_float() { "Further editing (SDR)" } else { "Further editing" },
+                    "Further editing",
                     ExportRecipe::further_editing(document.color),
                 ),
             ],
@@ -575,4 +590,17 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn document_delivery_switches_between_hdr_and_sdr_without_relabelling_primaries() {
+        for space in RgbSpace::ALL {
+            let color=DocumentColor {space,depth:SampleDepth::F32};
+            let exr=ExportRecipe::web_share().draft_for_color(color,ExportDraftAction::Format(ExportFormat::Exr));
+            assert_eq!(exr.recipe.profile,ExportProfile::builtin(space));assert_eq!(exr.recipe.depth,SampleDepth::F32);
+            let sdr=exr.recipe.draft_for_color(color,ExportDraftAction::Format(ExportFormat::Png));
+            assert_eq!(sdr.recipe.depth,SampleDepth::U16);assert!(sdr.formats.contains(&ExportFormat::Exr));sdr.recipe.validate().unwrap();
+            let integer=ExportRecipe::web_share().draft_for_color(DocumentColor{space,depth:SampleDepth::U8},ExportDraftAction::Refresh);
+            assert!(integer.formats.iter().all(|f|!f.is_hdr()));
+        }
+    }
+
 }

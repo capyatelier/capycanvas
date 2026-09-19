@@ -71,7 +71,7 @@ impl ColorState {
         view
     }
     pub fn render_field_mapped(&self, side:u32, recipe:layer_core::color::hdr::SdrRendition, bytes:&mut [u8]) -> bool {
-        if bytes.len()!=side as usize*side as usize*4{return false;}
+        if self.validate().is_err() || recipe.validate().is_err() || bytes.len()!=side as usize*side as usize*4{return false;}
         let mut pixels=vec![[0.;4];side as usize*side as usize];
         if !self.render_field_linear(side,&mut pixels){return false;}
         let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);

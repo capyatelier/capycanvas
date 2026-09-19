@@ -18,6 +18,7 @@ inline Windows::UI::Color displayColor(J const& value){
 struct ColorForm : std::enable_shared_from_this<ColorForm> {
     StackPanel root;
     ComboBox model;
+    TextBox intensity;
     std::array<TextBox,4> entries;
     TextBlock description,error;
     Button apply;
@@ -34,15 +35,17 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
             if(choice.GetStringAt(0)==str(draft,L"model"))model.SelectedIndex(i);}
         auto fields=array(draft,L"fields"),labels=array(view,L"labels");
         for(uint32_t i=0;i<4;++i){entries[i].Header(box_value(labels.GetStringAt(i)));entries[i].Text(fields.GetStringAt(i));}
-        description.Text(str(view,L"description"));error.Text(str(view,L"error"));
-        if(error.Text().empty()&&!flag(object(view,L"preview"),L"in_gamut",true))error.Text(L"Outside the display gamut; the original color is preserved.");
-        apply.IsEnabled(view.GetNamedValue(L"value").ValueType()==JsonValueType::Object);
+        description.Text(str(view,L"description"));error.Text(str(view,L"error",str(view,L"validation")));
+        apply.IsEnabled(view.GetNamedValue(L"value").ValueType()==JsonValueType::Object&&str(view,L"error").empty());
+        auto stops=draft.GetNamedValue(L"intensity",JsonValue::CreateNullValue());intensity.Visibility(stops.ValueType()==JsonValueType::Number?Visibility::Visible:Visibility::Collapsed);
+        if(stops.ValueType()==JsonValueType::Number)intensity.Text(str(draft,L"change_intensity_text",to_hstring(stops.GetNumber())));
         updating=false;
     }
-    J draft(){auto request=J::Parse(object(view,L"draft").Stringify());A fields;for(auto entry:entries)fields.Append(S(entry.Text()));request.Insert(L"fields",fields);return request;}
-    void load(J const& color,hstring const& space){
-        auto next=color.Stringify()+space;if(next==source)return;source=next;
+    J draft(){auto request=J::Parse(object(view,L"draft").Stringify());A fields;for(auto entry:entries)fields.Append(S(entry.Text()));request.Insert(L"fields",fields);if(intensity.Visibility()==Visibility::Visible)request.Insert(L"change_intensity_text",S(intensity.Text()));return request;}
+    void load(J const& color,hstring const& space,J const& panel=J{},bool paint=false){
+        auto next=color.Stringify()+space+panel.Stringify();if(next==source)return;source=next;
         auto request=O({{L"color",color},{L"document_space",S(space)}});
+        if(flag(panel,L"hdr")){request.Insert(L"document_depth",S(str(panel,L"document_depth")));if(paint)request.Insert(L"intensity",N(num(panel,L"intensity")));request.Insert(L"rendition",object(panel,L"rendition"));}
         if(view.HasKey(L"draft"))request.Insert(L"model",S(str(object(view,L"draft"),L"model")));
         refresh(request);
     }
@@ -54,14 +57,16 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
             auto request=self->draft();request.Insert(L"change_model",array(self->view,L"models").GetArrayAt(self->model.SelectedIndex()).GetAt(0));self->refresh(request);
         }});
         for(uint32_t i=0;i<4;++i){auto entry=entries[i];entry.MaxLength(128);AutomationProperties::SetAutomationId(entry,id+L"-"+to_hstring(i));root.Children().Append(entry);}
+        intensity.Header(box_value(L"HDR intensity (EV)"));AutomationProperties::SetAutomationId(intensity,id+L"-intensity");root.Children().Append(intensity);
         description.TextWrapping(TextWrapping::Wrap);error.TextWrapping(TextWrapping::Wrap);root.Children().Append(description);root.Children().Append(error);
         apply.Content(box_value(L"Apply color"));AutomationProperties::SetAutomationId(apply,id+L"-apply");root.Children().Append(apply);
         apply.Click([weak](auto&&,auto&&){if(auto self=weak.lock()){
-            self->refresh(self->draft());auto value=self->view.GetNamedValue(L"value",JsonValue::CreateNullValue());
-            if(value.ValueType()==JsonValueType::Object)self->commit(value.GetObject());
+            try{self->refresh(self->draft());}catch(hresult_error const& e){self->error.Text(e.message());return;}auto value=self->view.GetNamedValue(L"value",JsonValue::CreateNullValue());
+            if(value.ValueType()==JsonValueType::Object&&str(self->view,L"error").empty())self->commit(value.GetObject());
         }});
         // Invalid drafts must remain editable and retryable.
-        for(auto entry:entries)entry.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating)self->apply.IsEnabled(true);});
+        intensity.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating){auto draft=object(self->view,L"draft");if(self->intensity.Text()!=str(draft,L"change_intensity_text",to_hstring(num(draft,L"intensity"))))self->apply.IsEnabled(true);}});
+        for(uint32_t i=0;i<entries.size();++i)entries[i].TextChanged([weak,i](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating){auto fields=array(object(self->view,L"draft"),L"fields");if(fields.Size()>i&&self->entries[i].Text()!=fields.GetStringAt(i))self->apply.IsEnabled(true);}});
     }
 };
 }

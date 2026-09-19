@@ -19,6 +19,8 @@ using namespace CapyUi;
 namespace Pickers=winrt::Microsoft::Windows::Storage::Pickers;
 
 struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
+    static int depthIndex(hstring const& value){return value==L"F32"?3:value==L"F16"?2:value==L"U16"?1:0;}
+    static hstring depthValue(int index){return std::array<hstring,4>{L"U8",L"U16",L"F16",L"F32"}.at(index);}
     Dispatch send,report;
     PreviewTransport query;
     hstring workflowStamp,recoveryStamp;
@@ -79,11 +81,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     auto creation=object(options,L"creation");creationDraft=J::Parse(object(creation,L"options").Stringify());
                     auto labels=array(spec,L"labels"),defaults=array(creationDraft,L"extent");
                     ComboBox preset,space,depth,background;
-                    preset.Header(box_value(L"Preset"));space.Header(box_value(L"Working RGB"));depth.Header(box_value(L"Precision"));background.Header(box_value(L"Background"));
+                    AutomationProperties::SetAutomationId(depth,L"document-depth");preset.Header(box_value(L"Preset"));space.Header(box_value(L"Working RGB"));depth.Header(box_value(L"Precision"));background.Header(box_value(L"Background"));
                     auto presets=array(creation,L"presets"),spaces=array(creation,L"spaces");
                     for(auto item:presets)preset.Items().Append(box_value(str(item.GetObject(),L"name")));
                     for(auto item:spaces)space.Items().Append(box_value(item.GetArray().GetStringAt(1)));
-                    for(auto name:{L"8-bit SDR",L"16-bit SDR"})depth.Items().Append(box_value(name));
+                    for(auto name:{L"8-bit SDR",L"16-bit SDR",L"16-bit float HDR",L"32-bit float HDR"})depth.Items().Append(box_value(name));
                     for(auto name:{L"White",L"Transparent"})background.Items().Append(box_value(name));
                     for(auto control:{preset,space,depth,background}){control.HorizontalAlignment(HorizontalAlignment::Stretch);body.Children().Append(control);}
                     std::array<TextBox,2> entries;
@@ -98,7 +100,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         creationDraft.Insert(L"color",object(value,L"color"));creationDraft.Insert(L"background",S(str(value,L"background")));
                         auto extent=array(value,L"extent");for(uint32_t i=0;i<2;++i)entries[i].Text(to_hstring(uint32_t(extent.GetNumberAt(i))));
                         for(uint32_t i=0;i<spaces.Size();++i)if(spaces.GetArrayAt(i).GetStringAt(0)==str(object(value,L"color"),L"space"))space.SelectedIndex(i);
-                        depth.SelectedIndex(str(object(value,L"color"),L"depth")==L"U16"?1:0);background.SelectedIndex(str(value,L"background")==L"Transparent"?1:0);
+                        depth.SelectedIndex(depthIndex(str(object(value,L"color"),L"depth")));background.SelectedIndex(str(value,L"background")==L"Transparent"?1:0);
                     };
                     load(creationDraft);
                     preset.SelectionChanged([preset,presets,load](auto&&,auto&&){if(preset.SelectedIndex()>=0)load(object(presets.GetObjectAt(preset.SelectedIndex()),L"options"));});
@@ -121,7 +123,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                                 (*extent)[i]=uint32_t(num(result,L"value"));
                             }
                             A dimensions;for(auto value:*extent)dimensions.Append(N(value));creationDraft.Insert(L"extent",dimensions);
-                            creationDraft.Insert(L"color",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},{L"depth",S(depth.SelectedIndex()==1?L"U16":L"U8")}}));
+                            creationDraft.Insert(L"color",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},{L"depth",S(depthValue(depth.SelectedIndex()))}}));
                             creationDraft.Insert(L"background",S(background.SelectedIndex()==1?L"Transparent":L"White"));
                         } catch(hresult_error const& failure) {
                             e.Cancel(true);error.Text(failure.message());error.Visibility(Visibility::Visible);
@@ -151,7 +153,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         Pickers::FileOpenPicker open(window.AppWindow().Id());
                         open.CommitButtonText(str(options,L"open_label"));
                         open.FileTypeFilter().Append(extension);
-                        for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif"})open.FileTypeFilter().Append(ext);
+                        for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif",L".exr"})open.FileTypeFilter().Append(ext);
                         picker=open.PickSingleFileAsync();
                     } else {
                         Pickers::FileSavePicker save(window.AppWindow().Id());
@@ -285,14 +287,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto kind=str(request,L"kind"),stage=str(request,L"stage");auto details=object(request,L"details");
         if((kind==L"place"||kind==L"paste")&&stage==L"options"){showing=false;pickImages(request);co_return;}
         J action=O({{L"op",S(L"cancel")}});
-        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;A profileChoices;
+        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;std::array<NumberBox,4> sdrNumbers;ComboBox profileList;A profileChoices;
         if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
         bool library=kind==L"profiles"||(kind==L"proof"&&proofManaging);
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.CloseButtonText(L"Cancel");
             dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
-            auto title=library?L"ICC profile library":kind==L"proof"?L"Proof Setup":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
+            auto title=library?L"ICC profile library":kind==L"sdr"?L"SDR appearance":kind==L"proof"?L"Proof Setup":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
                 kind==L"place"||kind==L"paste"?L"Interpret untagged image":kind==L"repair"?L"Repair source profile":kind==L"rasterize"?L"Rasterize source":kind==L"histogram"?L"Histogram":L"Document properties";
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
@@ -336,16 +338,28 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 add(L"Remove / reset",[preset,operate]{operate(O({{L"type",S(preset.SelectedIndex()<4?L"reset":L"remove")},{L"index",N(preset.SelectedIndex())}}));});body.Children().Append(buttons);
                 dialog.PrimaryButtonText(L"Preview export");
                 dialog.PrimaryButtonClick([exportForm](auto&&,ContentDialogButtonClickEventArgs const& e){try{exportForm->current();}catch(hresult_error const& error){exportForm->validation.Text(error.message());e.Cancel(true);}});
+            }else if(kind==L"sdr"){
+                text(L"This saved appearance is used on SDR displays, for print proofing, and in SDR exports.");
+                auto display=object(model,L"windows_display");text(num(display,L"headroom",1)>1?L"HDR display · "+to_hstring(num(display,L"headroom"))+L"× headroom":L"SDR display · showing the saved SDR appearance");
+                auto recipe=object(details,L"rendition");auto values=array(details,L"pad_values");
+                auto numbers=array(details,L"numbers"),axes=array(object(details,L"pad"),L"axes");
+                for(uint32_t i=0;i<4;++i){auto definition=(i<2?numbers:axes).GetObjectAt(i%2);auto spec=object(definition,L"numeric");auto box=sdrNumbers[i];
+                    box.Header(box_value(str(definition,L"label")+(i==0?L" (EV)":L"")));box.Minimum(num(spec,L"min"));box.Maximum(num(spec,L"max"));box.SmallChange(num(spec,L"step",.01));
+                    box.Value(i<2?num(recipe,str(definition,L"key").c_str()):values.GetNumberAt(i-2));
+                    AutomationProperties::SetAutomationId(box,L"sdr-"+str(definition,L"key"));body.Children().Append(box);
+                }
+                dialog.PrimaryButtonText(L"Save appearance");
             }else if(kind==L"properties"){
                 for(auto item:array(request,L"details")){auto row=item.GetArray();text(row.GetStringAt(0)+L"\n"+row.GetStringAt(1));}dialog.CloseButtonText(L"Done");
             }else if(kind==L"histogram"){
-                auto histogram=object(details,L"histogram");auto channels=array(histogram,L"channels");
+                auto histogram=object(details,L"histogram");auto channels=array(histogram,L"channels");auto axis=object(details,L"axis");auto binRange=array(axis,L"bins");uint32_t first=binRange.Size()?uint32_t(binRange.GetNumberAt(0)):0,last=binRange.Size()?uint32_t(binRange.GetNumberAt(1)):256;
+                auto stops=array(axis,L"stops");if(stops.Size())text(to_hstring(stops.GetNumberAt(0))+L" to "+to_hstring(stops.GetNumberAt(1))+L" EV · 0 EV = 203 cd/m² reference white");
                 std::array<hstring,4> names{L"Red",L"Green",L"Blue",L"Luminance Y"};
                 std::array<winrt::Windows::UI::Color,4> colors{{{255,220,75,75},{255,75,185,100},{255,90,130,240},{255,160,160,160}}};
                 text(to_hstring(uint64_t(num(histogram,L"pixels")))+L" sampled pixels · "+to_hstring(uint64_t(num(histogram,L"transparent")))+L" transparent pixels excluded");
                 for(uint32_t i=0;i<channels.Size()&&i<4;++i){auto channel=channels.GetObjectAt(i);text(names[i]);auto bins=array(channel,L"bins");double maximum=1;for(auto bin:bins)maximum=std::max(maximum,bin.GetNumber());
                     Canvas graph;graph.Width(256);graph.Height(80);graph.HorizontalAlignment(HorizontalAlignment::Left);AutomationProperties::SetName(graph,names[i]+L" histogram");
-                    for(uint32_t x=0;x<bins.Size();++x){Shapes::Rectangle bar;bar.Width(1);auto height=80*bins.GetNumberAt(x)/maximum;bar.Height(height);bar.Fill(SolidColorBrush(colors[i]));Canvas::SetLeft(bar,x);Canvas::SetTop(bar,80-height);graph.Children().Append(bar);}body.Children().Append(graph);
+                    for(uint32_t x=first;x<std::min(last,bins.Size());++x){Shapes::Rectangle bar;bar.Width(256./std::max(1u,last-first));auto height=80*bins.GetNumberAt(x)/maximum;bar.Height(height);bar.Fill(SolidColorBrush(colors[i]));Canvas::SetLeft(bar,256.*(x-first)/std::max(1u,last-first));Canvas::SetTop(bar,80-height);graph.Children().Append(bar);}body.Children().Append(graph);
                     text(L"Below SDR: "+to_hstring(uint64_t(num(channel,L"below")))+L" · Above SDR: "+to_hstring(uint64_t(num(channel,L"above")))+
                         L" · Black: "+to_hstring(uint64_t(num(channel,L"black")))+L" · White: "+to_hstring(uint64_t(num(channel,L"white"))));
                 }
@@ -359,7 +373,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.PrimaryButtonText(kind==L"export"?L"Export…":flag(details,L"copy")?L"Save copy…":L"Apply");
             }else{
                 if(kind==L"depth"){
-                    depth.Header(box_value(L"Integer precision"));depth.Items().Append(box_value(L"8-bit SDR"));depth.Items().Append(box_value(L"16-bit SDR"));depth.SelectedIndex(str(object(details,L"color"),L"depth")==L"U16"?1:0);body.Children().Append(depth);
+                    depth.Header(box_value(L"Precision"));for(auto label:{L"8-bit SDR",L"16-bit SDR",L"16-bit float HDR",L"32-bit float HDR"})depth.Items().Append(box_value(label));depth.SelectedIndex(depthIndex(str(object(details,L"color"),L"depth")));body.Children().Append(depth);
                     dither.Content(box_value(L"Dither when reducing to 8-bit"));body.Children().Append(dither);
                 }else if(kind!=L"rasterize"){
                     space.Header(box_value(kind==L"repair"||kind==L"place"||kind==L"paste"?L"Source interpretation":L"Working RGB"));
@@ -390,6 +404,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 }else if(kind==L"proof"){
                     proofDraft=proofForm->current();proofProfileId=proofForm->profileId;
                     action=O({{L"op",S(L"proof_options")},{L"settings",proofDraft},{L"profile_id",proofProfileId.empty()?JsonValue::CreateNullValue():S(proofProfileId)}});
+                }else if(kind==L"sdr"){
+                    auto recipe=J::Parse(object(details,L"rendition").Stringify());auto numbers=array(details,L"numbers");A pad;
+                    for(uint32_t i=0;i<2;++i)recipe.Insert(str(numbers.GetObjectAt(i),L"key"),N(sdrNumbers[i].Value()));
+                    pad.Append(N(sdrNumbers[2].Value()));pad.Append(N(sdrNumbers[3].Value()));
+                    action=O({{L"op",S(L"sdr_options")},{L"recipe",recipe},{L"pad",pad}});
                 }else if(kind==L"export"&&stage==L"options"){
                     action=O({{L"op",S(L"export_options")},{L"recipe",exportForm->current()},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});
                 }else if(kind==L"export"&&stage==L"preview"){
@@ -406,7 +425,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     if(kind==L"assign")choice=O({{L"Assign",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)}});
                     if(kind==L"convert")choice=O({{L"Convert",O({{L"space",spaces.GetArrayAt(space.SelectedIndex()).GetAt(0)},
                         {L"options",O({{L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()])},{L"black_point_compensation",B(blackPoint.IsChecked().Value())}})}})}});
-                    if(kind==L"depth")choice=O({{L"Depth",O({{L"depth",S(depth.SelectedIndex()==1?L"U16":L"U8")},{L"dither",S(depth.SelectedIndex()==0&&dither.IsChecked().Value()?L"Stochastic8":L"None")}})}});
+                    if(kind==L"depth")choice=O({{L"Depth",O({{L"depth",S(depthValue(depth.SelectedIndex()))},{L"dither",S(depth.SelectedIndex()==0&&dither.IsChecked().Value()?L"Stochastic8":L"None")}})}});
                     if(kind==L"repair")choice=profileChoices.GetAt(space.SelectedIndex());
                     if(stage==L"interpret_image")action=O({{L"op",S(L"interpret_image")},{L"profile",profileChoices.GetAt(space.SelectedIndex())}});
                     else action=O({{L"op",S(L"prepare")},{L"choice",choice},{L"copy",B(kind==L"convert"&&copy.IsChecked().Value())}});
@@ -483,7 +502,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(flag(model,L"windows_importing"))return;
         for(auto value:array(object(model,L"state"),L"requests")) {
             auto envelope=value.GetObject();
-            if(str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
+            if(str(object(envelope,L"kind"),L"type")==L"sdr_rendition"||str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
                 auto id=uint32_t(num(envelope,L"id"));if(id!=handled){handled=id;send(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(id)}}).Stringify()));}break;
             }
             if(str(object(envelope,L"kind"),L"type")!=L"document")continue;

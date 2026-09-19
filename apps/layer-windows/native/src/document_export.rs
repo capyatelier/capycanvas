@@ -31,8 +31,8 @@ impl Task {
     }
     pub(super) fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
         let document = &self.original.project.document;
-        if recipe.format.is_hdr() {
-            return Err("HDR export is not supported on Windows yet".into());
+        if recipe.format.gainmap().is_some() {
+            return Err("Gain-map export requires a codec bundle unavailable on Windows".into());
         }
         recipe.validate_for_document(document)?;
         recipe.size.extent([document.width, document.height])?;
@@ -66,13 +66,17 @@ impl Task {
         let recipe = self.recipe.clone();
         let renderer = self.renderer(control)?;
         let before = renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
-        let (after, statistics) = renderer.preview_output(
+        let (after, statistics) = if recipe.format == ExportFormat::Exr {
+            (renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?, Default::default())
+        } else if matches!(recipe.format, ExportFormat::PngHdr | ExportFormat::PngHdrMapped) {
+            renderer.preview_hdr_output([512, 384], layer_core::color::RgbSpace::Srgb, 1.)?
+        } else { renderer.preview_output(
             [512, 384],
             layer_core::color::RgbSpace::Srgb,
             &recipe.interpretation(),
             recipe.encoding,
             recipe.background.matte(),
-        )?;
+        )? };
         self.previews = [before, after]
             .into_iter()
             .map(|p| {
@@ -104,8 +108,10 @@ impl Task {
         let mut output = std::io::BufWriter::new(stream);
         let target = recipe.interpretation();
         let statistics = match recipe.format {
-            ExportFormat::Exr | ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
-                return Err("HDR export is not supported on Windows yet".into());
+            ExportFormat::Exr => renderer.write_exr(&mut output),
+            ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut output, recipe.format.maps_hdr_range()),
+            ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
+                return Err("Gain-map export requires a codec bundle unavailable on Windows".into());
             }
             ExportFormat::Png => renderer.write_png(
                 &mut output,

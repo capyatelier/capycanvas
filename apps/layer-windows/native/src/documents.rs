@@ -326,7 +326,6 @@ fn prepare(
                 limits, Default::default(), cancel)?
         }
     };
-    layer_ui::require_sdr_host(&imported.project.document, "Windows")?;
     if imported.interpretation_required(environment.photo_policy).is_some() {
         return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles: crate::color_storage::list(cancel)? })));
     }
@@ -419,6 +418,7 @@ impl ImageImport {
 }
 pub(crate) struct DocumentService {
     pub proof: crate::proof::Service,
+    pub tone: crate::tone::Service,
     import: Option<ImageImport>,
     next_import: u64,
     worker: Worker,
@@ -434,7 +434,8 @@ impl DocumentService {
         let wake = std::sync::Arc::new(wake);
         let notify = wake.clone();
         Ok(Self {
-            proof: crate::proof::Service::new(wake),
+            proof: crate::proof::Service::new(wake.clone()),
+            tone: crate::tone::Service::new(wake),
             worker: Worker::start(move || notify())?,
             import: None,
             next_import: 1,
@@ -1040,11 +1041,12 @@ impl DocumentService {
         task.preview(index)
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
+        let tone = self.tone.stop();
         let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() { self.worker.retire_workflow(task); }
         let worker = self.worker.stop();
-        proof.and(worker)
+        proof.and(tone).and(worker)
     }
 }
 

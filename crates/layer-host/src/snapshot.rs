@@ -231,7 +231,7 @@ impl NativeHost {
         map.serialize_entry("zen_toolbars", &json!({"sections": []}))?;
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
-        map.serialize_entry("color_panel", &if state.platform==layer_ui::Platform::Android {state.colors.view_mapped(self.session.effective_sdr_rendition())}else{state.colors.view_in(self.ui_color_space)})?;
+        map.serialize_entry("color_panel", &if matches!(state.platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {state.colors.view_mapped(self.session.effective_sdr_rendition())}else{state.colors.view_in(self.ui_color_space)})?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form(),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,

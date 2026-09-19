@@ -210,7 +210,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
         &[CommandId::Histogram],
-        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::PreviewSdr],
+        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SdrRendition, CommandId::PreviewSdr],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
@@ -537,7 +537,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SdrRendition | Self::PreviewSdr => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::SdrRendition | Self::PreviewSdr => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows),

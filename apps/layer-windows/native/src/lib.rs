@@ -13,6 +13,10 @@ mod document_workflows;
 #[cfg(any(target_os = "windows", test))]
 mod proof;
 #[cfg(any(target_os = "windows", test))]
+mod tone;
+#[cfg(target_os = "windows")]
+mod display;
+#[cfg(any(target_os = "windows", test))]
 mod color_storage;
 #[cfg(any(target_os = "windows", test))]
 mod recovery;

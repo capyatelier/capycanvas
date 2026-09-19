@@ -499,22 +499,26 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
 
 #[test]
 fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
+    check_hdr_renderer(|color| WgpuRasterizer::new_native_headless(color).unwrap());
+}
+fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
     use layer_core::color::{hdr::SdrRendition, ProofRecipe};
+    for depth in [SampleDepth::F16, SampleDepth::F32] {
     for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
-        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth:SampleDepth::F16}).unwrap();
+        let mut r=make(DocumentColor{space,depth});
         let lut=Arc::new(layer_color::ProofLut::build(space,&ProofRecipe::new("SDR proof".into(),ColorProfile::Builtin(RgbSpace::Srgb)),||false).unwrap());
         let target=texture(&r,wgpu::TextureFormat::Rgba32Float);
         let output=target.create_view(&Default::default());
         for p in [[1.,1.,1.,1.],[8.,0.,0.,1.],[0.,0.,16.,1.],[8.,2.,-0.125,1.],[32.,4.,1.,0.5],[1.,1.,1.,1./65536.],[0.;4]] {
             let bits=layer_core::color::hdr::encode_pixel(p).unwrap();
             let p=layer_core::color::hdr::decode_pixel(bits).unwrap();
-            let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
-            let row=bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(256);
+            let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
+            let row=if depth == SampleDepth::F16 { bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>() } else { p.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>() }.repeat(256);
             for _ in 0..256 {builder.push_row(&row).unwrap();}
             let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
             frame(&mut r,&layer);
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
-            for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
+            for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{balance:-1.,contrast:0.5,..Default::default()},SdrRendition{balance:1.,contrast:2.,exposure:1.3,highlight_color:0.8,..Default::default()},SdrRendition{highlight_color:1.,headroom:4.,..Default::default()}] {
@@ -532,12 +536,13 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
                         let rgb=if headroom==1. && !proof {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
                         let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
                         let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
+                        else if surface == SdrSurfaceColor::ExtendedLinearSrgb { expected }
                         else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
                         let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
                         // PQ encode/decode uses hardware Float32 powers. The independent
                         // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
                         // 203/80. Both tolerances remain well below one 8-bit code.
-                        let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else{0.00008}}else{0.};
+                        let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else if surface==SdrSurfaceColor::ExtendedLinearSrgb{0.00015}else{0.00008}}else{0.};
                         for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
                         assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
                     }
@@ -546,6 +551,31 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
             }
         }
     }
+}
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "Requires hardware D3D12; functional HDR/SDR pixel oracle, not display acceptance"]
+fn d3d12_hdr_float16_float32_display_switching_and_proof_match_cpu() {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::DX12;
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default()
+    })).unwrap();
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    eprintln!("D3D12 HDR adapter: {:?}", adapter.get_info());
+    let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features,
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    })).unwrap();
+    check_hdr_renderer(|color| WgpuRasterizer::native_capture_on_gpu(adapter.clone(),device.clone().into(),queue.clone(),color).unwrap());
 }
 
 #[test]

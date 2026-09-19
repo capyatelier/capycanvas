@@ -159,6 +159,7 @@ struct ColorCoordinates {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPanelView {
     pub hdr: bool,
+    pub document_depth: layer_core::color::SampleDepth,
     pub intensity: f32,
     pub intensity_ramp: Vec<[f32; 4]>,
     pub rendition: Option<layer_core::color::hdr::SdrRendition>,
@@ -296,6 +297,7 @@ impl ColorState {
         };
         ColorPanelView {
             hdr: self.hdr_picker.is_some(),
+            document_depth: self.hdr_depth,
             intensity: self.hdr_intensity(),
             intensity_ramp: Vec::new(),
             rendition: None,

@@ -9,6 +9,11 @@ white. The implemented interactive host is GTK/Linux. The shared core and explic
 C creation API support Float32; the other hosts keep their existing HDR rejection.
 A successful cross-compile does not qualify those hosts for HDR editing.
 
+Subsequent Windows implementation and functional qualification are recorded in
+[Windows feature parity progress](windows-feature-parity-progress.md#windows-hdr-implementation-and-verification-2026-09-19).
+The host-status statements below describe this earlier GTK qualification; physical
+HDR and Windows performance acceptance remain unqualified.
+
 ## Data contract
 
 - Editable color tiles use little-endian IEEE binary32 straight RGBA. Placed

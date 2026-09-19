@@ -10,23 +10,25 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
     CheckBox resize,enlarge,blackPoint;
     TextBlock validation;
     A extent;
-    J recipe,draft;
+    J recipe,draft,color;
     A profiles;
     hstring profileId;
     bool updating=false;
     static hstring name(hstring const& value){
         if(value==L"Png")return L"PNG";if(value==L"Tiff")return L"TIFF";if(value==L"Jpeg")return L"JPEG";
+        if(value==L"PngHdr")return L"HDR PNG · BT.2020 PQ";if(value==L"PngHdrMapped")return L"HDR PNG · clip to PQ range";if(value==L"Exr")return L"OpenEXR · 32-bit float";if(value==L"F32")return L"32-bit float";
         if(value==L"U8")return L"8-bit";if(value==L"U16")return L"16-bit";if(value==L"Preserve")return L"Preserve transparency";
         if(value==L"Stochastic8")return L"Dither to 8-bit";if(value==L"None")return L"No dithering";return value;
     }
     void choices(ComboBox const& box,A const& values,hstring const& selected){box.Items().Clear();for(uint32_t i=0;i<values.Size();++i){auto value=values.GetStringAt(i);box.Items().Append(box_value(name(value)));if(value==selected)box.SelectedIndex(i);}}
     void normalize(J action){
-        auto input=to_string(O({{L"recipe",recipe},{L"action",action}}).Stringify());
+        auto input=to_string(O({{L"recipe",recipe},{L"action",action},{L"color",color}}).Stringify());
         std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_export_draft(input.c_str()),capy_string_free);
         if(!raw)throw hresult_error(E_FAIL,L"Export form unavailable");draft=J::Parse(to_hstring(raw.get()));
         if(draft.HasKey(L"error"))throw hresult_invalid_argument(str(draft,L"error"));recipe=object(draft,L"recipe");
         updating=true;choices(format,array(draft,L"formats"),str(recipe,L"format"));choices(depth,array(draft,L"depths"),str(recipe,L"depth"));
-        choices(background,array(draft,L"backgrounds"),str(recipe,L"background"));choices(dither,array(draft,L"dithers"),str(object(recipe,L"encoding"),L"dither"));updating=false;
+        choices(background,array(draft,L"backgrounds"),str(recipe,L"background"));choices(dither,array(draft,L"dithers"),str(object(recipe,L"encoding"),L"dither"));auto hdr=str(recipe,L"format")!=L"Png"&&str(recipe,L"format")!=L"Tiff"&&str(recipe,L"format")!=L"Jpeg";if(hdr){profileId=L"";auto wanted=object(object(recipe,L"profile"),L"profile").Stringify();for(uint32_t i=0;i<profiles.Size();++i)if(object(profiles.GetObjectAt(i),L"profile").Stringify()==wanted)profile.SelectedIndex(i);}
+        profile.IsEnabled(!hdr);intent.IsEnabled(!hdr);blackPoint.IsEnabled(!hdr);quality.IsEnabled(str(recipe,L"format")==L"Jpeg");updating=false;
     }
     J current(){
         auto value=J::Parse(recipe.Stringify());value.Insert(L"jpeg_quality",N(quality.Value()));
@@ -36,18 +38,18 @@ struct ExportFormView : std::enable_shared_from_this<ExportFormView> {
         auto encoding=object(value,L"encoding");auto conversion=object(encoding,L"conversion");
         conversion.Insert(L"intent",S(std::array<hstring,4>{L"RelativeColorimetric",L"Perceptual",L"Saturation",L"AbsoluteColorimetric"}[intent.SelectedIndex()]));
         conversion.Insert(L"black_point_compensation",B(blackPoint.IsChecked().Value()));
-        encoding.Insert(L"conversion",conversion);value.Insert(L"encoding",encoding);
-        auto input=to_string(O({{L"recipe",value},{L"action",O({{L"type",S(L"refresh")}})},{L"validate",B(true)},{L"extent",extent}}).Stringify());
+        if(str(value,L"format")==L"Png"||str(value,L"format")==L"Tiff"||str(value,L"format")==L"Jpeg"){encoding.Insert(L"conversion",conversion);value.Insert(L"encoding",encoding);}
+        auto input=to_string(O({{L"recipe",value},{L"color",color},{L"action",O({{L"type",S(L"refresh")}})},{L"validate",B(true)},{L"extent",extent}}).Stringify());
         std::unique_ptr<char,decltype(&capy_string_free)> raw(capy_export_draft(input.c_str()),capy_string_free);
         if(!raw)throw hresult_error(E_FAIL,L"Export form unavailable");auto result=J::Parse(to_hstring(raw.get()));
         if(result.HasKey(L"error"))throw hresult_invalid_argument(str(result,L"error"));return object(result,L"recipe");
     }
     void init(J const& details){
-        extent=array(details,L"extent");root.Spacing(8);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");profiles=A::Parse(array(form,L"profiles").Stringify());
+        color=object(details,L"color");extent=array(details,L"extent");root.Spacing(8);recipe=J::Parse(object(details,L"recipe").Stringify());auto form=object(details,L"form");profiles=A::Parse(array(form,L"profiles").Stringify());
         auto original=object(recipe,L"profile");bool contains=false;for(auto item:profiles)contains|=item.Stringify()==original.Stringify();if(!contains)profiles.Append(original);
         for(auto item:array(details,L"profiles")){auto entry=item.GetObject();if(entry.HasKey(L"issue"))continue;A empty;profiles.Append(O({{L"name",S(str(entry,L"name"))},{L"channels",S(str(entry,L"channels"))},{L"profile",O({{L"Icc",empty}})},{L"library",S(str(entry,L"id"))}}));}
         auto add=[&](ComboBox const& box,hstring const& label){box.Header(box_value(label));box.HorizontalAlignment(HorizontalAlignment::Stretch);root.Children().Append(box);};
-        add(format,L"File format");add(profile,L"Output profile");add(depth,L"Integer precision");add(background,L"Background");add(dither,L"Dithering");add(intent,L"Rendering intent");
+        AutomationProperties::SetAutomationId(format,L"export-format");add(format,L"File format");add(profile,L"Output profile");add(depth,L"Precision");add(background,L"Background");add(dither,L"Dithering");add(intent,L"Rendering intent");
         for(auto item:profiles)profile.Items().Append(box_value(str(item.GetObject(),L"name")));
         for(uint32_t i=0;i<profiles.Size();++i)if(profiles.GetObjectAt(i).Stringify()==original.Stringify())profile.SelectedIndex(i);
         for(auto value:{L"Relative colorimetric",L"Perceptual",L"Saturation",L"Absolute colorimetric"})intent.Items().Append(box_value(value));

@@ -1,5 +1,9 @@
 # Windows feature-gap review against Web and Android
 
+HDR implementation update: 2026-09-19. The earlier review below is historical;
+the Windows HDR implementation and fresh evidence are recorded in the new HDR
+section. The earlier blanket HDR rejection is no longer the current Windows contract.
+
 Fresh review: 2026-09-18–19. Started from a clean Windows worktree, pulled
 main from `20cecad7` to `59aff3df`, then integrated the disjoint Apple update
 `c1472101`, the concurrent Float32/OpenEXR change `537464b7`, and shared
@@ -139,6 +143,122 @@ cargo test --locked -p layer-render-wgpu --lib d3d12_proof_view_matches_cpu_with
 The second test reuses the shared proof CPU/GPU oracle with an explicitly
 selected D3D12 hardware device rather than inferring the backend from the OS.
 
+## Windows HDR implementation and verification (2026-09-19)
+
+Started on a clean Windows main at `20932ce4`, pulled `caf46ebf`, then safely
+integrated concurrent `cb577569`, `34810f1e` and `6a997a3d` changes without
+dropping either side of the shared color/proof/storage work. Independently read the current Windows, shared Rust and GTK workflows. The previous report was
+stale: shared Float32/EXR and Web/Android HDR work had landed, while Windows still
+rejected HDR adoption/export, exposed only U8/U16 controls and created an SDR
+presenter without tone analysis. Read AGENTS.md, the drag convention, Float32 HDR
+scope/validation, M4 design and HDR export proposal. This work adds no draggable
+surface and preserves the application drag rules.
+
+### Implemented behavior and ownership
+
+- Native New Drawing and precision conversion offer Float16 and Float32. Shared
+  creation, source import/placement, color candidate transactions and renderer
+  capability validation own adoption. Unsupported GPU capabilities fail without
+  silently narrowing document samples. Existing source originals keep their own
+  precision. Native .capy storage, history and recovery retain committed samples.
+- Shared numeric color entry receives document precision and HDR intensity;
+  parsing, range checks, signed/extended RGB and color conversion remain in Rust.
+  Native picker, palette and gradient previews use the shared saved-rendition
+  mapper; effect and gradient numeric fields receive HDR document precision. Histograms display
+  the shared stop-axis bounds, including the Float32 range.
+- View > Proof SDR opens native SDR Appearance controls projected from the shared
+  proof form. Save makes one shared history edit; Cancel leaves the master and
+  history unchanged. Temporary Preview SDR and print/gamut proof are viewing
+  states. Print proof receives the mapped SDR rendition and shares the canvas and
+  Navigator presenter; exports never consume temporary viewing switches.
+- The existing immutable snapshot/file worker now exports Float32 OpenEXR,
+  BT.2020 PQ PNG, explicitly range-clipped PQ PNG and saved-rendition SDR
+  PNG/JPEG/TIFF. Shared export drafts preserve EXR document primaries and normalize
+  deliberate SDR delivery. Preview, codec/range validation, output sizing,
+  cancellation and atomic sibling-file publication use existing Rust workflows.
+  Native open/placement uses the shared tagged PQ PNG and bounded OpenEXR decoder;
+  the Open picker explicitly offers EXR.
+- The D3D12 SwapChainPanel negotiates RGBA16Float with extended-linear sRGB.
+  Native DXGI output discovery matches the HWND's current monitor across adapters,
+  refreshing active HDR state and output limits at a 500 ms service deadline.
+  It avoids GetContainingOutput on the composition swap chain. Presenter encoding
+  changes between Windows scRGB and linear SDR; unadvertised float surfaces use
+  ordinary SDR. Missing/invalid output reports and SDR monitors use the saved SDR
+  rendition. HDR viewing retains the shared 203 cd/m² artwork reference and 80
+  cd/m² scRGB encoding. Neither display changes nor fallback changes the document.
+  This follows [Microsoft's Advanced Color contract](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range).
+- The Windows owner schedules shared snapshot/local-tone analysis on one bounded,
+  cancellable worker. Shared ToneKey plus GPU generation reject stale results.
+  Closing, document/color/history changes and removed devices cancel obsolete work;
+  workers join before device/service destruction. CPU tone guides and proof LUTs
+  are uploaded to replacement presenters. Presenter identity also tracks working
+  RGB changes, correcting the former stale-color presentation path.
+
+### Fresh HDR validation
+
+Functional evidence is recorded under ignored `artifacts/windows/hdr-*`. Small
+fixtures establish behavior and pixel/storage contracts, not latency or memory
+budgets. Hardware tests explicitly select D3D12 and reject CPU/fallback adapters.
+Synthetic display reports are available only to an isolated HDR smoke-test process.
+
+| Check | Result and evidence |
+| --- | --- |
+| Native Release build | Passed Rust Release and MSVC/WinUI build; executable at artifacts/windows/hdr-final/CapyCanvas.exe. Log: hdr-build.log. |
+| Rust unit suites | 886 passed: color 88, core 97, engine 63, host 28, UI 492, Windows 118. The default runs leave 22 opt-in tests ignored; the three HDR hardware tests below were run explicitly. Log: hdr-rust-final.log. |
+| Strict native lint | Passed layer-windows and layer-host, all targets, --no-deps, -D warnings. Log: hdr-clippy.log. Whole-dependency strict lint remains affected by existing layer-core lint findings; no workspace-wide clean claim. |
+| D3D12 HDR pixel oracle | Passed 1,344 CPU/GPU combinations: Float16/Float32, sRGB/ProPhoto, seven vectors, three encodings (linear SDR, Windows scRGB, PQ), four recipes, two headrooms, proof on/off. Offscreen Float32 readback verifies conversion and unchanged master samples. Log: hdr-oracle.log. |
+| D3D12 native document workflows | Both tests passed on the integrated code, 155.31 s together. Float16/Float32 source edits, saved SDR recipe and undo/redo, exact layered save/reopen, EXR/PQ/SDR delivery, proof/export separation, cancellation, pending-analysis device removal/replacement, precision conversion, signed/extreme Float32, rejected lossy demotion, and protected strict-PQ destinations. Log: hdr-d3d12-final.log. |
+| Native GUI journeys | Float16 and Float32 passed creation, invalid/valid HDR numeric color, above-white painting and exact undo/redo, SDR appearance cancel/save/history, PNG/PQ/EXR export, synthetic display switching, proof/export separation, device recovery, Unicode save/reopen, and opening the exported HDR photo (PQ for Float16; EXR for Float32). Logs: hdr-ui-f16.log and hdr-ui-f32.log. |
+| SDR native regression | Existing exercise-proof.ps1 passed first-use cancellation, shared options, profile-picker cancellation, library drafts, proof/history/pixel separation, export invariance, D3D12 recovery and save/reopen. Log: hdr-sdr-proof.log. |
+
+The hardware adapter was Intel Iris Xe, D3D12 driver 32.0.101.6737. The real DXGI
+output reported SDR with 400 cd/m² maximum luminance; RGBA16Float composition was
+available. Injected SDR/HDR reports test host transitions and the five-times
+headroom path, not a physical HDR panel. One hardware rerun timed out at the
+existing 60-second canvas-settle deadline while a Release build was running;
+the isolated serial rerun passed without changing the deadline. The failing log
+is retained as hdr-d3d12-build-contention.log; its cause is not proven and no
+performance qualification is inferred. Removed only unused target/debug/incremental
+cache when disk space became tight; source and validation evidence were retained.
+
+Native validation found and fixed delayed TextChanged notifications re-enabling
+an invalid HDR color draft. A fixture race reading a reopened SDR dialog before
+its snapshot arrived was fixed with an explicit readiness wait.
+
+Reproduction, with GUI journeys run serially in disposable profiles:
+
+~~~powershell
+./apps/layer-windows/scripts/build.ps1 -Configuration Release -SkipRestore -OutputDirectory artifacts/windows/hdr-final
+cargo test --locked -p layer-core -p layer-color -p layer-engine -p layer-ui -p layer-host -p layer-windows --lib
+cargo clippy --locked -p layer-windows -p layer-host --all-targets --no-deps -- -D warnings
+./apps/layer-windows/scripts/exercise-hdr.ps1 -Executable artifacts/windows/hdr-final/CapyCanvas.exe -Depth F16
+./apps/layer-windows/scripts/exercise-hdr.ps1 -Executable artifacts/windows/hdr-final/CapyCanvas.exe -Depth F32
+./apps/layer-windows/scripts/exercise-proof.ps1 -Executable artifacts/windows/hdr-final/CapyCanvas.exe
+~~~
+
+Set CAPY_SETTINGS_DIRECTORY to a new absolute directory under ignored artifacts
+for each native workflow run. Run hardware tests serially:
+
+~~~powershell
+cargo test --locked -p layer-windows --lib d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p layer-windows --lib d3d12_windows_float32_signed_range_rejects_lossy_demotion_and_protects_exports -- --ignored --test-threads=1 --nocapture
+cargo test --locked -p layer-render-wgpu --lib d3d12_hdr_float16_float32_display_switching_and_proof_match_cpu -- --ignored --test-threads=1 --nocapture
+~~~
+
+### HDR release limitations
+
+- Physical HDR output, calibrated luminance/gamut, OS SDR brightness settings,
+  real HDR/SDR monitor crossing, mixed DPI/adapters, hot-plug, suspend and driver
+  reset remain untested. Synthetic capability changes and GPU pixel comparisons
+  do not close these hardware acceptance gates.
+- Sustained painting cadence, large-photo 24/45/60 MP latency, peak process/driver
+  memory, concurrent save/export throughput and constrained-device behavior have
+  not been measured for Windows HDR. No performance acceptance is claimed.
+- Windows has no qualified gain-map JPEG/AVIF codec bundle; those exports remain
+  explicitly unavailable. Unsupported gain-map/HLG/HEIF inputs follow the shared
+  codec's rejection contract. The bounded EXR subset remains the shared flat
+  scanline FLOAT contract, not arbitrary deep/multipart/tiled/HALF EXR.
+
 ## Remaining gaps and acceptance
 
 - Physical pen/touch prediction, pressure/tilt/eraser, capture/cancellation and
@@ -157,8 +277,7 @@ selected D3D12 hardware device rather than inferring the backend from the OS.
   This review builds an unpackaged executable; it does not refresh or qualify
   distribution packages.
 
-HDR authoring/display integration, unsupported codecs and the dirty-rendering
-redesign remain separate work. HDR is not currently an extra supported feature
-of Web or Android that Windows silently omits. Print proofing is now implemented
-and is no longer in that deferred list. See [Windows acceptance](windows-acceptance.md)
+Windows HDR authoring and D3D12 viewing are now implemented as described above.
+Physical HDR and performance acceptance, unsupported codecs and the dirty-rendering
+redesign remain separate work. Print proofing remains implemented. See [Windows acceptance](windows-acceptance.md)
 for the wider release gates.
