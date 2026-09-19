@@ -58,3 +58,24 @@ export async function checkHdrDisplay({evaluate}, hdr) {
   }
   return samples;
 }
+
+// Simulate an older browser that cannot inspect its accepted configuration.
+// This verifies fallback/recovery, not a physical display change.
+export async function checkHdrCapabilityFallback({evaluate}) {
+  const result=await evaluate(`(async()=>{
+    const prototype=GPUCanvasContext.prototype,get=prototype.getConfiguration;
+    const formats=()=>[layerApp.canvas,...document.querySelectorAll('.navigator-surface')].map(c=>get.call(c.getContext('webgpu'))?.format);
+    const wait=async predicate=>{const start=performance.now();while(!predicate()){if(performance.now()-start>15000)throw Error('HDR capability transition timed out');await new Promise(r=>setTimeout(r,20));}};
+    let fallback;
+    try{
+      prototype.getConfiguration=undefined;
+      await wait(()=>!layerApp.app.tone_status().display_hdr&&formats().every(f=>f===navigator.gpu.getPreferredCanvasFormat()));
+      fallback=formats();
+    }finally{prototype.getConfiguration=get;}
+    await wait(()=>layerApp.app.tone_status().hdr_output&&formats().every(f=>f==='rgba16float'));
+    return {fallback,restored:formats()};
+  })()`);
+  assert.ok(result.fallback.every(f=>f!=='rgba16float'));
+  assert.ok(result.restored.every(f=>f==='rgba16float'));
+  return result;
+}

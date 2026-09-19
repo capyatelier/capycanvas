@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
-import {checkHdrDisplay} from './hdr-display.test.mjs';
+import {checkHdrDisplay,checkHdrCapabilityFallback} from './hdr-display.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 // Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
@@ -191,6 +191,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);
     await output(hdrDisplay);
     if(hdrDisplay){
+      results.capabilityFallback=await checkHdrCapabilityFallback({evaluate});
       try{
         await call('Emulation.setEmulatedMedia',{features:[{name:'dynamic-range',value:'standard'}]});
         results.displayChangeEmulated=await evaluate(`!matchMedia('(dynamic-range: high)').matches`);

@@ -257,3 +257,12 @@ SDR previews; the 12 MP browser admission limit and gain-map output limits remai
 
 The Web encoding follows [WebGPU canvas color management](https://gpuweb.github.io/gpuweb/#canvas-color-management)
 and [Chrome's extended canvas configuration](https://developer.chrome.com/blog/new-in-webgpu-129).
+
+The final build incorporates `ebdb33b0` from main: retained GPU tone guides and
+Huion Float32 blending qualification. The combined desktop and packaged Wacom
+Chrome journeys pass, including pen-contact guide retention and late-result
+rejection. A test removes canvas configuration inspection to simulate an older
+browser: both views fall back to SDR and recover HDR when the API returns.
+Chrome ignores `dynamic-range` emulation, so physical display switching remains
+unqualified. Fingerprinted production assets are tested on a clean origin after
+stale development worker modules caused a Print startup failure during integration.
