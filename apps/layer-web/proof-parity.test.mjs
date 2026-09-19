@@ -19,9 +19,16 @@ export async function checkProofStartingLayout({call,evaluate,settle}) {
     await label(name,'.workspace-switcher');
     assert.equal((await idle()).name,name,'The real workspace switch completed');
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'proof',visible:false}})`);await idle();await settle();
-    await click('[data-menu="window"] > summary');
-    await label('Workspaces','#workspace-menu');
-    await label('Restore Starting Layout…','#workspace-menu');
+    const windowVisible=await evaluate(`document.querySelector('[data-menu="window"] > summary')?.getBoundingClientRect().width>0`);
+    if(windowVisible)await click('[data-menu="window"] > summary');
+    else {
+      // Narrow tablet headers use the same application menu behind a button.
+      const selector=await evaluate(`(()=>{const n=[...document.querySelectorAll('summary[aria-label="Application menus"],summary[aria-label="Main Menu"]')].find(n=>n.getBoundingClientRect().width>0);if(!n)throw Error('Missing visible application menu');n.dataset.proofParityMenu='target';return '[data-proof-parity-menu="target"]'})()`);
+      await click(selector);await label('Window','.header-menu[open] .popover');
+      await evaluate(`document.querySelector('[data-proof-parity-menu="target"]')?.removeAttribute('data-proof-parity-menu')`);
+    }
+    await label('Workspaces','.header-menu[open] .popover');
+    await label('Restore Starting Layout…','.header-menu[open] .popover');
     await click('.workspace-form .suggested-action');
     await idle();await settle();
     const groups=await evaluate('layerApp.app.layout(innerWidth,innerHeight).groups');

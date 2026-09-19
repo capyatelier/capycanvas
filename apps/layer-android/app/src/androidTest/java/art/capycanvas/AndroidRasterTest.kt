@@ -341,7 +341,9 @@ class AndroidRasterTest {
         fun status()=native{JSONObject(Native.toneStatus(it))}
         fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
         fun ready(){compose.waitUntil(120_000){val s=status();s.getBoolean("ready")||!s.isNull("error")};assertTrue(status().isNull("error"))}
-        open(input);refresh();ready()
+        open(input)
+        native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())};refresh();ready()
+        assertFalse("Exercise the mapped SDR presenter on HDR-capable devices too",status().getBoolean("hdr_output"))
         native{Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString());Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString())};refresh()
         val first=status().getInt("publications")
         val control=Native.captureControl();val task=native{Native.toneTask(it,control)}
@@ -493,6 +495,7 @@ class AndroidRasterTest {
                     val job=native{h->val(id,f)=request(h,"new_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision"))}
                     try{Native.projectOptions(job,obj("extent" to org.json.JSONArray(listOf(3840,2160)),"color" to obj("space" to "Srgb","depth" to "F16"),"background" to "White").toString());Native.projectWork(job,-1,3840,2160);native{Native.projectAdopt(it,job,"null")}}finally{Native.projectFree(job)}
                 }else open(File(activity.filesDir,name))
+                native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())}
                 refresh();entry.put("open_ms",SystemClock.uptimeMillis()-started);ready();entry.put("ready_ms",SystemClock.uptimeMillis()-started)
                 entry.put("cold_heartbeat_ms",summary(org.json.JSONArray(heartbeat.toList())));heartbeat.clear()
                 if(InstrumentationRegistry.getArguments().getString("hdrDiagnostics")=="true") {

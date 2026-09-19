@@ -136,7 +136,6 @@ impl SnapshotGpu {
 
 pub struct SnapshotRenderer {
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
-    #[cfg(not(target_arch = "wasm32"))]
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
     renderer: WgpuRasterizer,
@@ -288,7 +287,6 @@ impl SnapshotRenderer {
                 .depth
                 .is_float()
                 .then_some(project.document.sdr_rendition),
-            #[cfg(not(target_arch = "wasm32"))]
             local_tone: None,
             gpu_local_tone: None,
             renderer,

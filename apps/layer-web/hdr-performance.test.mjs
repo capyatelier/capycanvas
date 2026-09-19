@@ -14,6 +14,7 @@ export async function measureHdr({call,evaluate,settle}) {
   const wait=c=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){if(${c})resolve(true);else if(performance.now()-start>150000)reject(Error(${JSON.stringify(c)}+': '+document.body.innerText.slice(-1000)));else setTimeout(poll,30)}poll()})`);
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const memory=async()=>{
+    if(process.env.LAYER_HDR_MEMORY==='off')return{source:'Memory sampling disabled for pacing measurement'};
     try {
       if(process.env.LAYER_DEVICE_SERIAL){const {stdout}=await exec(process.env.ADB||'adb',['-s',process.env.LAYER_DEVICE_SERIAL,'shell','dumpsys','meminfo']);const section=stdout.split('Total PSS by process:')[1]?.split('Total PSS by OOM adjustment:')[0]??'';const detail=[...section.matchAll(/([\d,]+)K:\s+(com\.android\.chrome[^\s]*) \(pid (\d+)/g)].map(m=>({id:Number(m[3]),type:m[2],pss_bytes:Number(m[1].replaceAll(',',''))*1024}));return{pss_bytes:detail.reduce((s,p)=>s+p.pss_bytes,0)||null,detail,source:'ADB all-process PSS; includes all Chrome tabs, isolated renderers and GPU',raw:section};}
       const {processInfo}=await call('SystemInfo.getProcessInfo',{},null);let pss=0,observed=0;const detail=[];
@@ -31,7 +32,7 @@ export async function measureHdr({call,evaluate,settle}) {
     hdrPerf.pointer=layerApp.app.input.bind(layerApp.app);layerApp.app.input=(...args)=>{const t=performance.now();try{return hdrPerf.pointer(...args)}finally{hdrPerf.inputs.push(performance.now()-t)}};`);
   const reset=()=>evaluate('hdrPerf.gaps=[];hdrPerf.frames=[];hdrPerf.inputs=[];hdrPerf.last=performance.now()');
   const diagnostics=()=>evaluate(`({gaps:hdrPerf.gaps,frames:hdrPerf.frames,inputs:hdrPerf.inputs,stats:JSON.parse(JSON.stringify(layerApp.app.renderer_stats(),(_,v)=>typeof v==='bigint'?Number(v):v))})`);
-  const read=async()=>{const d=await diagnostics();return{heartbeat_ms:summary(d.gaps),submission_ms:summary(d.inputs),host_frame_ms:summary(d.frames.map(v=>v[2])),callback_ms:summary(d.frames.slice(1).map((v,i)=>v[0]-d.frames[i][0])),render_cpu_ms:summary(d.stats.samples),gpu_ms:summary(d.stats.gpu_samples),renderer_bytes:d.stats.resident_bytes,frames:d.frames,...await memory()};};
+  const read=async(includeMemory=true)=>{const d=await diagnostics();return{heartbeat_ms:summary(d.gaps),submission_ms:summary(d.inputs),host_frame_ms:summary(d.frames.map(v=>v[2])),callback_ms:summary(d.frames.slice(1).map((v,i)=>v[0]-d.frames[i][0])),render_cpu_ms:summary(d.stats.samples),gpu_ms:summary(d.stats.gpu_samples),renderer_bytes:d.stats.resident_bytes,frames:d.frames,...(includeMemory?await memory():{})};};
   async function motion(device){
     const p=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]*.5)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]*.5)*r.height/c.viewport[1]}})()`);
     const pointer=(type,x,y)=>device==='touch'?call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:21,x,y}]}):call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],x,y,button:'left',buttons:type==='up'?0:1,pointerType:device,force:type==='up'?0:.65});
@@ -41,11 +42,12 @@ export async function measureHdr({call,evaluate,settle}) {
     await Promise.all(pending);if(failure)throw failure;
     const held=await evaluate("JSON.parse(JSON.stringify(layerApp.app.tone_status(),(_,v)=>typeof v==='bigint'?Number(v):v))");
     if(toneBefore.hdr){assert.equal(held.retained,true);assert.equal(held.publications,toneBefore.publications);}
-    await pointer('up',p.x,p.y);const released=performance.now();await settle();const drawing=await read();
-    if(toneBefore.hdr)await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');
+    await pointer('up',p.x,p.y);const released=performance.now();await settle();const drawing=await read(false);
+    if(toneBefore.hdr)await wait(`layerApp.app.tone_status().error||(layerApp.app.tone_status().ready&&${held.idle?'true':`layerApp.app.tone_status().publications>${toneBefore.publications}`})`);
     const toneAfter=await evaluate("JSON.parse(JSON.stringify(layerApp.app.tone_status(),(_,v)=>typeof v==='bigint'?Number(v):v))");
     assert.equal(toneAfter.error??null,null);
-    return{device,...drawing,guide_before:toneBefore,guide_during:held,guide_after:toneAfter,pen_up_guide_ms:performance.now()-released};
+    const penUpGuideMs=performance.now()-released;
+    return{device,...drawing,...await memory(),guide_before:toneBefore,guide_during:held,guide_after:toneAfter,pen_up_guide_ms:penUpGuideMs};
   }
   try {
     for(const name of (process.env.LAYER_HDR_WORKLOADS||'sparse4k,hdr24.png,hdr45.png,hdr60.png').split(',')){
