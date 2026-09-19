@@ -153,7 +153,7 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
             let dome = (1. - radius2).sqrt();
             // Convex refraction magnifies the center and gently twists the
             // flowing folds. Screen-space up still controls contrast.
-            let lens = 1. - 0.28 * (1. - radius2);
+            let lens = 1. - 0.36 * (1. - radius2);
             let px = x * lens + 0.055 * y * (1. - radius2);
             let py = y * lens - 0.055 * x * (1. - radius2);
             let right = (px + 1.) * 0.5;
@@ -168,8 +168,7 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
                 + 0.35 * (3. * py + right).sin();
             let wave = 0.7 * phase.sin() + 0.16 * (2. * phase + 0.3).sin();
             let reflection = (phase - 0.7).cos().max(0.).powf(4. + 10. * right);
-            // A broad internal reflection under the narrow crest gives the
-            // folds a softer glass surface without another family of ripples.
+            // Keep the internal reflection faint so the folds stay clear.
             let inner_reflection = (phase + 0.5).cos().max(0.).powi(2);
             // Bound the amplitude separately: the bottom visibly converges
             // to gray even where a reflection would otherwise stay bright.
@@ -177,20 +176,20 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
             let v = 0.5
                 + contrast
                     * ((1.1 + 1.6 * up)
-                        * (0.8 * wave + 0.55 * reflection + 0.18 * inner_reflection - 0.17))
+                        * (0.8 * wave + 0.55 * reflection + 0.07 * inner_reflection - 0.17))
                         .tanh();
             let tint = 0.085 * up * (reflection - 0.5 * wave);
-            // A soft off-axis reflection and grazing rim make the surface
-            // read as a slightly raised lens. Keep the lower interior gray.
+            // A restrained, narrow glint and faint rim retain the lens shape
+            // without a broad hazy reflection. Keep the lower interior gray.
             let light = (-0.5 * x + 0.45 * y + 0.73993 * dome).max(0.);
-            let glint = 0.34 * light.powi(90) + 0.05 * light.powi(12);
+            let glint = 0.10 * light.powi(110);
             let rim = (1. - dome).powi(3);
-            let rim_light = 0.14 + 0.36 * (-0.55 * x + 0.83 * y).max(0.);
-            let shadow = 0.065 * (0.65 * x - 0.76 * y).max(0.) * radius2;
+            let rim_light = 0.07 + 0.18 * (-0.55 * x + 0.83 * y).max(0.);
+            let shadow = 0.035 * (0.65 * x - 0.76 * y).max(0.) * radius2;
             let rgb = [v - 0.7 * tint, v + 0.05 * tint, v + tint];
             let rgb: [u8; 3] = std::array::from_fn(|c| {
                 let lit = rgb[c] * (1. - shadow) + glint * (1. - rgb[c]);
-                let lit = lit * (1. - rim * 0.4) + rim * rim_light * (0.88 + 0.06 * c as f32);
+                let lit = lit * (1. - rim * 0.2) + rim * rim_light * (0.88 + 0.06 * c as f32);
                 (lit.clamp(0., 1.) * 255.).round() as u8
             });
             bytes.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);

@@ -2,8 +2,8 @@
 
 Follow-up to the [Proof control polish](color-management-proof-polish.md).
 
-The glass field has a gentle convex refraction, a small fluid twist, an off-axis
-reflection and a grazing rim. A soft shadow separates it from the panel. Pattern
+The glass field has a gentle convex refraction, a small fluid twist, a faint
+off-axis glint and a restrained rim. It has no drop shadow. Pattern
 spacing still tightens to the right; contrast follows the original screen-space
 vertical coordinate, so the bottom remains the low-contrast direction. This is
 an illustration, independent of the document's tone mapping.
@@ -67,3 +67,17 @@ verify the eliminated redraws directly. No input-to-present latency, constrained
 hardware, long-session memory, physical HDR luminance, browser or other-host
 qualification is claimed. Tone mapping and export code did not change; their
 previous validation and limitations remain in the archived review manifests.
+
+## Quieter finish
+
+The follow-up removes the GSK outset shadow, removes the broad lens reflection,
+reduces the narrow glint and internal fold reflection, and halves the rim
+lighting. Convex refraction is slightly stronger, with the same fluid twist.
+This only changes the static illustration; caching, control mapping and tone
+processing are unchanged.
+
+The release and native-test builds passed. The five-size hit-region/cache check
+passed again: one shared texture, 600 changed-value updates, no unchanged arc
+redraws. GTK screenshots were visually inspected. Evidence is under
+`artifacts/color-m4/proof-lens-quiet/`; the earlier pointer and 60 MP results above
+were not rerun for this illustration-only adjustment.
