@@ -96,6 +96,104 @@ fn engine(
 }
 
 #[test]
+fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
+    use layer_core::{Affine, Figure, FigurePaint, FigureShape, LayerMask, LayerOperation, LayerOperationKind, Point};
+    use layer_core::color::{RgbColor, f16};
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
+            let color = DocumentColor { space, depth };
+            let mut document = layer_core::Document::new("portable paint", 384, 128);
+            document.color = color;
+            let id = document.layers[0].id;
+            let (_, mut live) = engine(document);
+            let empty = backing(&live.document().layers[0].raster);
+            let colors = if depth.is_float() {
+                [[8., -0.125, 2., 0.625], [-0.25, 3., 0.5, 0.375]]
+            } else {
+                [[1., 0., 0., 0.625], [0., 1., 0.5, 0.375]].map(|p|
+                    RgbColor::new(RgbSpace::DisplayP3, p).unwrap().linear_in(space).unwrap())
+            };
+            let start = Point { x: 64., y: 32. };
+            let end = Point { x: 320., y: 96. };
+            let mut kinds = vec![LayerOperationKind::Fill { color: colors[0], alpha_locked: false }];
+            for radial in [false, true] {
+                for transparent in [false, true] {
+                    let mut colors = colors;
+                    if transparent { colors[1][3] = 0.; }
+                    kinds.push(LayerOperationKind::Gradient { start, end, colors, radial, alpha_locked: false });
+                }
+            }
+            kinds.push(LayerOperationKind::Figure(Figure {
+                shape: FigureShape::Rectangle, paint: FigurePaint::Fill,
+                start, end, width: 4., colors, alpha_locked: false, erase: false,
+            }));
+            kinds.push(LayerOperationKind::Figure(Figure {
+                shape: FigureShape::Rectangle, paint: FigurePaint::Both,
+                start, end, width: 4., colors, alpha_locked: false, erase: false,
+            }));
+            for kind in kinds {
+                live.append_layer_operation(id, LayerOperation {
+                    placement: Affine::IDENTITY,
+                    coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
+                    kind: kind.clone(),
+                }).unwrap();
+                flush(&mut live);
+                let pixels = backing(&live.document().layers[0].raster);
+                assert_ne!(pixels, empty, "{color:?} {kind:?}");
+                // Independent straight-linear reference, including both sides
+                // of the 256px page boundary and outside the figure.
+                for (x, y) in [(16, 64), (128, 64), (300, 64), (368, 64)] {
+                    let expected = match &kind {
+                        LayerOperationKind::Fill { color, .. } => *color,
+                        LayerOperationKind::Gradient { colors: [a, b], radial, .. } => {
+                            let p = [x as f64 + 0.5 - 64., y as f64 + 0.5 - 32.];
+                            let t = (if *radial { p[0].hypot(p[1]) / 256f64.hypot(64.) }
+                                else { (p[0]*256. + p[1]*64.) / (256.*256. + 64.*64.) }).clamp(0., 1.);
+                            let alpha = (1.-t)*f64::from(a[3]) + t*f64::from(b[3]);
+                            std::array::from_fn(|i| if i == 3 { alpha as f32 } else if alpha == 0. { 0. }
+                                else { (((1.-t)*f64::from(a[i])*f64::from(a[3]) + t*f64::from(b[i])*f64::from(b[3])) / alpha) as f32 })
+                        },
+                        LayerOperationKind::Figure(f) => if (64..320).contains(&x) {
+                            colors[usize::from(f.paint == FigurePaint::Both)]
+                        } else { [0.; 4] },
+                        _ => unreachable!(),
+                    };
+                    let key = TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [x / 256, y / 256] };
+                    let bpp = depth.bytes() * 4;
+                    let offset = ((y % 256 * 256 + x % 256) as usize) * bpp;
+                    let absent = vec![0; bpp];
+                    let bytes = pixels.get(&key).map_or(absent.as_slice(), |p| &p[offset..offset+bpp]);
+                    for i in 0..4 {
+                        if depth == SampleDepth::F16 {
+                            let actual = f16::from_bits(u16::from_le_bytes(bytes[2*i..2*i+2].try_into().unwrap()));
+                            let reference = f16::from_f32(expected[i]);
+                            assert_eq!(actual, reference, "{color:?} {kind:?} at {x},{y}/{i}");
+                        } else {
+                            let max = if depth == SampleDepth::U8 { 255. } else { 65535. };
+                            let encoded = if i == 3 { f64::from(expected[i]) } else { space.encode(f64::from(expected[i])) };
+                            let reference = (encoded.clamp(0., 1.)*max).round() as u16;
+                            let actual = if depth == SampleDepth::U8 { u16::from(bytes[i]) }
+                                else { u16::from_le_bytes(bytes[2*i..2*i+2].try_into().unwrap()) };
+                            assert!(actual.abs_diff(reference) <= 1, "{color:?} {kind:?} at {x},{y}/{i}: {actual} vs {reference}");
+                        }
+                    }
+                }
+                assert!(live.undo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&live.document().layers[0].raster), empty);
+                assert!(live.redo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&live.document().layers[0].raster), pixels);
+                let project = layer_core::Project { document: live.document().clone(), assets: Default::default() };
+                let mut bytes = Vec::new(); project.write(&mut bytes).unwrap();
+                let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
+                assert_eq!(loaded.document.color, color);
+                assert_eq!(backing(&loaded.document.layers[0].raster), pixels);
+                assert!(live.undo().unwrap()); flush(&mut live);
+            }
+        }
+    }
+}
+
+#[test]
 fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {

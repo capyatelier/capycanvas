@@ -5,6 +5,11 @@ Feature branch: `gtk-phase4-qualification`. Runnable package review precedes mer
 The old `artifacts/color-m4/review/build-manifest.json` is historical evidence;
 new evidence is under `artifacts/color-m4/qualification/`.
 
+Follow-up: the user's fill/gradient failure exposed missing portable-color
+editing coverage in this qualification. The reproduction, shared validation
+repair and actual GTK editing/save/reopen checks are documented in
+[the editing regression qualification](gtk-editing-regression-qualification.md).
+
 ## Audit and scope
 
 - The reviewed Proof dial, defaults, gestures, cancellation, undo transaction,

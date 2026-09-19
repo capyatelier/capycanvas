@@ -70,8 +70,7 @@ impl Figure {
             && self
                 .colors
                 .iter()
-                .flatten()
-                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                .all(|c| c.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&c[3]))
             && if self.shape == FigureShape::Line {
                 self.paint == FigurePaint::Outline && dx.hypot(dy) >= 0.001
             } else {
