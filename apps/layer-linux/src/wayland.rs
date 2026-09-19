@@ -1,6 +1,7 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
 mod color;
 mod hdr;
+pub(crate) mod backdrop;
 use gtk::{gdk, glib::translate::*, prelude::*};
 use std::{
     ptr::NonNull,

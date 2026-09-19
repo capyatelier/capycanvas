@@ -116,9 +116,21 @@ enum Reply {
     Readback(ReadbackImage),
 }
 
+#[cfg(test)]
+static NEXT_STARTUP_PAUSE: std::sync::Mutex<Option<Arc<AtomicBool>>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn pause_next_startup() -> Arc<AtomicBool> {
+    let pause = Arc::new(AtomicBool::new(true));
+    *NEXT_STARTUP_PAUSE.lock().unwrap() = Some(pause.clone());
+    pause
+}
+
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    #[cfg(test)]
+    startup_pause: Option<Arc<AtomicBool>>,
     pub(crate) proof_owner: u64,
     hdr_view: Option<(Option<layer_core::color::hdr::SdrRendition>, bool)>,
     transform_preview: Option<layer_render::TransformPreview>,
@@ -200,6 +212,10 @@ impl RenderWorker {
         area: gtk::glib::SendWeakRef<gtk::Picture>,
         color: layer_core::color::DocumentColor,
     ) -> Result<Self, String> {
+        #[cfg(test)]
+        let startup_pause = NEXT_STARTUP_PAUSE.lock().unwrap().take();
+        #[cfg(test)]
+        let pause = startup_pause.clone();
         static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let proof_owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
         let (commands, receiver) = mpsc::channel();
@@ -225,6 +241,12 @@ impl RenderWorker {
                 // A panic retires this entire owner; no encoder or renderer
                 // state is reused after unwinding.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    #[cfg(test)]
+                    if let Some(pause) = pause {
+                        while pause.load(Ordering::Acquire) {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                    }
                     Worker::new(parent, area, worker_clock, color)?.run(
                         &receiver,
                         &reply,
@@ -263,6 +285,8 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
+            #[cfg(test)]
+            startup_pause,
             proof_owner,
             hdr_view: None,
             transform_preview: None,
@@ -438,6 +462,8 @@ impl RenderWorker {
         self.snapshot_gpu.clone().ok_or_else(|| "Canvas renderer is still preparing".into())
     }
     pub(super) fn stop(&mut self) {
+        #[cfg(test)]
+        if let Some(pause) = &self.startup_pause { pause.store(false, Ordering::Release); }
         self.snapshot_gpu = None;
         let _ = self.discard_prepared_color();
         if let Some(thread) = self.thread.take() {
