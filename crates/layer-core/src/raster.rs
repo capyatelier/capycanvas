@@ -17,6 +17,7 @@ use std::{
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 16) as usize;
+mod compression;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -148,17 +149,17 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 
 impl TileBlob {
     pub fn encode(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_at_level(descriptor, bytes, -20)
+        Self::encode_with_policy(descriptor, bytes, true)
     }
     /// Immutable imported samples are compressed on the file worker. Unlike
     /// interactive capture, favor source residency over minimum commit latency.
     pub fn encode_source(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_at_level(descriptor, bytes, 1)
+        Self::encode_with_policy(descriptor, bytes, false)
     }
-    fn encode_at_level(
+    fn encode_with_policy(
         descriptor: PixelDescriptor,
         bytes: &[u8],
-        level: i32,
+        interactive: bool,
     ) -> Result<Self, String> {
         let expected = descriptor
             .byte_len([TILE_SIZE; 2])
@@ -174,8 +175,10 @@ impl TileBlob {
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
-            compressed: Arc::<[u8]>::from(zstd::bulk::compress(shuffled.as_deref().unwrap_or(bytes), level)
-                .map_err(|e| e.to_string())?).into(),
+            compressed: Arc::<[u8]>::from(compression::compress(
+                shuffled.as_deref().unwrap_or(bytes),
+                interactive,
+            )?).into(),
         })
     }
     fn digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
@@ -199,13 +202,7 @@ impl TileBlob {
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
         let compressed = self.compressed()?;
-        let frame_size = zstd::zstd_safe::find_frame_compressed_size(&compressed)
-            .map_err(|_| "Invalid compressed raster frame")?;
-        if frame_size != self.compressed.len() {
-            return Err("Trailing compressed raster data".into());
-        }
-        let mut bytes =
-            zstd::bulk::decompress(&compressed, size).map_err(|e| e.to_string())?;
+        let mut bytes = compression::decompress(&compressed, size)?;
         if bytes.len() == size && self.descriptor.bits_per_channel > 8 {
             bytes = unshuffle_samples(self.descriptor, &bytes);
         }

@@ -1,5 +1,37 @@
 # Pinned dependency fixes
 
+## Portable Zstd raster storage
+
+`zrip-core` 0.10.1 and `zrip-encode` 0.8.7 are the published MIT-licensed
+crates from <https://github.com/paddor/zrip>, revision
+`c8aa18a056a1a4895c788d0c950782d2dd6b82d2`. Their registry archive SHA-256s are:
+
+| Crate | SHA-256 |
+| --- | --- |
+| zrip-core | `a91bc58032e884eb76396eaa2d6607db874dcf95e6752fb15401da494ab72ba7` |
+| zrip-encode | `a8eb51ef0ac2bda5ff1381eccf970be2bf7cc431e44f0e7a4b8cdccf685fd6f7` |
+
+The leaf archives omit a license file; the MIT license here is copied from the
+same upstream release's `zrip` 0.8.8 archive. Package lockfiles, cache markers,
+and original unnormalized manifests are omitted. The application pins the
+unmodified registry decoder 0.8.7 and enables `paranoid` throughout: these
+codec paths forbid unsafe code and use bounds-checked scratch storage.
+
+`zrip-raster.patch` preserves compression of raster byte planes. Histogram and
+quarter-block shortcuts incorrectly classify periodic ramps as incompressible;
+they are disabled while ordinary match search and raw-block fallback remain.
+Blocks with no/few matches may still use Huffman literals, zero-sequence blocks
+omit the mode byte, and a rejected block restores its previous Huffman table.
+The Huffman encoder supports the full byte alphabet using FSE-compressed weight
+descriptions, limits deep trees to Zstd's 11 bits, and caches descriptions only
+when representable. FSE final-symbol initialization uses the reference half-word
+bias. These changes retain standard Zstd frames and the existing archive format.
+
+The [independent C oracle](../tools/validation/portable-zstd/README.md) checks both
+directions, forced Huffman blocks, raster fixtures, and existing archives. C Zstd
+exists only in that separate validation workspace. Remove this patch when an
+upstream release provides the equivalent fixes.
+
 ## WebP entropy-table admission
 
 `image-webp` is the published 0.2.4 crate, retaining its MIT/Apache licenses.
