@@ -12,6 +12,7 @@ heif = ["dep:libloading"]
 serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../layer-core" }
 libjpeg-turbo-rs = "=0.8.0"
+quick-xml = "=0.41.0"
 moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }
 png = "=0.18.1"
 # Bilevel/fax TIFF is outside the supported unsigned 8/16-bit photo matrix.

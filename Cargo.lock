@@ -1093,6 +1093,7 @@ dependencies = [
  "libloading",
  "moxcms 0.9.1",
  "png 0.18.1",
+ "quick-xml",
  "serde",
  "serde_json",
  "sysinfo",

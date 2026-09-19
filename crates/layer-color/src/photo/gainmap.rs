@@ -29,7 +29,13 @@ impl GainMapMetadata {
 
 #[cfg(all(feature = "heif", target_os = "linux"))]
 mod native;
+mod jpeg;
+mod jpeg_container;
 pub fn gainmap_available() -> bool {
+    true
+}
+pub fn gainmap_format_available(format: GainMapFormat) -> bool {
+    if format == GainMapFormat::Jpeg { return true; }
     #[cfg(all(feature = "heif", target_os = "linux"))]
     {
         return native::available();
@@ -74,6 +80,9 @@ pub fn write_gainmap_rows_with_guide(
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
+    if format == GainMapFormat::Jpeg {
+        return jpeg::write(output, extent, space, rendition, guide, quality, resolution, matte, clip, cancelled, read);
+    }
     #[cfg(all(feature = "heif", target_os = "linux"))]
     {
         native::write(
@@ -132,6 +141,9 @@ pub fn preview_gainmap_rows_with_guide(
     ),
     String,
 > {
+    if format == GainMapFormat::Jpeg {
+        return jpeg::preview(extent, bounds, space, rendition, guide, quality, matte, cancelled, read);
+    }
     #[cfg(all(feature = "heif", target_os = "linux"))]
     {
         native::preview(
@@ -144,8 +156,13 @@ pub fn preview_gainmap_rows_with_guide(
     }
 }
 
-#[cfg(all(feature = "heif", target_os = "linux"))]
-pub(super) use native::read_gainmap;
+pub(super) fn read_gainmap(input: impl Read, format: GainMapFormat, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<SourceImage, String> {
+    if format == GainMapFormat::Jpeg { return jpeg::read(input, limits, cancelled); }
+    #[cfg(all(feature = "heif", target_os = "linux"))]
+    { native::read_gainmap(input, format, limits, cancelled) }
+    #[cfg(not(all(feature = "heif", target_os = "linux")))]
+    { Err("HDR AVIF import is unavailable on this host".into()) }
+}
 
 #[cfg(test)]
 mod tests {

@@ -7,7 +7,6 @@ pub use layer_core::color::source::MAX_PROFILE_BYTES as MAX_ICC_BYTES;
 
 mod profiles;
 pub(crate) use profiles::{matrix_profile, calibrated_rgb_profile};
-#[cfg(all(feature = "heif", target_os = "linux"))]
 pub(crate) use profiles::nclx_profile;
 use profiles::*;
 mod description;
@@ -268,6 +267,32 @@ struct MatrixTransform {
     input: [Box<dyn moxcms::ToneCurveEvaluator + Send + Sync>; 3],
     output: [Box<dyn moxcms::ToneCurveEvaluator + Send + Sync>; 3],
     matrix: [[f64; 3]; 3],
+}
+
+/// Gain is applied in linear application RGB, before conversion to the editing
+/// primaries. Applying RGB gains after an ICC transform changes saturated HDR.
+pub(crate) struct GainMapColor {
+    base_to_application: MatrixTransform,
+    application_to_srgb: MatrixTransform,
+}
+impl GainMapColor {
+    pub fn new(base: &ColorProfile, application: Option<&ColorProfile>) -> Result<Self, String> {
+        let base = open(base)?;
+        let mut linear = match application { Some(p) => open(p)?, None => base.clone() };
+        if !matrix_only(&base) || !matrix_only(&linear) {
+            return Err("JPEG gain maps require a matrix RGB color profile".into());
+        }
+        linear.red_trc = Some(ToneReprCurve::Parametric(vec![1.]));
+        linear.green_trc = linear.red_trc.clone();
+        linear.blue_trc = linear.red_trc.clone();
+        let options = ConversionOptions::default();
+        Ok(Self {
+            base_to_application: MatrixTransform::new(&base, &linear, options)?.ok_or("Invalid gain-map color profile")?,
+            application_to_srgb: MatrixTransform::new(&linear, &linear_profile(RgbSpace::Srgb)?, options)?.ok_or("Invalid gain-map color profile")?,
+        })
+    }
+    pub fn linear_base(&self, encoded: [f32; 3]) -> [f32; 3] { self.base_to_application.apply(encoded) }
+    pub fn to_srgb(&self, linear: [f32; 3]) -> [f32; 3] { self.application_to_srgb.apply(linear) }
 }
 impl MatrixTransform {
     fn new(

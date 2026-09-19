@@ -752,6 +752,18 @@ fn large_export_preview_and_cancellation(output:u32) {
 #[ignore = "isolated Wayland display, GPU and pinned HDR codecs"]
 #[allow(deprecated)]
 fn native_gainmap_export_choices_preview_flatten_and_reopen() {
+    gainmap_export_journey(true);
+}
+
+#[test]
+#[ignore = "isolated Wayland display and GPU; run with no photo codec bundle"]
+fn portable_jpeg_gainmap_export_without_codec_bundle() {
+    assert!(!layer_color::photo::gainmap_format_available(layer_color::photo::GainMapFormat::Avif));
+    gainmap_export_journey(false);
+}
+
+#[allow(deprecated)]
+fn gainmap_export_journey(include_avif: bool) {
     use layer_core::color::{ColorProfile, source::*};
     assert!(layer_color::photo::gainmap_available());
     let app=native_test_app("art.capycanvas.GainmapExport");
@@ -761,7 +773,7 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
     for name in ["Opaque edited HDR.jpg", "Transparent edited HDR.avif"] {
         let path=output.join(name);if path.exists(){std::fs::remove_file(path).unwrap();}
     }
-    for transparent in [false,true] {
+    for transparent in [false,true].into_iter().filter(|transparent| !transparent || include_avif) {
         let mut p=new_drawing(64,48).unwrap();p.document.color.depth=SampleDepth::F16;p.document.layers[1].visible=false;
         let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
         for _ in 0..48{let mut row=Vec::new();for x in 0..64{let a=if transparent{x as f32/63.}else{1.};let v=layer_core::color::hdr::encode_pixel([4.,0.5,0.2,a]).unwrap();row.extend(v.into_iter().flat_map(u16::to_le_bytes));}source.push_row(&row).unwrap();}
