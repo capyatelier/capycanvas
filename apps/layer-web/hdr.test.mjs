@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 // Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
@@ -7,6 +8,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 export async function checkHdr({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/color-m4-web-android/browser';
   await mkdir(directory,{recursive:true});
+  const capture=async name=>writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
   const wait=c=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${c})resolve(true);else if(performance.now()-start>55000)reject(Error(${JSON.stringify(c)}+': '+document.body.innerText.slice(-1800)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
   const click=(label,root='dialog[open]')=>evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(root+' button')})].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
   const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
@@ -23,6 +25,10 @@ export async function checkHdr({call,evaluate,settle}) {
   const results={browser:await evaluate('navigator.userAgent'),steps:[]};
   const mark=s=>{results.steps.push(s);console.log(s)};
   try {
+    // Preserve prior recovery records, but finish offering them before real
+    // contacts target the header. A late modal can intercept the first tap.
+    await evaluate('layerApp.documents.startRecovery()');
+    await checkProofStartingLayout({call,evaluate,settle});
     await open('hdr-pq.png');
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
@@ -34,10 +40,19 @@ export async function checkHdr({call,evaluate,settle}) {
     await evaluate(`[...document.querySelectorAll('.dock-tab[data-panel="color"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);
     await wait(`!![...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0)`);
     assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
+    await capture('color-panel');
     await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
     await wait(`!!document.querySelector('dialog[aria-label="Edit Color"][open]')`);
     assert.equal(await evaluate(`document.querySelector('[aria-label="Color model"]').value`),'linear_rgb');
+    for(const text of ['','-','.','17','1e999']) {
+      await evaluate(`(()=>{const n=document.querySelector('[aria-label="Intensity (EV)"]');n.focus();n.value=${JSON.stringify(text)};n.dispatchEvent(new Event('input'));})()`);
+      assert.equal(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Use Color').disabled`),true);
+      assert.equal(await evaluate(`document.querySelector('[aria-label="Intensity (EV)"]').value`),text);
+    }
+    await evaluate(`(()=>{const n=document.querySelector('[aria-label="Intensity (EV)"]');n.value='-0.5';n.dispatchEvent(new Event('input'));})()`);
+    assert.equal(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Use Color').disabled`),false);
     await evaluate(`(()=>{const n=document.querySelector('[aria-label="Intensity (EV)"]');n.value=3;n.dispatchEvent(new Event('input'));})()`);
+    await capture('edit-color');
     await click('Use Color');await wait('layerApp.app.color_panel().intensity===3');
     assert.equal(await evaluate('layerApp.app.color_panel().intensity'),3);
     mark('Picker matches GTK corner action, removes palettes, and edits HDR intensity');
@@ -100,12 +115,14 @@ export async function checkHdr({call,evaluate,settle}) {
     for(const[type,p,buttons]of [['mousePressed',arc[0],1],['mouseMoved',arc[1],1],['mouseReleased',arc[1],0]])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons,pointerType:'pen',force:buttons?.6:0});
     await settle();assert.notEqual((await evaluate('layerApp.app.proof_form().rendition')).exposure,changed.exposure);
     await invoke('undo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed,'One undo restores an arc gesture');
+    await checkProofKeys({call,evaluate,settle,invoke});
     assert.deepEqual(await hist(),original,'SDR appearance does not change HDR artwork');
+    await writeFile(`${directory}/sdr-rendition.json`,JSON.stringify(await evaluate('layerApp.app.proof_form().rendition'))+'\n');
     const master=await save();assert.deepEqual(master.blobs,master0.blobs);assert.deepEqual(master.document.layers,master0.document.layers);
     mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
     await settle();await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     assert.ok(await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad');return c.getContext('2d').getImageData(c.width/2,c.height/2,1,1).data[3]===255})()`),await evaluate(`document.querySelector('.proof-panel').innerText`));
-    await click('Close','.proof-panel');
+    await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'proof',visible:false}})`);
     await evaluate(`hdrTest.files.set('hdr-master.capy',hdrTest.last.slice())`);
     await open('hdr-master.capy');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);

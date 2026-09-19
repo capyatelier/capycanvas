@@ -12,6 +12,39 @@ pub enum ProofAction {
     Rendition { phase: crate::ContactPhase, recipe: layer_core::color::hdr::SdrRendition },
     Pad { phase: crate::ContactPhase, values: [f64;2] },
 }
+
+/// Value policy shared with GTK; the host owns key repeat, capture and history phases.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SdrControlEdit {
+    Reset,
+    Step { axis: usize, steps: f64 },
+}
+pub fn sdr_control(mut recipe: layer_core::color::hdr::SdrRendition, part: u8, edit: SdrControlEdit) -> Result<layer_core::color::hdr::SdrRendition,String> {
+    use layer_core::color::hdr::SdrRendition;
+    if part>3 {return Err("Invalid Proof control".into())}
+    match edit {
+        SdrControlEdit::Reset => match part {
+            0=>{recipe.balance=0.;recipe.contrast=1.;},
+            1=>recipe.exposure=0.,
+            2=>recipe.highlight_color=SdrRendition::default().highlight_color,
+            _=>recipe=SdrRendition{headroom:recipe.headroom,..Default::default()},
+        },
+        SdrControlEdit::Step {axis,steps} => {
+            if axis>1||!steps.is_finite(){return Err("Invalid Proof adjustment".into())}
+            if part==0 {
+                let mut values=sdr_pad_values(recipe);let control=sdr_tone_pad().axes[axis].numeric.clone();
+                values[axis]=(values[axis]+steps*control.step).clamp(control.min,control.max);
+                recipe=sdr_from_pad(recipe,values);
+            } else if part<3 {
+                let control=sdr_number_controls()[part as usize-1].numeric.clone();
+                let value=if part==1 {&mut recipe.exposure}else{&mut recipe.highlight_color};
+                *value=(f64::from(*value)+steps*control.step).clamp(control.min,control.max) as f32;
+            }
+        }
+    }
+    Ok(recipe)
+}
 pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
     match action {
         ProofAction::Reveal => reveal(session),
@@ -206,8 +239,12 @@ pub fn sdr_dial(size: f32, mut recipe: layer_core::color::hdr::SdrRendition,
     if let (Some(p),Some(part))=(point,part.or(hit)) {
         match part {
             0=>recipe=sdr_from_pad(recipe,pad.values(g.field.disc_components(p).map(f64::from))),
-            1=>recipe.exposure=-2.+4.*g.arcs[0].fraction(p),
-            2=>recipe.highlight_color=g.arcs[1].fraction(p),
+            1|2=>{
+                let control=&sdr_number_controls()[part as usize-1].numeric;
+                let value=control.min+(control.max-control.min)*f64::from(g.arcs[part as usize-1].fraction(p));
+                let value=((value/control.step).round()*control.step).clamp(control.min,control.max) as f32;
+                if part==1 {recipe.exposure=value}else{recipe.highlight_color=value}
+            },
             3=>recipe=layer_core::color::hdr::SdrRendition{headroom:recipe.headroom,..Default::default()},
             _=>return Err("Invalid Proof dial control".into()),
         }
@@ -468,6 +505,28 @@ pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> [f64; 2] 
 mod tests {
     use super::*;
     use layer_core::color::RgbSpace;
+    #[test]
+    fn keyboard_steps_and_resets_match_native_controls() {
+        use layer_core::color::hdr::SdrRendition;
+        let initial=SdrRendition{headroom:12.,balance:0.2,contrast:1.2,exposure:-1.,highlight_color:0.7};
+        let step=|part,axis,steps|sdr_control(initial,part,SdrControlEdit::Step{axis,steps}).unwrap();
+        assert!((step(0,0,1.).balance-0.21).abs()<1e-6);
+        assert!((step(0,1,1.).contrast-initial.contrast*2f32.powf(0.01)).abs()<1e-6);
+        assert!((step(1,0,10.).exposure+0.6).abs()<1e-6);
+        assert!((step(2,1,-1.).highlight_color-0.69).abs()<1e-6);
+        assert_eq!(step(1,1,1000.).exposure,2.);
+        for part in 0..=3 {
+            let reset=sdr_control(initial,part,SdrControlEdit::Reset).unwrap();
+            assert_eq!(reset.headroom,12.);
+            if part==0 {assert_eq!((reset.balance,reset.contrast),(0.,1.));assert_eq!(reset.exposure,initial.exposure);}
+            if part==1 {assert_eq!(reset.exposure,0.);assert_eq!(reset.balance,initial.balance);}
+            if part==2 {assert_eq!(reset.highlight_color,SdrRendition::default().highlight_color);}
+            if part==3 {assert_eq!(reset,SdrRendition{headroom:12.,..Default::default()});}
+        }
+        assert!(sdr_control(initial,4,SdrControlEdit::Reset).is_err());
+        assert!(sdr_control(initial,0,SdrControlEdit::Step{axis:2,steps:1.}).is_err());
+        assert!(sdr_control(initial,0,SdrControlEdit::Step{axis:0,steps:f64::NAN}).is_err());
+    }
     #[test]
     fn dial_transport_reuses_gtk_hits_mapping_and_preserves_headroom() {
         let recipe=layer_core::color::hdr::SdrRendition{headroom:12.,..Default::default()};

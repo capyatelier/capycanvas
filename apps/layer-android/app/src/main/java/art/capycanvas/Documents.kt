@@ -70,7 +70,19 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         when (document.getString("type")) {
             "open" -> picker = DocumentPicker(request, approval.first, approval.second)
             "place", "paste" -> images.start(request, document.getString("type") == "paste")
-            "export" -> { exportRecipe = null; exportRequest = request }
+            "export" -> { exportRecipe = null;host.viewModelScope.launch {
+                try {
+                    if(host.proof.hasPending()) {
+                        // No export capture has begun. Commit the panel draft
+                        // while idle, then request options at its new revision.
+                        val epoch=file.optLong("epoch")
+                        finish(id!!,false)
+                        try { host.proof.finishPending() } catch(e:Exception) {host.reportActionError(e.message?:"Could not finish print preparation");return@launch}
+                        if(host.panelContent?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke("export_document")
+                    } else exportRequest=request
+                }
+                catch(e:Exception){complete(id!!,false,e.message?:"Could not finish print preparation")}
+            } }
             "save" -> document.objectOrNull("location")?.let { transfer(request, Uri.parse(it.getString("uri")), approval) }
                 ?: run { picker = DocumentPicker(request, approval.first, approval.second) }
         }

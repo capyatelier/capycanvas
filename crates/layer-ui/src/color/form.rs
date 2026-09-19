@@ -8,6 +8,8 @@ pub enum ColorUiRequest {
     Layout { size: f32, #[serde(default)] hdr: bool },
     Arc { size: f32, point: Option<[f32;2]>, #[serde(default)] fraction: f32 },
     ProofDial { size: f32, recipe: layer_core::color::hdr::SdrRendition, point: Option<[f32;2]>, part: Option<u8> },
+    ProofControl { recipe: layer_core::color::hdr::SdrRendition, part: u8, edit: crate::proof_panel::SdrControlEdit },
+    PrintProof { settings: crate::proof_panel::PrintProofSettings },
     Form {
         request: ColorFormRequest,
     },
@@ -26,6 +28,8 @@ pub enum ColorUiRequest {
 pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
     let value = match request {
         ColorUiRequest::ProofDial {size,recipe,point,part} => return crate::proof_panel::sdr_dial(size,recipe,point,part),
+        ColorUiRequest::ProofControl {recipe,part,edit} => return serde_json::to_value(crate::proof_panel::sdr_control(recipe,part,edit)?).map_err(|e|e.to_string()),
+        ColorUiRequest::PrintProof {settings} => return serde_json::to_value(settings.recipe()?).map_err(|e|e.to_string()),
         ColorUiRequest::Layout {size,hdr} => {
             let layout=if hdr {ColorPanelLayout::with_hdr(size)}else{ColorPanelLayout::new(size)}.ok_or("Invalid color panel size")?;
             let mut value=serde_json::to_value(layout).map_err(|e|e.to_string())?;
@@ -98,6 +102,7 @@ pub struct ColorFormView {
     pub models: Vec<(ColorInputModel, &'static str)>,
     pub labels: [&'static str; 4],
     pub description: String,
+    pub validation: Option<String>,
     pub value: Option<RgbColor>,
     pub preview: Option<ColorPreview>,
     pub base_preview: Option<ColorPreview>,
@@ -126,11 +131,25 @@ pub(super) fn mapped_preview(color:RgbColor, document:RgbSpace, display:RgbSpace
     Ok(ColorPreview {space:display,rgba:[display.encode(rgb[0] as f64) as f32,display.encode(rgb[1] as f64) as f32,display.encode(rgb[2] as f64) as f32,p[3]],in_gamut:color.in_hdr_gamut(display)?})
 }
 
+/// Color definition and gamut feedback shared with GTK's Edit Color dialog.
+pub fn color_validation(color: RgbColor, document: RgbSpace, display: RgbSpace, hdr: bool) -> Result<String, String> {
+    let mut text = format!("Defined in {}", color.space.name());
+    if !if hdr { color.in_hdr_gamut(document)? } else { color.in_gamut(document)? } {
+        text.push_str(" · Outside document gamut");
+    }
+    if !if hdr { color.in_hdr_gamut(display)? } else { color.in_gamut(display)? } {
+        text.push_str(&format!(" · Outside {} preview gamut", display.name()));
+    }
+    if hdr && color.brightness_ev(document)?.is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
+    Ok(text)
+}
+
 pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
     let mut editor = ColorEditor::new(request.color, request.document_space)?;
     if let Some(depth)=request.document_depth {editor.set_document_depth(depth);}
     editor.set_model(request.model)?;
-    if let Some(stops) = request.intensity { editor.enable_hdr(stops)?; }
+    let intensity=request.intensity.or_else(||request.document_depth.filter(|d|d.is_float()).map(|_|request.color.brightness_ev(request.document_space).ok().flatten().unwrap_or(0.).max(0.)));
+    if let Some(stops) = intensity { editor.enable_hdr(stops)?; }
     if let Some(fields) = request.fields {
         for (i, text) in fields.into_iter().enumerate() {
             editor.set_field(i, text)?;
@@ -174,6 +193,7 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
             .collect(),
         labels: editor.model().labels(),
         description: editor.description(),
+        validation: value.map(|c|color_validation(c,request.document_space,request.display_space,editor.intensity().is_some())).transpose()?,
         value,
         preview,
         base_preview: editor.intensity().and_then(|_| editor.base_color().ok()).map(|c| mapped_preview(c,request.document_space,request.display_space,request.rendition)).transpose()?,
@@ -197,6 +217,21 @@ mod tests {
             change_intensity: None,
             rendition: None,
         }
+    }
+    #[test]
+    fn hdr_property_color_uses_the_gtk_initial_ev_and_preserves_samples() {
+        let color=RgbColor::from_linear(RgbSpace::Srgb,[-0.2,4.,1.,0.3]).unwrap();
+        let mut draft=request(color);
+        draft.document_space=RgbSpace::Srgb;
+        draft.document_depth=Some(layer_core::color::SampleDepth::F16);
+        draft.model=ColorInputModel::LinearRgb;
+        let form=color_form(draft).unwrap();
+        assert_eq!(form.value,Some(color));
+        assert_eq!(form.draft.intensity,Some(2.));
+        assert!(form.base_preview.is_some());
+        assert!(form.validation.as_deref().unwrap().contains("Above SDR white"));
+        assert!(form.validation.as_deref().unwrap().contains("Outside document gamut"));
+        assert_eq!(color_form(form.draft).unwrap().value,Some(color));
     }
     #[test]
     fn transported_drafts_keep_native_precision_and_reject_invalid_edits() {

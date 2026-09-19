@@ -673,16 +673,11 @@ impl ProofDial {
                 } else {
                     1.
                 };
-                if part == 0 {
-                    let spec = layer_ui::proof_panel::sdr_tone_pad();
-                    let mut v = p.pad.get();
-                    let a = &spec.axes[axis].numeric;
-                    v[axis] = (v[axis] + sign * step * a.step).clamp(a.min, a.max);
-                    p.change(sdr_from_pad(p.recipe.get(), v), v);
-                } else {
-                    let a = &p.arcs[part - 1];
-                    a.set_value(a.value() + sign * step * a.adjustment().step_increment());
-                }
+                let recipe = layer_ui::proof_panel::sdr_control(
+                    p.recipe.get(), part as u8,
+                    layer_ui::proof_panel::SdrControlEdit::Step {axis, steps:sign*step},
+                ).expect("GTK supplies a valid Proof control");
+                p.change(recipe, sdr_pad_values(recipe));
                 glib::Propagation::Stop
             }
         ));

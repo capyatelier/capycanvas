@@ -204,6 +204,12 @@ impl WebApp {
         Ok(())
     }
 }
+
+/// CPU-only worker entry; no canvas or renderer is needed for the immutable guide.
+#[wasm_bindgen]
+pub fn proof_texture_build(edge: u32) -> Vec<u8> {
+    layer_ui::proof_panel::sdr_direction_texture(edge)
+}
 #[wasm_bindgen]
 pub fn tone_worker_build(request: JsValue) -> Result<JsValue, JsValue> {
     #[derive(Deserialize)]

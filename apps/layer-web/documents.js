@@ -158,6 +158,18 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           await retireRecovery();
         }finally{progress.remove();}
       } else if(r.type==="save"||r.type==="export") {
+        if(r.type==="export"&&proof.hasPending()) {
+          // Export has only requested its options; no capture or file write has
+          // started. Release that request so the pending document edit can
+          // commit, then request options against the resulting revision.
+          const epoch=app.state().document_file.epoch;
+          applyChange(app.finish_document(id,false));
+          try {
+            await proof.finishPending();
+            if(app.state().document_file.epoch===epoch)dispatch({type:"invoke",command:"export_document"});
+          } catch(error) { message(String(error)); }
+          return;
+        }
         const choice=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}

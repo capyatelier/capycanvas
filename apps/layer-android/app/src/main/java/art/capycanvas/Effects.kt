@@ -170,7 +170,10 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 "toggle" -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, Modifier.weight(1f)); Switch(value as Boolean, { change(it) }, enabled = enabled)
                 }
-                "choice" -> { Text(label); PropertyChoice(label, kind.array("options").values().map { it.toString() }, (value as Number).toInt(), enabled) { change(it) } }
+                "choice" -> Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    Text(label,Modifier.weight(1f))
+                    Box(Modifier.weight(1f)){PropertyChoice(label,kind.array("options").values().map{it.toString()},(value as Number).toInt(),enabled){change(it)}}
+                }
                 "color" -> ManagedColorButton(host,label,value as JSONObject,enabled) { change(it) }
                 "gradient" -> GradientControl(host,layer,control,enabled)
             }

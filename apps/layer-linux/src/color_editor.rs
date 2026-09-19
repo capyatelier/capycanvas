@@ -62,17 +62,7 @@ impl Form {
         })();
         match color {
             Ok((color, base)) => {
-                let mut text = format!("Defined in {}", color.space.name());
-                if !if self.hdr { color.in_hdr_gamut(self.space) } else { color.in_gamut(self.space) }.unwrap() {
-                    text.push_str(" · Outside document gamut");
-                }
-                if !if self.hdr { color.in_hdr_gamut(view.space()) } else { color.in_gamut(view.space()) }.unwrap() {
-                    text.push_str(&format!(
-                        " · Outside {} preview gamut",
-                        view.space().name()
-                    ));
-                }
-                if self.hdr && color.brightness_ev(self.space).unwrap().is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
+                let text = layer_ui::color_validation(color, self.space, view.space(), self.hdr).unwrap();
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);

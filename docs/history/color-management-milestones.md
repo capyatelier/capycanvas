@@ -297,3 +297,9 @@ shared GTK reveal workflow in docked, floating and drawer views, with pen/touch
 dragging, cancellation and workspace undo/redo checked on both hosts. Physical
 HDR surfaces, gain-map delivery and full presentation/thermal qualification
 remain explicit follow-up work; this entry is not global signoff.
+
+The [GTK parity follow-up](../development/color-management-gtk-parity.md) audits
+rendered Color/Proof contents, restored Paint/Photo layouts, held-key/contact
+history, shared color feedback, Print draft/preservation and Export ordering,
+and browser GPU replacement. Runnable packages and comparison evidence include
+the regular Android app, not only the isolated HDR test package.

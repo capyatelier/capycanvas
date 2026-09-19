@@ -3,6 +3,8 @@ package art.capycanvas
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.*
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -192,7 +194,16 @@ class AndroidRasterTest {
         var original=histogram()
         assertEquals("F16",JSONObject(original).getJSONObject("color").getString("depth"))
         assertTrue(JSONObject(original).getJSONArray("channels").objects().any{it.getLong("above")>0})
+        fun captureColor(name:String){automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),name).outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}}
+        captureColor("color-panel.png")
         compose.onNodeWithTag("color-edit-button").performClick()
+        compose.waitForIdle();SystemClock.sleep(300);captureColor("edit-color.png")
+        for(text in listOf("","-",".","17","1e999")) {
+            compose.onNodeWithTag("color-intensity-value").performTextReplacement(text)
+            compose.onNodeWithText("Use Color").assertIsNotEnabled()
+        }
+        compose.onNodeWithTag("color-intensity-value").performTextReplacement("-0.5")
+        compose.onNodeWithText("Use Color").assertIsEnabled()
         compose.onNodeWithTag("color-intensity-value").performTextReplacement("3")
         compose.onNodeWithText("Use Color").performClick();refresh()
         assertEquals(3.0,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.001)
@@ -234,15 +245,31 @@ class AndroidRasterTest {
         action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
         // External history must refresh the visible dial as well as its Rust recipe.
         compose.waitUntil(10_000){compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode().config[SemanticsProperties.StateDescription].contains(", Brightness 0%,")}
+        val keys=compose.onNodeWithTag("sdr-tone-pad")
+        keys.performSemanticsAction(SemanticsActions.RequestFocus)
+        keys.performKeyInput {keyDown(Key.DirectionRight);keyUp(Key.DirectionRight)}
+        refresh();assertEquals((JSONObject(changed).getDouble("balance")+.01).coerceAtMost(1.0),form().getJSONObject("rendition").getDouble("balance"),1e-6)
+        action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        keys.performKeyInput{keyDown(Key.DirectionUp);keyDown(Key.Escape);keyUp(Key.Escape);keyUp(Key.DirectionUp)}
+        refresh();assertEquals(changed,form().getJSONObject("rendition").toString())
+        for((part,key,step)in listOf(Triple(1,"exposure",.04),Triple(2,"highlight_color",.01))) {
+            val arcKeys=compose.onNodeWithTag("sdr-arc-$part")
+            arcKeys.performSemanticsAction(SemanticsActions.RequestFocus)
+            arcKeys.performKeyInput{keyDown(Key.DirectionUp);keyUp(Key.DirectionUp)}
+            refresh();assertEquals(JSONObject(changed).getDouble(key)+step,form().getJSONObject("rendition").getDouble(key),1e-6)
+            action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        }
+        compose.waitUntil(10_000){compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode().config[SemanticsProperties.StateDescription].endsWith("Color intensity 30%") }
         assertEquals(original,histogram())
         automation.takeScreenshot()?.let { screenshot->File(activity.getExternalFilesDir(null),"hdr-proof.png").outputStream().use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};screenshot.recycle() }
-        compose.onNodeWithText("Close").performClick();refresh()
+        compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};refresh()
         val saved=save("hdr-master.capy");val manifest=manifest(saved)
         assertEquals(first.getJSONArray("blobs").toString(),manifest.getJSONArray("blobs").toString())
         assertEquals(first.getJSONObject("document").getJSONArray("layers").toString(),manifest.getJSONObject("document").getJSONArray("layers").toString())
         open(File(files,"hdr-master.capy"));refresh();ready();assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString())
         val cancel=Native.captureControl();var task=0L
         try{task=native{Native.toneTask(it,cancel)};Native.captureCancel(cancel);assertTrue(runCatching{Native.toneWork(task)}.isFailure);assertTrue(runCatching{native{Native.toneApply(it,task)}}.isFailure)}finally{Native.toneRelease(task);Native.captureFree(cancel)}
+        File(activity.getExternalFilesDir(null),"hdr-sdr-rendition.json").writeText(form().getJSONObject("rendition").toString())
         val sdr=png("hdr-sdr.png")
         val recipe=native{h->val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1);JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
         assertTrue("Strict PQ delivery rejects out-of-range paint",runCatching{png("hdr-strict-rejected.png",recipe)}.isFailure)
@@ -382,6 +409,8 @@ class AndroidRasterTest {
         val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
         val target=runBlocking{ProfileStore.import(activity,targetBytes)}
         fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun hide(){compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};compose.waitForIdle()}
+        fun cancel(){compose.onNodeWithTag("proof-mode-off").performScrollTo().performClick();hide()}
         var selectedName=""
         fun setup(command:String="soft_proof_setup") {
             action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isNotEmpty()}
@@ -392,14 +421,15 @@ class AndroidRasterTest {
         fun pick(name:String){
             selectedName=name
             compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
+            compose.waitUntil(10_000){compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).fetchSemanticsNodes().isNotEmpty()}
             compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).onFirst().performScrollTo().performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile-picker").fetchSemanticsNodes().isEmpty()}
             compose.onNodeWithTag("proof-profile").assertTextContains(name)
         }
         fun apply(){
-            if(host.proof.error!=null)compose.onNodeWithText("Retry").performScrollTo().performClick()
+            if(host.proof.error!=null)pick(selectedName)
             compose.waitUntil(120_000){!host.proof.busy&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getString("name")}==selectedName&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getJSONObject("profile").has("Icc")}}
-            assertNull(host.proof.error);compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
+            assertNull(host.proof.error);hide()
         }
         fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
         fun status()=native{JSONObject(Native.proofStatus(it))}
@@ -407,7 +437,7 @@ class AndroidRasterTest {
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
-        compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
+        compose.onNodeWithText("Choose Profile…").assertExists();SystemClock.sleep(400);cancel()
         assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
         val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
@@ -418,7 +448,17 @@ class AndroidRasterTest {
         val originalBytes=ByteArray(array.length()){array.getInt(it).toByte()}
         val embedded=runBlocking{ProfileStore.import(activity,originalBytes)}
         compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
-        setup();pick(embedded.getString("name"));apply()
+        setup();pick(embedded.getString("name"))
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread{host.invoke("export_document")}
+        compose.waitUntil(120_000){compose.onAllNodesWithTag("export-choose-file").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(embedded.getString("name"),current().getString("name"))
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000){!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+        DocumentController.nativeFileJobsForTest=true
+        compose.waitForIdle();SystemClock.sleep(300)
+        InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"proof-print.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        apply()
         assertTrue("The saved ICC, not the same-named builtin, must be selected",current().getJSONObject("profile").has("Icc"))
         val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
         runBlocking{ProfileStore.remove(activity,originalEntry.getString("id"))}
@@ -426,17 +466,19 @@ class AndroidRasterTest {
         setup();compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
         compose.onNodeWithText("Document Profile").assertExists()
         compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
-        compose.onNodeWithText("Done").performClick();pick(target.getString("name"));compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
+        compose.onNodeWithText("Done").performClick();pick(target.getString("name"));cancel()
         assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
         assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
         // An unwritable library path fails before document/history publication.
-        setup();pick(target.getString("name"))
-        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
-        println("Preparing replacement with blocked local profile storage")
         val oldDirectory=ColorPreferencesStore.directoryForTest
         val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
         ColorPreferencesStore.directoryForTest=blocked
-
+        setup()
+        // Select through the standard/profile callback with the already loaded ICC;
+        // changing the library path prevents the picker from resolving its entry.
+        compose.runOnUiThread{host.proof.edit("profile",target)}
+        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
+        println("Preparing replacement with blocked local profile storage")
         compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isEmpty())}
         assertNotNull("Preservation must fail before replacing ${current().getString("name")}",host.proof.error)
         assertEquals(embedded.getString("name"),current().getString("name"))
@@ -488,7 +530,7 @@ class AndroidRasterTest {
                     assertFalse("Cancelled proof worker must stop",worker.isAlive)
                     assertNotNull("Cancellation must reject preparation",failure.get())
                 }else Native.proofWork(task)
-                compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
+                hide()
                 assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
                 assertEquals(retained,current().toString())
                 assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})

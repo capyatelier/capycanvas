@@ -93,6 +93,23 @@ class AndroidWorkspaceManagerTest {
         CanvasHost.workspaceDirectoryForTest = null
         assertEquals("Legacy preferences are preserved", legacy, instrumentation.targetContext.getSharedPreferences("capy-canvas", 0).all)
     }
+    @Test fun restoreStartingLayoutPlacesProofNextToColor() {
+        for(name in listOf("Photo","Paint")) {
+            val workspace=view().getJSONArray("defaults").objects().first{it.getString("title")==name}
+            tap("workspace-switch-${workspace.getString("id")}");idle()
+            action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
+            menu("Restore Starting Layout…");tap("workspace-submit");idle()
+            val panels=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("color")}.getJSONArray("panels").values()
+            assertEquals("$name restores Proof immediately after Color","proof",panels[panels.indexOf("color")+1])
+            compose.onNodeWithTag("tab-proof").assertIsDisplayed().performTouchInput{click()}
+            compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().any{it.getString("active")=="proof"}}
+            compose.waitForIdle()
+            compose.onNodeWithTag("proof-mode-off").assertIsDisplayed()
+            compose.onNodeWithTag("proof-mode-print").assertIsDisplayed()
+            shot("restored-proof-${name.lowercase()}")
+        }
+    }
+
     @Test fun workspacePreviewSwitchHistoryAndRestart() {
         val original = view().getString("id")
         val initial = capture()

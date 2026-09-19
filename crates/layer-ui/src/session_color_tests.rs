@@ -1,5 +1,24 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn print_panel_first_use_has_no_target_and_off_rejects_late_publication() {
+    use crate::proof_workflow::{proof_form,ProofPreparation};
+    use layer_core::color::{ColorProfile,ProofRecipe,RgbSpace};
+    let mut s=session();
+    let before=s.engine.checkpoint();
+    let form=proof_form(&s);
+    assert!(form["print_settings"]["profile"].is_null());
+    assert_eq!(form["print_settings"]["simulation"],"black_ink");
+    assert_eq!(form["print_controls"].as_array().unwrap().iter().map(|v|v["label"].as_str().unwrap()).collect::<Vec<_>>(),["Profile","Simulate","Intent","Black point compensation","Gamut warning"]);
+    s.select_proof_mode(ProofMode::Print).unwrap();
+    let job=ProofPreparation::panel(&s,ProofRecipe::new("sRGB".into(),ColorProfile::Builtin(RgbSpace::Srgb))).unwrap();
+    job.validate(&s).unwrap();
+    s.select_proof_mode(ProofMode::Off).unwrap();
+    assert!(job.apply(&mut s,true).is_err());
+    assert_eq!(s.engine.checkpoint(),before);
+    assert!(s.engine.document().proof.is_none());
+}
+
+#[test]
 fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_jobs() {
     use crate::proof_workflow::{ProofPreparation, ProofView};
     use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};

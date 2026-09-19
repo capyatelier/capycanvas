@@ -411,3 +411,9 @@ open artwork. Neither host currently offers gain-map output or physical HDR
 presentation. Proof shares Color's Paint/Photo tab group and supports the normal
 docked, floating and drawer views. The report separates these tested workflows
 from outstanding hardware qualification and measured performance limits.
+
+The [GTK parity audit](../development/color-management-gtk-parity.md) records the
+near visual match for Color, Proof and Edit Color: shared geometry and labels,
+neutral mode buttons, compact Print rows, grouped color entries and the same
+color-definition/gamut feedback. Restore Starting Layout includes adjacent
+Color/Proof tabs in Paint and Photo on both hosts.

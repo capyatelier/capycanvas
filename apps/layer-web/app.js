@@ -45,7 +45,7 @@ let refreshPreferences, customization, layerPanel, effectPanels, editor, workspa
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
-let compilerScheduled = false, compilerFailed = false;
+let compilerScheduled = false, compilerFailed = false, compilerEpoch = 0;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
 installTooltips();
 let startupNotice;
@@ -325,26 +325,30 @@ function refreshStartup() {
 function scheduleCompiler() {
   if (!gpuReady || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
   compilerScheduled = true;
+  const epoch=compilerEpoch;
   // Start after this display callback can present. The next job is scheduled
   // by a later frame, with input/UI opportunities between each GPU scope.
   setTimeout(async () => {
     try {
+      if(epoch!==compilerEpoch)return;
       if (!firstCanvasRendered) {
         // A display callback alone does not mean the GPU has rendered paper.
         // Starting document compilation sooner can hold up Chrome's GPU-process
         // command batch, including the pending first canvas presentation.
         await gpuOperation(() => app.wait_for_canvas());
+        if(epoch!==compilerEpoch)return;
         firstCanvasRendered = true;
         await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
       }
+      if(epoch!==compilerEpoch)return;
       await gpuOperation(() => app.compile_startup_step());
+      if(epoch!==compilerEpoch)return;
       refreshStartup();
       wake();
     } catch (error) {
-      compilerFailed = true;
-      stopGpu(error);
+      if(epoch===compilerEpoch){compilerFailed = true;stopGpu(error);}
     } finally {
-      compilerScheduled = false;
+      if(epoch===compilerEpoch)compilerScheduled = false;
     }
   }, 0);
 }
@@ -1462,6 +1466,9 @@ try {
 }
 
 function stopGpu(error) {
+  // A retired device may finish compilation late, or never settle its Promise.
+  // Neither case may hold the new renderer’s compilation lane or stop it.
+  compilerEpoch++;compilerScheduled=false;
   gpuReady=false;pending.length=0;
   applyChange(app.suspend_gpu());
   if(startupNotice)startupNotice.hidden=true;

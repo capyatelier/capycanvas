@@ -87,6 +87,7 @@ let sequence = 0,
   session;
 const requests = new Map(),
   errors = [];
+const observedError=message=>{errors.push(message);if(process.env.LAYER_TEST_VERBOSE)console.error(message);};
 chrome.stderr.on("data", (data) => {
   if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(data);
 });
@@ -108,7 +109,7 @@ chrome.stdio[4].on("data", (data) => {
       // Only this disposable test profile is navigated away from by the harness.
       call("Page.handleJavaScriptDialog", {accept:true}).catch(()=>{});
     } else if (event.method === "Runtime.exceptionThrown")
-      errors.push(
+      observedError(
         event.params.exceptionDetails.exception?.description ||
           event.params.exceptionDetails.exception?.value ||
           event.params.exceptionDetails.text,
@@ -117,7 +118,7 @@ chrome.stdio[4].on("data", (data) => {
       event.method === "Runtime.consoleAPICalled" &&
       ["error", "warning"].includes(event.params.type)
     )
-      errors.push(
+      observedError(
         event.params.args.map((a) => a.value || a.description).join(" "),
       );
     else if (
@@ -127,7 +128,7 @@ chrome.stdio[4].on("data", (data) => {
       !(event.params.entry.level === "warning" && event.params.entry.text.startsWith('Compilation log for [ShaderModule "connected region"]:') && !/\berror(?:s)?\b/i.test(event.params.entry.text))
     ) {
       if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
-      errors.push([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
+      observedError([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
     }
   }
 });

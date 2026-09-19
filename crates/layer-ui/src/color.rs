@@ -14,7 +14,7 @@ mod hdr_arc;
 pub use hdr_arc::HdrIntensityArc;
 pub use editor::{ColorEditor, ColorInputModel};
 mod form;
-pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui};
+pub use form::{ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui};
 mod library;
 pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor};
 

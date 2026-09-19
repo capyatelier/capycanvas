@@ -94,6 +94,9 @@ impl ProofPreparation {
             return Err("The drawing changed; reopen Proof Setup".into());
         }
         if self.edit {
+            if self.request.is_none() && s.proof_panel_mode()!=crate::ProofMode::Print {
+                return Err("Print preview is no longer selected".into());
+            }
             s.require_document_idle()?;
             if s.state().document_file.busy { return Err("A document operation is in progress".into()); }
         }
@@ -247,7 +250,10 @@ impl ProofView {
 
 pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
     let document = s.engine().document();
+    use crate::proof_panel::{PrintProofSettings,PrintProofControl,ProofSimulation,PROOF_INTENTS};
+    let print=document.proof.as_ref().and_then(|p|PrintProofSettings::from_recipe(p).ok()).unwrap_or_default();
     serde_json::json!({
+        "identity": [serde_json::json!(s.state().document_file.epoch),serde_json::json!(document.color)],
         "mode": s.proof_panel_mode(),
         "hdr": document.color.depth.is_float(),
         "rendition": s.effective_sdr_rendition(),
@@ -256,6 +262,10 @@ pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
         "pad_values": crate::proof_panel::sdr_pad_values(s.effective_sdr_rendition()),
         "recipe": document.proof.clone().unwrap_or_else(|| ProofRecipe::new(document.color.space.name().into(), ColorProfile::Builtin(document.color.space))),
         "document_profile": document.proof,
+        "print_settings": print,
+        "print_controls": PrintProofControl::ALL.map(|control|serde_json::json!({"id":control,"label":control.label()})),
+        "intents": PROOF_INTENTS,
+        "simulations": ProofSimulation::CHOICES,
         "profiles": RgbSpace::ALL.map(crate::ExportProfile::builtin),
     })
 }

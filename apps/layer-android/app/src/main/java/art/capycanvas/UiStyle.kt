@@ -320,3 +320,14 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
         }
     }
 }
+
+/** Compact GTK panel choice: input surface, ellipsized value and trailing arrow. */
+@Composable internal fun PanelChoiceButton(label:String,modifier:Modifier=Modifier,enabled:Boolean=true,onClick:()->Unit) {
+    val colors=LocalPalette.current
+    Row(modifier.fillMaxWidth().heightIn(min=24.dp).clip(RoundedCornerShape(6.dp)).background(colors.input)
+        .clickable(enabled=enabled,role=Role.Button,onClick=onClick).padding(horizontal=6.dp),
+        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+        Text(label,Modifier.weight(1f),color=colors.text.copy(alpha=if(enabled)1f else .5f),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        SharedIcon("chevron-down",null,Modifier.size(12.dp),tint=colors.text.copy(alpha=if(enabled)1f else .5f))
+    }
+}
