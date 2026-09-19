@@ -163,3 +163,26 @@ were inspected. The more complex field took 175.76 ms to generate once off the
 UI thread; no regeneration occurs during dragging or resizing. Evidence is in
 `artifacts/color-m4/proof-flow/`. This is a pattern-only revision; prior real-input
 and 60 MP workflow measurements were not rerun.
+
+## Organic spacing and shapes
+
+The regularity came from one similarly shaped influence per square. The detailed
+side now allows empty buckets and pairs of points, wider position jitter, and
+individually varied widths and oval orientations. This breaks up aligned rows
+and creates uneven, curved boundaries. The variation increases smoothly toward
+the right; the established broad flow at the far left is preserved.
+
+The search remains bounded to 25 buckets with at most two candidate sites each.
+Inactive and out-of-support candidates are skipped before evaluating their
+influence. Circular compact support keeps bucket transitions continuous even
+with oval influences; empty neighborhoods have an explicit finite background.
+The seeded pattern is still generated once by the cached background worker.
+No control behavior, tone mapping, HDR pixels or export settings change.
+
+Validation: release and native-test builds passed. The five-size GTK
+hit-region/cache check passed with one texture build across 600 changed-value
+updates and no unchanged arc redraws. Native screenshots at 128, 226 and 400
+logical pixels were inspected. One-time background generation took 219.66 ms;
+dragging and resizing reused that texture. Evidence is under
+`artifacts/color-m4/proof-organic/`. Prior real-input and 60 MP workflow evidence
+was not rerun for this static-pattern revision.

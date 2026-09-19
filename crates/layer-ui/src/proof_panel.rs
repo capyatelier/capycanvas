@@ -220,26 +220,60 @@ fn liquid_cells(x: f32, y: f32, across: f32) -> f32 {
     let mut field = 0.;
     for j in -2..=2 {
         for i in -2..=2 {
-            let h = liquid_cell_hash(ix + i, iy + j);
-            let sx = (ix + i) as f32 + 0.18 + 0.64 * (h & 1023) as f32 / 1023.;
-            let sy = (iy + j) as f32 + 0.18 + 0.64 * ((h >> 10) & 1023) as f32 / 1023.;
-            let d2 = (u - sx).powi(2) + (v - sy).powi(2);
-            // Compact support makes the bounded neighborhood continuous across
-            // grid boundaries, including the broader influences on the left.
-            let tail = (d2 - 3.).clamp(0., 1.);
-            let support = 1. - tail * tail * (3. - 2. * tail);
-            let w = (-falloff * d2).exp() * support;
-            sum += w;
-            strongest = strongest.max(w);
-            let strength = 0.35 + 1.1 * ((h >> 20) & 1023) as f32 / 1023.;
-            field += w * strength;
+            // The grid only bounds the search. Vary its population rather than
+            // assigning one identical point to every square: gaps, pairs and
+            // wider jitter break up rows. Fade these changes in with detail so
+            // the broad left-hand flow keeps its established shape.
+            let hashes = [
+                liquid_cell_hash(ix + i, iy + j),
+                liquid_cell_hash(ix + i + 97, iy + j - 61),
+            ];
+            for (site, h) in hashes.into_iter().enumerate() {
+                let weight = if site == 0 {
+                    if h >> 28 < 3 { 1. - detail } else { 1. }
+                } else if h >> 28 < 5 {
+                    detail
+                } else {
+                    0.
+                };
+                if weight == 0. {
+                    continue;
+                }
+                let margin = 0.18 - 0.13 * detail;
+                let jitter = 1. - 2. * margin;
+                let sx = (ix + i) as f32 + margin + jitter * (h & 1023) as f32 / 1023.;
+                let sy = (iy + j) as f32 + margin + jitter * ((h >> 10) & 1023) as f32 / 1023.;
+                let dx = u - sx;
+                let dy = v - sy;
+                let d2 = dx * dx + dy * dy;
+                if d2 >= 4. {
+                    continue;
+                }
+                // Different widths and oriented oval influences produce curved,
+                // uneven boundaries. The quadratic stays positive definite.
+                let shape = h.rotate_left(11).wrapping_mul(0x9e3779b9);
+                let size = 1. + detail * ((shape & 255) as f32 / 255. - 0.5) * 0.45;
+                let a = detail * (((shape >> 8) & 255) as f32 / 255. - 0.5) * 0.65;
+                let b = detail * (((shape >> 16) & 255) as f32 / 255. - 0.5) * 0.65;
+                let distance = ((1. + a) * dx * dx + (1. - a) * dy * dy + 2. * b * dx * dy)
+                    / (size * size);
+                // Keep support circular and bounded despite oval influences,
+                // so entering/leaving search buckets creates no discontinuity.
+                let tail = (d2 - 3.).clamp(0., 1.);
+                let support = 1. - tail * tail * (3. - 2. * tail);
+                let w = (-falloff * distance).exp() * support * weight;
+                sum += w;
+                strongest = strongest.max(w);
+                let strength = 0.35 + 1.1 * ((h >> 20) & 1023) as f32 / 1023.;
+                field += w * strength;
+            }
         }
     }
     // Overlapping influences join into flowing contours on the left. Local
     // ownership separates them into defined cells on the right. Interpolate
     // the implicit field before shading: no image blur, haze or opacity layer.
     let pooled = (0.9 * std::f32::consts::PI / falloff - field) * 1.8;
-    let ownership = strongest / sum;
+    let ownership = if sum > 0. { strongest / sum } else { 0. };
     let edge = ((ownership - 0.47) / 0.24).clamp(0., 1.);
     let core = edge * edge * (3. - 2. * edge);
     let separated = 0.7 - 1.25 * core;
