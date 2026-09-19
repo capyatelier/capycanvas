@@ -104,6 +104,9 @@ chrome.stdio[4].on("data", (data) => {
       clearTimeout(waiter.timer);
       if (event.error) waiter.reject(new Error(`${waiter.method}: ${JSON.stringify(event.error)}`));
       else waiter.resolve(event.result);
+    } else if (event.method === "Page.javascriptDialogOpening" && event.params.type === "beforeunload") {
+      // Only this disposable test profile is navigated away from by the harness.
+      call("Page.handleJavaScriptDialog", {accept:true}).catch(()=>{});
     } else if (event.method === "Runtime.exceptionThrown")
       errors.push(
         event.params.exceptionDetails.exception?.description ||

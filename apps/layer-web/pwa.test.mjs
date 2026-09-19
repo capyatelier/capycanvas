@@ -268,7 +268,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     const start = Date.now();
     while (Date.now() - start < 25000) {
       try {
-        if (await evaluate(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body.dataset.gpu === 'ready'`)) return;
+        if (await evaluate(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready() && layerApp.startupTimes.complete !== null`)) return;
       } catch (error) {
         if (!/navigated|context|Cannot find/i.test(String(error))) throw error;
       }
@@ -342,7 +342,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     assert.deepEqual(icons, [32, 180, 192, 512].map(size => ({
       width: size, height: size, corners: Array(4).fill(size === 180 ? 255 : 0), background: [118, 118, 118, 255],
     })), "Icons load offline with mid-gray backgrounds; only Apple's artwork leaves corner masking to the OS");
-    await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
+    await evaluate("layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));
     const before = await canvasPixels();
