@@ -42,8 +42,25 @@ fn native_document_tabs_history_storage_and_close() {
     crate::open_workspace(&app, &windows, Some((project.clone(), None)), None);
     let w = windows.borrow()[0].clone();
     new_photo::ready(&w);
+    let plain_title = find_named(w.window.upcast_ref(), "single-document-title")
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    assert_eq!(
+        w.documents.root.visible_child_name().as_deref(),
+        Some("title")
+    );
+    assert_eq!(plain_title.text(), "Untitled · 256 × 256");
+    assert!(plain_title.is_mapped());
+    assert!(
+        !find_named(w.window.upcast_ref(), "document-tab-1")
+            .unwrap()
+            .is_mapped()
+    );
+    let single_title_width = w.documents.root.width();
     w.documents.ram_budget.set(0);
     new_photo::invoke(&w, CommandId::AddLayer);
+    assert_eq!(plain_title.text(), "• Untitled · 256 × 256");
     w.dispatch(UiAction::SetBrushSize { value: 42. });
     new_photo::invoke(&w, CommandId::ZoomIn);
     let original_view = state(&w).camera;
@@ -256,6 +273,19 @@ fn native_document_tabs_history_storage_and_close() {
     new_photo::ready(&w);
     assert_eq!(w.documents.selected(), first);
     assert!(state(&w).document_file.modified);
+    assert_eq!(
+        w.documents.root.visible_child_name().as_deref(),
+        Some("title")
+    );
+    assert_eq!(plain_title.text(), "• Untitled · 256 × 256");
+    assert!(plain_title.is_mapped());
+    assert!(
+        !find_named(w.window.upcast_ref(), "document-tab-1")
+            .unwrap()
+            .is_mapped()
+    );
+    assert_eq!(w.documents.root.width(), single_title_width);
+    crate::capture(&w, "/tmp/capy-single-drawing-title.png");
     w.window.close();
     until(|| w.window.visible_dialog().is_some(), "final dirty close");
     new_photo::response(&w, "discard");
@@ -272,15 +302,6 @@ fn native_document_tab_input() {
     w.window.present();
     new_photo::ready(&w);
     pump(250);
-    for _ in 0..2 {
-        glib::MainContext::default()
-            .block_on(
-                w.documents
-                    .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
-            )
-            .unwrap();
-        new_photo::ready(&w);
-    }
     let directory = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     std::fs::write(directory.join("ready"), "ready").unwrap();
     pump(500);
@@ -297,6 +318,25 @@ fn native_document_tab_input() {
         step += 1;
         pump(180);
     };
+    // A single drawing restores the native draggable/double-clickable caption.
+    let title = find_named(w.window.upcast_ref(), "single-document-title").unwrap();
+    let b = title.compute_bounds(&w.window).unwrap();
+    perform(
+        serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]},
+        {"down":true},{"down":false},{"down":true},{"down":false}]),
+    );
+    assert!(!w.window.is_maximized());
+    w.window.maximize();
+    pump(400);
+    for _ in 0..2 {
+        glib::MainContext::default()
+            .block_on(
+                w.documents
+                    .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
+            )
+            .unwrap();
+        new_photo::ready(&w);
+    }
     let point = |id: u64, fraction: f32| {
         let tab = find_named(w.window.upcast_ref(), &format!("document-tab-{id}")).unwrap();
         let b = tab.compute_bounds(&w.window).unwrap();
@@ -377,6 +417,32 @@ fn native_document_tab_input() {
     );
     new_photo::ready(&w);
     crate::capture(&w, "/tmp/capy-document-tabs-wide.png");
+    // Exercise the actual pointer states for visual comparison with AdwTabBar.
+    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (state, target) in [
+            ("idle", [800., 200.]),
+            ("hover", point(1, 0.4)),
+            ("selected", point(3, 0.4)),
+        ] {
+            perform(serde_json::json!([{"point":target}]));
+            crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-{state}.png"));
+        }
+        let tab = find_named(w.window.upcast_ref(), "document-tab-3").unwrap();
+        let close = tab.last_child().unwrap();
+        let b = close.compute_bounds(&w.window).unwrap();
+        perform(serde_json::json!([{"point":[b.x()+b.width()/2., b.y()+b.height()/2.]}]));
+        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-close.png"));
+        perform(serde_json::json!([{"point":point(3, 0.4)}, {"down":true}]));
+        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-pressed.png"));
+        perform(serde_json::json!([{"down":false}]));
+        assert!(tab.first_child().unwrap().grab_focus());
+        perform(
+            serde_json::json!([{"key":0xff09,"down":true},{"key":0xff09,"down":false},
+            {"key":0xffe1,"down":true},{"key":0xff09,"down":true},{"key":0xff09,"down":false},{"key":0xffe1,"down":false}]),
+        );
+        crate::capture(&w, &format!("/tmp/capy-document-tabs-{name}-focus.png"));
+    }
     // Keyboard selector remains available when workspace customization removes
     // the title component; its native menu also advertises this command.
     let mut workspace = state(&w).workspace;

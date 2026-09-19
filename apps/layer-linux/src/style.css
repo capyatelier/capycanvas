@@ -240,12 +240,24 @@ window, label, text { font-size: var(--ui-text-size); }
 /* Custom angular input and rendering share coordinates without CSS insets. */
 scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-width: 0; min-height: 0; }
 
-/* Drawing tabs consume the available title-bar interval equally. */
-.document-tabs { border-spacing: 2px; }
-.document-tab { border-radius: 7px; background: alpha(currentColor, 0.035); }
-.document-tab.selected { background: alpha(currentColor, 0.12); box-shadow: inset 0 -2px @accent_color; }
-.document-tab button { min-width: 0; min-height: 28px; padding: 2px 6px; }
-.document-tab-close { opacity: 0.65; }
-.document-tab-close:hover { opacity: 1; }
-.document-tab.drop-before { box-shadow: inset 2px 0 @accent_color; }
-.document-tab.drop-after { box-shadow: inset -2px 0 @accent_color; }
+/* Match GNOME Web's AdwTabBar: one rounded fill, no selection underline.
+   Keep geometry/input in the retained title bar, including its compact mode. */
+.document-tabs { border-spacing: 0; }
+.document-tab { min-height: 26px; padding: 4px; border-radius: 9px; background: transparent; transition: background-color 150ms ease-in-out; }
+.document-tab:hover { background-color: alpha(currentColor, .07); }
+.document-tab:active { background-color: alpha(currentColor, .16); }
+.document-tab.selected { background-color: alpha(currentColor, .10); }
+.document-tab.selected:hover { background-color: alpha(currentColor, .13); }
+.document-tab.selected:active { background-color: alpha(currentColor, .19); }
+/* Only adjacent idle tabs need a divider; selection/hover supplies the edge. */
+.document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active) { background-image: image(color-mix(in srgb, currentColor var(--border-opacity), transparent)); background-size: 1px 80%; background-position: left center; background-repeat: no-repeat; }
+.document-tab:not(.selected):not(:hover):not(:active) + .document-tab:not(.selected):not(:hover):not(:active):dir(rtl) { background-position: right center; }
+.document-tab button.document-tab-select { min-width: 0; min-height: 26px; padding: 0 4px; border-radius: 5px; background: transparent; box-shadow: none; font-weight: normal; outline: none; }
+.document-tab button.document-tab-close { min-width: 24px; min-height: 24px; margin: 0; padding: 0; border-radius: 99px; }
+.document-tab:focus-within:focus-visible { outline: 2px solid alpha(var(--accent-color), .5); outline-offset: -2px; }
+@media (prefers-contrast: more) {
+  .document-tab:hover, .document-tab:active, .document-tab.selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor var(--border-opacity), transparent); }
+  .document-tab:focus-within:focus-visible { outline-color: alpha(var(--accent-color), .8); }
+}
+.document-tab.drop-before { box-shadow: inset 2px 0 var(--accent-color); }
+.document-tab.drop-after { box-shadow: inset -2px 0 var(--accent-color); }

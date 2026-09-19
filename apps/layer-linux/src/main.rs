@@ -47,6 +47,22 @@ fn stylesheet() -> String {
     )
 }
 
+fn stylesheet_provider() -> gtk::CssProvider {
+    let css = gtk::CssProvider::new();
+    css.load_from_string(&stylesheet());
+    // GTK media queries use the provider's preference, not the theme's.
+    adw::StyleManager::for_display(&gtk::gdk::Display::default().unwrap())
+        .bind_property("high-contrast", &css, "prefers-contrast")
+        .transform_to(|_, contrast: bool| Some(if contrast {
+            gtk::InterfaceContrast::More
+        } else {
+            gtk::InterfaceContrast::NoPreference
+        }))
+        .sync_create()
+        .build();
+    css
+}
+
 fn main() -> gtk::glib::ExitCode {
     // SAFETY: first operation, before GTK initialization or worker creation.
     unsafe { display_color::enable_gtk_color_management() };
@@ -71,8 +87,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {
-        let css = gtk::CssProvider::new();
-        css.load_from_string(&stylesheet());
+        let css = stylesheet_provider();
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
             &css,

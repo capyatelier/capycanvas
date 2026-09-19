@@ -49,6 +49,7 @@ struct Label {
 pub(crate) struct Documents {
     pub root: gtk::Stack,
     strip: gtk::Box,
+    title: gtk::Label,
     selector: gtk::MenuButton,
     selector_label: gtk::Label,
     pub model: RefCell<DocumentTabs>,
@@ -280,6 +281,15 @@ impl Documents {
         root.set_hhomogeneous(false);
         root.set_vhomogeneous(false);
         root.set_hexpand(true);
+        let title = gtk::Label::new(Some(layer_ui::APP_NAME));
+        title.set_widget_name("single-document-title");
+        title.add_css_class("document-title");
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_width_chars(1);
+        let title_handle = gtk::WindowHandle::new();
+        title_handle.add_css_class("header-readout");
+        title_handle.set_child(Some(&title));
+        root.add_named(&title_handle, Some("title"));
         let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         strip.set_homogeneous(true);
         strip.add_css_class("document-tabs");
@@ -301,6 +311,7 @@ impl Documents {
         Self {
             root,
             strip,
+            title,
             selector,
             selector_label,
             model: RefCell::new(DocumentTabs::default()),
@@ -359,12 +370,13 @@ impl Documents {
         self.root.add_controller(target);
     }
     pub fn allocate(&self, width: f32) {
-        self.root
-            .set_visible_child_name(if DocumentTabs::compact(width, self.len()) {
-                "selector"
-            } else {
-                "tabs"
-            });
+        self.root.set_visible_child_name(if self.len() == 1 {
+            "title"
+        } else if DocumentTabs::compact(width, self.len()) {
+            "selector"
+        } else {
+            "tabs"
+        });
     }
     fn label(id: u64, canvas: &GpuCanvas) -> Label {
         let file = &canvas.session.state().document_file;
@@ -384,12 +396,23 @@ impl Documents {
         }
     }
     pub fn refresh(&self, w: &Rc<Workspace>) {
-        let Some(current) = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .map(|g| Self::label(self.selected(), g))
-        else {
+        let Some(current) = w.gpu.borrow().as_ref().map(|g| {
+            let state = g.session.state();
+            if let Some(tab) = state.tabs.first() {
+                self.title.set_label(&format!(
+                    "{}{} · {} × {}",
+                    if state.document_file.modified {
+                        "• "
+                    } else {
+                        ""
+                    },
+                    tab.title,
+                    tab.width,
+                    tab.height
+                ));
+            }
+            Self::label(self.selected(), g)
+        }) else {
             return;
         };
         let mut labels = BTreeMap::from([(current.id, current.clone())]);
@@ -433,8 +456,25 @@ impl Documents {
             )));
             title.set_ellipsize(gtk::pango::EllipsizeMode::End);
             title.set_width_chars(1);
+            // Balance the close control so the title is centered in the tab.
+            title.set_margin_start(24);
             let select = gtk::Button::builder().child(&title).hexpand(true).build();
             select.add_css_class("flat");
+            select.add_css_class("document-tab-select");
+            select.set_focus_on_click(false);
+            select.connect_state_flags_changed(glib::clone!(
+                #[weak]
+                row,
+                move |button, _| {
+                    // The fill belongs to the whole tab, including the area
+                    // behind its separate close button.
+                    if button.state_flags().contains(gtk::StateFlags::ACTIVE) {
+                        row.set_state_flags(gtk::StateFlags::ACTIVE, false);
+                    } else {
+                        row.unset_state_flags(gtk::StateFlags::ACTIVE);
+                    }
+                }
+            ));
             select.set_tooltip_text(Some(&format!("{}\n{}", label.title, label.location)));
             select.update_property(&[gtk::accessible::Property::Label(&format!(
                 "Switch to {}",
@@ -453,6 +493,9 @@ impl Documents {
             let close = gtk::Button::from_icon_name("window-close-symbolic");
             close.add_css_class("flat");
             close.add_css_class("document-tab-close");
+            close.set_valign(gtk::Align::Center);
+            // Like AdwTabBar, one keyboard stop per tab; Ctrl+W closes it.
+            close.set_can_focus(false);
             close.set_tooltip_text(Some(&format!("Close {}", label.title)));
             close.connect_clicked(glib::clone!(
                 #[weak]
@@ -463,7 +506,7 @@ impl Documents {
             self.strip.append(&row);
         }
         self.mark_selected();
-        self.root.queue_allocate();
+        self.root.queue_resize();
     }
     fn mark_selected(&self) {
         let selected = format!("document-tab-{}", self.selected());

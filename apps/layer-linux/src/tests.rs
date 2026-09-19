@@ -1085,8 +1085,7 @@ impl Drop for NativeTestApp {
 }
 fn native_test_app(id: &str) -> NativeTestApp {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -9514,8 +9513,7 @@ fn native_window_lifecycle() {
 #[ignore = "native GTK widgets: requires a Wayland display"]
 fn native_ribbon_allocation() {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -13095,8 +13093,7 @@ fn native_compositor_input() {
 #[ignore = "hardware desktop: run this test separately with --ignored --test-threads=1"]
 fn native_workspace_controls_docking_and_ink() {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,

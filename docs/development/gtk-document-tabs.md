@@ -15,7 +15,17 @@ item the remaining interval, including when customization places it in a side
 zone. Native controls and 12px window-drag gutters remain available. Customize Title Bar retains its existing geometry
 and intercepts inner-tab input. Resizing changes presentation only, never selection or tab order. A selector
 remains reachable through the title-bar overflow and keyboard when the title
-component is hidden by a customized workspace. One drawing uses the same control.
+component is hidden by a customized workspace. With one drawing, show the original
+plain title and dimensions at the normal title width, with native window dragging;
+tab styling, the close button, and the dropdown appear only for multiple drawings.
+
+Tab appearance follows GNOME Web's native [AdwTabBar styling](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/src/stylesheet/widgets/_tab-view.scss):
+transparent idle tabs, a 9px rounded selected fill without an accent underline,
+full-tab hover/pressed fills, separators only between adjacent idle tabs, and
+24px circular close controls. Keyboard focus outlines the whole tab; high contrast
+adds the native inset border. Titles stay centered across the full tab width.
+The application CSS provider follows Adwaita's high-contrast preference, including
+changes while a window is open, so its media query uses the same mode as the theme.
 
 New, Open, desktop/command-line file activation, native drawing drops, and
 recovery append and select a tab in the initiating window. External activation
@@ -134,7 +144,8 @@ Native GTK tests run against an isolated Mutter compositor and real GPU:
 * `native_document_tabs_history_storage_and_close`: production New dialog creates
   a tab; independent undo/redo, dirty state, camera and brush; forced disk spill
   with zero retained inactive tile bytes and joined workers; exact save/reopen;
-  separate recovery snapshots; equal widths and wide/narrow/wide presentation;
+  separate recovery snapshots; original single-title presentation before/after
+  multiple tabs; equal widths and wide/narrow/wide presentation;
   cancelled close/save, background close, and final-window close.
 * `native_document_tabs_immediate_stroke_and_undo`: switch with unsubmitted input,
   then switch immediately after Undo while the new raster belongs only to Redo;
@@ -148,7 +159,9 @@ Native GTK tests run against an isolated Mutter compositor and real GPU:
   opens while storage remains unavailable.
 * `native_document_tab_input`: Mutter-delivered mouse and touch reorder after
   native slop, Escape cancellation, one-step undo, ordinary click/tap selection,
-  Ctrl+Tab, and selector access after removing the title component.
+  Ctrl+Tab, single-title native caption actions, and selector access after removing
+  the title component. Light/dark and high-contrast captures cover idle, hover, selected, pressed,
+  close-hover, and keyboard focus states against native AdwTabBar styling.
 * Updated `native_application_file_launch`: cold/warm multi-file activation,
   per-photo import policy, independent duplicate opens, failed-file continuation,
   explicit New Window and target routing, and closing during import.

@@ -920,7 +920,8 @@ impl Header {
         ];
         self.insets.set(insets);
         let mut geometry = model.resolve(width, insets, &self.metrics(model.size), self.editing.get());
-        if !self.editing.get() && let Some(entry) = model.entries().find(|e| e.item == HeaderItem::DocumentTitle) {
+        if !self.editing.get() && w.documents.len() > 1
+            && let Some(entry) = model.entries().find(|e| e.item == HeaderItem::DocumentTitle) {
             geometry.expand_document(entry.id, width, insets);
         }
         if self
