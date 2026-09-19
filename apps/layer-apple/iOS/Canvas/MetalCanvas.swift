@@ -107,6 +107,15 @@ final class CanvasView: UIView {
         super.layoutSubviews()
         guard let window, bounds.width > 0, bounds.height > 0 else { return }
         contentScaleFactor = window.screen.scale
+        // Keep the shared header clear of iPadOS window controls without
+        // insetting the canvas or changing its input coordinates.
+        let headerInset: CGFloat
+        if #available(iOS 26.0, *) {
+            headerInset = edgeInsets(for: .safeArea(cornerAdaptation: .horizontal)).left
+        } else { headerInset = safeAreaInsets.left }
+        DispatchQueue.main.async { [weak store] in
+            if store?.headerLeadingInset != headerInset { store?.headerLeadingInset = headerInset }
+        }
         measureWorkspaceBottom()
         let details = DisplayDetails(screen: traitCollection.displayGamut == .P3 ? "Wide color (P3)" : "Standard color (sRGB)",
             destination: "iPadOS color management")
@@ -128,6 +137,10 @@ final class CanvasView: UIView {
             frames.activate()
         } else { store.native?.resize(width: width, height: height, scale: Float(contentScaleFactor)) }
         wake()
+    }
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
     }
     @objc private func keyboardChanged(_ notification: Notification) {
         // Read UIKit's per-window guide after its layout update. Shared workspace
