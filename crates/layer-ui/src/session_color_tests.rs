@@ -458,8 +458,10 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     let original = s.engine.document().clone();
     let checkpoint = s.engine.checkpoint();
     assert!(!s.command(CommandId::PreviewSdr).enabled);
+    let published = s.workspace_update().model_revision;
     s.set_hdr_display_available(true);
     assert!(s.command(CommandId::PreviewSdr).enabled);
+    assert!(s.workspace_update().model_revision > published, "Display capability republishes command availability");
     let recipe = SdrRendition { exposure: -2., ..Default::default() };
     let thumbnail_revisions = || s.state.layers.iter().map(|l| (l.paint_revision, l.mask_revision)).collect::<Vec<_>>();
     let original_thumbnails = thumbnail_revisions();

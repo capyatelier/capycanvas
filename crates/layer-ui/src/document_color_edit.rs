@@ -114,6 +114,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.hdr_display_available == available { return false; }
         self.state.hdr_display_available = available;
         self.refresh_commands();
+        self.changed(regions::COMMANDS, true);
         true
     }
 

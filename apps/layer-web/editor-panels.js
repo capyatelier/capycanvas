@@ -93,7 +93,8 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     const swap=button("",()=>color({op:"swap"}),"color-swap color-utility");
     swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);swap.append(icon("color-swap"));stage.append(swap);
     const arc=document.createElementNS("http://www.w3.org/2000/svg","svg"),track=document.createElementNS(arc.namespaceURI,"path"),marker=document.createElementNS(arc.namespaceURI,"circle");
-    arc.classList.add('color-intensity');arc.style.cssText='position:absolute;inset:0;overflow:visible;pointer-events:none';
+    // Chrome arbitrates touch scrolling on the SVG viewport, not its path.
+    arc.classList.add('color-intensity');arc.style.cssText='position:absolute;inset:0;overflow:visible;pointer-events:none;touch-action:none';
     track.setAttribute('fill','none');track.setAttribute('stroke','transparent');track.setAttribute('stroke-linecap','round');track.style.pointerEvents='stroke';track.style.touchAction='none';track.setAttribute('tabindex','0');track.setAttribute('role','slider');track.setAttribute('aria-label','Color intensity');
     const ramp=document.createElementNS(arc.namespaceURI,'g'),caption=document.createElementNS(arc.namespaceURI,'text');ramp.style.pointerEvents='none';caption.style.pointerEvents='none';caption.setAttribute('fill','currentColor');arc.append(ramp);
     marker.setAttribute('fill','white');marker.setAttribute('stroke','black');marker.setAttribute('stroke-width','2');arc.append(track,marker,caption);stage.append(arc);

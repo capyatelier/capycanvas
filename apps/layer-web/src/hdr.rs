@@ -1,4 +1,4 @@
-//! HDR presentation remains mapped SDR until a host HDR surface is qualified.
+//! Extended-range presentation delegates display mapping to the browser.
 //! Full-resolution capture is asynchronous; bounded analysis runs in a worker.
 use super::*;
 use layer_core::color::hdr::{LocalToneBuilder, LocalToneGuide};
@@ -36,6 +36,11 @@ pub struct WebTone {
 }
 #[wasm_bindgen]
 impl WebApp {
+    /// The host verifies both the display media query and extended canvas mode.
+    pub fn set_display_hdr(&mut self, available: bool) -> bool {
+        let available = available && self.session.engine().backend().0.as_ref().is_some_and(|g| g.hdr_capable);
+        self.session.set_hdr_display_available(available)
+    }
     pub fn proof_control(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action = serde_wasm_bindgen::from_value(action).map_err(js)?;
         serialize(&layer_ui::proof_panel::apply(&mut self.session, action).map_err(js)?)
@@ -73,6 +78,7 @@ impl WebApp {
             && (self.session.engine().animation_time() - self.tone.analysed_time).abs() >= 0.5;
         serialize(
             &serde_json::json!({"generation":self.tone.generation,"hdr":self.tone.key.is_some(),
+            "display_hdr":self.session.state().hdr_display_available,"hdr_output":self.hdr_output(),"proof_mode":self.session.proof_panel_mode(),
             "needed":self.tone.key.is_some() && (!self.tone.ready || animated) && self.tone.error.is_none() && self.session.require_document_snapshot_idle().is_ok(),
             "ready":self.tone.ready,"error":self.tone.error}),
         )
@@ -202,6 +208,16 @@ impl WebApp {
         self.tone.ready = true;
         self.tone.error = None;
         Ok(())
+    }
+}
+
+impl WebApp {
+    pub(super) fn hdr_output(&self) -> bool {
+        self.session.state().hdr_display_available
+            && self.session.engine().document().color.depth.is_float()
+            && self.session.proof_panel_mode() == layer_ui::ProofMode::Off
+            && !self.session.state().gamut_warning
+            && self.session.state().sdr_appearance_preview.is_none()
     }
 }
 

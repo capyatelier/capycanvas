@@ -555,13 +555,13 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
             let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
             frame(&mut r,&layer);
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
-            for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
+            for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::ExtendedSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{balance:-1.,contrast:0.5,..Default::default()},SdrRendition{balance:1.,contrast:2.,exposure:1.3,highlight_color:0.8,..Default::default()},SdrRendition{highlight_color:1.,headroom:4.,..Default::default()}] {
                 for headroom in [1.,4.] {
                     for compositor in [false, true] {
-                        if compositor && (surface != SdrSurfaceColor::Bt2100Pq || headroom != 1.) {continue;}
+                        if compositor && (!matches!(surface, SdrSurfaceColor::Bt2100Pq | SdrSurfaceColor::ExtendedSrgb) || headroom != 1.) {continue;}
                         for proof in [false,true] {
                             if compositor {presenter.set_compositor_hdr_view(&r,recipe).unwrap();}
                             else {presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();}
@@ -578,6 +578,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
                             let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
                             let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
                             else if surface == SdrSurfaceColor::ExtendedLinearSrgb { expected }
+                            else if surface == SdrSurfaceColor::ExtendedSrgb { expected.map(|v| v.signum()*if v.abs()<=0.0031308 {12.92*v.abs()} else {1.055*v.abs().powf(1./2.4)-0.055}) }
                             else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
                             let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
                             // PQ encode/decode uses hardware Float32 powers. The independent

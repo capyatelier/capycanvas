@@ -31,11 +31,31 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   let tone=null,toneGeneration=-1,toneChanged=0;
   const label=element("output","proof-status");label.id="proof-status";label.hidden=true;
   document.getElementById("canvas-status").prepend(label);
+  const hdrDisplay=matchMedia('(dynamic-range: high)');
+  let displayDevice=null,extendedCanvas=false;
+  function syncDisplay(){
+    const device=document.getElementById('canvas').getContext('webgpu')?.getConfiguration()?.device;
+    if(device!==displayDevice){
+      displayDevice=device;extendedCanvas=false;
+      if(device){
+        // Older browsers may silently ignore toneMapping. Check the accepted
+        // configuration on a disposable canvas before changing the live view.
+        const context=document.createElement('canvas').getContext('webgpu');
+        try{
+          context.configure({device,format:'rgba16float',colorSpace:'srgb',toneMapping:{mode:'extended'}});
+          const config=context.getConfiguration();
+          extendedCanvas=config?.format==='rgba16float'&&config.toneMapping?.mode==='extended';
+        }catch{}finally{context?.unconfigure();}
+      }
+    }
+    if(app.set_display_hdr(hdrDisplay.matches&&extendedCanvas))applyChange({regions:8,canvas_wake:true});
+  }
+  hdrDisplay.addEventListener('change',()=>{if(app.gpu_ready())syncDisplay();});
   function displayDetails(){
     const dialog=element('dialog','document-dialog display-details');dialog.setAttribute('aria-label','Display Details');
     const status=app.tone_status(),body=element('p');
-    body.textContent=(status.error?`SDR preview unavailable: ${status.error}`:'Showing the saved SDR appearance on a mapped SDR display.')+
-      '\n\nThis browser canvas uses an SDR surface. HDR presentation is not enabled, even when the screen supports HDR.\n\nArtwork reference white: 203 cd/m². The HDR master is preserved.';
+    body.textContent=(status.hdr_output?'Showing HDR. Brightness depends on your display and system settings.':status.error?`SDR preview unavailable: ${status.error}`:status.proof_mode==='print'?'Showing the print proof.':status.display_hdr?'Showing the SDR preview.':'Showing the saved SDR appearance. HDR output is unavailable in this browser or on this display.')+
+      '\n\nArtwork reference white: 203 cd/m². The HDR master is preserved.';
     const footer=element('footer');footer.append(button('Close',()=>dialog.close()));
     dialog.append(element('h2','','Display Details'),body,footer);dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
   }
@@ -43,9 +63,10 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   document.getElementById("canvas-status").prepend(hdrLabel);
   function syncTone(){
     if(!app.gpu_ready())return;
+    syncDisplay();
     const status=app.tone_status();
     hdrLabel.hidden=!status.hdr;
-    hdrLabel.textContent=status.error?"SDR preview unavailable":status.ready?"Showing SDR":"Preparing SDR…";
+    hdrLabel.textContent=status.hdr_output?'HDR':status.error?"SDR preview unavailable":!status.ready?"Preparing SDR…":status.proof_mode==='print'?'Print proof':status.display_hdr?'SDR preview':'Showing SDR';
     if(status.generation!==toneGeneration){toneGeneration=status.generation;toneChanged=performance.now();tone?.cancel();wake();}
     if(document.hidden){tone?.cancel();return;}
     if(!status.needed||tone||performance.now()-toneChanged<180)return;

@@ -17,7 +17,7 @@ mod workspaces;
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
-use layer_render_wgpu::{GpuRasterError, StartupProgress, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -65,6 +65,9 @@ pub struct WebGpu {
     instance: wgpu::Instance,
     surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
+    sdr_format: wgpu::TextureFormat,
+    color: SdrSurfaceColor,
+    hdr_capable: bool,
     presenter: ViewportPresenter,
     blank_presented: bool,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
@@ -92,7 +95,7 @@ impl CanvasRenderer for WebRenderer {
         let changed = self.renderer()?.adopt_prepared_color(color)?;
         if changed {
             let gpu = self.0.as_mut().unwrap();
-            gpu.presenter = ViewportPresenter::for_renderer(&gpu.renderer, gpu.config.format);
+            gpu.presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, gpu.color)?;
         }
         Ok(changed)
     }
@@ -539,6 +542,7 @@ impl WebApp {
         self.session
             .replace_renderer(WebRenderer(Some(gpu)))
             .map_err(js)?;
+        self.session.set_hdr_display_available(false);
         self.startup = StartupProgress::default();
         Ok(())
     }
@@ -596,6 +600,9 @@ impl WebGpu {
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
+        let hdr_capable = surface.get_capabilities(renderer.adapter())
+            .color_spaces(wgpu::TextureFormat::Rgba16Float)
+            .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
         let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
@@ -606,6 +613,9 @@ impl WebGpu {
             renderer,
             instance,
             surface: Some(surface),
+            sdr_format: config.format,
+            color: SdrSurfaceColor::Srgb,
+            hdr_capable,
             config,
             presenter,
             blank_presented: false,
@@ -1023,11 +1033,26 @@ impl WebApp {
         }
         change.canvas_wake |= !self.startup.complete;
         let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
+        let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            let color = if hdr_output { SdrSurfaceColor::ExtendedSrgb } else { SdrSurfaceColor::Srgb };
+            if gpu.color != color {
+                gpu.config.format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { gpu.sdr_format };
+                gpu.config.color_space = color.surface_color_space();
+                let mut presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, color).map_err(js)?;
+                presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
+                gpu.presenter = presenter;
+                gpu.color = color;
+                gpu.surface.as_ref().unwrap().configure(gpu.renderer.device(), &gpu.config);
+            }
             gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
-            gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;
+            if hdr_output {
+                gpu.presenter.set_compositor_hdr_view(&gpu.renderer, rendition.unwrap()).map_err(js)?;
+            } else {
+                gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;
+            }
         }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;

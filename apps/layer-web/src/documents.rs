@@ -184,6 +184,7 @@ impl WebApp {
         let instance = live.instance.clone();
         let lost = live.lost.clone();
         let config = live.config.clone();
+        let (color, sdr_format, hdr_capable) = (live.color, live.sdr_format, live.hdr_capable);
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
@@ -333,11 +334,14 @@ impl WebApp {
                     }
                 }
             }
-            let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+            let presenter = ViewportPresenter::for_surface(&renderer, config.format, color).map_err(js)?;
             let gpu = WebGpu {
                 renderer,
                 instance,
                 config,
+                color,
+                sdr_format,
+                hdr_capable,
                 surface: None,
                 presenter,
                 blank_presented: true,
@@ -437,6 +441,10 @@ impl WebApp {
         let next = self.session.renderer_mut().0.as_mut().unwrap();
         next.surface = old.surface.take();
         next.config = old.config.clone();
+        if next.color != old.color {
+            next.color = old.color;
+            next.presenter = ViewportPresenter::for_surface(&next.renderer, next.config.format, next.color).map_err(js)?;
+        }
         next.renderer
             .resize_surface(next.config.width, next.config.height)
             .map_err(js)?;

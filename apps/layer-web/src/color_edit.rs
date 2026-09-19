@@ -224,7 +224,7 @@ impl WebApp {
             std::mem::swap(&mut live.0.as_mut().unwrap().renderer, &mut renderer);
         }).map_err(js)?;
         let live = s.renderer_mut().0.as_mut().unwrap();
-        live.presenter = ViewportPresenter::for_renderer(&live.renderer, live.config.format);
+        live.presenter = ViewportPresenter::for_surface(&live.renderer, live.config.format, live.color).map_err(js)?;
         self.deferred_contacts.clear();
         self.prepare_startup()?;
         serialize(

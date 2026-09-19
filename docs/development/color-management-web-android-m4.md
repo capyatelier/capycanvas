@@ -81,7 +81,9 @@ including the original OpenEXR BSD notices and pinned upstream Zlib notice.
 - Float32 EXR for linear HDR interchange; strict BT.2020 PQ PNG rejects values
   outside its range and blocks Choose in preview. Explicit clipped-PQ delivery
   and authored SDR PNG/TIFF/JPEG use output copies. Gain-map JPEG/AVIF and physical
-  HDR surfaces are unavailable on Web/Android and are reported as such.
+  HDR surfaces were unavailable in this first integration. Subsequent Android
+  PQ and Web extended-canvas milestones below supersede that display limit;
+  gain-map delivery remains unavailable.
 - Bounded worker capture, generation/stale-result checks, atomic cancellation
   and worker teardown. Web admits at most **12,000,000 HDR pixels**, with an
   actionable rejection preserving the existing master. It never reduces HDR
@@ -226,3 +228,32 @@ in `artifacts/color-m4-web-android/fixtures`; performance names resolve under
 extends the real Open workflow with preservation checks. Do not rebuild that
 Wasm directory during active browser tests. Build/package and ADB commands,
 including the required instrumented-test fixtures, are in the review README.
+
+## Web HDR display and EV drag follow-up — 2026-09-19
+
+Web now qualifies HDR using both `(dynamic-range: high)` and an actual
+`rgba16float` WebGPU canvas configuration whose accepted tone-mapping mode is
+`extended`. The shared presenter sends signed, extended sRGB to both canvas and
+Navigator. The browser owns output tone mapping and brightness; no invented
+numeric display headroom or app SDR shoulder compresses the HDR master. Off,
+SDR, Print, gamut warnings, document/color adoption and GPU replacement keep
+surface configuration and presentation encoding together. SDR analysis remains
+available for thumbnails and explicit proofing. Capability changes publish
+command availability as well as waking the canvas.
+
+The EV snapback was reproduced with actual Chrome touch input: scrolling
+arbitration cancelled the SVG path's pointer and correctly restored the starting
+value. `touch-action: none` on the enclosing SVG viewport prevents that unwanted
+cancellation. Real pointer cancellation still restores the original EV. Mouse,
+touch and pen exercise the arc through browser input dispatch.
+
+The review bundle is `artifacts/web-hdr-ev/review/`. It records source/package
+hashes, runnable Web output, desktop and tablet workflows, and independent GPU
+pixel-oracle results. Browser checks read one actual submitted swapchain row per
+surface with temporary test-only copy usage, verifying above-white output and
+standard SDR proofing. Screenshots are SDR captures and do not measure physical
+HDR luminance. The picker, layer thumbnails and export comparison canvases remain
+SDR previews; the 12 MP browser admission limit and gain-map output limits remain.
+
+The Web encoding follows [WebGPU canvas color management](https://gpuweb.github.io/gpuweb/#canvas-color-management)
+and [Chrome's extended canvas configuration](https://developer.chrome.com/blog/new-in-webgpu-129).
