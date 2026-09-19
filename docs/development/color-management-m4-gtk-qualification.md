@@ -271,3 +271,57 @@ feature-branch delivery. The package and evidence are made available before
 that merge. This change closes the startup packaging and hue regression and
 adds bounded, measured static local-tone/concurrent export behavior. It does
 not turn the unresolved numerical, animation or hardware gates into passes.
+
+## Integration with concurrently updated main
+
+Before the authorized main merge, `origin/main` advanced from `59aff3df` to
+`537464b7` (iPad window-control spacing and separate Float32/OpenEXR work).
+The first fast-forward push was rejected; no remote history was overwritten.
+Integration commit `b8ff85a3` merges that work cleanly in an isolated checkout.
+The GTK diff relative to the new main adds no Float32 storage implementation.
+References to half masters and the measurements above describe this task's
+Float16 workload; the combined application also contains the independently
+published Float32 feature, which this report does not qualify.
+
+The integrated source is rebuilt and checked separately under
+`artifacts/color-m4/qualification/integration/`. Its 91 non-ignored shared color
+tests pass. The gain-map suite reproduces the same four passes and two unchanged
+JPEG failures. Original evidence and its runnable package remain preserved;
+the integration package and manifest identify the exact combined revision.
+
+All nineteen integrated snapshot checks and all eleven integrated native
+workflow checks pass, including the unchanged hue assertion at 2×. The rebuilt
+normal package opens the reviewed native document and the full exported 60 MP
+AVIF after relocation to a path containing spaces. Actual-desktop HDR texture
+preservation and injected capability transitions pass again. The following
+additional measurements use the combined binary, with compilation and other GPU
+checks completed before timing; they exercise Float16, not Float32 storage.
+
+Integrated concurrent run (120 s, 14,400 requests): p95/p99 12.239/12.535 ms,
+0.215% missed slots, sampled tree RSS 2.653 GiB. All declared concurrent gates
+pass. Native save/reopen plus both full exports and complete decoding finishes
+in 89.933 s during the interaction window. JPEG publication is 26.896 s, AVIF
+41.909 s; these combined-revision timings are slower than the original branch's
+21.12–21.28/34.19–34.75 s and are not presented as a throughput improvement.
+The decoded counts, extents, clipping counts and compressed bytes are unchanged.
+
+Integrated ordinary local interaction also passes all gates: p95/p99
+13.742/14.058 ms, 0.146% missed slots, first response
+2.392 ms, worker CPU/GPU p99 0.701/0.621 ms, and peak tree
+RSS 1.246 GiB. The integrated SDR comparison records p95/p99
+12.863/13.157 ms, worker CPU/GPU p99 0.663/0.555 ms, first response
+110.482 ms and 31 missed slots. Its worker percentiles remain inside
+the original parent/fixed-baseline investigation envelope. These are additional
+integration observations; the three-way paired baselines above use the original
+base, not the concurrently published Float32 commit.
+
+Latest runnable build: `artifacts/color-m4/qualification/integration/review/launch.sh`.
+Its source/build/evidence identities are in `integration/build-manifest.json`.
+The original branch's package and manifest remain available separately.
+
+A targeted integrated SDR repeat records p95/p99 13.032/13.164 ms, worker
+CPU/GPU p99 0.689/0.538 ms, four missed slots and first response 64.824 ms.
+The preceding 31-slot/110.482 ms first-use outlier is retained. Worker percentile
+regression gates are satisfied, but these runs do not establish a ≤50 ms SDR
+first-response guarantee; that limitation also appears in the original parent
+and fixed-baseline observations. No bad run is removed from the evidence.
