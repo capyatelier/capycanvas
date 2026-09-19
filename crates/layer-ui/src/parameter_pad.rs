@@ -11,6 +11,14 @@ pub struct ParameterDialGeometry {
     pub arcs: [ParameterArc; 2],
     pub reset: [f32; 4],
 }
+/// Percent baseline and a passive symbolic icon. Arc percentages follow their
+/// track; side percentages are horizontal, with the icon above.
+#[derive(Clone, Copy, Debug)]
+pub struct ParameterDialReadout {
+    pub icon: [f32; 4],
+    pub text: [f32; 2],
+    pub curve: Option<(f32, f32, bool)>, // radius, degrees, reverse
+}
 #[derive(Clone, Copy, Debug)]
 pub struct ParameterArc {
     pub center: [f32; 2],
@@ -21,6 +29,41 @@ pub struct ParameterArc {
     pub sweep: f32,
 }
 impl ParameterDialGeometry {
+    pub fn text_size(size: f32) -> f32 {
+        (size * 0.044).clamp(9., 12.)
+    }
+    pub fn readouts(&self, size: f32) -> [ParameterDialReadout; 4] {
+        let [cx, cy] = self.field.center;
+        let font = Self::text_size(size);
+        let icon = font + 1.;
+        let side_x = (cx - self.field.disc_radius() - self.arcs[0].marker_radius - 3.) * 0.5;
+        let side = |x| ParameterDialReadout {
+            icon: [x - icon * 0.5, cy - icon - 3., icon, icon],
+            text: [x, cy + font],
+            curve: None,
+        };
+        let arc = |index: usize| {
+            let a = self.arcs[index];
+            let outside = a.radius + (a.width * 0.5).max(a.marker_radius);
+            let radius = outside + if index == 0 { 5. } else { 4. + font };
+            let angle = (8. / radius).asin().to_degrees();
+            let degrees = if index == 0 {
+                -90. + angle
+            } else {
+                90. - angle
+            };
+            let text = [
+                cx + radius * degrees.to_radians().cos(),
+                cy + radius * degrees.to_radians().sin(),
+            ];
+            ParameterDialReadout {
+                icon: [cx - 17. - icon * 0.5, text[1] - icon + 1., icon, icon],
+                text,
+                curve: Some((radius, degrees, index == 1)),
+            }
+        };
+        [side(side_x), side(size - side_x), arc(0), arc(1)]
+    }
     pub fn new(size: f32) -> Option<Self> {
         let layout = crate::ColorPanelLayout::new(size)?;
         let mut field = crate::ColorWheelGeometry::new(layout.wheel[2])?;

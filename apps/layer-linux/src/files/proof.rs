@@ -53,7 +53,6 @@ struct Model {
     views: RefCell<Vec<Weak<ProofPanel>>>,
     export_wait: Cell<bool>,
     completed: Cell<u64>,
-    preview: RefCell<Option<Arc<crate::proof_dial::PreviewSource>>>,
 }
 pub(crate) struct ProofPanel {
     pub root: gtk::Box,
@@ -93,14 +92,6 @@ impl ProofPanel {
         });
         model.views.borrow_mut().push(Rc::downgrade(&p));
         p
-    }
-    pub fn set_preview(&self, source: Option<Arc<crate::proof_dial::PreviewSource>>) {
-        *self.model.preview.borrow_mut() = source.clone();
-        for view in self.views() {
-            if let Some(form) = view.form.borrow().as_ref() {
-                form.dial.set_preview(source.clone());
-            }
-        }
     }
     pub fn duplicate(&self, w: &Rc<Workspace>) -> Rc<Self> {
         let p = Self::with_model(self.model.clone());
@@ -154,7 +145,6 @@ impl ProofPanel {
             self.cancel_job();
             self.finish_export();
             self.model.identity.set(Some(identity));
-            self.set_preview(None);
             self.model.page.set(match mode {
                 ProofMode::Off => Page::Off,
                 ProofMode::Sdr => Page::Sdr,
@@ -555,7 +545,6 @@ impl Form {
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
         panel.root.append(&stack);
         let dial = crate::proof_dial::ProofDial::new();
-        dial.set_preview(panel.model.preview.borrow().clone());
         stack.add_named(&dial.root, Some("sdr"));
         let print = panel_controls::column();
         print.set_widget_name("soft-proof-setup");

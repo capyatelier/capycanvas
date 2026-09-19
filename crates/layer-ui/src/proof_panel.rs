@@ -130,6 +130,45 @@ pub struct ProofNumberControl {
     pub label: &'static str,
     pub numeric: NumericControl,
 }
+/// Reuse the application icon vocabulary on every host.
+pub const SDR_READOUT_ICONS: [&str; 4] = [
+    "layer-appearance-symbolic",
+    "layer-grain-symbolic",
+    "layer-brightness_contrast-symbolic",
+    "layer-hue_saturation-symbolic",
+];
+
+/// Fixed directional illustration, never a sampled/modified document preview.
+/// Smooth glass folds on the left acquire fine ripples to the right; the top
+/// increases contrast and the bottom approaches neutral gray. Hosts cache it
+/// by device-pixel size. Native-endian premultiplied ARGB32, bounded to 512².
+pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
+    let edge = edge.clamp(1, 512);
+    let mut bytes = Vec::with_capacity((edge * edge * 4) as usize);
+    for j in 0..edge {
+        for i in 0..edge {
+            let x = (i as f32 + 0.5) / edge as f32 * 2. - 1.;
+            let y = 1. - (j as f32 + 0.5) / edge as f32 * 2.;
+            let right = (x + 1.) * 0.5;
+            let contrast = 0.08 + 1.6 * (y + 1.) * 0.5;
+            let phase =
+                3.8 * x + 2.2 * y + 1.2 * (2.6 * y - x).sin() + 0.4 * (3. * x + 2. * y).sin();
+            let broad = 0.65 * phase.sin() + 0.35 * (2.3 * y - 1.6 * x).cos();
+            let detail = 0.6 * (10. * phase + 1.2 * (5. * y).sin()).sin()
+                + 0.4 * (25. * x - 18. * y + 3. * (3. * y).sin()).cos();
+            let reflection = (phase + 0.6).cos().max(0.).powi(16);
+            let signal = 0.7 * broad + 0.35 * right.powf(1.7) * detail + 0.65 * reflection - 0.15;
+            let v = 0.5 + 0.48 * (contrast * 2. * signal).tanh();
+            let tint = contrast * 0.025 * (phase - 1.).sin();
+            let rgb = [v - 0.6 * tint, v + 0.1 * tint, v + tint]
+                .map(|c| (c.clamp(0., 1.) * 255.).round() as u32);
+            bytes.extend_from_slice(
+                &(0xff000000 | rgb[0] << 16 | rgb[1] << 8 | rgb[2]).to_ne_bytes(),
+            );
+        }
+    }
+    bytes
+}
 pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};
     let mut balance = NumericControl::number(-1., 1., 0.01, 0).unit("%");
@@ -158,14 +197,14 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 2] {
         (
             "exposure",
             "Brightness",
-            -4.,
-            4.,
+            -2.,
+            2.,
             0.04,
             0,
             "%",
             25.,
-            -4.,
-            4.,
+            -2.,
+            2.,
         ),
         (
             "highlight_color",
@@ -253,7 +292,7 @@ mod tests {
                 let v = sdr_pad_values(r);
                 assert!((v[0] - values[0]).abs() < 1e-5 && (v[1] - values[1]).abs() < 1e-5);
                 let gains = r.gains();
-                assert!(((gains[0] * gains[1]).sqrt() - r.contrast).abs() < 1e-6);
+                assert!(((gains[0] * gains[1]).sqrt() - r.contrast * 1.3).abs() < 1e-6);
                 assert_eq!(
                     serde_json::from_str::<SdrRendition>(&serde_json::to_string(&r).unwrap())
                         .unwrap(),
@@ -262,11 +301,32 @@ mod tests {
             }
         }
         assert_eq!(sdr_from_pad(original, [0., 0.]), original);
-        assert_eq!(sdr_from_pad(original, [0., -1.]).gains(), [0.5; 2]);
-        assert_eq!(sdr_from_pad(original, [0., 1.]).gains(), [2.; 2]);
+        assert_eq!(
+            sdr_from_pad(original, [0., -1.]).gains(),
+            original.gains().map(|v| v * 0.5)
+        );
+        assert_eq!(
+            sdr_from_pad(original, [0., 1.]).gains(),
+            original.gains().map(|v| v * 2.)
+        );
         assert!(sdr_from_pad(original, [-1., 0.]).gains()[0] > 1.);
         assert!(sdr_from_pad(original, [1., 0.]).gains()[1] > 1.);
         assert_eq!(sdr_from_pad(original, [f64::NAN; 2]), original);
+    }
+    #[test]
+    fn proof_defaults_and_brightness_range_match_the_reviewed_treatment() {
+        let recipe = layer_core::color::hdr::SdrRendition::default();
+        assert_eq!(recipe.highlight_color, 0.3);
+        assert_eq!(sdr_pad_values(recipe), [0., 0.]);
+        let controls = sdr_number_controls();
+        assert_eq!(
+            (
+                controls[0].numeric.min * controls[0].numeric.scale,
+                controls[0].numeric.max * controls[0].numeric.scale
+            ),
+            (-50., 50.)
+        );
+        assert_eq!(sdr_direction_texture(128).len(), 128 * 128 * 4);
     }
     #[test]
     fn print_options_round_trip_and_absolute_intent_disables_bpc() {

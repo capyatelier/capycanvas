@@ -34,7 +34,9 @@ fn hdr_tone_sdr_base(paint:vec4<f32>,options:vec4<f32>,appearance:vec4<f32>,base
     let broad=-2.473931+.4*(base+2.473931);
     let headroom=max(options.z*.4-.6*2.473931,0.);
     let baseline=hdr_bt2390(exp2(broad+log_y-base),headroom);
-    let gains=options.y*vec2(exp2(-.5*appearance.y),exp2(.5*appearance.y));
+    // The reviewed 130% contrast / +30% micro baseline. UI values are relative.
+    let balance=appearance.y+.3;
+    let gains=(1.3*options.y)*vec2(exp2(-.5*balance),exp2(.5*balance));
     var mapped=baseline;
     if baseline>0. && baseline<1. && (any(gains!=vec2(1.)) || options.x!=0.) {
         let u=hdr_log_odds(baseline);

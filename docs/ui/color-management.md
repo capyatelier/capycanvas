@@ -250,31 +250,37 @@ control. In the Paint and Photo
 starting layouts it shares Color's tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
-For HDR artwork, **Proof → SDR** uses a circular control with a small live SDR
-preview of the image. The **center is the automatic baseline**, at 100% contrast.
+For HDR artwork, **Proof → SDR** uses a circular control. Its glass-like field
+shows the directions: blended on the left, fine ripples on the right, stronger
+contrast above and gray below. The **center is the balanced baseline**, at 100%
+contrast and 0% relative texture balance. This baseline includes the reviewed
+130% contrast / +30% fine-texture treatment.
 Move **up** for more contrast (up to 200%), or **down** for less (down to 50%).
 Move **left** to favor broad shapes and lighting (**macro**), or **right** to favor
 fine texture (**micro**). At centered balance, both change together. Range fitting
 stays fixed while adjusting the circle, so more contrast does not turn back into
 more compression at the top.
 
-The **top arc** adjusts Brightness, keeping black and white fixed. The **bottom
+The **top arc** adjusts Brightness from −50% to +50%, keeping black and white fixed. The **bottom
 arc** adjusts Color intensity: left lets bright highlights become white; right
 retains more color by lowering their brightness. Their ramps show dark-to-light
-and white-to-scene-color respectively. Small curved readouts show the values;
-hover or focus identifies the controls. No labels or Auto button occupy the panel.
+and white-to-color respectively. Color intensity defaults to **30%**.
+Small icons identify each percentage; the side values are horizontal with their
+icons above, while the arc values follow their tracks. Hover or focus gives the
+control names. No labels or Auto button occupy the panel.
 
 Drag, use arrow keys (Shift for larger steps), or double-click a control to reset
 it. Escape cancels an adjustment. The small refresh icon resets all appearance
 controls while preserving the stored HDR range. Reset returns the circle to its
 center. There are no older algorithm modes or custom-recipe placeholders.
-The small preview is a cached, reduced central crop; use the canvas and export
-preview to judge fine detail and the complete image. The
+The glass field is a fixed direction guide. Use the canvas and export preview
+to judge the image. The
 [algorithm, fixtures and qualification notes](../history/color-management-local-tone.md)
 explain the bounded local-Laplacian approximation and its limits.
 The [circular-control review](../history/color-management-proof-dial.md) records
 its original geometry. The [contrast update](../history/color-management-contrast-dial.md)
-records the current formulas, simplification and validation.
+records the contrast model. The [Proof polish review](../history/color-management-proof-polish.md)
+records the centered treatment, input fix and current validation.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.

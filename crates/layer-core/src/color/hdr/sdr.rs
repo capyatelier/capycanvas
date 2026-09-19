@@ -10,6 +10,10 @@ const DEFAULT_HEADROOM: f32 = 2.300_448_4;
 pub const BASELINE_COMPRESSION: f32 = 0.6;
 const GRAY_LOG: f32 = -2.473931;
 const ODDS_PIVOT: f32 = -2.187627;
+// Authored baseline: the reviewed 130% contrast / +30% micro treatment.
+// Stored controls and their readouts are relative to this baseline.
+const BASELINE_CONTRAST: f32 = 1.3;
+const BASELINE_BALANCE: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SdrRendition {
@@ -20,7 +24,7 @@ pub struct SdrRendition {
     pub headroom: f32,
     /// 0 favors luminous white highlights; 1 retains color by lowering luminance.
     pub highlight_color: f32,
-    /// -1 favors macro structure, +1 favors micro texture; 0 balances both.
+    /// Macro/micro balance relative to the authored baseline.
     pub balance: f32,
 }
 impl Default for SdrRendition {
@@ -29,7 +33,7 @@ impl Default for SdrRendition {
             exposure: 0.,
             contrast: 1.,
             headroom: DEFAULT_HEADROOM,
-            highlight_color: 0.,
+            highlight_color: 0.3,
             balance: 0.,
         }
     }
@@ -104,9 +108,11 @@ impl SdrRendition {
         Ok(r)
     }
     pub fn gains(self) -> [f32; 2] {
+        let contrast = BASELINE_CONTRAST * self.contrast;
+        let balance = BASELINE_BALANCE + self.balance;
         [
-            self.contrast * (-0.5 * self.balance).exp2(),
-            self.contrast * (0.5 * self.balance).exp2(),
+            contrast * (-0.5 * balance).exp2(),
+            contrast * (0.5 * balance).exp2(),
         ]
     }
     pub fn mapper(self, source: RgbSpace, destination: RgbSpace) -> SdrMapper {
@@ -412,7 +418,7 @@ mod tests {
         (builder.finish(|| false).unwrap(), pixels)
     }
     #[test]
-    fn center_is_exact_baseline_and_vertical_is_monotonic_at_every_balance() {
+    fn center_matches_reviewed_130_30_and_vertical_is_monotonic_at_every_balance() {
         let (guide, pixels) = fixture();
         let r = SdrRendition {
             headroom: 6.,
@@ -422,10 +428,21 @@ mod tests {
             let p = pixels[x];
             let position = [x as f32 + 0.5, 0.5];
             let base = guide.illumination(position, p[0].log2());
-            let expected = r
-                .mapper(RgbSpace::Srgb, RgbSpace::Srgb)
-                .baseline
-                .map((p[0].log2() - BASELINE_COMPRESSION * (base - GRAY_LOG)).exp2());
+            let curve = r.mapper(RgbSpace::Srgb, RgbSpace::Srgb).baseline;
+            let broad = GRAY_LOG + (1. - BASELINE_COMPRESSION) * (base - GRAY_LOG);
+            let y0 = curve.map((p[0].log2() - BASELINE_COMPRESSION * (base - GRAY_LOG)).exp2());
+            let b = log_odds(
+                curve
+                    .map(broad.exp2())
+                    .clamp(2f32.powi(-24), 1. - 2f32.powi(-24)),
+            );
+            // Independent reference to the previously approved 130% / +30%
+            // rendering, before destination gamut policy.
+            let expected = from_odds(
+                ODDS_PIVOT
+                    + 1.3 * 2f32.powf(-0.15) * (b - ODDS_PIVOT)
+                    + 1.3 * 2f32.powf(0.15) * (log_odds(y0) - b),
+            );
             let actual = r
                 .mapper(RgbSpace::Srgb, RgbSpace::Srgb)
                 .tone_local_premultiplied(p, position, &guide);
@@ -469,7 +486,7 @@ mod tests {
                     ..Default::default()
                 };
                 let g = r.gains();
-                assert!(((g[0] * g[1]).sqrt() - contrast).abs() < 1e-6);
+                assert!(((g[0] * g[1]).sqrt() - contrast * 1.3).abs() < 1e-6);
                 let mapper = r.mapper(RgbSpace::Srgb, RgbSpace::Srgb);
                 for alpha in [0.01, 0.25, 1.] {
                     let p = pixels[20];

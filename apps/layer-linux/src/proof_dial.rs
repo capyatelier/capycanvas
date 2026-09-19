@@ -1,10 +1,7 @@
 //! Circular Proof controls. Rust defines geometry and recipe mapping; GTK owns
-//! capture, keyboard/accessibility, drawing and one bounded thumbnail worker.
+//! capture, keyboard/accessibility and drawing. The direction texture is shared.
 use gtk::{cairo, gdk, glib, prelude::*, subclass::prelude::*};
-use layer_core::color::{
-    RgbSpace,
-    hdr::{LocalToneGuide, SdrRendition},
-};
+use layer_core::color::hdr::SdrRendition;
 use layer_ui::{
     ContactPhase,
     parameter_pad::{ParameterArc, ParameterDialGeometry},
@@ -13,74 +10,7 @@ use layer_ui::{
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    sync::Arc,
 };
-
-pub(crate) struct PreviewSource {
-    pub image: layer_render_wgpu::snapshot::SnapshotPreview,
-    pub guide: Arc<LocalToneGuide>,
-}
-impl PreviewSource {
-    fn accent(&self) -> [f64; 3] {
-        let matrix = self.image.space.linear_transform(RgbSpace::Srgb);
-        let mut sum = [0.; 3];
-        let mut weight = 0.;
-        for p in &self.image.pixels {
-            if p[3] <= 0. {
-                continue;
-            }
-            let rgb =
-                layer_core::color::rgb::apply(matrix, [p[0] as f64, p[1] as f64, p[2] as f64]);
-            let peak = rgb.into_iter().fold(0f64, f64::max);
-            if peak <= 0. {
-                continue;
-            }
-            let rgb = rgb.map(|v| RgbSpace::Srgb.encode((v / peak).clamp(0., 1.)));
-            let minimum = rgb.into_iter().fold(1f64, f64::min);
-            let w = (1. - minimum).powi(2) * f64::from(p[3]);
-            for c in 0..3 {
-                sum[c] += rgb[c] * w;
-            }
-            weight += w;
-        }
-        if weight > 1e-6 {
-            sum.map(|v| v / weight)
-        } else {
-            [0.65; 3]
-        }
-    }
-    fn render(&self, recipe: SdrRendition) -> Vec<u8> {
-        let image = &self.image;
-        let mapper = recipe.mapper(image.space, RgbSpace::Srgb);
-        let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
-        for (i, &pixel) in image.pixels.iter().enumerate() {
-            let position = [i as u32 % image.extent[0], i as u32 / image.extent[0]];
-            let position = std::array::from_fn(|c| {
-                (position[c] as f32 + 0.5) * self.guide.document_extent[c] as f32
-                    / image.extent[c] as f32
-            });
-            let pixel = mapper.map_local_premultiplied(pixel, position, &self.guide);
-            let a = pixel[3].clamp(0., 1.);
-            // Cairo's ARGB32 transport is a disposable SDR UI preview only.
-            let rgb: [u8; 3] = std::array::from_fn(|c| {
-                (RgbSpace::Srgb
-                    .encode(if a > 0. { f64::from(pixel[c] / a) } else { 0. })
-                    .clamp(0., 1.)
-                    * f64::from(a)
-                    * 255.)
-                    .round() as u8
-            });
-            bytes.extend_from_slice(
-                &((u32::from((a * 255.).round() as u8) << 24)
-                    | (u32::from(rgb[0]) << 16)
-                    | (u32::from(rgb[1]) << 8)
-                    | u32::from(rgb[2]))
-                .to_ne_bytes(),
-            );
-        }
-        bytes
-    }
-}
 
 mod layout {
     use super::*;
@@ -140,6 +70,10 @@ mod layout {
                 allocate(arc.upcast_ref(), [0., 0., size, size]);
             }
             allocate(p.reset.upcast_ref(), g.reset);
+            for (icon, readout) in p.icons.iter().zip(g.readouts(size)) {
+                icon.set_pixel_size(readout.icon[2].round() as i32);
+                allocate(icon.upcast_ref(), readout.icon);
+            }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
@@ -154,6 +88,9 @@ mod layout {
             ] {
                 obj.snapshot_child(child, snapshot);
             }
+            for icon in &p.icons {
+                obj.snapshot_child(icon, snapshot);
+            }
             let size = obj.width().min(obj.height()) as f32;
             let Some(g) = ParameterDialGeometry::new(size) else {
                 return;
@@ -166,31 +103,35 @@ mod layout {
             ));
             cr.translate((obj.width() as f64 - f64::from(size)) * 0.5, 0.);
             let v = p.pad.get();
-            let contrast = format!("{:.0}%", v[1].exp2() * 100.);
-            let balance = format!("{:+.0}%", v[0] * 100.);
-            // Side openings carry the inner control's readouts; the outer arcs
-            // carry their own values above and below. All names are in tooltips.
-            let radius = f64::from(g.field.disc_radius() + g.arcs[0].marker_radius) + 5.;
-            curved_text(
-                &cr,
-                obj.upcast_ref(),
-                &contrast,
-                g.field.center,
-                radius,
-                180.,
-                true,
-                size,
-            );
-            curved_text(
-                &cr,
-                obj.upcast_ref(),
-                &balance,
-                g.field.center,
-                radius,
-                0.,
-                false,
-                size,
-            );
+            let r = p.recipe.get();
+            let values = [
+                format!("{:.0}%", v[1].exp2() * 100.),
+                format!("{:+.0}%", v[0] * 100.),
+                format!("{:+.0}%", r.exposure * 25.),
+                format!("{:.0}%", r.highlight_color * 100.),
+            ];
+            for (text, readout) in values.iter().zip(g.readouts(size)) {
+                if let Some((radius, angle, reverse)) = readout.curve {
+                    curved_text(
+                        &cr,
+                        obj.upcast_ref(),
+                        text,
+                        g.field.center,
+                        radius as f64,
+                        angle as f64,
+                        reverse,
+                        size,
+                    );
+                } else {
+                    text_style(&cr, obj.upcast_ref(), size);
+                    let width = cr.text_extents(text).unwrap().x_advance();
+                    cr.move_to(
+                        f64::from(readout.text[0]) - width * 0.5,
+                        f64::from(readout.text[1]),
+                    );
+                    let _ = cr.show_text(text);
+                }
+            }
         }
     }
 }
@@ -201,7 +142,6 @@ mod arc_scale {
     #[derive(Default)]
     pub struct ArcScale {
         pub index: Cell<usize>,
-        pub(super) owner: RefCell<Weak<ProofDial>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for ArcScale {
@@ -241,11 +181,7 @@ mod arc_scale {
                 gradient.add_color_stop_rgb(0.5, 0.55, 0.55, 0.55);
                 gradient.add_color_stop_rgb(1., 1., 1., 1.);
             } else {
-                let color = self
-                    .owner
-                    .borrow()
-                    .upgrade()
-                    .map_or([0.82, 0.42, 0.18], |p| p.accent.get());
+                let color = [0.15, 0.55, 0.85];
                 gradient.add_color_stop_rgb(0., 0.95, 0.95, 0.95);
                 gradient.add_color_stop_rgb(1., color[0], color[1], color[2]);
             }
@@ -271,21 +207,6 @@ mod arc_scale {
             }
             let _ = cr.stroke();
             marker(&cr, g.point(f), g.marker_radius, obj.has_visible_focus());
-            let label = if index == 0 {
-                format!("{:+.0}%", obj.value() * 25.)
-            } else {
-                format!("{:.0}%", obj.value() * 100.)
-            };
-            curved_text(
-                &cr,
-                obj.upcast_ref(),
-                &label,
-                g.center,
-                (g.radius + g.width * 0.5 + 5.) as f64,
-                if index == 0 { -90. } else { 90. },
-                index == 1,
-                obj.width() as f32,
-            );
         }
     }
     impl RangeImpl for ArcScale {}
@@ -315,12 +236,8 @@ pub(crate) struct ProofDial {
     double: Cell<bool>,
     updating: Cell<bool>,
     changed: RefCell<Vec<Changed>>,
-    source: RefCell<Option<Arc<PreviewSource>>>,
     image: RefCell<Option<cairo::ImageSurface>>,
-    accent: Cell<[f64; 3]>,
-    rendering: Cell<bool>,
-    dirty: Cell<bool>,
-    serial: Cell<u64>,
+    icons: [gtk::Image; 4],
 }
 impl ProofDial {
     pub fn new() -> Rc<Self> {
@@ -334,7 +251,7 @@ impl ProofDial {
         field.set_focusable(true);
         field.set_parent(&root);
         field.update_property(&[gtk::accessible::Property::Label("Contrast and scale"),gtk::accessible::Property::Description("Up increases contrast. Left favors broad structure; right favors fine texture. Center restores the automatic baseline. Arrow keys adjust; Escape cancels; double-click resets.")]);
-        field.set_tooltip_text(Some("Contrast ↑ · Macro ← → Micro\nDrag to adjust. Arrow keys fine-tune; Shift moves farther. Double-click resets."));
+        field.set_tooltip_text(Some("Contrast ↑ · Macro ← → Micro\nGlass shows direction, not the image. Drag to adjust. Arrow keys fine-tune; Shift moves farther. Double-click resets."));
         let arcs = std::array::from_fn(|i| {
             let arc: ArcScale = glib::Object::builder()
                 .property("orientation", gtk::Orientation::Horizontal)
@@ -350,6 +267,14 @@ impl ProofDial {
             arc.set_widget_name(&format!("sdr-appearance-{}", spec.key));
             arc.update_property(&[gtk::accessible::Property::Label(spec.label)]);
             arc.set_tooltip_text(Some(if i==0{"Brightness · Darker ← → Brighter\nBlack and white stay fixed. Double-click resets."}else{"Color intensity · White ← → Color\nRetain more highlight color by lowering brightness. Double-click resets."}));
+            // GTK picks descendants before calling the parent's contains().
+            // Keep GtkRange's keyboard/accessibility behavior, but exclude its
+            // invisible linear trough/slider subtree from pointer targeting.
+            let mut child = arc.first_child();
+            while let Some(widget) = child {
+                widget.set_can_target(false);
+                child = widget.next_sibling();
+            }
             arc.set_parent(&root);
             arc
         });
@@ -362,6 +287,13 @@ impl ProofDial {
         reset.set_tooltip_text(Some("Reset SDR appearance"));
         reset.update_property(&[gtk::accessible::Property::Label("Reset SDR appearance")]);
         reset.set_parent(&root);
+        let icons = layer_ui::proof_panel::SDR_READOUT_ICONS.map(|name| {
+            let image = gtk::Image::from_icon_name(name);
+            image.set_opacity(0.62);
+            image.set_can_target(false);
+            image.set_parent(&root);
+            image
+        });
         let recipe = SdrRendition::default();
         let pad = sdr_pad_values(recipe);
         let p = Rc::new(Self {
@@ -377,17 +309,10 @@ impl ProofDial {
             double: Cell::new(false),
             updating: Cell::new(false),
             changed: Default::default(),
-            source: Default::default(),
             image: Default::default(),
-            accent: Cell::new([0.82, 0.42, 0.18]),
-            rendering: Cell::new(false),
-            dirty: Cell::new(false),
-            serial: Cell::new(0),
+            icons,
         });
         *p.root.imp().owner.borrow_mut() = Rc::downgrade(&p);
-        for a in &p.arcs {
-            *a.imp().owner.borrow_mut() = Rc::downgrade(&p);
-        }
         p.field.set_draw_func(glib::clone!(
             #[weak]
             p,
@@ -455,39 +380,13 @@ impl ProofDial {
         self.recipe.set(recipe);
         self.pad.set(sdr_pad_values(recipe));
         self.refresh();
-        self.render();
     }
     pub fn connect_changed(&self, f: impl Fn(ContactPhase, SdrRendition) + 'static) {
         self.changed.borrow_mut().push(Box::new(f));
     }
-    pub fn set_preview(self: &Rc<Self>, source: Option<Arc<PreviewSource>>) {
-        if self
-            .source
-            .borrow()
-            .as_ref()
-            .zip(source.as_ref())
-            .is_some_and(|(a, b)| Arc::ptr_eq(a, b))
-        {
-            return;
-        }
-        if source.is_none() && self.source.borrow().is_none() {
-            return;
-        }
-        self.accent
-            .set(source.as_ref().map_or([0.65; 3], |source| source.accent()));
-        self.arcs[1].queue_draw();
-        *self.source.borrow_mut() = source;
-        self.image.borrow_mut().take();
-        self.serial.set(self.serial.get() + 1);
-        self.render();
-        self.field.queue_draw();
-    }
     fn refresh(&self) {
         self.updating.set(true);
         let r = self.recipe.get();
-        // Preserve older numeric recipes beyond the current soft brightness
-        // range rather than displaying a silently clamped value.
-        self.arcs[0].set_range((-4f64).min(r.exposure as f64), 4f64.max(r.exposure as f64));
         self.arcs[0].set_value(r.exposure as f64);
         self.arcs[1].set_value(r.highlight_color as f64);
         for (i, a) in self.arcs.iter().enumerate() {
@@ -526,7 +425,6 @@ impl ProofDial {
         self.recipe.set(recipe);
         self.pad.set(pad);
         self.refresh();
-        self.render();
         self.emit(ContactPhase::Move);
     }
     fn end(self: &Rc<Self>, cancel: bool) {
@@ -536,7 +434,6 @@ impl ProofDial {
                 self.recipe.set(r);
                 self.pad.set(p);
                 self.refresh();
-                self.render();
             }
             self.emit(if cancel {
                 ContactPhase::Cancel
@@ -562,6 +459,19 @@ impl ProofDial {
             }
         }
     }
+    fn contains(&self, part: usize, x: f64, y: f64) -> bool {
+        let Some(g) =
+            ParameterDialGeometry::new(self.field.width().min(self.field.height()) as f32)
+        else {
+            return false;
+        };
+        if part == 0 {
+            (x as f32 - g.field.center[0]).hypot(y as f32 - g.field.center[1])
+                <= g.field.disc_radius()
+        } else {
+            g.arcs[part - 1].contains([x as f32, y as f32])
+        }
+    }
     fn wire(self: &Rc<Self>, part: usize, widget: &gtk::Widget) {
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
@@ -570,21 +480,18 @@ impl ProofDial {
             #[weak(rename_to=p)]
             self,
             move |g, x, y| {
-                if part == 0 {
-                    let field =
-                        ParameterDialGeometry::new(p.field.width().min(p.field.height()) as f32)
-                            .unwrap()
-                            .field;
-                    if (x - field.center[0] as f64).hypot(y - field.center[1] as f64)
-                        > field.disc_radius() as f64
-                    {
-                        g.set_state(gtk::EventSequenceState::Denied);
-                        return;
-                    }
+                if !p.contains(part, x, y) || p.active.get().is_some_and(|a| a != part) {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                    return;
                 }
                 g.set_state(gtk::EventSequenceState::Claimed);
                 g.widget().unwrap().grab_focus();
-                p.double.set(false);
+                // Grouped click/drag controllers can see the same second press
+                // in either order. Never overwrite a double-click reset with
+                // this press's absolute slider position.
+                if p.double.get() {
+                    return;
+                }
                 p.origin.set([x, y]);
                 p.begin(part);
                 p.at(part, x, y);
@@ -603,12 +510,16 @@ impl ProofDial {
         drag.connect_drag_end(glib::clone!(
             #[weak(rename_to=p)]
             self,
-            move |_, _, _| p.end(false)
+            move |_, _, _| if p.active.get() == Some(part) {
+                p.end(false)
+            }
         ));
         drag.connect_cancel(glib::clone!(
             #[weak(rename_to=p)]
             self,
-            move |_, _| p.end(true)
+            move |_, _| if p.active.get() == Some(part) {
+                p.end(true)
+            }
         ));
         widget.add_controller(drag.clone());
         let click = gtk::GestureClick::new();
@@ -617,7 +528,14 @@ impl ProofDial {
         click.connect_pressed(glib::clone!(
             #[weak(rename_to=p)]
             self,
-            move |_, n, _, _| if n == 2 {
+            move |g, n, x, y| {
+                if !p.contains(part, x, y) || p.active.get().is_some_and(|a| a != part) {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                if n != 2 {
+                    return;
+                }
                 p.end(true);
                 p.double.set(true);
                 p.begin(part);
@@ -625,10 +543,24 @@ impl ProofDial {
                     let v = layer_ui::proof_panel::sdr_tone_pad().defaults();
                     p.change(sdr_from_pad(p.recipe.get(), v), v);
                 } else {
-                    p.arcs[part - 1].set_value(0.);
+                    p.arcs[part - 1].set_value(if part == 1 {
+                        0.
+                    } else {
+                        f64::from(SdrRendition::default().highlight_color)
+                    });
                 }
                 p.end(false);
             }
+        ));
+        click.connect_released(glib::clone!(
+            #[weak(rename_to=p)]
+            self,
+            move |_, _, _, _| p.double.set(false)
+        ));
+        click.connect_stopped(glib::clone!(
+            #[weak(rename_to=p)]
+            self,
+            move |_| p.double.set(false)
         ));
         widget.add_controller(click.clone());
         click.group_with(&drag);
@@ -685,13 +617,17 @@ impl ProofDial {
         focus.connect_leave(glib::clone!(
             #[weak(rename_to=p)]
             self,
-            move |_| p.end(true)
+            move |_| if p.active.get() == Some(part) {
+                p.end(true)
+            }
         ));
         widget.add_controller(focus);
         widget.connect_unmap(glib::clone!(
             #[weak(rename_to=p)]
             self,
-            move |_| p.end(true)
+            move |_| if p.active.get() == Some(part) {
+                p.end(true)
+            }
         ));
     }
     fn draw_field(&self, area: &gtk::DrawingArea, cr: &cairo::Context, w: i32, h: i32) {
@@ -701,27 +637,29 @@ impl ProofDial {
         cr.arc(center[0], center[1], r, 0., std::f64::consts::TAU);
         let _ = cr.save();
         cr.clip();
-        let dark = adw::StyleManager::default().is_dark();
-        let base = if dark { 0.18 } else { 0.78 };
-        cr.set_source_rgb(base, base, base);
-        let _ = cr.paint();
+        let edge = ((2. * r * f64::from(area.scale_factor())).ceil() as u32).clamp(64, 512);
+        if self
+            .image
+            .borrow()
+            .as_ref()
+            .is_none_or(|image| image.width() != edge as i32)
+        {
+            let bytes = layer_ui::proof_panel::sdr_direction_texture(edge);
+            *self.image.borrow_mut() = cairo::ImageSurface::create_for_data(
+                bytes,
+                cairo::Format::ARgb32,
+                edge as i32,
+                edge as i32,
+                edge as i32 * 4,
+            )
+            .ok();
+        }
         if let Some(image) = self.image.borrow().as_ref() {
-            // A live central crop. Illumination used full document coordinates.
-            let scale = (2. * r / image.width() as f64).max(2. * r / image.height() as f64);
-            cr.translate(
-                center[0] - image.width() as f64 * scale * 0.5,
-                center[1] - image.height() as f64 * scale * 0.5,
-            );
-            cr.scale(scale, scale);
+            cr.translate(center[0] - r, center[1] - r);
+            cr.scale(2. * r / f64::from(edge), 2. * r / f64::from(edge));
             if cr.set_source_surface(image, 0., 0.).is_ok() {
                 let _ = cr.paint();
             }
-        } else {
-            let gradient = cairo::LinearGradient::new(0., 0., 2. * r, 2. * r);
-            gradient.add_color_stop_rgb(0., 0.65, 0.65, 0.65);
-            gradient.add_color_stop_rgb(1., 0.12, 0.12, 0.12);
-            let _ = cr.set_source(&gradient);
-            let _ = cr.paint();
         }
         let _ = cr.restore();
         {
@@ -732,47 +670,6 @@ impl ProofDial {
             let marker_radius = ParameterDialGeometry::new(size).unwrap().arcs[0].marker_radius;
             marker(cr, point, marker_radius, area.has_visible_focus());
         }
-    }
-    fn render(self: &Rc<Self>) {
-        self.dirty.set(true);
-        if self.rendering.replace(true) {
-            return;
-        }
-        glib::spawn_future_local(glib::clone!(
-            #[weak(rename_to=p)]
-            self,
-            async move {
-                loop {
-                    p.dirty.set(false);
-                    let Some(source) = p.source.borrow().clone() else {
-                        break;
-                    };
-                    let recipe = p.recipe.get();
-                    let serial = p.serial.get();
-                    let extent = source.image.extent;
-                    let result = gtk::gio::spawn_blocking(move || source.render(recipe)).await;
-                    if serial == p.serial.get() && recipe == p.recipe.get() {
-                        if let Ok(bytes) = result {
-                            if let Ok(image) = cairo::ImageSurface::create_for_data(
-                                bytes,
-                                cairo::Format::ARgb32,
-                                extent[0] as i32,
-                                extent[1] as i32,
-                                extent[0] as i32 * 4,
-                            ) {
-                                *p.image.borrow_mut() = Some(image);
-                                p.field.queue_draw();
-                            }
-                        }
-                    }
-                    if !p.dirty.get() {
-                        break;
-                    }
-                    glib::timeout_future(std::time::Duration::from_millis(16)).await;
-                }
-                p.rendering.set(false);
-            }
-        ));
     }
 }
 
@@ -813,19 +710,7 @@ fn curved_text(
     reverse: bool,
     size: f32,
 ) {
-    let ink = widget.color();
-    cr.set_source_rgba(
-        ink.red() as f64,
-        ink.green() as f64,
-        ink.blue() as f64,
-        0.62,
-    );
-    cr.select_font_face(
-        "Adwaita Sans",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Normal,
-    );
-    cr.set_font_size((size as f64 * 0.044).clamp(9., 12.));
+    text_style(cr, widget, size);
     let advance: f64 = text
         .chars()
         .map(|c| cr.text_extents(&c.to_string()).unwrap().x_advance())
@@ -852,4 +737,20 @@ fn curved_text(
         let _ = cr.restore();
         cursor += w;
     }
+}
+
+fn text_style(cr: &cairo::Context, widget: &gtk::Widget, size: f32) {
+    let ink = widget.color();
+    cr.set_source_rgba(
+        ink.red() as f64,
+        ink.green() as f64,
+        ink.blue() as f64,
+        0.62,
+    );
+    cr.select_font_face(
+        "Adwaita Sans",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Normal,
+    );
+    cr.set_font_size(f64::from(ParameterDialGeometry::text_size(size)));
 }

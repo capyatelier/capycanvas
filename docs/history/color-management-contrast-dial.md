@@ -1,5 +1,9 @@
 # Contrast × Scale — SDR Proof review
 
+Historical checkpoint. The [Proof polish update](color-management-proof-polish.md)
+rebases the center to the reviewed 130% / +30% treatment, defaults Color to 30%,
+and replaces the image crop with a directional glass field.
+
 September 2026. Replaces the Strength/Balance mapping in the
 [circular Proof control](color-management-proof-dial.md). GTK retains the same
 circle, brightness/color arcs, small curved values, keyboard behavior and reset.

@@ -113,7 +113,6 @@ impl LocalToneView {
             }
             *self.wanted.borrow_mut() = key.clone();
             self.published.borrow_mut().take();
-            w.proof_panel.set_preview(None);
             self.changed.set(Instant::now());
             if let Some(g) = w.gpu.borrow().as_ref() {
                 let _ = g.session.engine().backend().set_local_tone(None);
@@ -179,9 +178,7 @@ impl LocalToneView {
                     let mut renderer = gpu
                         .capture(project, background, time, Default::default(), c)
                         .map_err(|e| e.to_string())?;
-                    let guide = renderer.local_tone_guide()?;
-                    let image = renderer.preview_linear_document([128, 128]);
-                    Ok::<_, String>((guide, image))
+                    renderer.local_tone_guide()
                 })
                 .await
                 .map_err(|_| "Local tone worker stopped".to_string())
@@ -192,16 +189,7 @@ impl LocalToneView {
                     && Self::key(&w).as_ref() == Some(&key)
                 {
                     let result = match result {
-                        Ok((guide, image)) => {
-                            let result = Self::publish(&w, guide.clone()).await;
-                            if result.is_ok() && Self::key(&w).as_ref() == Some(&key) {
-                                match image {
-                                    Ok(image) => w.proof_panel.set_preview(Some(Arc::new(crate::proof_dial::PreviewSource { image, guide }))),
-                                    Err(e) => eprintln!("Proof thumbnail unavailable: {e}"),
-                                }
-                            }
-                            result
-                        },
+                        Ok(guide) => Self::publish(&w, guide).await,
                         Err(e) => Err(e),
                     };
                     if Self::key(&w).as_ref() == Some(&key) {

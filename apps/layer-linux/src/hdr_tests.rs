@@ -794,10 +794,11 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
 fn native_local_tone_pad_and_five_hdr_photos() {
     let app=native_test_app("art.capycanvas.LocalToneReview");
     let directory=std::path::Path::new("../../artifacts/color-m4/local-tone/images/review").canonicalize().unwrap();
-    let evidence=std::path::Path::new("../../artifacts/color-m4/contrast-dial/native");std::fs::create_dir_all(evidence).unwrap();let evidence=evidence.canonicalize().unwrap();
+    let evidence=std::path::Path::new("../../artifacts/color-m4/proof-polish/native");std::fs::create_dir_all(evidence).unwrap();let evidence=evidence.canonicalize().unwrap();
     for name in ["abandoned_hall_01","venice_sunset","neon_photostudio","kiara_1_dawn","studio_small_09"] {
         let path=directory.join(format!("{name}_2k.capy"));
-        let p=layer_core::Project::read(std::fs::File::open(&path).unwrap(),Default::default()).unwrap();
+        let mut p=layer_core::Project::read(std::fs::File::open(&path).unwrap(),Default::default()).unwrap();
+        p.document.sdr_rendition=SdrRendition {headroom:p.document.sdr_rendition.headroom,..Default::default()};
         let recipe=p.document.sdr_rendition;let source=p.document.layers[0].source.clone();
         let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);invoke(&w,CommandId::SdrRendition);appearance(&w);
         let start=Instant::now();
@@ -840,7 +841,8 @@ fn native_local_tone_pad_and_five_hdr_photos() {
         assert!(keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Left,&0u32,&gdk::ModifierType::empty()]));
         assert_ne!(w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition,edited);
         keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Escape,&0u32,&gdk::ModifierType::empty()]);pump(20);assert_eq!(project(&w).document.sdr_rendition,edited,"Escape restores gesture");
-        clicks.emit_by_name::<()>("pressed",&[&2i32,&40f64,&40f64]);pump(20);
+        clicks.emit_by_name::<()>("pressed",&[&2i32,&(geometry.field.center[0] as f64),&(geometry.field.center[1] as f64)]);pump(20);
+        clicks.emit_by_name::<()>("released",&[&2i32,&(geometry.field.center[0] as f64),&(geometry.field.center[1] as f64)]);
         let reset=project(&w).document.sdr_rendition;assert_eq!((reset.contrast,reset.balance),(recipe.contrast,recipe.balance));
         assert_eq!(project(&w).document.layers[0].source,source,"proof must not edit source");
         assert_eq!(w.local_tone.ready_count(),count);
@@ -921,5 +923,99 @@ fn native_hdr_large_proof_dial_responsiveness() {
     assert_ne!(rendition(),before);
     invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before);
     assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers,layers,"Proof must preserve the master");
+    w.window.destroy();pump(100);
+}
+
+
+#[test]
+#[ignore = "private Wayland display; GTK widget picking including Scale children"]
+fn native_proof_dial_hit_regions() {
+    let _app = native_test_app("art.capycanvas.ProofDialHits");
+    for size in [128, 160, 226, 320, 400] {
+        let dial = crate::proof_dial::ProofDial::new();
+        let window = gtk::Window::builder().default_width(size).default_height(size).child(&dial.root).build();
+        window.present(); pump(150);
+        let field = &dial.field;
+        let g = layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
+        for y in (0..field.height()).step_by(2) {
+            for x in (0..field.width()).step_by(2) {
+                let distance = (x as f32-g.field.center[0]).hypot(y as f32-g.field.center[1]);
+                if distance < g.field.disc_radius()-0.5 {
+                    let p = field.compute_point(&dial.root, &gtk::graphene::Point::new(x as f32,y as f32)).unwrap();
+                    let hit = dial.root.pick(p.x() as f64,p.y() as f64,gtk::PickFlags::DEFAULT).unwrap();
+                    assert_eq!(hit,field.clone().upcast::<gtk::Widget>(),"size {size}, circle ({x},{y}) was stolen by {}",hit.widget_name());
+                }
+            }
+        }
+        for (i,arc) in dial.arcs.iter().enumerate() {
+            for n in 0..=100 {
+                let point=g.arcs[i].point(n as f32/100.);
+                let p=arc.compute_point(&dial.root,&gtk::graphene::Point::new(point[0],point[1])).unwrap();
+                let hit=dial.root.pick(p.x() as f64,p.y() as f64,gtk::PickFlags::DEFAULT).unwrap();
+                assert_eq!(hit,arc.clone().upcast::<gtk::Widget>(),"visible arc {i} at {n}%");
+            }
+        }
+        let output=std::path::Path::new("../../artifacts/color-m4/proof-polish/controls");
+        std::fs::create_dir_all(output).unwrap();
+        let snap=gtk::Snapshot::new();
+        gtk::WidgetPaintable::new(Some(&dial.root)).snapshot(&snap,dial.root.width() as f64,dial.root.height() as f64);
+        window.renderer().unwrap().render_texture(&snap.to_node().unwrap(),None).save_to_png(output.join(format!("dial-{size}.png"))).unwrap();
+        window.destroy();pump(20);
+    }
+}
+
+
+#[test]
+#[ignore = "isolated Mutter native-input.js --native-test=native_proof_dial_pointer_input"]
+fn native_proof_dial_pointer_input() {
+    let app = native_test_app("art.capycanvas.ProofDialPointer");
+    let mut p = new_drawing(64,64).unwrap(); p.document.color.depth=SampleDepth::F16;
+    let w=Workspace::with_project(&app,Some((p,None)));
+    w.window.maximize(); w.window.present(); ready(&w);
+    invoke(&w,CommandId::SdrRendition); appearance(&w); pump(300);
+    let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
+    let g=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
+    let at=|point:[f32;2]| {let p=field.compute_point(&w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();[p.x(),p.y()]};
+    let rendition=||w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
+    let dir=std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let mut step=0;
+    std::fs::write(dir.join("ready"),"ready").unwrap();
+    let mut perform=|events:serde_json::Value| {
+        let path=dir.join(format!("step-{step}.json"));
+        std::fs::write(path.with_extension("tmp"),serde_json::to_vec(&events).unwrap()).unwrap();
+        std::fs::rename(path.with_extension("tmp"),path).unwrap();
+        let until=Instant::now()+Duration::from_secs(20);
+        while !dir.join(format!("done-{step}")).exists() {pump(2);assert!(Instant::now()<until);}
+        step+=1;pump(80);
+    };
+    for touch in [false,true] {
+        let event=|phase:&str,point:[f32;2]| if touch {serde_json::json!({"touch":phase,"point":point})}
+            else {match phase {"down"=>serde_json::json!({"point":point,"down":true}),"up"=>serde_json::json!({"down":false}),_=>serde_json::json!({"point":point})}};
+        // Actual down/move/up, including the horizontal strip stolen by the old
+        // invisible GtkRange children. Drag across an arc without changing owner.
+        for start in [[0.5,0.5],[0.2,0.5],[0.8,0.5],[0.5,0.2],[0.5,0.8]] {
+            let before=rendition();
+            let from=at(g.field.disc_marker(start));let to=at(g.arcs[0].point(0.7));
+            perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
+            let after=rendition();assert_ne!(after,before,"circle contact must change contrast/scale; touch={touch}");
+            assert_eq!((after.exposure,after.highlight_color),(before.exposure,before.highlight_color),"circle contact must not edit arcs");
+            invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before,"one undo per circle gesture");
+        }
+        for i in 0..2 {
+            let before=rendition();let from=at(g.arcs[i].point(0.2));let to=at(g.arcs[i].point(0.8));
+            perform(serde_json::json!([event("down",from),event("move",to),event("up",to)]));
+            let after=rendition();assert_eq!((after.contrast,after.balance),(before.contrast,before.balance));
+            if i==0 {assert_ne!(after.exposure,before.exposure);assert_eq!(after.highlight_color,before.highlight_color);}
+            else {assert_eq!(after.exposure,before.exposure);assert_ne!(after.highlight_color,before.highlight_color);}
+            invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before,"one undo per arc gesture");
+        }
+    }
+    // Double-click color resets to 30%, not zero, through real GTK delivery.
+    let color=find_named(w.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color").unwrap().downcast::<gtk::Scale>().unwrap();
+    color.set_value(0.8);pump(50);
+    let point=at(g.arcs[1].point(0.6));
+    perform(serde_json::json!([{"point":point,"down":true},{"down":false},{"down":true},{"down":false}]));
+    assert_eq!(rendition().highlight_color,0.3);
+    std::fs::write(dir.join("finished"),"done").unwrap();
     w.window.destroy();pump(100);
 }
