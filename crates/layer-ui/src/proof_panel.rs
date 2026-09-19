@@ -139,7 +139,7 @@ pub const SDR_READOUT_ICONS: [&str; 4] = [
 ];
 
 /// Fixed directional illustration, never a sampled/modified document preview.
-/// Smooth glass folds on the left acquire fine ripples to the right; the top
+/// Broad liquid cells on the left become finer to the right; the top
 /// increases contrast and the bottom approaches neutral gray. Hosts cache it
 /// as an immutable texture. Opaque RGBA8 transport, bounded to 512².
 pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
@@ -179,26 +179,58 @@ fn sdr_glass_sample(x: f32, y: f32) -> [f32; 3] {
     let lens = eta + 2.8 * (snell - eta);
     let px = x * lens + 0.04 * y * (1. - radius2);
     let py = y * lens - 0.04 * x * (1. - radius2);
-    let right = (px + 1.) * 0.5;
     let up = ((y + 1.) * 0.5).clamp(0., 1.);
-    // Keep the same flowing fold family, with finer texture to the right.
-    let flow = right
-        + 0.23 * (2.7 * py - 0.35).sin() * (1. - 0.25 * right)
-        + 0.06 * (4.5 * py + 2. * right).sin();
-    let phase = std::f32::consts::TAU * (0.4 * flow + 3.6 * flow.powi(3))
-        + 0.35 * (3. * py + right).sin();
-    let wave = 0.7 * phase.sin() + 0.16 * (2. * phase + 0.3).sin();
-    let reflection = (phase - 0.7).cos().max(0.).powf(4. + 10. * right.clamp(0., 1.));
-    // Clear folds without a broad white reflection or surface glow. Contrast
+    let cell = liquid_cells(px, py);
+    // Clean cell centers without a broad white reflection or surface glow. Contrast
     // follows screen-space up so the bottom still fades toward neutral gray.
     let contrast = 0.49 * up.powf(0.8);
-    let v = 0.5 + contrast * ((2.4 + 1.8 * up) * (0.8 * wave + 0.55 * reflection - 0.17)).tanh();
-    let tint = 0.025 * up * (reflection - 0.5 * wave);
+    let v = 0.5 + contrast * (1.9 * cell).tanh();
+    let tint = 0.015 * up * cell;
     // A narrow, angle-dependent rim defines the dome without a drop shadow.
-    // Let it dominate at the silhouette, where compressed folds are subpixel.
+    // Let it dominate at the silhouette, where compressed cells are subpixel.
     let rim = (1. - dome).powi(3);
     let rim_light = 0.12 + 0.70 * (-0.55 * x + 0.83 * y).clamp(0., 1.).powi(6);
     [v - 0.7 * tint, v + 0.05 * tint, v + tint].map(|c| c * (1. - rim) + rim_light * rim)
+}
+
+fn liquid_cells(x: f32, y: f32) -> f32 {
+    // A gentle flow bends the cell boundaries. The complex exponential then
+    // increases density toward the right without stretching cells into stripes.
+    let xw = x + 0.12 * (2.2 * y + 0.8 * x.sin()).sin();
+    let yw = y + 0.10 * (2.5 * x - 0.65 * (2. * y).sin()).sin();
+    let radius = 4.5 * (0.75 * xw).exp();
+    let u = radius * (0.75 * yw).cos() + 8.1;
+    let v = radius * (0.75 * yw).sin() + 5.7;
+    let ix = u.floor() as i32;
+    let iy = v.floor() as i32;
+    let mut sum = 0.;
+    let mut strongest: f32 = 0.;
+    let mut shade = 0.;
+    for j in -1..=1 {
+        for i in -1..=1 {
+            let h = liquid_cell_hash(ix + i, iy + j);
+            let sx = (ix + i) as f32 + 0.18 + 0.64 * (h & 1023) as f32 / 1023.;
+            let sy = (iy + j) as f32 + 0.18 + 0.64 * ((h >> 10) & 1023) as f32 / 1023.;
+            let d2 = (u - sx).powi(2) + (v - sy).powi(2);
+            let w = (-5.5 * d2).exp();
+            sum += w;
+            strongest = strongest.max(w);
+            shade += w * ((h >> 20) & 1023) as f32 / 1023.;
+        }
+    }
+    // Soft ownership rounds the corners into liquid patches and leaves narrow
+    // connecting channels. Small shade variations keep the centers uncluttered.
+    let ownership = strongest / sum;
+    let t = ((ownership - 0.47) / 0.24).clamp(0., 1.);
+    let core = t * t * (3. - 2. * t);
+    (1. - core) * 0.9 + core * (-0.75 + 0.45 * shade / sum)
+}
+
+fn liquid_cell_hash(x: i32, y: i32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(0x8da6b343) ^ (y as u32).wrapping_mul(0xd8163841);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb352d);
+    h ^ (h >> 15)
 }
 pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};

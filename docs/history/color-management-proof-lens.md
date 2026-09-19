@@ -3,8 +3,8 @@
 Follow-up to the [Proof control polish](color-management-proof-polish.md).
 
 The glass field has pronounced spherical refraction, a small fluid twist and a
-narrow grazing rim. It has no surface glow or drop shadow. Pattern
-spacing still tightens to the right; contrast follows the original screen-space
+narrow grazing rim. It has no surface glow or drop shadow. Rounded liquid cells
+become finer to the right; contrast follows the original screen-space
 vertical coordinate, so the bottom remains the low-contrast direction. This is
 an illustration, independent of the document's tone mapping.
 
@@ -113,3 +113,25 @@ passed at 128, 160, 226, 320 and 400 logical pixels, with one texture build,
 were visually inspected, including the compressed rim. Evidence is under
 `artifacts/color-m4/proof-dome/`. The earlier real-pointer and 60 MP checks were
 not repeated; this revision changes only the cached illustration.
+
+## Liquid cells
+
+Rounded, irregular cells replace the striped folds. A gently warped cellular
+field has clean centers and narrow connected channels. Small neutral shade
+variations distinguish adjacent cells without adding surface glow. A complex
+exponential coordinate mapping progressively increases density toward the right,
+so cells stay rounded as they get smaller. Contrast still fades toward gray at
+the bottom. The spherical edge refraction and narrow grazing rim are retained.
+
+The pattern is deterministic shared Rust code, with nine nearby cell sites per
+sample and no assets or new dependencies. The existing one-time background
+generation, shared 512² texture, edge antialiasing and retained rendering remain
+in place. Tone mapping, control values, document data and exports are unchanged.
+
+Validation: release and native-test builds passed. The five-size GTK
+hit-region/cache check passed again, reusing one texture across 600 changed-value
+updates without repainting unchanged arcs. The cell texture took 71.21 ms to
+generate once off the UI thread. Screenshots at 128, 226 and 400 logical pixels
+were visually inspected. Logs and screenshots are under
+`artifacts/color-m4/proof-cells/`. Prior real-pointer and 60 MP evidence remains
+archived; those checks were not repeated for this pattern-only change.
