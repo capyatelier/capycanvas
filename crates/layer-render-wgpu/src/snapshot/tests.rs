@@ -575,6 +575,27 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
 }
 
 #[test]
+fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries() {
+    let mut project = rich_project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
+    project.document.width = 2053;
+    for layer in &mut project.document.layers {
+        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
+    }
+    let (live, expected) = frame(&project);
+    let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default(), Default::default()).unwrap();
+    let mut actual = Vec::new();
+    let mut y = 0;
+    while y < capture.extent()[1] {
+        let (rows, pixels) = capture.read_band(y).unwrap();
+        actual.extend(pixels); y += rows;
+    }
+    assert_eq!(actual.len(), expected.len());
+    for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
+        assert!((a-b).abs() <= 2e-6, "shared snapshot column seam: {a} != {b}");
+    }
+}
+
+#[test]
 fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
     for color in [
         DocumentColor::default(),

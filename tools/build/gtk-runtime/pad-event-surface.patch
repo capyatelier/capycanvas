@@ -1,0 +1,12 @@
+--- a/gdk/gdksurface.c
++++ b/gdk/gdksurface.c
+@@ -2990,7 +2990,8 @@
+   gint64 begin_time = GDK_PROFILER_CURRENT_TIME;
+   gboolean handled = FALSE;
+ 
+-  if (!GDK_SURFACE_IS_MAPPED (surface))
++  /* A pad mode notification can precede keyboard focus on Wayland. */
++  if (surface == NULL || !GDK_SURFACE_IS_MAPPED (surface))
+     return FALSE;
+ 
+   if (check_autohide (event))

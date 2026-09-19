@@ -5,6 +5,9 @@ use super::*;
 use layer_core::color::{RgbSpace, SampleDepth, hdr::SdrRendition};
 use layer_ui::{ColorInputModel, ColorSlot, EffectAction};
 
+#[path = "hdr_qualification_tests.rs"]
+mod qualification;
+
 fn project(w: &Rc<Workspace>) -> layer_core::Project {
     layer_core::Project::read(std::io::Cursor::new(snapshot(w)), Default::default()).unwrap()
 }

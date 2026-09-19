@@ -1,5 +1,12 @@
 # GTK runtime for HDR review
 
+Normal Linux packages now include this fix through
+[`../gtk-runtime/build.sh`](../gtk-runtime/build.sh) and
+`apps/layer-linux/package.mjs`. This directory's `build.sh` is the compatibility
+entry point for the archived review launcher and delegates to that same recipe.
+The package includes the complete source archive, patch, LGPL license and rebuild
+instructions; it does not depend on a user's review-artifact directory.
+
 `bash tools/build/gtk-review/build.sh` builds GTK 4.22.4 into
 `artifacts/color-m4/review/runtime`. It never installs system packages.
 The source archive is pinned by SHA256 and retained next to its build.

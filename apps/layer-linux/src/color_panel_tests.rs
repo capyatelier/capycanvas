@@ -52,6 +52,7 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
     reference.download(&mut expected, side * 4);
     texture.download(&mut actual, side * 4);
     let mut maximum = 0;
+    let mut worst = (0, 0, 0, 0, 0);
     let mut samples = 0;
     for y in 0..side {
         for x in 0..side {
@@ -62,7 +63,11 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
             }
             let offset = (y * side + x) * 4;
             for c in 0..4 {
-                maximum = maximum.max(actual[offset + c].abs_diff(expected[offset + c]));
+                let difference = actual[offset + c].abs_diff(expected[offset + c]);
+                if difference > maximum {
+                    maximum = difference;
+                    worst = (x, y, c, actual[offset + c], expected[offset + c]);
+                }
             }
             samples += 1;
         }
@@ -70,7 +75,7 @@ fn assert_hue_guide_colors(w: &Workspace, texture: &gtk::gdk::Texture) {
     assert!(samples > 100);
     assert!(
         maximum <= 2,
-        "{:?} hue guide differs from native gradient by {maximum}/255",
+        "{:?} hue guide differs from native gradient by {maximum}/255 at {worst:?}, side {side}",
         colors.wheel_shape()
     );
 }
