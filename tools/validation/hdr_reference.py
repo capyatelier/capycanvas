@@ -9,6 +9,7 @@ No Capy libraries are used by the oracle. Python 3 and FFmpeg are required.
 import argparse
 import hashlib
 import json
+import math
 import pathlib
 import struct
 import subprocess
@@ -82,9 +83,53 @@ def verify(root):
                       "max_pq16_code_error": max_pq, "max_sdr8_code_error": max_sdr}, indent=2))
 
 
+def verify_delivery(root):
+    """Cross-check independent decodes of EXR and explicitly clipped PQ delivery.
+
+    Declared tolerance: one 16-bit PQ code per channel. This checks the host's
+    complete output route; it does not treat matching Capy reimports as an oracle.
+    The authored local SDR mapper is covered separately by shared reference tests.
+    """
+    paths = [root / name for name in ("exr-delivery.exr", "hdr-delivery.png", "sdr-delivery.png")]
+    def stream(path):
+        return json.loads(run("ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)))["streams"][0]
+    exr, hdr, sdr = map(stream, paths)
+    assert exr["pix_fmt"] == "gbrapf32le" and exr["color_transfer"] == "linear", exr
+    metadata = {k: hdr[k] for k in ("color_space", "color_range", "color_transfer", "color_primaries")}
+    assert metadata == dict(color_space="gbr", color_range="pc", color_transfer="smpte2084", color_primaries="bt2020"), metadata
+    assert {(s["width"], s["height"]) for s in (exr, hdr, sdr)} == {(512, 384)}
+    count = 512 * 384
+    floats = run("ffmpeg", "-v", "error", "-i", str(paths[0]), "-f", "rawvideo", "-pix_fmt", "gbrapf32le", "-")
+    planes = struct.unpack(f"<{count * 4}f", floats)
+    codes = run("ffmpeg", "-v", "error", "-i", str(paths[1]), "-f", "rawvideo", "-pix_fmt", "rgba64le", "-")
+    matrix = ((0.627403895934699, 0.329283038377883, 0.043313065687418),
+              (0.069097289358232, 0.919540395075459, 0.011362315566309),
+              (0.016391438875150, 0.088013307877226, 0.895595253247624))
+    maximum = 0
+    negative = above = clipped = 0
+    for i, out in enumerate(struct.iter_unpack("<4H", codes)):
+        p = [planes[2 * count + i], planes[i], planes[count + i]]
+        assert all(map(math.isfinite, p))
+        assert planes[3 * count + i] == 1 and out[3] == 65535
+        negative += any(v < 0 for v in p)
+        above += any(v > 1 for v in p)
+        for c in range(3):
+            linear = sum(matrix[c][j] * p[j] for j in range(3))
+            clipped += linear < 0 or linear > 10000 / 203
+            expected = round(pq(max(0, min(10000 / 203, linear))) * 65535)
+            maximum = max(maximum, abs(expected - out[c]))
+    assert negative > 0 and above > 0 and clipped > 0
+    assert maximum <= 1, maximum
+    print(json.dumps({"pixels": count, "metadata": metadata, "negative_pixels": negative,
+                      "above_white_pixels": above, "clipped_channels": clipped,
+                      "max_pq16_code_error": maximum, "tolerance_pq16_codes": 1,
+                      "ffmpeg": run("ffmpeg", "-version").decode().splitlines()[0],
+                      "sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}}, indent=2))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["generate", "verify"])
+    parser.add_argument("operation", choices=["generate", "verify", "verify-delivery"])
     parser.add_argument("directory", type=pathlib.Path)
     args = parser.parse_args()
-    {"generate": generate, "verify": verify}[args.operation](args.directory)
+    {"generate": generate, "verify": verify, "verify-delivery": verify_delivery}[args.operation](args.directory)

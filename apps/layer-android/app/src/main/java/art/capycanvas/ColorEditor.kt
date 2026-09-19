@@ -42,7 +42,7 @@ private fun colorEpoch(host: CanvasHost): Long =
     val hdrIntensity=initialIntensity ?: if(host.panelContent?.objectOrNull("color_panel")?.optBoolean("hdr")==true)0f else null
     var form by remember {
         mutableStateOf(JSONObject(Native.colorUi(obj("type" to "form", "request" to obj(
-            "color" to initial, "document_space" to documentRgbSpace(host), "model" to (if(hdrIntensity!=null)"linear_rgb" else "document_rgb"), "intensity" to hdrIntensity, "rendition" to host.panelContent?.objectOrNull("color_panel")?.objectOrNull("rendition")
+            "color" to initial, "document_depth" to host.panelContent?.objectOrNull("state")?.objectOrNull("colors")?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdrIntensity!=null)"linear_rgb" else "document_rgb"), "intensity" to hdrIntensity, "rendition" to host.panelContent?.objectOrNull("color_panel")?.objectOrNull("rendition")
         )).toString())))
     }
     var intensityText by remember {mutableStateOf(if(form.getJSONObject("draft").isNull("intensity"))"" else form.getJSONObject("draft").getDouble("intensity").toString())}

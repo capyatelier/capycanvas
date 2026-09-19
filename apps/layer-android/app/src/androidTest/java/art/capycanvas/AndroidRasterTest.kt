@@ -167,7 +167,7 @@ class AndroidRasterTest {
             Native.projectWork(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
             native {Native.documentComplete(it,id,true,"null")}
             return file.readBytes()
-        } finally {Native.projectFree(task)}
+        } catch(e:Exception){native{Native.documentComplete(it,id,false,"null")};throw e} finally {Native.projectFree(task)}
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
@@ -188,7 +188,7 @@ class AndroidRasterTest {
         fun form()=native{JSONObject(Native.proofForm(it))}
         fun ready(){compose.waitUntil(120_000){native{JSONObject(Native.toneStatus(it)).getBoolean("ready")}};assertNull(host.failure)}
         open(input);refresh();ready()
-        val original=histogram()
+        var original=histogram()
         assertEquals("F16",JSONObject(original).getJSONObject("color").getString("depth"))
         assertTrue(JSONObject(original).getJSONArray("channels").objects().any{it.getLong("above")>0})
         compose.onNodeWithTag("color-edit-button").performClick()
@@ -196,6 +196,13 @@ class AndroidRasterTest {
         compose.onNodeWithText("Use Color").performClick();refresh()
         assertEquals(3.0,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.001)
         compose.onAllNodesWithText("Palettes…").assertCountEquals(0)
+        native {h->
+            val color=JSONObject(Native.colorUi(obj("type" to "form","request" to obj("color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"document_space" to "Srgb","document_depth" to "F16","model" to "linear_rgb","intensity" to 0,"fields" to org.json.JSONArray(listOf("-4","4","1","100")))).toString())).getJSONObject("value")
+            Native.dispatch(h,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(h,obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground","color" to color)).toString())
+        };refresh()
+        motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,30,256.0 to 192.0);refresh()
+        val painted=histogram();assertTrue(JSONObject(painted).getJSONArray("channels").objects().any{it.getLong("below")>0});assertNotEquals(original,painted)
+        action("undo");assertEquals(original,histogram());action("redo");assertEquals(painted,histogram());original=painted
         val first=manifest(save("hdr-original.capy"))
         action("sdr_rendition")
         compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
@@ -216,7 +223,16 @@ class AndroidRasterTest {
         refresh();val changed=form().getJSONObject("rendition").toString();assertNotEquals(before,changed)
         action("undo");assertEquals(before,form().getJSONObject("rendition").toString())
         action("redo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        val density=activity.resources.displayMetrics.density
+        val arc=JSONObject(Native.colorUi(obj("type" to "proof_dial","size" to padNode.size.width/density,"recipe" to form().getJSONObject("rendition")).toString())).getJSONArray("arcs").getJSONObject(0).getJSONArray("path")
+        fun arcPoint(i:Int)=arc.getJSONArray(i).let{androidx.compose.ui.geometry.Offset(it.getDouble(0).toFloat()*density,it.getDouble(1).toFloat()*density)}
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(arcPoint(16));moveTo(arcPoint(48));cancel()}
+        refresh();assertEquals(changed,form().getJSONObject("rendition").toString())
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(arcPoint(16));moveTo(arcPoint(48));up()}
+        refresh();assertNotEquals(JSONObject(changed).getDouble("exposure"),form().getJSONObject("rendition").getDouble("exposure"),.01)
+        action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
         assertEquals(original,histogram())
+        automation.takeScreenshot()?.let { screenshot->File(activity.getExternalFilesDir(null),"hdr-proof.png").outputStream().use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};screenshot.recycle() }
         compose.onNodeWithText("Close").performClick();refresh()
         val saved=save("hdr-master.capy");val manifest=manifest(saved)
         assertEquals(first.getJSONArray("blobs").toString(),manifest.getJSONArray("blobs").toString())
@@ -226,7 +242,11 @@ class AndroidRasterTest {
         try{task=native{Native.toneTask(it,cancel)};Native.captureCancel(cancel);assertTrue(runCatching{Native.toneWork(task)}.isFailure);assertTrue(runCatching{native{Native.toneApply(it,task)}}.isFailure)}finally{Native.toneRelease(task);Native.captureFree(cancel)}
         val sdr=png("hdr-sdr.png")
         val recipe=native{h->val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1);JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
-        png("hdr-pq.png",recipe)
+        assertTrue("Strict PQ delivery rejects out-of-range paint",runCatching{png("hdr-strict-rejected.png",recipe)}.isFailure)
+        val clipped=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "PngHdrMapped")).toString())).getJSONObject("recipe")}
+        png("hdr-pq.png",clipped)
+        val exr=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "Exr")).toString())).getJSONObject("recipe")}
+        val exrBytes=png("hdr-exact.exr",exr);assertArrayEquals(byteArrayOf(0x76,0x2f,0x31,0x01),exrBytes.copyOfRange(0,4))
         val recovery=File(files,"hdr-recovery.capy");val capture=native{Native.projectRecoveryTask(it,false)}
         try{Native.projectPublish(capture,recovery.absolutePath)}finally{Native.projectFree(capture)}
         native{Native.destroyGpuForTest(it)};compose.runOnUiThread{host.documentChanged()};compose.waitUntil(10_000){host.failure!=null}
@@ -237,6 +257,7 @@ class AndroidRasterTest {
         try{Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0);native{Native.projectAdopt(it,restore,"null")}}finally{Native.projectFree(restore)}
         refresh();ready();assertEquals(original,histogram());assertTrue(native{state(it).getJSONObject("document_file").getBoolean("modified")})
         scenario.recreate();scenario.onActivity{activity=it};compose.waitUntil(60_000){host.surfaceReady};refresh();ready();assertEquals(original,histogram())
+        open(File(files,"hdr-exact.exr"));refresh();ready();val exact=JSONObject(histogram());assertEquals("F32",exact.getJSONObject("color").getString("depth"));assertTrue(exact.getJSONArray("channels").objects().any{it.getLong("below")>0})
         open(File(files,"hdr-pq.png"));refresh();ready();assertEquals("F16",JSONObject(histogram()).getJSONObject("color").getString("depth"))
         open(File(files,"hdr-sdr.png"));refresh();assertEquals("U8",JSONObject(histogram()).getJSONObject("color").getString("depth"))
         println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; cancelled analysis; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
@@ -268,6 +289,11 @@ class AndroidRasterTest {
                 }else open(File(activity.filesDir,name))
                 refresh();entry.put("open_ms",SystemClock.uptimeMillis()-started);ready();entry.put("ready_ms",SystemClock.uptimeMillis()-started)
                 entry.put("cold_heartbeat_ms",summary(org.json.JSONArray(heartbeat.toList())));heartbeat.clear()
+                if(InstrumentationRegistry.getArguments().getString("hdrDiagnostics")=="true") {
+                    native{Native.dispatch(it,obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "stats","visible" to true)).toString())};refresh()
+                    val viewport=host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("viewport")
+                    native{Native.dispatch(it,obj("type" to "move_panel","panel" to "stats","viewport" to viewport,"target" to obj("kind" to "float","position" to org.json.JSONArray(listOf(80,80)))).toString())};refresh()
+                }
                 invoke("fit_canvas");invoke("pen");native{Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground","color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(1.8,.3,.1,1.0))))).toString())};refresh()
                 val center=if(name=="sparse4k")1920.0 to 1080.0 else when(name){"hdr24.png"->3000.0 to 2000.0;"hdr45.png"->4128.0 to 2752.0;else->4752.0 to 3168.0}
                 repeat(3){i->entry.getJSONArray("runs").put(motion(if(i==1)android.view.MotionEvent.TOOL_TYPE_FINGER else android.view.MotionEvent.TOOL_TYPE_STYLUS,180,center));persist()}
@@ -281,6 +307,17 @@ class AndroidRasterTest {
                 val background=Thread{try{Native.inspectionHistogram(concurrent)}catch(e:Exception){concurrentError=e.message}};background.start()
                 val saveStart=SystemClock.uptimeMillis();val saved=save("hdr-performance.capy");entry.put("save_ms",SystemClock.uptimeMillis()-saveStart);entry.put("saved_bytes",saved.size);background.join(150_000)
                 try{assertFalse(background.isAlive);assertNull(concurrentError)}finally{if(!background.isAlive)Native.captureFree(concurrentFlag)}
+                // Output uses the same atomic cancellation contract as the UI.
+                val exportFlag=Native.captureControl();val exportId=native{request(it,"export_document").first}
+                var exportTask=0L
+                val deadline=SystemClock.uptimeMillis()+60_000
+                while(exportTask==0L&&SystemClock.uptimeMillis()<deadline){exportTask=native{Native.projectExportTask(it,exportId,System.nanoTime(),exportFlag)};if(exportTask==0L){tick();SystemClock.sleep(10)}}
+                assertNotEquals(0L,exportTask)
+                val temporary=File(files,"cancelled-output.png");var exportFailure:Exception?=null
+                val exporting=Thread{try{Native.projectWork(exportTask,ParcelFileDescriptor.open(temporary,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)}catch(e:Exception){exportFailure=e}}
+                exporting.start();SystemClock.sleep(40);val cancelStart=SystemClock.uptimeMillis();Native.captureCancel(exportFlag);exporting.join(10_000)
+                try{assertFalse(exporting.isAlive);assertNotNull(exportFailure);entry.put("export_cancel_ms",SystemClock.uptimeMillis()-cancelStart);native{Native.documentComplete(it,exportId,false,"null")}}
+                finally{if(!exporting.isAlive){Native.projectFree(exportTask);Native.captureFree(exportFlag);temporary.delete()}}
                 // Cancel a real file decode using an independent atomic handle.
                 if(name!="sparse4k") {
                     val control=Native.captureControl();val job=native{h->val(id,f)=request(h,"open_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) to id}
@@ -306,8 +343,8 @@ class AndroidRasterTest {
         var selectedName=""
         fun setup(command:String="soft_proof_setup") {
             action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isNotEmpty()}
-            compose.waitUntil(10_000){compose.onAllNodes(hasTestTag("color-choice-Proof mode") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
-            compose.onNodeWithTag("color-choice-Proof mode").performClick();compose.onAllNodesWithText("Print").onLast().performClick()
+            compose.waitUntil(10_000){compose.onAllNodes(hasTestTag("proof-mode-print") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("proof-mode-print").performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile").fetchSemanticsNodes().isNotEmpty()}
         }
         fun pick(name:String){

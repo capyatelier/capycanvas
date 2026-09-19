@@ -22,9 +22,9 @@ export function createHistogram({app,element,button}) {
       const context=canvas.getContext("2d");context.clearRect(0,0,512,180);
       for(const i of indices){context.beginPath();context.moveTo(0,180);bins.forEach((x,j)=>context.lineTo(j/(bins.length-1)*512,180-scale(h.channels[i].bins[x])/maximum*176));context.lineTo(512,180);context.closePath();context.fillStyle=["#ed747480","#69cf9280","#73a7f580","#aaaaaacc"][i];context.fill();}
       if(result.axis.white!=null){const x=result.axis.white*512;context.beginPath();context.moveTo(x,0);context.lineTo(x,180);context.strokeStyle='#bbbbbb';context.setLineDash([4,4]);context.stroke();context.setLineDash([]);context.fillStyle='#dddddd';context.fillText('0 EV · white',x+4,12);}
-      description.textContent=`${h.color.space} · ${h.color.depth==="F16"?"16-bit float":h.color.depth==="U16"?"16-bit":"8-bit"} · ${Number(h.pixels).toLocaleString()} nontransparent pixels`;
+      description.textContent=`${h.color.space} · ${h.color.depth==="F32"?"32-bit float":h.color.depth==="F16"?"16-bit float":h.color.depth==="U16"?"16-bit":"8-bit"} · ${Number(h.pixels).toLocaleString()} nontransparent pixels`;
       const labels=["R","G","B","Y"];range.textContent=indices.map(i=>{const c=h.channels[i];return`${labels[i]}: below 0 ${Number(c.below).toLocaleString()}, above 1 ${Number(c.above).toLocaleString()} · black ${Number(c.black).toLocaleString()}, white ${Number(c.white).toLocaleString()}`;}).join("\n");
-      canvas.title=h.color.depth==="F16"?`Linear RGB and luminance: ${result.axis.stops.map(n=>n.toFixed(1)).join(" to ")} stops from reference white. Zero and negative values are counted separately.`:"Profile-encoded document RGB; luminance is linear Y.";
+      canvas.title=["F16","F32"].includes(h.color.depth)?`Linear RGB and luminance: ${result.axis.stops.map(n=>n.toFixed(1)).join(" to ")} stops from reference white. Zero and negative values are counted separately.`:"Profile-encoded document RGB; luminance is linear Y.";
       axis.textContent=canvas.title+" Includes visible paper; excludes transparent pixels and display overlays.";
     };
     const refresh=async()=>{

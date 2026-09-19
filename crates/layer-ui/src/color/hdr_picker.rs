@@ -58,8 +58,9 @@ impl ColorState {
         let base=self.picker_base().linear_in(self.rgb_space).unwrap();
         let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
         view.intensity_ramp=(0..=64).map(|i| {
-            let gain=(-2.+8.*i as f32/64.).exp2();
-            let rgb=mapper.map_rgb([base[0]*gain,base[1]*gain,base[2]*gain]);
+            let gain=(-2.+8.*i as f64/64.).exp2();
+            let rgb=mapper.map_rgb([base[0],base[1],base[2]].map(|v|
+                (f64::from(v)*gain).clamp(-f64::from(f32::MAX),f64::from(f32::MAX)) as f32));
             [RgbSpace::Srgb.encode(rgb[0] as f64) as f32,RgbSpace::Srgb.encode(rgb[1] as f64) as f32,RgbSpace::Srgb.encode(rgb[2] as f64) as f32,1.]
         }).collect();
         let preview=|color| super::form::mapped_preview(color,self.rgb_space,RgbSpace::Srgb,Some(recipe)).unwrap().rgba;
@@ -361,6 +362,7 @@ mod float32_tests {
         let mut pixels = vec![[0.; 4]; 49];
         assert!(state.render_field_linear(7, &mut pixels));
         assert!(pixels.into_iter().flatten().all(f32::is_finite));
+        assert!(state.view_mapped(Default::default()).intensity_ramp.into_iter().flatten().all(f32::is_finite));
         state.set_hdr_intensity(-149.).unwrap();
         state.validate().unwrap();
         let before = state.clone();

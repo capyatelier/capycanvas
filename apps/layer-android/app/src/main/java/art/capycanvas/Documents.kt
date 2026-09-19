@@ -92,11 +92,11 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val request = exportRequest ?: return
         exportRecipe = recipe; exportDestination = destination; exportRequest = null
         val document = request.getJSONObject("kind").getJSONObject("request")
-        val extension = when (recipe.getString("format")) { "Jpeg" -> "jpg"; "Tiff" -> "tif"; else -> "png" }
+        val extension = when (recipe.getString("format")) { "Exr" -> "exr"; "Jpeg" -> "jpg"; "Tiff" -> "tif"; else -> "png" }
         document.put("name", document.getString("name").substringBeforeLast('.') + "." + extension)
         picker = DocumentPicker(request, approval.first, approval.second)
     }
-    fun exportMime() = when (exportRecipe?.getString("format")) { "Jpeg" -> "image/jpeg"; "Tiff" -> "image/tiff"; else -> "image/png" }
+    fun exportMime() = when (exportRecipe?.getString("format")) { "Exr" -> "image/x-exr"; "Jpeg" -> "image/jpeg"; "Tiff" -> "image/tiff"; else -> "image/png" }
     fun cancel(id: Int) { exportRequest = null; complete(id, false) }
     fun close(id: Int, decision: String) {
         host.viewModelScope.launch {
@@ -131,7 +131,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 if (kind == "export") {
                     val master = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.objectOrNull("location")?.optString("uri")
                     check(uri.toString() != master) { "Choose a different file to keep the editable drawing." }
-                    val extensions = when (exportRecipe?.getString("format")) { "Tiff" -> listOf("tif", "tiff"); "Jpeg" -> listOf("jpg", "jpeg"); else -> listOf("png") }
+                    val extensions = when (exportRecipe?.getString("format")) { "Exr" -> listOf("exr"); "Tiff" -> listOf("tif", "tiff"); "Jpeg" -> listOf("jpg", "jpeg"); else -> listOf("png") }
                     check(location!!.getString("name").substringAfterLast('.').lowercase() in extensions) { "Use a .${extensions.first()} filename for this image format." }
                 }
                 if (kind in listOf("export", "open", "new")) { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = kind == "export"; opening = !exporting }

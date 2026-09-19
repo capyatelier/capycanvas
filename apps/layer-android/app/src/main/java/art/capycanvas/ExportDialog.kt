@@ -38,6 +38,7 @@ import org.json.JSONObject
     DisposableEffect(preview) { onDispose { preview.close() } }
     LaunchedEffect(recipe?.toString(),fit,width,height,resolution,ppi,quality) { preview.invalidate() }
     fun selectedRecipe():JSONObject = JSONObject(recipe!!.toString()).apply {
+        check(getString("format") !in listOf("JpegHdr","JpegHdrMapped","AvifHdr","AvifHdrMapped")) {"Gain-map delivery is unavailable on Android; choose HDR PNG or OpenEXR"}
         put("jpeg_quality",quality.toIntOrNull() ?: error("Enter a JPEG quality from 1 to 100"))
         put("size",if(fit)obj("Fit" to obj("bounds" to JSONArray(listOf(width.toIntOrNull(),height.toIntOrNull())),"enlarge" to enlarge))else "Original")
         put("resolution",if(resolution=="Ppi")obj("Ppi" to (ppi.toIntOrNull() ?: error("Enter a resolution")))else resolution)
@@ -84,7 +85,7 @@ import org.json.JSONObject
     fun choices(key:String, labels:List<Pair<String,String>>) = labels.filter { pair -> draft?.getJSONArray(key)?.values()?.contains(pair.first) != false }
     AlertDialog(onDismissRequest = ::dismiss, title = { Text("Export image") },
         dismissButton = { TextButton(::dismiss) { Text("Cancel") } },
-        confirmButton = { TextButton(enabled = recipe != null && !preview.busy && !preferenceBusy, modifier = Modifier.testTag("export-choose-file"), onClick = {
+        confirmButton = { TextButton(enabled = recipe != null && !preview.busy && !preferenceBusy && !(recipe?.optString("format")=="PngHdr" && preview.clipped>0), modifier = Modifier.testTag("export-choose-file"), onClick = {
             scope.launch {
                 try {
                     val selected = selectedRecipe()
@@ -99,10 +100,10 @@ import org.json.JSONObject
                 val value = recipe; val model = form
                 if (value != null && model != null && !preview.busy && !preferenceBusy) {
                     ColorChoice("Destination",presetNames.mapIndexed{i,name->i.toString() to name},destination){scope.launch{preference(obj("type" to "get","index" to it.toInt()))}}
-                    val hdrOutput=value.getString("format").startsWith("PngHdr")
-                    if(documentColor?.optString("depth")=="F16") {
-                        ColorChoice("Dynamic range",listOf("sdr" to "SDR rendition","hdr" to "HDR PNG · BT.2020 PQ"),if(hdrOutput)"hdr" else "sdr") { change("format",if(it=="hdr")"PngHdr" else "Png") }
-                        if(hdrOutput) {
+                    val hdrOutput=value.getString("format").contains("Hdr")||value.getString("format")=="Exr"
+                    if(documentColor?.optString("depth") in listOf("F16","F32")) {
+                        ColorChoice("Dynamic range",listOf("sdr" to "SDR rendition","hdr" to "HDR PNG · BT.2020 PQ","exr" to "OpenEXR · 32-bit float"),if(value.getString("format")=="Exr")"exr" else if(hdrOutput)"hdr" else "sdr") { change("format",if(it=="exr")"Exr" else if(it=="hdr")"PngHdr" else "Png") }
+                        if(value.getString("format").startsWith("PngHdr")) {
                             Row { Checkbox(value.getString("format")=="PngHdrMapped",{change("format",if(it)"PngHdrMapped" else "PngHdr")});Text("Clip out-of-range HDR colors") }
                             Text("Mapped SDR preview. Native HDR display and gain-map delivery are unavailable on Android.")
                         }
@@ -118,6 +119,7 @@ import org.json.JSONObject
                     }
                     ColorChoice("Bit depth", choices("depths",listOf("U8" to "8-bit", "U16" to "16-bit")), value.getString("depth")) { change("depth", it) }
                     }
+                    if(!hdrOutput) {
                     ColorChoice("Transparency", choices("backgrounds",listOf("Preserve" to "Preserve", "White" to "White background", "Black" to "Black background")), value.getString("background")) { change("background", it) }
                     val encoding = value.getJSONObject("encoding")
                     val conversion = encoding.getJSONObject("conversion")
@@ -125,6 +127,7 @@ import org.json.JSONObject
                         change("encoding", JSONObject(encoding.toString()).put("conversion", JSONObject(conversion.toString()).put("intent", it)))
                     }
                     ColorChoice("Dither", choices("dithers",listOf("None" to "None", "Stochastic8" to "Stochastic (8-bit output)")), encoding.getString("dither")) { change("encoding", JSONObject(encoding.toString()).put("dither", it)) }
+                    }
                     if (value.getString("format") == "Jpeg") OutlinedTextField(quality, { quality = it }, label = { Text("JPEG quality (1–100)") }, singleLine = true)
                     Row { Checkbox(fit, { fit = it }); Text("Fit within pixel size") }
                     if (fit) { OutlinedTextField(width, { width = it }, label = { Text("Maximum width") }, singleLine = true); OutlinedTextField(height, { height = it }, label = { Text("Maximum height") }, singleLine = true) }
@@ -139,7 +142,7 @@ import org.json.JSONObject
                 if(preview.busy)Text("Preparing complete output comparison…")
                 preview.images.forEachIndexed {index,image->Text(if(index==0)"Artwork" else "Output");Image(image,if(index==0)"Artwork preview" else "Output preview",Modifier.fillMaxWidth().heightIn(max=180.dp))}
                 if(preview.images.isNotEmpty())Text("sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")
-                if(preview.clipped>0)Text("Some colors exceed the output gamut and will be clipped.")
+                if(preview.clipped>0)Text(if(recipe?.optString("format")=="PngHdr")"Some colors exceed PQ range. Enable Clip out-of-range HDR colors or choose OpenEXR." else "Some colors exceed the output gamut and will be clipped.")
                 preview.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }

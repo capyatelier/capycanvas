@@ -792,6 +792,14 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .proof-panel header { display:flex; align-items:center; justify-content:space-between; }
 .proof-panel h2 { margin:0; }
 .proof-tone-pad { display:block; width:100%; max-width:256px; margin:12px auto; touch-action:none; }
+.proof-sdr { position:relative; }
+.proof-modes { display:flex; gap:2px; margin-top:8px; }
+.proof-modes button { flex:1; }
+.proof-modes button[aria-pressed=true] { background:var(--accent); }
+.proof-dial-icon { position:absolute; pointer-events:none; }
+.proof-dial-reset { position:absolute; padding:0; min-height:0; min-width:0; background:transparent; }
+.proof-dial-accessibility { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.proof-dial-accessibility:focus-within { position:static; width:auto; height:auto; overflow:visible; clip-path:none; }
 .proof-panel input[type=range] { touch-action:none; min-width:0; width:160px; }
 .proof-panel [hidden] { display:none; }
 

@@ -156,6 +156,39 @@ pub const SDR_READOUT_ICONS: [&str; 4] = [
     "layer-hue_saturation-symbolic",
 ];
 
+/// GTK's dial geometry and square/disc mapping, transported to Web/Compose.
+/// Part 0 is the field, 1/2 the arcs and 3 reset. A captured part stays fixed
+/// while its pointer moves outside the original hit area.
+pub fn sdr_dial(size: f32, mut recipe: layer_core::color::hdr::SdrRendition,
+    point: Option<[f32;2]>, part: Option<u8>) -> Result<serde_json::Value,String> {
+    use crate::parameter_pad::ParameterDialGeometry;
+    let g=ParameterDialGeometry::new(size).ok_or("Invalid Proof dial size")?;
+    let pad=sdr_tone_pad();
+    let hit=point.and_then(|p| {
+        let [x,y,w,h]=g.reset;
+        if p[0]>=x&&p[0]<=x+w&&p[1]>=y&&p[1]<=y+h {Some(3)}
+        else if let Some(i)=g.arcs.iter().position(|a|a.contains(p)){Some(i as u8+1)}
+        else if (p[0]-g.field.center[0]).hypot(p[1]-g.field.center[1])<=g.field.disc_radius(){Some(0)}else{None}
+    });
+    if let (Some(p),Some(part))=(point,part.or(hit)) {
+        match part {
+            0=>recipe=sdr_from_pad(recipe,pad.values(g.field.disc_components(p).map(f64::from))),
+            1=>recipe.exposure=-2.+4.*g.arcs[0].fraction(p),
+            2=>recipe.highlight_color=g.arcs[1].fraction(p),
+            3=>recipe=layer_core::color::hdr::SdrRendition{headroom:recipe.headroom,..Default::default()},
+            _=>return Err("Invalid Proof dial control".into()),
+        }
+    }
+    let values=sdr_pad_values(recipe);
+    let fractions=[(recipe.exposure+2.)/4.,recipe.highlight_color];
+    Ok(serde_json::json!({"center":g.field.center,"radius":g.field.disc_radius(),
+        "marker_radius":g.field.marker_radius(),"marker":g.field.disc_marker(pad.fractions(values).map(|v|v as f32)),
+        "reset":g.reset,"readouts":g.readouts(size),"icons":SDR_READOUT_ICONS,"text_size":ParameterDialGeometry::text_size(size),
+        "percentages":[recipe.contrast*100.,recipe.balance*100.,recipe.exposure*25.,recipe.highlight_color*100.],
+        "arcs":g.arcs.iter().zip(fractions).map(|(a,f)|serde_json::json!({"geometry":a,"point":a.point(f),"path":(0..=64).map(|i|a.point(i as f32/64.)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "hit":hit,"recipe":recipe,"pad_values":values}))
+}
+
 /// Fixed directional illustration, never a sampled/modified document preview.
 /// Broad flowing pools on the left become fine, defined cells to the right; the top
 /// increases contrast and the bottom approaches neutral gray. Hosts cache it
@@ -402,6 +435,26 @@ pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> [f64; 2] 
 mod tests {
     use super::*;
     use layer_core::color::RgbSpace;
+    #[test]
+    fn dial_transport_reuses_gtk_hits_mapping_and_preserves_headroom() {
+        let recipe=layer_core::color::hdr::SdrRendition{headroom:12.,..Default::default()};
+        for size in [128.,256.,400.] {
+            let g=crate::parameter_pad::ParameterDialGeometry::new(size).unwrap();
+            for (part,arc) in g.arcs.iter().enumerate() {
+                let p=arc.point(0.75);
+                let v=sdr_dial(size,recipe,Some(p),None).unwrap();
+                assert_eq!(v["hit"],part+1);
+                let r:layer_core::color::hdr::SdrRendition=serde_json::from_value(v["recipe"].clone()).unwrap();
+                assert_eq!(r.headroom,12.);
+                assert!((if part==0 {r.exposure-1.}else{r.highlight_color-0.75}).abs()<1e-5);
+            }
+            let p=g.field.disc_marker([1.,1.]);
+            let v=sdr_dial(size,recipe,Some(p),Some(0)).unwrap();
+            assert_eq!(v["pad_values"],serde_json::json!([1.,1.]));
+            let v=sdr_dial(size,recipe,Some(g.field.center),Some(3)).unwrap();
+            assert_eq!(v["recipe"],serde_json::to_value(recipe).unwrap());
+        }
+    }
     #[test]
     fn circular_controls_are_bounded_invertible_and_preserve_delivery_settings() {
         use layer_core::color::hdr::SdrRendition;

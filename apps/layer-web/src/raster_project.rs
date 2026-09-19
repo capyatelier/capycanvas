@@ -223,6 +223,7 @@ pub(super) async fn unpack(
         return Err(js("Oversized project metadata"));
     }
     let metadata: Metadata = serde_json::from_str(metadata).map_err(js)?;
+    hdr::admit_document(&metadata.document)?;
     let mut project = Project {
         document: metadata.document,
         assets: BTreeMap::new(),
@@ -394,6 +395,7 @@ pub async fn raster_worker_read(options: &str, bytes: Vec<u8>) -> Result<JsValue
     if let Some(remaining) = options.source_bytes { photo_limits.source_bytes = photo_limits.source_bytes.min(remaining); }
     let imported = layer_ui::read_import(std::io::Cursor::new(&bytes), options.intent, options.photo_policy,
         &options.name, limits(options.dimension), photo_limits, &Default::default()).map_err(js)?;
+    hdr::admit_document(&imported.project.document)?;
     drop(bytes);
     let wire = pack(imported.project).await?;
     js_sys::Reflect::set(&wire, &js("source"), &serialize(&imported.source)?)?;

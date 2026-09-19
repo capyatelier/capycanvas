@@ -144,7 +144,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
             let mut renderer=job.gpu.capture(job.project,job.background,job.time,Default::default(),job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
             renderer.set_output_extent(extent)?;
-            let (after,statistics)=if recipe.format.is_hdr() { renderer.preview_hdr_output([512,384],layer_core::color::RgbSpace::Srgb,1.)? } else { renderer.preview_output([512,384],layer_core::color::RgbSpace::Srgb,&recipe.interpretation(),recipe.encoding,recipe.background.matte())? };
+            let (after,statistics)=if recipe.format == layer_ui::ExportFormat::Exr {(renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?,layer_color::OutputStatistics::default())} else if recipe.format.is_hdr() { renderer.preview_hdr_output([512,384],layer_core::color::RgbSpace::Srgb,1.)? } else { renderer.preview_output([512,384],layer_core::color::RgbSpace::Srgb,&recipe.interpretation(),recipe.encoding,recipe.background.matte())? };
             Ok::<_,String>((before,after,serde_json::json!({"extent":extent,"clipped_channels":statistics.clipped_channels}).to_string()))
         }).map_err(error)?.join().map_err(|_|"Output preview worker failed".to_string())??;
         let result = env

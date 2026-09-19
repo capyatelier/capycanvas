@@ -2,7 +2,7 @@ import {importProfile,chooseProfileLibrary} from './export-controls.js';
 
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
-export function createProof({app,dialog,element,button,applyChange,wake}) {
+export function createProof({app,dialog,element,button,icon,applyChange,wake}) {
   let work=null,setup=null;
   let tone=null,toneGeneration=-1,toneChanged=0;
   const label=element("output","proof-status");label.id="proof-status";label.hidden=true;
@@ -66,8 +66,8 @@ export function createProof({app,dialog,element,button,applyChange,wake}) {
     setup={id};cancel();panelEpoch=app.state().document_file.epoch;
     panel=element('aside','document-dialog proof-panel');panel.setAttribute('aria-label','Proof');const owner=panel;
     const header=element('header');header.append(element('h2','','Proof'),button('Close',closePanel));panel.append(header);
-    const mode=element('select');mode.setAttribute('aria-label','Proof mode');
-    for(const[value,label]of[['off','Off'],['sdr','SDR'],['print','Print']]){const o=element('option','',label);o.value=value;mode.append(o);}panel.append(mode);
+    const mode=element('div','proof-modes');mode.setAttribute('aria-label','Proof mode');mode.setAttribute('role','group');
+    for(const[value,label]of[['off','Off'],['sdr','SDR'],['print','Print']]){const o=button(label,()=>{mode.value=value;mode.onchange();});o.value=value;mode.append(o);}panel.append(mode);
     const sdrPage=element('div','proof-sdr'),printPage=element('div','proof-print'),issue=element('p','error-message'),status=element('p');status.setAttribute('role','status');
     panel.append(sdrPage,printPage,issue,status);document.body.append(panel);
     const model=app.proof_form();let recipe=structuredClone(model.recipe),profiles=[],selected='';
@@ -78,25 +78,24 @@ export function createProof({app,dialog,element,button,applyChange,wake}) {
     const texture=element('canvas');texture.width=texture.height=256;const texturePixels=new ImageData(new Uint8ClampedArray(app.proof_texture(256)),256,256);
     const restoreTexture=()=>texture.getContext('2d',{willReadFrequently:true}).putImageData(texturePixels,0,0);restoreTexture();
     texture.addEventListener('contextrestored',()=>{restoreTexture();refreshPanel();});canvas.addEventListener('contextrestored',()=>refreshPanel());
-    let padContact=null;
-    const pad=(e,phase)=>{const r=canvas.getBoundingClientRect();let x=(e.clientX-r.x)/r.width*2-1,y=1-(e.clientY-r.y)/r.height*2;const len=Math.hypot(x,y);if(len>1){x/=len;y/=len;}send({type:'pad',phase,values:[x,y]});};
-    canvas.onpointerdown=e=>{if(e.button!==0||padContact!==null)return;padContact=e.pointerId;canvas.setPointerCapture(e.pointerId);e.preventDefault();pad(e,'down');pad(e,'move');};
-    canvas.onpointermove=e=>{if(e.pointerId===padContact)pad(e,'move');};
-    canvas.onpointerup=e=>{if(e.pointerId===padContact){padContact=null;pad(e,'up');}};
-    for(const name of ['pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===padContact){padContact=null;send({type:'pad',phase:'cancel',values:[0,0]});}});
-    canvas.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(e.key))return;e.preventDefault();const values=app.proof_form().pad_values;if(e.key==='Home')values.fill(0);else values[e.key==='ArrowLeft'||e.key==='ArrowRight'?0:1]+=e.key==='ArrowLeft'||e.key==='ArrowDown'?-.02:.02;send({type:'pad',phase:'down',values});send({type:'pad',phase:'up',values});};
-    canvas.ondblclick=()=>{send({type:'pad',phase:'down',values:[0,0]});send({type:'pad',phase:'up',values:[0,0]});};
-    const controls=model.numbers.map(spec=>{
-      const input=element('input');Object.assign(input,{type:'range',min:spec.numeric.min,max:spec.numeric.max,step:spec.numeric.step||.01});field(sdrPage,spec.label,input);const output=element('output');input.parentElement.append(output);
-      let active=false;
-      const change=phase=>{const r=app.proof_form().rendition;r[spec.key]=Number(input.value);send({type:'rendition',phase,recipe:r});};
-      input.onpointerdown=()=>{active=true;change('down');};input.oninput=()=>{if(!active){active=true;change('down');}change('move');};input.onchange=()=>{if(active){active=false;change('up');}};
-      input.onpointercancel=()=>{if(active){active=false;change('cancel');}};
-      return{input,output,spec,cancel(){if(active){active=false;change('cancel');}}};
-    });
-    cancelContacts=()=>{if(padContact!==null){padContact=null;send({type:'pad',phase:'cancel',values:[0,0]});}controls.forEach(c=>c.cancel());};
-    sdrPage.append(button('Reset SDR appearance',()=>{const r={...app.proof_form().rendition,exposure:0,contrast:1,balance:0,highlight_color:.3};send({type:'rendition',phase:'down',recipe:r});send({type:'rendition',phase:'up',recipe:r});}));
-    sdrPage.append(element('p','','The saved SDR rendition is used for SDR viewing, print simulation and SDR delivery. This display presents mapped SDR.'));
+    let padContact=null,activePart=0;
+    const dial=(point=null,part=null)=>app.color_ui({type:'proof_dial',size:256,recipe:app.proof_form().rendition,point,part});
+    const coordinates=e=>{const r=canvas.getBoundingClientRect();return[(e.clientX-r.x)*256/r.width,(e.clientY-r.y)*256/r.height];};
+    const update=(e,phase)=>send({type:'rendition',phase,recipe:dial(coordinates(e),activePart).recipe});
+    const cancelDial=()=>{if(padContact!==null){padContact=null;send({type:'rendition',phase:'cancel',recipe:app.proof_form().rendition});}};
+    canvas.onpointerdown=e=>{if(e.button!==0||padContact!==null)return;const hit=dial(coordinates(e)).hit;if(hit==null)return;activePart=Number(hit);padContact=e.pointerId;canvas.setPointerCapture(e.pointerId);e.preventDefault();canvas.focus();send({type:'rendition',phase:'down',recipe:app.proof_form().rendition});update(e,'move');};
+    canvas.onpointermove=e=>{if(e.pointerId===padContact&&activePart!==3)update(e,'move');};
+    canvas.onpointerup=e=>{if(e.pointerId===padContact){padContact=null;update(e,'up');}};
+    for(const name of ['pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===padContact)cancelDial();});
+    const atomic=recipe=>{send({type:'rendition',phase:'down',recipe:app.proof_form().rendition});send({type:'rendition',phase:'up',recipe});};
+    const resetPart=part=>{const r=app.proof_form().rendition;if(part===0){r.balance=0;r.contrast=1;}else if(part===1)r.exposure=0;else if(part===2)r.highlight_color=.3;else Object.assign(r,{balance:0,contrast:1,exposure:0,highlight_color:.3});atomic(r);};
+    canvas.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();cancelDial();return;}if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(e.key))return;e.preventDefault();if(e.key==='Home'){resetPart(activePart);return;}const direction=['ArrowLeft','ArrowDown'].includes(e.key)?-1:1,step=(e.shiftKey?.1:.02)*direction,r=app.proof_form().rendition;if(activePart===1)r.exposure=Math.max(-2,Math.min(2,r.exposure+step*2));else if(activePart===2)r.highlight_color=Math.max(0,Math.min(1,r.highlight_color+step));else{const v=app.proof_form().pad_values;const i=['ArrowLeft','ArrowRight'].includes(e.key)?0:1;v[i]=Math.max(-1,Math.min(1,v[i]+step));send({type:'pad',phase:'down',values:app.proof_form().pad_values});send({type:'pad',phase:'up',values:v});return;}atomic(r);};
+    canvas.ondblclick=e=>{const hit=dial(coordinates(e)).hit;if(hit!=null)resetPart(Number(hit));};
+    cancelContacts=cancelDial;
+    const accessible=element('div','proof-dial-accessibility');sdrPage.append(accessible);
+    const arcControls=model.numbers.map((spec,i)=>{const input=element('input');Object.assign(input,{type:'range',min:spec.numeric.min,max:spec.numeric.max,step:spec.numeric.step||.01});input.setAttribute('aria-label',spec.label);input.onfocus=()=>{activePart=i+1;};input.oninput=()=>{const r=app.proof_form().rendition;r[spec.key]=Number(input.value);atomic(r);};input.onkeydown=e=>{if(e.key==='Home'){e.preventDefault();resetPart(i+1);}};accessible.append(input);return{input,spec};});
+    const reset=button('Reset SDR appearance',()=>resetPart(3));reset.className='proof-dial-reset';reset.setAttribute('aria-label','Reset SDR appearance');reset.replaceChildren(icon('reset'));sdrPage.append(reset);
+    const icons=['layer-appearance-symbolic','layer-grain-symbolic','layer-brightness_contrast-symbolic','layer-hue_saturation-symbolic'].map(name=>{const node=icon(name.replace(/^layer-/,'').replace(/-symbolic$/,''));node.classList.add('proof-dial-icon');sdrPage.append(node);return node;});
     const profile=field(printPage,'Proof profile',element('select'));
     const option=(group,p)=>{const index=profiles.push(p)-1,o=element('option','',p.name);o.value=index;group.append(o);return String(index);};
     if(model.document_profile){const group=element('optgroup');group.label='Document Profile';profile.append(group);selected=option(group,model.document_profile);}
@@ -132,12 +131,20 @@ export function createProof({app,dialog,element,button,applyChange,wake}) {
     mode.onchange=()=>{if(committing)return;const next=mode.value;cancelContacts();serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();mode.value=next;send({type:'mode',mode:mode.value});if(mode.value==='print')schedule();};
     refreshPanel=()=>{
       if(!panel)return;if(app.state().document_file.epoch!==panelEpoch){closePanel();return;}
-      const form=app.proof_form();mode.value=form.mode;mode.querySelector('[value=sdr]').disabled=!form.hdr;
+      const form=app.proof_form();mode.value=form.mode;for(const b of mode.children){b.setAttribute('aria-pressed',String(b.value===form.mode));b.disabled=committing||(b.value==='sdr'&&!form.hdr);b.hidden=b.value==='sdr'&&!form.hdr;}
       sdrPage.hidden=form.mode!=='sdr';printPage.hidden=form.mode!=='print';gamut.checked=app.state().gamut_warning;gamut.disabled=committing||!form.document_profile;
-      for(const{input,output,spec}of controls){input.value=form.rendition[spec.key];output.textContent=`${Math.round(Number(input.value)*spec.numeric.scale)}${spec.numeric.unit}`;}
-      const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.clearRect(0,0,256,256);ctx.save();ctx.beginPath();ctx.arc(128,128,126,0,2*Math.PI);ctx.clip();ctx.drawImage(texture,0,0);ctx.restore();
-      const[x,y]=form.pad_values;ctx.beginPath();ctx.arc(128+x*118,128-y*118,7,0,Math.PI*2);ctx.strokeStyle='black';ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();
-      canvas.setAttribute('aria-valuetext',`Balance ${Math.round(x*100)}%, contrast ${Math.round(y*100)}%`);
+      for(const{input,spec}of arcControls)input.value=form.rendition[spec.key];
+      const d=dial(),ctx=canvas.getContext('2d',{willReadFrequently:true}),[cx,cy]=d.center;
+      restoreTexture();ctx.clearRect(0,0,256,256);ctx.save();ctx.beginPath();ctx.arc(cx,cy,d.radius,0,2*Math.PI);ctx.clip();ctx.drawImage(texture,cx-d.radius,cy-d.radius,d.radius*2,d.radius*2);ctx.restore();
+      const marker=(p,r)=>{ctx.beginPath();ctx.arc(...p,r,0,Math.PI*2);ctx.strokeStyle='black';ctx.lineWidth=3;ctx.stroke();ctx.strokeStyle='white';ctx.lineWidth=1.5;ctx.stroke();};
+      for(const[a,index]of d.arcs.map((a,i)=>[a,i])){const g=a.geometry,gradient=ctx.createLinearGradient(a.path[0][0],0,a.path.at(-1)[0],0);if(index===0){gradient.addColorStop(0,'#0a0a0a');gradient.addColorStop(.5,'#8c8c8c');gradient.addColorStop(1,'#fff');}else{gradient.addColorStop(0,'#f2f2f2');gradient.addColorStop(1,'#268cd9');}ctx.beginPath();a.path.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.strokeStyle=gradient;ctx.lineWidth=g.width;ctx.lineCap='round';ctx.stroke();marker(a.point,g.marker_radius);}
+      marker(d.marker,d.marker_radius);
+      ctx.fillStyle=getComputedStyle(panel).color;ctx.font=`${d.text_size}px system-ui`;ctx.textAlign='center';
+      const width=canvas.getBoundingClientRect().width,left=(sdrPage.clientWidth-width)/2,scale=width/256,top=canvas.offsetTop;
+      d.readouts.forEach((r,i)=>{const value=Math.round(d.percentages[i]),text=`${i===1||i===2?value>=0?'+':'':''}${value}%`;if(r.curve){const[radius,angle,reverse]=r.curve,sign=reverse?-1:1,total=ctx.measureText(text).width;let advance=-total/2;for(const ch of text){const w=ctx.measureText(ch).width,a=angle*Math.PI/180+sign*(advance+w/2)/radius;ctx.save();ctx.translate(cx+radius*Math.cos(a),cy+radius*Math.sin(a));ctx.rotate(a+(reverse?-1:1)*Math.PI/2);ctx.fillText(ch,0,0);ctx.restore();advance+=w;}}else ctx.fillText(text,...r.text);const[x,y,w,h]=r.icon;Object.assign(icons[i].style,{left:`${left+x*scale}px`,top:`${top+y*scale}px`,width:`${w*scale}px`,height:`${h*scale}px`});});
+      const[x,y,w,h]=d.reset;Object.assign(reset.style,{left:`${left+x*scale}px`,top:`${top+y*scale}px`,width:`${w*scale}px`,height:`${h*scale}px`});
+      canvas.setAttribute('aria-valuetext',`Balance ${Math.round(form.rendition.balance*100)}%, contrast ${Math.round(form.rendition.contrast*100)}%. Arrow keys adjust; Shift takes larger steps, Home resets, Escape cancels.`);
+
     };
     if(sdr)send({type:'mode',mode:'sdr'});refreshPanel();
     if(app.proof_form().mode==='print'&&!model.document_profile)schedule();

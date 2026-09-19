@@ -150,7 +150,11 @@ internal class ProofController(private val host: CanvasHost) {
         Surface(Modifier.padding(top=64.dp,end=12.dp).width(320.dp),shape=MaterialTheme.shapes.large,shadowElevation=8.dp) {
             Column(Modifier.padding(16.dp).heightIn(max=600.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("Proof",style=MaterialTheme.typography.titleLarge);TextButton({controller.close(id)},enabled=!controller.committing){Text("Close")}}
-                ColorChoice("Proof mode",listOf("off" to "Off")+(if(form?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to "Print"),mode,enabled=form!=null&&!controller.committing){controller.cancel();mode=it;action(obj("type" to "mode","mode" to it))}
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                    (listOf("off" to "Off")+(if(form?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to "Print")).forEach{(value,label)->
+                        FilterChip(selected=mode==value,onClick={controller.cancel();mode=value;action(obj("type" to "mode","mode" to value))},label={Text(label)},enabled=form!=null&&!controller.committing,modifier=Modifier.weight(1f).testTag("proof-mode-$value"))
+                    }
+                }
                 if(mode=="sdr") form?.let{ProofSdrControls(it,::action)}
                 if(mode=="print") {
                 if(form!=null){

@@ -6,6 +6,18 @@ use layer_ui::proof_workflow::ToneKey;
 use std::sync::Arc;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
+/// Browser admission is deliberately independent of installed-RAM hints. Real
+/// Chrome measurements exceed the combined renderer/GPU process budget at the
+/// larger photo sizes; never open by silently reducing precision or dimensions.
+pub(super) fn admit_document(document: &layer_core::Document) -> Result<(), JsValue> {
+    if document.color.depth.is_float()
+        && u64::from(document.width) * u64::from(document.height) > 12_000_000
+    {
+        return Err(js("HDR drawings above 12 megapixels are not supported in this browser build. Open the editable master in the native app, or explicitly resize a copy there. Your current drawing is unchanged."));
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub(super) struct ToneState {
     key: Option<ToneKey>,

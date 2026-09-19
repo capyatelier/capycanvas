@@ -50,7 +50,7 @@ pub struct HistogramAxis {
 impl Histogram {
     pub fn axis(&self) -> HistogramAxis {
         let bins=self.plot_bins();
-        let stops=self.color.depth.is_float().then(|| [hdr_bin_stops(bins.start),hdr_bin_stops(bins.end-1)]);
+        let stops=self.color.depth.is_float().then(|| [self.hdr_bin_stops(bins.start),self.hdr_bin_stops(bins.end-1)]);
         HistogramAxis {bins:[bins.start,bins.end],white:stops.map(|s| -s[0]/(s[1]-s[0])),stops}
     }
 

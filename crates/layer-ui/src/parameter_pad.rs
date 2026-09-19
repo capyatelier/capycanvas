@@ -13,13 +13,13 @@ pub struct ParameterDialGeometry {
 }
 /// Percent baseline and a passive symbolic icon. Arc percentages follow their
 /// track; side percentages are horizontal, with the icon above.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct ParameterDialReadout {
     pub icon: [f32; 4],
     pub text: [f32; 2],
     pub curve: Option<(f32, f32, bool)>, // radius, degrees, reverse
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct ParameterArc {
     pub center: [f32; 2],
     pub radius: f32,

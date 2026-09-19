@@ -246,6 +246,7 @@ impl WebApp {
             }
             let source_kind = imported.source;
             let project = imported.project;
+            hdr::admit_document(&project.document)?;
             if placing {
                 let source = project
                     .document

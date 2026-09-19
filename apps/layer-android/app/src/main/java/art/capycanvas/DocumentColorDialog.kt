@@ -166,7 +166,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                     if (loaded && !job.busy) {
                         if (operation != "depth") ColorChoice("Color space", listOf("Srgb" to "sRGB", "DisplayP3" to "Display P3", "AdobeRgb" to "Adobe RGB", "ProPhoto" to "ProPhoto RGB"), space) { space = it; job.invalidate() }
                         if (operation == "depth") {
-                            ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR"), depth) { depth = it; job.invalidate() }
+                            ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR", "F32" to "32-bit float HDR"), depth) { depth = it; job.invalidate() }
                             if (depth == "U8") ColorChoice("Dither", listOf("None" to "None", "Stochastic8" to "Stochastic"), dither) { dither = it; job.invalidate() }
                         }
                         if (operation == "convert") ColorChoice("Result", listOf("layers" to "Editable layers", "copy" to "Save flattened copy"), result) { result = it; job.invalidate() }

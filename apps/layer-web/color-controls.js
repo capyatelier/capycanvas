@@ -8,7 +8,7 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     form.method = 'dialog'; root.setAttribute('aria-label', 'Edit Color');
     const title = element('h2', '', 'Edit Color'), description = element('p'), model = element('select');
     model.setAttribute('aria-label', 'Color model');
-    const intensityInput=element('input');intensityInput.type='number';intensityInput.step='.1';intensityInput.min='-16';intensityInput.max='15.999';intensityInput.setAttribute('aria-label','Intensity (EV)');
+    const intensityInput=element('input');intensityInput.type='number';intensityInput.step='.1';intensityInput.min='-149';intensityInput.max='128';intensityInput.setAttribute('aria-label','Intensity (EV)');
     const intensityRow=element('label','document-size','Intensity (EV)');intensityRow.append(intensityInput);
     const preview = element('div', 'color-form-preview'), basePreview=element('div','color-form-preview'), comparison=element('div','color-comparison'),baseLabel=element('figcaption','','Base'),adjustedLabel=element('figcaption','','Adjusted'), warning = element('p'), error = element('p');
     error.setAttribute('role', 'status');
@@ -51,7 +51,7 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     model.onchange = () => query({...view.draft, change_model: model.value});
     form.onsubmit = e => { e.preventDefault(); apply.click(); };
     root.addEventListener('close', () => { root.remove(); resolve(result); }, {once: true});
-    const panel=app.color_panel();query({color, document_space: app.state().colors.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??0):null,rendition:panel.rendition});
+    const panel=app.color_panel();query({color,document_depth:app.document_color().depth, document_space: app.state().colors.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??0):null,rendition:panel.rendition});
     root.showModal(); fields[0].input.focus();
   });
 }

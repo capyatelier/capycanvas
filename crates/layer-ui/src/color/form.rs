@@ -7,6 +7,7 @@ use super::*;
 pub enum ColorUiRequest {
     Layout { size: f32, #[serde(default)] hdr: bool },
     Arc { size: f32, point: Option<[f32;2]>, #[serde(default)] fraction: f32 },
+    ProofDial { size: f32, recipe: layer_core::color::hdr::SdrRendition, point: Option<[f32;2]>, part: Option<u8> },
     Form {
         request: ColorFormRequest,
     },
@@ -24,6 +25,7 @@ pub enum ColorUiRequest {
 }
 pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
     let value = match request {
+        ColorUiRequest::ProofDial {size,recipe,point,part} => return crate::proof_panel::sdr_dial(size,recipe,point,part),
         ColorUiRequest::Layout {size,hdr} => {
             let layout=if hdr {ColorPanelLayout::with_hdr(size)}else{ColorPanelLayout::new(size)}.ok_or("Invalid color panel size")?;
             let mut value=serde_json::to_value(layout).map_err(|e|e.to_string())?;
@@ -78,6 +80,8 @@ pub struct ColorFormRequest {
     pub color: RgbColor,
     pub document_space: RgbSpace,
     #[serde(default)]
+    pub document_depth: Option<layer_core::color::SampleDepth>,
+    #[serde(default)]
     pub display_space: RgbSpace,
     #[serde(default)]
     pub model: ColorInputModel,
@@ -124,6 +128,7 @@ pub(super) fn mapped_preview(color:RgbColor, document:RgbSpace, display:RgbSpace
 
 pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
     let mut editor = ColorEditor::new(request.color, request.document_space)?;
+    if let Some(depth)=request.document_depth {editor.set_document_depth(depth);}
     editor.set_model(request.model)?;
     if let Some(stops) = request.intensity { editor.enable_hdr(stops)?; }
     if let Some(fields) = request.fields {
@@ -154,6 +159,7 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
         draft: ColorFormRequest {
             color: editor.definition(),
             document_space: request.document_space,
+            document_depth: request.document_depth,
             display_space: request.display_space,
             model: editor.model(),
             fields: Some(editor.fields().clone()),
@@ -182,6 +188,7 @@ mod tests {
         ColorFormRequest {
             color,
             document_space: RgbSpace::ProPhoto,
+            document_depth: None,
             display_space: RgbSpace::Srgb,
             model: Default::default(),
             fields: None,

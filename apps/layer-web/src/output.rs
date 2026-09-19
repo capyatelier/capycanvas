@@ -323,7 +323,17 @@ pub async fn raster_worker_output(
         if !metadata.color.depth.is_float() { return Err(js("HDR output requires HDR artwork")); }
         if recipe.format.gainmap().is_some() { return Err(js("HDR gain-map output is unavailable in this browser; choose HDR PNG")); }
         let mut resampler = layer_color::RowResampler::new(metadata.extent, extent).map_err(js)?;
-        let mut rows = |y,pixels: &mut [[f32;4]]| resampler.read_row(y,pixels,&mut read_row);
+        let mut rows = |y,pixels: &mut [[f32;4]]| {if y==0 {resampler=layer_color::RowResampler::new(metadata.extent,extent)?;}resampler.read_row(y,pixels,&mut read_row)};
+        if recipe.format == ExportFormat::Exr {
+            let after=if metadata.preview {
+                Some(mapped_preview(extent,metadata.color.space,metadata.rendition,&mut rows).map_err(js)?)
+            } else {
+                layer_color::photo::write_exr_rows(output,extent,metadata.color.space,metadata.resolution,rows).map_err(js)?;None
+            };
+            let result=serialize(&serde_json::json!({"clipped_channels":0,"extent":extent}))?;
+            if let Some(after)=after {let values=js_sys::Array::new();values.push(&preview_value(&before.unwrap())?);values.push(&preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?;}
+            return Ok(result);
+        }
         let (preview, stats) = if metadata.preview {
             let (size, mut pixels, stats) = layer_color::photo::preview_hdr_rows(extent,[512,384],metadata.color.space,&mut rows).map_err(js)?;
             let guide = layer_color::build_local_tone_guide(metadata.extent,metadata.color.space,||false,&mut read_row).map_err(js)?;

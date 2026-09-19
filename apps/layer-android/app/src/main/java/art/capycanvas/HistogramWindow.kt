@@ -79,14 +79,14 @@ import kotlin.math.ln
                 }
                 if (histogram != null) {
                     val color = histogram.getJSONObject("color")
-                    Text("${color.getString("space")} · ${when(color.getString("depth")){"F16"->"16-bit float";"U16"->"16-bit";else->"8-bit"}} · ${histogram.getLong("pixels")} nontransparent pixels")
+                    Text("${color.getString("space")} · ${when(color.getString("depth")){"F32"->"32-bit float";"F16"->"16-bit float";"U16"->"16-bit";else->"8-bit"}} · ${histogram.getLong("pixels")} nontransparent pixels")
                     for (i in indices) {
                         val c = histogram.getJSONArray("channels").getJSONObject(i)
                         Text("${listOf("R","G","B","Y")[i]}: below 0 ${c.getLong("below")}, above 1 ${c.getLong("above")} · black ${c.getLong("black")}, white ${c.getLong("white")}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
                 Text(if (result != null && "${result!!.getLong("epoch")}:${result!!.getLong("revision")}" != key && !busy) "Drawing changed · showing previous inspection" else status)
-                Text((if(histogram?.getJSONObject("color")?.getString("depth")=="F16") "Linear RGB and luminance: ${axis!!.getJSONArray("stops").values().joinToString(" to "){"%.1f".format((it as Number).toDouble())}} EV. Dashed line: reference white (0 EV). Zero and negative values counted separately. " else "Encoded document RGB · linear luminance Y. ")+"Includes visible paper; excludes transparent pixels and display overlays.", style = MaterialTheme.typography.bodySmall)
+                Text((if(histogram?.getJSONObject("color")?.getString("depth") in listOf("F16","F32")) "Linear RGB and luminance: ${axis!!.getJSONArray("stops").values().joinToString(" to "){"%.1f".format((it as Number).toDouble())}} EV. Dashed line: reference white (0 EV). Zero and negative values counted separately. " else "Encoded document RGB · linear luminance Y. ")+"Includes visible paper; excludes transparent pixels and display overlays.", style = MaterialTheme.typography.bodySmall)
                 TextButton({ refresh() }, enabled = !busy) { Text("Refresh") }
             }
         }

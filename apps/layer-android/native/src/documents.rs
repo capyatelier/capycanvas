@@ -421,6 +421,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     let target = recipe.interpretation();
                     let mut out = BufWriter::new(input.ok_or("Missing export output")?);
                     match recipe.format {
+                        layer_ui::ExportFormat::Exr => renderer.write_exr(&mut out),
                         layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut out, recipe.format.maps_hdr_range()),
                         layer_ui::ExportFormat::JpegHdr | layer_ui::ExportFormat::JpegHdrMapped | layer_ui::ExportFormat::AvifHdr | layer_ui::ExportFormat::AvifHdrMapped => Err("HDR gain-map delivery is unavailable on Android; choose HDR PNG".into()),
                         layer_ui::ExportFormat::Png => renderer.write_png(

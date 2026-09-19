@@ -146,6 +146,7 @@ impl WebApp {
                 project.validate(Default::default()).map_err(js)?;
                 (project, clipped)
             };
+            hdr::admit_document(&project.document)?;
             let old_background = view.background_rgba_linear;
             layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush, &mut view);
             let mut previews = Vec::new();
