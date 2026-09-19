@@ -296,6 +296,7 @@ mod allocation {
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.update_backdrop();
                 owner.allocate_workspace_motion();
                 owner.measure_drawer_tiles();
                 let placement = owner.drawer.geometry(&owner);
@@ -805,6 +806,7 @@ pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
+    backdrop: RefCell<Option<crate::wayland::backdrop::Backdrop>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
     pub(crate) local_tone: Rc<crate::local_tone_view::LocalToneView>,
     pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
@@ -868,6 +870,7 @@ impl Drop for Workspace {
         // Join the GPU worker before any native window/surface fields drop.
         self.local_tone.suspend();
         self.gpu.get_mut().take();
+        self.backdrop.get_mut().take();
         self.customization.dispose();
         gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
     }
@@ -1011,6 +1014,7 @@ impl Workspace {
             window,
             area,
             gpu: RefCell::new(None),
+            backdrop: RefCell::new(None),
             image_drop: RefCell::new(None),
             image_drop_label,
             proof,
@@ -2044,6 +2048,17 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                let background = crate::wayland::backdrop::Backdrop::new(area).and_then(|mut background| {
+                    background.update(area, this.palette.get().unwrap().bg.0)?;
+                    Ok(background)
+                });
+                match background {
+                    Ok(background) => {
+                        *this.backdrop.borrow_mut() = Some(background);
+                        this.window.add_css_class("native-canvas-background");
+                    }
+                    Err(error) => { this.gpu_error(&error); return; }
+                }
                 let reattached = this.gpu.borrow_mut().as_mut().map(|gpu| gpu.reattach(area));
                 if let Some(result) = reattached {
                     if let Err(error) = result {
@@ -2086,6 +2101,8 @@ impl Workspace {
                 if let Some(gpu) = this.gpu.borrow_mut().as_mut() {
                     gpu.session.renderer_mut().stop();
                 }
+                this.window.remove_css_class("native-canvas-background");
+                this.backdrop.borrow_mut().take();
             }
         ));
     }
@@ -2123,6 +2140,7 @@ impl Workspace {
         self.status.set_visible(true);
     }
     fn restart_gpu(self: &Rc<Self>) {
+        self.update_backdrop();
         let result = self
             .gpu
             .borrow_mut()
@@ -2310,6 +2328,24 @@ impl Workspace {
         }
         css.push('}');
         self.palette_css.load_from_string(&css);
+        self.update_backdrop();
+    }
+
+    fn update_backdrop(&self) {
+        if let Some(background) = self.backdrop.borrow_mut().as_mut()
+            && let Some(palette) = self.palette.get()
+        {
+            match background.update(&self.area, palette.bg.0) {
+                Ok(()) => self.window.add_css_class("native-canvas-background"),
+                Err(error) => {
+                    // Keep the window opaque on failure, then reveal the GPU
+                    // again after a successful resize, palette change or restart.
+                    self.window.remove_css_class("native-canvas-background");
+                    self.status.set_text(&format!("Canvas background unavailable: {error}"));
+                    self.status.set_visible(true);
+                }
+            }
+        }
     }
 
     fn resolved(&self) -> ResolvedLayout {

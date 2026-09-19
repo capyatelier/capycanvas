@@ -61,6 +61,20 @@ only when the final tab/window closes.
 
 ## Ownership and switching
 
+The window keeps a CPU-backed Wayland surround below the GPU canvas for its whole
+mapped lifetime. Startup, parking, failed rendering, and renderer replacement
+therefore show the theme background instead of exposing other windows. GTK starts
+opaque and becomes transparent only after that background has been installed;
+synchronized subsurfaces publish its pixels and geometry with GTK's parent commit.
+Nine slices retain the 12px window corners while stretching a tiny immutable
+shared-memory sample (2,500 bytes at scale 1, bounded below 150 KiB), independent of
+window area and tab count. Resizing reuses the sample; palette, scale, and corner
+changes replace it. No old drawing image or inactive GPU worker is kept for this.
+This requires the stable Wayland viewporter interface in addition to the existing
+subcompositor/shm support. If background initialization fails, keep GTK opaque
+and report the startup failure. A later update failure uses the same opaque
+fallback; successful updates or canvas restart restore the live drawing view.
+
 Keep one Workspace/native window and its retained controls. Store the active
 GpuCanvas in its existing slot and inactive GpuCanvas sessions in a tab owner.
 An inactive renderer is stopped and joined, retaining no native GPU surface,
@@ -141,6 +155,13 @@ shared spillable tile API.
 
 Native GTK tests run against an isolated Mutter compositor and real GPU:
 
+* `native_canvas_background_during_startup_and_tab_switch`: actual compositor
+  captures over a contrasting window, with GPU initialization deliberately paused;
+  covers startup, New, returning to an inactive tab, resize, light/dark themes,
+  failed rendering, restart, and window destruction. Center pixels must stay
+  opaque while waiting, reveal the drawing when ready, and uncover the other
+  window only when the drawing window closes. Edge joins and rounded corners are
+  checked at scales 1 and 2. Requires `LAYER_NATIVE_CAPTURE_DIR`.
 * `native_document_tabs_history_storage_and_close`: production New dialog creates
   a tab; independent undo/redo, dirty state, camera and brush; forced disk spill
   with zero retained inactive tile bytes and joined workers; exact save/reopen;
@@ -204,3 +225,9 @@ renderer navigation and close, initiating-window close during import/recovery,
 removed title/fullscreen/Zen selector access, deterministic close neighbor,
 duplicate names with locations, and title customization input arbitration.
 No tear-off, MRU policy, inactive thumbnails, or session serialization is needed.
+
+A fresh-context follow-up review of the persistent background found no ownership
+or synchronization blockers. Its recovery finding was addressed: successful
+updates and Restart Canvas must remove the opaque GTK fallback so they reveal
+the drawing again. Compositor tests cover that recovery and the requested
+slice-join/corner checks at scales 1 and 2; the viewporter prerequisite is explicit.

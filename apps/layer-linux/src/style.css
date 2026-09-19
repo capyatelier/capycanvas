@@ -1,6 +1,7 @@
-/* Only editor windows have a Wayland canvas underlay. Native dialogs retain
-   their opaque themed surfaces so text stays readable above other windows. */
-window.background.capy-workspace { background: transparent; }
+/* The window starts opaque. A synchronized, window-owned Wayland background
+   takes over before GTK becomes transparent for the GPU canvas underlay. */
+window.background.capy-workspace { background: var(--window-bg-color); }
+window.background.capy-workspace.native-canvas-background { background: transparent; }
 /* Pen fallback for GTK's mouse-position tooltip query; match native Adwaita. */
 popover.pen-tooltip { padding:0; margin:0; }
 popover.pen-tooltip > contents { padding:6px 10px; border-radius:9px; background:rgba(0,0,6,.8); border:1px solid rgba(255,255,255,.1); color:white; box-shadow:none; }

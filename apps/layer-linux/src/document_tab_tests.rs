@@ -17,6 +17,215 @@ fn switch(w: &Rc<Workspace>, id: u64) {
 }
 
 #[test]
+#[ignore = "isolated native-input.js with LAYER_NATIVE_CAPTURE_DIR"]
+fn native_canvas_background_during_startup_and_tab_switch() {
+    use std::sync::atomic::Ordering;
+    let app = native_test_app("art.capycanvas.OpaqueCanvas");
+    let directory = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let captures = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_CAPTURE_DIR").unwrap());
+    // A real window behind the editor makes transparency observable in the
+    // compositor capture. WidgetPaintable snapshots cannot exercise this bug.
+    let behind = gtk::Window::builder()
+        .application(&*app)
+        .decorated(false)
+        .build();
+    behind.set_widget_name("transparency-sentinel");
+    let css = gtk::CssProvider::new();
+    css.load_from_string("#transparency-sentinel { background: #ff00ff; }");
+    gtk::style_context_add_provider_for_display(
+        &gtk::prelude::WidgetExt::display(&behind),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    behind.maximize();
+    behind.present();
+    pump(400);
+    std::fs::write(directory.join("ready"), "ready").unwrap();
+    let mut step = 0;
+    let mut capture = |name: &str, expected: [u8; 3]| {
+        let path = directory.join(format!("step-{step}.json"));
+        let temp = path.with_extension("tmp");
+        std::fs::write(
+            &temp,
+            serde_json::to_vec(&serde_json::json!([
+                {"wait_ms":250}, {"capture":name}
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::rename(temp, path).unwrap();
+        until(
+            || directory.join(format!("done-{step}")).exists(),
+            "compositor capture",
+        );
+        step += 1;
+        let mut reader =
+            png::Decoder::new(std::fs::File::open(captures.join(format!("{name}.png"))).unwrap())
+                .read_info()
+                .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        for y in info.height / 2 - 20..info.height / 2 + 20 {
+            for x in info.width / 2 - 20..info.width / 2 + 20 {
+                let i = ((y * info.width + x) * 3) as usize;
+                assert!(
+                    pixels[i..i + 3]
+                        .iter()
+                        .zip(expected)
+                        .all(|(a, b)| a.abs_diff(b) <= 2),
+                    "{name}: expected {expected:?}, got {:?} at {x},{y}",
+                    &pixels[i..i + 3]
+                );
+            }
+        }
+        if name == "switch-resized" {
+            // Mutter restores this window centered at the requested logical
+            // extent. Check the slice joins and transparent outer corners in
+            // the actual composite, including the separate scale-2 run.
+            let scale: u32 = std::env::var("LAYER_MOTION_SCALE")
+                .unwrap_or("1".into())
+                .parse()
+                .unwrap();
+            let left = (info.width - 1100 * scale) / 2;
+            let top = (info.height - 750 * scale) / 2;
+            let right = left + 1100 * scale;
+            let bottom = top + 750 * scale;
+            let r = 12 * scale;
+            let pixel = |x, y| {
+                let i = ((y * info.width + x) * 3) as usize;
+                &pixels[i..i + 3]
+            };
+            for (x, y) in [
+                (left + r, top + 2 * scale),
+                (right - r - 1, top + 2 * scale),
+                (left + r, bottom - 2 * scale - 1),
+                (right - r - 1, bottom - 2 * scale - 1),
+                (left + 2 * scale, top + r),
+                (left + 2 * scale, bottom - r - 1),
+                (right - 2 * scale - 1, top + r),
+                (right - 2 * scale - 1, bottom - r - 1),
+            ] {
+                assert!(
+                    pixel(x, y)
+                        .iter()
+                        .zip(expected)
+                        .all(|(a, b)| a.abs_diff(b) <= 2),
+                    "background slice join at {x},{y}: {:?}",
+                    pixel(x, y)
+                );
+            }
+            for (x, y) in [
+                (left, top),
+                (right - 1, top),
+                (left, bottom - 1),
+                (right - 1, bottom - 1),
+            ] {
+                let p = pixel(x, y);
+                assert!(
+                    p[0] > 150 && p[1] < 20 && p[2] > 150,
+                    "rounded corner must expose the sentinel: {p:?}"
+                );
+            }
+        }
+    };
+    capture("behind", [255, 0, 255]);
+    let pause = crate::render_thread::pause_next_startup();
+    let w = Workspace::with_project(&app, Some((new_drawing(256, 256).unwrap(), None)));
+    w.window.maximize();
+    w.window.present();
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    // Allow the compositor's window-opening fade to finish; the GPU remains
+    // paused, so this cannot hide a missing application background.
+    pump(600);
+    capture("startup-wait", [51; 3]);
+    assert!(
+        !w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .startup
+            .complete
+    );
+    pause.store(false, Ordering::Release);
+    new_photo::ready(&w);
+    capture("startup-ready", [255; 3]);
+
+    let pause = crate::render_thread::pause_next_startup();
+    glib::MainContext::default()
+        .block_on(
+            w.documents
+                .open(&w, (new_drawing(128, 128).unwrap(), None, None)),
+        )
+        .unwrap();
+    capture("new-tab-wait", [51; 3]);
+    assert!(
+        w.documents.parked_memory().1,
+        "inactive GPU worker still stops"
+    );
+    pause.store(false, Ordering::Release);
+    new_photo::ready(&w);
+    capture("new-tab-ready", [255; 3]);
+
+    let pause = crate::render_thread::pause_next_startup();
+    glib::MainContext::default()
+        .block_on(w.documents.activate(&w, 1))
+        .unwrap();
+    capture("switch-wait", [51; 3]);
+    w.window.unmaximize();
+    w.window.set_default_size(1100, 750);
+    pump(350);
+    capture("switch-resized", [51; 3]);
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Light),
+    });
+    capture("switch-light", [184; 3]);
+    pause.store(false, Ordering::Release);
+    new_photo::ready(&w);
+    capture("switch-ready", [255; 3]);
+
+    w.gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .backend()
+        .fail_next_frame();
+    w.wake();
+    until(
+        || {
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .rendering_suspended()
+        },
+        "failed GPU worker",
+    );
+    capture("failed-worker", [184; 3]);
+    // Simulate the opaque GTK fallback after a background transport failure.
+    // A successful restart must reveal the new drawing again, not mask it.
+    w.window.remove_css_class("native-canvas-background");
+    let pause = crate::render_thread::pause_next_startup();
+    w.restart_gpu();
+    capture("restart-wait", [184; 3]);
+    pause.store(false, Ordering::Release);
+    new_photo::ready(&w);
+    capture("restart-ready", [255; 3]);
+    w.window.destroy();
+    capture("closed", [255, 0, 255]);
+    behind.destroy();
+    std::fs::write(directory.join("finished"), "done").unwrap();
+}
+
+#[test]
 #[ignore = "isolated Wayland and GPU"]
 fn native_document_tabs_history_storage_and_close() {
     let (app, windows) = crate::application("art.capycanvas.DocumentTabs");
