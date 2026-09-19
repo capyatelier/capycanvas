@@ -141,6 +141,8 @@ pub struct ColorState {
     coordinates: [Option<ColorCoordinates>; 2],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hdr_picker: Option<[HdrPaint; 2]>,
+    #[serde(default = "default_hdr_depth")]
+    hdr_depth: layer_core::color::SampleDepth,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -208,11 +210,13 @@ pub struct ColorSwatchView {
     pub rgba: [f32; 4],
     pub selected: bool,
 }
+fn default_hdr_depth() -> layer_core::color::SampleDepth { layer_core::color::SampleDepth::F16 }
+
 impl Default for ColorState {
     fn default() -> Self {
         Self {
             library: ColorLibrary::default(),
-            foreground: RgbColor {
+            foreground: RgbColor { linear_rgb: None,
                 space: RgbSpace::Srgb,
                 rgba: [0.075, 0.075, 0.07, 1.],
             },
@@ -226,6 +230,7 @@ impl Default for ColorState {
             hues: [60., 0.],
             coordinates: [None; 2],
             hdr_picker: None,
+            hdr_depth: layer_core::color::SampleDepth::F16,
         }
     }
 }
@@ -536,6 +541,9 @@ impl ColorState {
     }
     fn set_color_with_picker(&mut self, color: RgbColor, paint: Option<HdrPaint>) -> Result<(), String> {
         Self::validate_definition(color)?;
+        if self.hdr_picker.is_some() {
+            layer_core::color::hdr::validate_pixel(self.hdr_depth, color.linear_in(self.rgb_space)?).map_err(str::to_string)?;
+        }
         let rgba = paint.map_or(color, |p| p.base).encoded_in(self.rgb_space)?.map(|v| v.clamp(0., 1.));
         let index = self.index();
         let old_hsv = self.components_in(ColorSpace::Hsv);
@@ -618,14 +626,15 @@ impl ColorState {
     }
     pub fn apply(&mut self, action: ColorAction) -> Result<(), String> {
         match action {
-            ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev(self.rgb_space, stops)?)?,
+            ColorAction::Brightness { stops } => self.set_color(self.definition().with_brightness_ev_at_depth(self.rgb_space, stops, self.hdr_depth)?)?,
             ColorAction::HdrIntensity { stops } => self.set_hdr_intensity(stops)?,
             ColorAction::SetSlotIntensity { slot, color, stops } => {
                 if slot == ColorSlot::Transparent { return Err("Choose foreground or background".into()); }
                 if self.hdr_picker.is_none() { return Err("HDR intensity requires an HDR drawing".into()); }
                 Self::validate_definition(color)?;
+                hdr_picker::validate_intensity(self.hdr_depth, stops)?;
                 let paint = HdrPaint::at_intensity(color, self.rgb_space, stops)?;
-                layer_core::color::hdr::encode_pixel(color.linear_in(self.rgb_space)?).map_err(str::to_string)?;
+                layer_core::color::hdr::validate_pixel(self.hdr_depth, color.linear_in(self.rgb_space)?).map_err(str::to_string)?;
                 self.paint_slot = slot;
                 // Accepting an untouched draft retains exact base coordinates too.
                 if self.definition() != color || self.hdr_intensity() != stops {

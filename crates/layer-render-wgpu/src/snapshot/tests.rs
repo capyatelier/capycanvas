@@ -7,6 +7,40 @@ use std::io::Cursor;
 mod placement;
 
 #[test]
+fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
+    let mut document = Document::new("Float32 delivery", 3, 1);
+    document.color.depth = SampleDepth::F32;
+    document.layers[1].visible = false;
+    let target = SourceInterpretation { channels: SourceChannels::Rgba,
+        depth: SampleDepth::F32, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
+    let input = [[100000.125f32, -0.125, 2., 0.5], [4., 2., 1., 1.], [1e-20, -1., 4., 1. / 65536.]];
+    let mut builder = SourceBuilder::new([3, 1], target.clone(), 1024 * 1024).unwrap();
+    builder.push_row(&input.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+    document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
+    let project = Project { document, assets: Default::default() };
+    let mut renderer = SnapshotRenderer::new(project.clone(), [0.; 4], 0., Default::default()).unwrap();
+    let before = renderer.preview_linear_document([3, 1]).unwrap().pixels;
+    let mut output = Cursor::new(Vec::new());
+    renderer.write_exr(&mut output).unwrap();
+    let image = layer_color::photo::read_photo(Cursor::new(output.into_inner()), Default::default()).unwrap();
+    assert_eq!(image.interpretation, target);
+    let mut bytes = vec![0; image.row_bytes()];
+    image.rows().read(0, &mut bytes).unwrap();
+    for (encoded, expected) in bytes.chunks_exact(16).zip(input) {
+        assert_eq!(layer_core::color::hdr::decode_samples(SampleDepth::F32, encoded).unwrap().map(f32::to_bits), expected.map(f32::to_bits));
+    }
+    let mut pq = Vec::new();
+    assert!(renderer.write_hdr_png(&mut pq, false).is_err());
+    pq.clear();
+    assert!(renderer.write_hdr_png(&mut pq, true).unwrap().clipped_channels > 0);
+    assert!(layer_color::photo::read_photo(Cursor::new(pq), Default::default()).unwrap().interpretation.depth.is_float());
+    let mut sdr = Vec::new();
+    renderer.write_png(&mut sdr, &SourceInterpretation { depth: SampleDepth::U16, ..target }, Default::default(), None).unwrap();
+    assert_eq!(layer_color::photo::read_photo(Cursor::new(sdr), Default::default()).unwrap().interpretation.depth, SampleDepth::U16);
+    assert_eq!(renderer.preview_linear_document([3, 1]).unwrap().pixels, before);
+}
+
+#[test]
 fn hdr_flattened_storage_ignores_sdr_rendition() {
     use layer_core::color::hdr;
     let mut document = Document::new("HDR flattened copy", 3, 1);
@@ -87,7 +121,7 @@ fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
             ];
             for value in values {
                 match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                     SampleDepth::U8 => row.push(value as u8),
                     SampleDepth::U16 => row.extend((value as u16).to_le_bytes()),
                 }
@@ -346,7 +380,7 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
     selection.inverted = mask_kind == 2;
     mask.initial = Some(selection);
     let scalar = match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
         SampleDepth::U8 => vec![123; 65536],
         SampleDepth::U16 => 32001u16.to_le_bytes().repeat(65536),
     };
@@ -368,7 +402,7 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         ..Default::default()
     };
     let paint = match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
         SampleDepth::U8 => [92u8, 41, 71, 123].repeat(65536),
         SampleDepth::U16 => [30001u16, 17003, 49117, 32768]
             .into_iter()
@@ -572,6 +606,27 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     );
     reader.control().cancel();
     assert!(reader.read_band(0).is_err());
+}
+
+#[test]
+fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries() {
+    let mut project = rich_project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
+    project.document.width = 2053;
+    for layer in &mut project.document.layers {
+        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
+    }
+    let (live, expected) = frame(&project);
+    let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default(), Default::default()).unwrap();
+    let mut actual = Vec::new();
+    let mut y = 0;
+    while y < capture.extent()[1] {
+        let (rows, pixels) = capture.read_band(y).unwrap();
+        actual.extend(pixels); y += rows;
+    }
+    assert_eq!(actual.len(), expected.len());
+    for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
+        assert!((a-b).abs() <= 2e-6, "shared snapshot column seam: {a} != {b}");
+    }
 }
 
 #[test]

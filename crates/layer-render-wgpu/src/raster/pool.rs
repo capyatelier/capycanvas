@@ -63,7 +63,9 @@ impl BufferPool {
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ));
         }
-        let format = if descriptor.bits_per_channel == 16 {
+        let format = if descriptor.bits_per_channel == 32 {
+            wgpu::TextureFormat::Rgba32Uint
+        } else if descriptor.bits_per_channel == 16 {
             wgpu::TextureFormat::Rgba16Uint
         } else {
             wgpu::TextureFormat::Rgba8Uint

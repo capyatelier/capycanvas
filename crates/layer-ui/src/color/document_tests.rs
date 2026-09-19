@@ -38,7 +38,7 @@ fn definitions_survive_picker_display_alpha_and_workspace_changes() {
         state.set_color(definition).unwrap();
     }
     let before = state.clone();
-    let invalid = RgbColor {
+    let invalid = RgbColor { linear_rgb: None,
         space: RgbSpace::ProPhoto,
         rgba: [f32::MAX, 0., 0., 1.],
     };

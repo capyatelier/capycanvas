@@ -82,6 +82,31 @@ static avifImage* avif_rgb(const char* path,unsigned w,unsigned h,bool alpha,uin
   rgb.depth=12;rgb.pixels=raw.data();rgb.rowBytes=w*(alpha?8:6);rgb.alphaPremultiplied=AVIF_FALSE;rgb.avoidLibYUV=AVIF_TRUE;rgb.maxThreads=2;
   avif_ok(avifImageRGBToYUV(image,&rgb));return image;
 }
+// Bound libaom's working set independently of full-image dimensions. Grid
+// cells share the original 12-bit planes; no resampling, chroma reduction or
+// gain-map precision change. SINGLE releases each cell's codec before the next.
+static void avif_encode_grid(avifEncoder* enc,avifImage* image,avifRWData* data) {
+  const unsigned cols=(image->width+1023)/1024,rows=(image->height+1023)/1024;
+  if(cols==1&&rows==1){avif_ok(avifEncoderWrite(enc,image,data));return;}
+  const unsigned cw=(image->width+cols-1)/cols,ch=(image->height+rows-1)/rows;
+  std::vector<avifImage*> cells;
+  for(unsigned y=0;y<rows;y++)for(unsigned x=0;x<cols;x++){
+    auto cell=avifImageCreateEmpty();require(cell,"Cannot allocate AVIF grid cell");
+    avifCropRect rect{x*cw,y*ch,std::min(cw,image->width-x*cw),std::min(ch,image->height-y*ch)};
+    avif_ok(avifImageSetViewRect(cell,image,&rect));
+    cell->gainMap=avifGainMapCreate();require(cell->gainMap,"Cannot allocate grid gain map");
+    // Our authored gain maps contain no allocated alternate ICC profile.
+    require(image->gainMap->altICC.size==0,"Unexpected alternate ICC profile");
+    *cell->gainMap=*image->gainMap;
+    cell->gainMap->image=avifImageCreateEmpty();require(cell->gainMap->image,"Cannot allocate gain-map cell");
+    avif_ok(avifImageSetViewRect(cell->gainMap->image,image->gainMap->image,&rect));
+    cells.push_back(cell);
+  }
+  if(image->exif.size)avif_ok(avifImageSetMetadataExif(cells[0],image->exif.data,image->exif.size));
+  avif_ok(avifEncoderAddImageGrid(enc,cols,rows,cells.data(),AVIF_ADD_IMAGE_FLAG_SINGLE));
+  avif_ok(avifEncoderFinish(enc,data));
+  for(auto cell:cells)avifImageDestroy(cell);
+}
 static void avif_encode(unsigned w,unsigned h,int quality,uint64_t budget) {
   auto image=avif_rgb("base.raw",w,h,true,budget);auto m=metadata();
   if(std::ifstream("exif").good()){auto e=load("exif",65533);require(e.size()>6,"Invalid Exif");avif_ok(avifImageSetMetadataExif(image,e.data()+6,e.size()-6));}
@@ -97,7 +122,7 @@ static void avif_encode(unsigned w,unsigned h,int quality,uint64_t budget) {
   gm->altMatrixCoefficients=AVIF_MATRIX_COEFFICIENTS_IDENTITY;gm->altYUVRange=AVIF_RANGE_FULL;gm->altDepth=16;gm->altPlaneCount=4;
   auto enc=avifEncoderCreate();require(enc,"Cannot allocate AVIF encoder");enc->codecChoice=AVIF_CODEC_CHOICE_AOM;enc->maxThreads=2;
   enc->speed=8;enc->quality=quality;enc->qualityAlpha=100;enc->qualityGainMap=100;
-  avifRWData data=AVIF_DATA_EMPTY;avif_ok(avifEncoderWrite(enc,image,&data));save("encoded",data.data,data.size);
+  avifRWData data=AVIF_DATA_EMPTY;avif_encode_grid(enc,image,&data);save("encoded",data.data,data.size);
   avifRWDataFree(&data);avifEncoderDestroy(enc);avifImageDestroy(image);
 }
 // Header is LE u32 width,height,primaries,transfer,bytes-per-pixel. Native worker

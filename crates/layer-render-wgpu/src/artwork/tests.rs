@@ -19,7 +19,7 @@ fn document(color: DocumentColor) -> Document {
         for x in 0..3 {
             let values = codes(x * PAGE_SIZE);
             let bytes = match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                 SampleDepth::U16 => values
                     .into_iter()
                     .flat_map(u16::to_le_bytes)
@@ -124,7 +124,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
                         ..(position[0] + radius + 1).min(EXTENT[0])
                     {
                         let values = codes(x).map(|v| match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                             SampleDepth::U16 => f64::from(v) / 65535.,
                             SampleDepth::U8 => f64::from(v >> 8) / 255.,
                         });

@@ -127,7 +127,7 @@ impl LocalToneBuilder {
             &cancelled,
         )?;
         let mut detail: Vec<Vec<f32>> = original.iter().map(|p| vec![0.; p.pixels.len()]).collect();
-        // At most half an EV between samples over the supported half-float
+        // At most half an EV between samples over the occupied HDR
         // range. Retain one remapped pyramid at a time, not N full pyramids.
         let intervals = ((high - low) / 0.5).ceil().max(1.) as u32;
         let step = ((high - low) / intervals as f32).max(0.00001);

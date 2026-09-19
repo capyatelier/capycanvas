@@ -26,6 +26,8 @@ pub struct Stats {
     /// Frame id, document-to-surface matrix, artwork preview revision. Allows
     /// camera requests to be matched to actual presentation without timing guesses.
     pub camera_views: Vec<(u64, [f32; 6], u64)>,
+    /// Recipe actually used by this presented frame, for local-tone latency.
+    pub hdr_views: Vec<(u64, Option<layer_core::color::hdr::SdrRendition>)>,
     /// GTK owner delivery ns, source layer id, surface point, resulting pose.
     pub photo_inputs: Vec<(u64, u64, [f32; 2], [f32; 6])>,
     /// Frame id, source layer id and its submitted placement for presentation correlation.
@@ -78,6 +80,9 @@ pub fn thread_cpu_ms() -> f64 {
     time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
 }
 impl Timing {
+    pub fn hdr_view(&self, rendition: Option<layer_core::color::hdr::SdrRendition>) {
+        self.stats.lock().unwrap().hdr_views.push((self.id, rendition));
+    }
     pub fn photo_frame(&self, layers: &[layer_core::Layer]) {
         self.stats.lock().unwrap().photo_frames.extend(layers.iter()
             .filter(|layer| layer.source.is_some())

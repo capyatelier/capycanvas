@@ -188,12 +188,13 @@ pub(crate) fn picker_texture(view: ViewColor, headroom: f32, space: RgbSpace,
     picker_texture_with_gain(view, headroom, space, extent, pixels, 1.)
 }
 pub(crate) fn picker_texture_with_gain(view: ViewColor, headroom: f32, space: RgbSpace,
-    extent: [u32; 2], pixels: &[[f32; 4]], gain: f32) -> gdk::Texture {
+    extent: [u32; 2], pixels: &[[f32; 4]], gain: f64) -> gdk::Texture {
     let document = if let ViewColor::Mapped { document, .. } = view { document } else { space };
     let to_document = space.linear_transform(document);
     let document_pixel = |p: [f32; 4]| {
         let rgb = layer_core::color::rgb::apply(to_document, [p[0],p[1],p[2]].map(f64::from));
-        [rgb[0] as f32 * gain,rgb[1] as f32 * gain,rgb[2] as f32 * gain,p[3]]
+        let rgb = rgb.map(|v| (v * gain).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32);
+        [rgb[0],rgb[1],rgb[2],p[3]]
     };
     if headroom > 1. {
         let to_srgb = document.linear_transform(RgbSpace::Srgb);

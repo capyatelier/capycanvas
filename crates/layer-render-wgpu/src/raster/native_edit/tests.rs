@@ -98,7 +98,7 @@ fn engine(
 #[test]
 fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples() {
     for space in RgbSpace::ALL {
-        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             let color = DocumentColor { space, depth };
             let mut document = layer_core::Document::new("native workflow", 256, 256);
             document.color = color;
@@ -214,7 +214,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             }];
             let stride = usize::from(depth.bits() / 8) * 4;
             let expected: Vec<u8> = match depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                 SampleDepth::U8 => vec![70, 140, 210, 255],
                 SampleDepth::U16 => [70u16, 140, 210, 255]
                     .into_iter()

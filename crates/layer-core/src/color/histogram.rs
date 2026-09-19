@@ -56,14 +56,20 @@ impl Histogram {
 
     /// Positive HDR bins shown by an inspector. Keep white and nearby stops in
     /// view; expand to include occupied tails. Bin zero has a separate count.
+    pub fn hdr_bin(&self, linear: f64) -> usize {
+        if self.color.depth == super::SampleDepth::F32 { bin_between(linear, -149., 128.) } else { hdr_bin(linear) }
+    }
+    pub fn hdr_bin_stops(&self, bin: usize) -> f64 {
+        if self.color.depth == super::SampleDepth::F32 { (bin.saturating_sub(1) as f64 / 254.) * 277. - 149. } else { hdr_bin_stops(bin) }
+    }
     pub fn plot_bins(&self) -> std::ops::Range<usize> {
         if !self.color.depth.is_float() { return 0..BINS; }
         let occupied = |i| self.channels.iter().any(|c| c.bins[i] > 0);
-        let first = (1..BINS).find(|&i| occupied(i)).unwrap_or(hdr_bin(1.));
-        let last = (1..BINS).rev().find(|&i| occupied(i)).unwrap_or(hdr_bin(1.));
-        let low = hdr_bin_stops(first).floor().min(-4.).max(-12.);
-        let high = (hdr_bin_stops(last).ceil() + 1.).max(2.).min(16.);
-        hdr_bin(2f64.powf(low))..(hdr_bin(2f64.powf(high)) + 1).min(BINS)
+        let first = (1..BINS).find(|&i| occupied(i)).unwrap_or(self.hdr_bin(1.));
+        let last = (1..BINS).rev().find(|&i| occupied(i)).unwrap_or(self.hdr_bin(1.));
+        let low = self.hdr_bin_stops(first).floor().min(-4.).max(if self.color.depth == super::SampleDepth::F32 { -149. } else { -12. });
+        let high = (self.hdr_bin_stops(last).ceil() + 1.).max(2.).min(if self.color.depth == super::SampleDepth::F32 { 128. } else { 16. });
+        self.hdr_bin(2f64.powf(low))..(self.hdr_bin(2f64.powf(high)) + 1).min(BINS)
     }
     pub fn new(color: DocumentColor) -> Self {
         Self {
@@ -95,7 +101,8 @@ impl Histogram {
                 [0, 1, 2].map(|c| f64::from(pixel[c]) / f64::from(pixel[3]))
             };
             for c in 0..3 {
-                self.channels[c].add(if self.color.depth.is_float() { hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) }, rgb[c]);
+                let bin = if self.color.depth.is_float() { self.hdr_bin(rgb[c]) } else { encoded.index(rgb[c]) };
+                self.channels[c].add(bin, rgb[c]);
             }
             // Algebraically equal to dot(Y, RGB), with neutral values exact at
             // the endpoints instead of depending on rounded coefficient sums.
@@ -103,7 +110,7 @@ impl Histogram {
                 + self.luminance[0] * (rgb[0] - rgb[1])
                 + self.luminance[2] * (rgb[2] - rgb[1]);
             self.channels[3].add(
-                if self.color.depth.is_float() { hdr_bin(y) } else { (y.clamp(0., 1.) * BINS as f64)
+                if self.color.depth.is_float() { self.hdr_bin(y) } else { (y.clamp(0., 1.) * BINS as f64)
                     .floor()
                     .min((BINS - 1) as f64) as usize },
                 y,
@@ -116,7 +123,10 @@ impl Histogram {
 /// Bin 0 counts nonpositive channels; remaining bins cover -12..+16 stops
 /// relative to portable reference white. `above` still reports above-white data.
 pub fn hdr_bin(linear: f64) -> usize {
-    if linear <= 0. { 0 } else { 1 + (((linear.log2()+12.)/28.).clamp(0.,1.)*254.).floor() as usize }
+    bin_between(linear, -12., 16.)
+}
+fn bin_between(linear: f64, low: f64, high: f64) -> usize {
+    if linear <= 0. { 0 } else { 1 + (((linear.log2()-low)/(high-low)).clamp(0.,1.)*254.).floor() as usize }
 }
 /// Lower stop boundary of a positive HDR bin.
 pub fn hdr_bin_stops(bin: usize) -> f64 { (bin.saturating_sub(1) as f64 / 254.) * 28. - 12. }
@@ -270,5 +280,19 @@ mod tests {
             }
             assert_eq!(actual, expected, "{space:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod float32_tests {
+    use super::*;
+    #[test]
+    fn float32_histogram_separates_extended_range_and_subnormal_bins() {
+        let mut histogram = Histogram::new(DocumentColor { depth: super::super::SampleDepth::F32, ..Default::default() });
+        histogram.add(&[[f32::from_bits(1),1e-20,1.,1.],[-1.,100000.,1e30,1.]]).unwrap();
+        let plot = histogram.plot_bins();
+        for value in [f64::from(f32::from_bits(1)),1e-20,1.,100000.,1e30] { assert!(plot.contains(&histogram.hdr_bin(value))); }
+        assert_ne!(histogram.hdr_bin(100000.), histogram.hdr_bin(1e30));
+        assert_eq!(histogram.channels[0].below, 1);
     }
 }

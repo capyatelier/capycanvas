@@ -372,7 +372,7 @@ pub async fn raster_worker_output(
             return Ok(());
         }
         match recipe.format {
-            ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
+            ExportFormat::Exr | ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
             ExportFormat::Png => layer_color::photo::write_png_rows(
                 output,
                 extent,

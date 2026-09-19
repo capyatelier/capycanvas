@@ -277,7 +277,7 @@ pub fn write_tiff_rows(
         }};
     }
     let result = match (interpretation.channels, interpretation.depth) {
-        (_, SampleDepth::F16) => return Err("TIFF HDR delivery is not supported; select PQ PNG or an SDR rendition".into()),
+        (_, SampleDepth::F16 | SampleDepth::F32) => return Err("TIFF HDR delivery is not supported; select PQ PNG or an SDR rendition".into()),
         (SourceChannels::Gray, SampleDepth::U8) => write!(colortype::Gray8, false),
         (SourceChannels::Gray, SampleDepth::U16) => write!(colortype::Gray16, true),
         (SourceChannels::GrayAlpha, SampleDepth::U8) => write!(GrayAlpha8, false),

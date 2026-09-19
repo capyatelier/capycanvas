@@ -143,6 +143,8 @@ pub struct SnapshotRenderer {
     resident: HashMap<LayerId, RasterData>,
     extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
+    shared_device: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
     output_resolution: Option<layer_core::ImageResolution>,
@@ -290,6 +292,8 @@ impl SnapshotRenderer {
             backing,
             resident: HashMap::new(),
             extent,
+            #[cfg(not(target_arch = "wasm32"))]
+            shared_device: gpu.is_some(),
             #[cfg(not(target_arch = "wasm32"))]
             output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))]
@@ -447,7 +451,12 @@ impl SnapshotRenderer {
         } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
-            match self.read_region([0, y, width, rows]) {
+            let result = if self.shared_device && width > 512 {
+                self.read_interactive_band(y, rows)
+            } else {
+                self.read_region([0, y, width, rows])
+            };
+            match result {
                 Ok(pixels) => return Ok((rows, pixels)),
                 Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => {
                     rows = (rows / 2).max(16);
@@ -455,6 +464,34 @@ impl SnapshotRenderer {
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    /// A file worker shares the canvas queue. Complete at most two tile
+    /// columns before yielding it through readback; a full 8K-wide effect band
+    /// otherwise blocks presentation for several refresh intervals. Preserve
+    /// the row-band cache and exact pixel/halo semantics of read_region.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_interactive_band(&mut self, y: u32, rows: u32) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        let width = self.extent[0];
+        let band_bytes = u64::from(width) * u64::from(rows) * 16;
+        if band_bytes > self.limits.planned_pixel_bytes {
+            return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.limits.planned_pixel_bytes });
+        }
+        let mut band = vec![[0.; 4]; width as usize * rows as usize];
+        for x in (0..width).step_by(512) {
+            self.check_cancelled()?;
+            let columns = 512.min(width - x);
+            // The assembled CPU band stays alive beside each bounded GPU job.
+            self.limits.planned_pixel_bytes -= band_bytes;
+            let result = self.read_region([x, y, columns, rows]);
+            self.limits.planned_pixel_bytes += band_bytes;
+            let pixels = result?;
+            for (row, source) in pixels.chunks_exact(columns as usize).enumerate() {
+                let start = row * width as usize + x as usize;
+                band[start..start + columns as usize].copy_from_slice(source);
+            }
+        }
+        Ok(band)
     }
 
     /// Exact linear-premultiplied document RGB. No display conversion, proof,

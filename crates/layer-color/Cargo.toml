@@ -19,6 +19,8 @@ tiff = { version = "=0.10.3", default-features = false, features = ["deflate", "
 image = { version = "=0.25.9", default-features = false, features = ["bmp"] }
 gif = "=0.14.2"
 image-webp = "=0.2.4"
+# Sequential block IO keeps HDR interchange bounded on native and wasm.
+exr = { version = "=1.74.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = { version = "=0.8.9", optional = true }

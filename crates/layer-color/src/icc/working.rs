@@ -109,10 +109,9 @@ impl WorkingDecoder {
         }
         if let DecoderKind::Linear { matrix, identity } = &self.kind {
             for (input, output) in encoded.chunks_exact(bpp).zip(output) {
-                let mut p = [0.,0.,0.,1.];
-                for (c, b) in input.chunks_exact(2).enumerate() { p[c] = layer_core::color::f16::from_bits(u16::from_le_bytes([b[0],b[1]])).to_f32(); }
-                layer_core::color::hdr::encode_pixel(p).map_err(str::to_string)?;
+                let mut p = layer_core::color::hdr::decode_samples(self.source.depth, input).map_err(str::to_string)?;
                 if !identity { let rgb = [p[0],p[1],p[2]]; for c in 0..3 { p[c] = matrix[c][0]*rgb[0]+matrix[c][1]*rgb[1]+matrix[c][2]*rgb[2]; } }
+                layer_core::color::hdr::validate_pixel(layer_core::color::SampleDepth::F32, p).map_err(str::to_string)?;
                 *output = p;
             }
             return Ok(());

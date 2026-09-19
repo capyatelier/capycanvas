@@ -9,7 +9,7 @@ fn native_penup_and_following_strokes() {
     let mut project = new_drawing(4096, 4096).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: if std::env::var("LAYER_DRAWING_HDR").as_deref() == Ok("1") { SampleDepth::F16 } else { SampleDepth::U16 },
+        depth: match std::env::var("LAYER_DRAWING_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 },
     };
     for _ in 0..31 {
         let id = project.document.allocate_layer_id();
@@ -19,6 +19,7 @@ fn native_penup_and_following_strokes() {
             .layers
             .insert(position, layer_core::Layer::paint(id, "pacing layer"));
     }
+    let depth = project.document.color.depth;
     project.validate(Default::default()).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
@@ -222,7 +223,7 @@ fn native_penup_and_following_strokes() {
     assert_eq!(backed.len(), count);
     assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
     let report = serde_json::json!({
-        "document": {"extent": [4096,4096], "space": "ProPhoto", "depth": 16, "paint_layers": 32},
+        "document": {"extent": [4096,4096], "space": "ProPhoto", "depth": depth.bits(), "paint_layers": 32},
         "brush": "PaletteKnife", "brush_size": 720, "contact_ms": 800, "contacts": count,
         "viewport": camera.viewport, "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "path": "app-owned Wayland Vulkan subsurface", "backing_observation": "first observed host-backed at 2ms event-loop sampling",
@@ -235,6 +236,13 @@ fn native_penup_and_following_strokes() {
     let path = std::env::var("LAYER_PACING_REPORT").unwrap();
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     w.window.destroy();
+    // This harness drives the main context directly, without Application::run
+    // observing the analysis worker's application hold during shutdown.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.local_tone.worker_state().0 {
+        pump(5);
+        assert!(Instant::now() < deadline, "cancelled local analysis did not stop");
+    }
     pump(100);
 }
 

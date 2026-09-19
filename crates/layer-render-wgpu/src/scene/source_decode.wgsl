@@ -19,9 +19,12 @@ struct Settings {
     if any(position.xy >= settings.options.zw) { return vec4<f32>(0.); }
     let samples = textureLoad(encoded, vec2<i32>(position.xy), 0);
     if settings.options.y==0. {
-        let alpha=half_value(samples.a);
+        var decoded=vec4(half_value(samples.r),half_value(samples.g),half_value(samples.b),half_value(samples.a));
+        if settings.unused0.x!=0. {decoded=bitcast<vec4<f32>>(samples);}
+        let alpha=decoded.a;
         if alpha==0. {return vec4(0.);}
-        let linear=vec3(half_value(samples.r),half_value(samples.g),half_value(samples.b));
+        let linear=decoded.rgb;
+        if settings.unused0.y!=0. {return vec4(linear*alpha,alpha); }
         let rgb=vec3(dot(settings.red.xyz,linear),dot(settings.green.xyz,linear),dot(settings.blue.xyz,linear));
         return vec4(rgb*alpha,alpha);
     }

@@ -201,6 +201,10 @@ LayerStatus layer_canvas_instant_feedback_default(
 /* Blocking headless/diagnostic constructor, not an interactive window host.
  * Native frontends use layer-host and the staged WgpuRasterizer lifecycle. */
 LayerStatus layer_canvas_create(const LayerCanvasConfig *config, LayerCanvas **output);
+/* HDR linear RGB, reference white 203 cd/m². float_bits: 16 or 32.
+ * Ignores integer_depth; other config fields and ownership are unchanged.
+ * Unsupported GPU capabilities return an error, never a lower precision. */
+LayerStatus layer_canvas_create_float(const LayerCanvasConfig *config, uint32_t float_bits, LayerCanvas **output);
 void layer_canvas_destroy(LayerCanvas *canvas);
 LayerStatus layer_canvas_submit_pen_events(LayerCanvas *canvas,
                                            const LayerPenEvent *events,

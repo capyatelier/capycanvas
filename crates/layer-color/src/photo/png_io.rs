@@ -237,7 +237,7 @@ pub fn write_png_rows(
     info.bit_depth = match interpretation.depth {
         SampleDepth::U8 => png::BitDepth::Eight,
         SampleDepth::U16 => png::BitDepth::Sixteen,
-        SampleDepth::F16 => return Err("HDR needs explicit PQ PNG delivery".into()),
+        SampleDepth::F16 | SampleDepth::F32 => return Err("HDR needs explicit PQ PNG delivery".into()),
     };
     info.color_type = match interpretation.channels {
         SourceChannels::Gray => png::ColorType::Grayscale,
