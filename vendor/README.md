@@ -1,5 +1,29 @@
 # Pinned dependency fixes
 
+## AV1 decoder portability
+
+`rav1d` 1.1.0 is the published BSD-2-Clause crate from
+<https://github.com/memorysafety/rav1d>, revision
+`782dab2135ea64a057c097088a13eb8ed3cc3320`, registry archive SHA-256
+`1932f060d5e7bd49dc9f8b272c1dc5e9ce0ffe141c28be900265d3989b36c9ed`.
+The library sources, manifest, build script, license, release notes and registry
+provenance are retained; development CI/configuration files and package lockfiles
+are omitted.
+
+`rav1d-portable.patch` makes `cc`/`nasm-rs` optional dependencies of the existing
+`asm` feature. Pointer-sized C integer aliases use the matching Rust primitives.
+The native `off_t` and errno values remain from libc; `wasm32-unknown-unknown`
+uses an i64 offset and conventional Linux result codes without a libc dependency
+or syscalls. The AV1 decoding algorithm is unchanged. Both bit-depth features are
+enabled and default/assembly features disabled by the
+[portability check](../tools/validation/portable-av1/README.md).
+
+That independent check proves exact lossless 8/10/12-bit plane decoding in native
+Rust and Chrome WebAssembly, with no WebAssembly host imports, and checks the
+Android target. It uses one decoder thread and a frame-size limit. Application
+container/color/memory/cancellation integration is tracked separately in the
+[migration plan](../docs/development/portable-photo-core.md).
+
 ## Portable Zstd raster storage
 
 `zrip-core` 0.10.1 and `zrip-encode` 0.8.7 are the published MIT-licensed

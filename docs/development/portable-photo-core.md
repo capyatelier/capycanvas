@@ -9,9 +9,9 @@ Commit and push significant milestones to `origin/main`.
 ## Remaining work
 
 - Replace native AVIF: rav1e/ravif encoding, Rust container and gain-map handling,
-  upstream rav1d decoding. Validate actual WebAssembly decoding early. The initial
-  rav1d 1.1.0 probe with assembly disabled fails on missing libc types on wasm;
-  resolve portability before choosing the final decoder integration.
+  upstream rav1d decoding. The patched decoder passes actual WebAssembly
+  decoding; connect it to the application container/color path with bounded
+  memory and cancellation before replacing native dispatch.
 - Replace HEIC import with heif-oxide. Its current fidelity limitations are
   accepted for the initial integration; retain explicit capability reporting.
 - Finish GTK integration and remove native codec build, bundle discovery and
@@ -124,3 +124,18 @@ Source compressed sizes were within 2% of C for U8/F16/F32; U16 source grew 25%.
 Interactive F16/F32 sizes improved; interactive U16 grew 45%. These measurements
 describe this corpus and host, not browser/device drawing latency. No archive
 migration or lossy sample conversion is involved.
+
+## AV1 portability qualification — 2026-09-19
+
+The [rav1d portability patch](../../vendor/README.md#av1-decoder-portability)
+removes the initial WebAssembly compile failure from libc ABI aliases and makes
+assembly build tools optional. With assembly disabled, the independent
+[portable AV1 check](../../tools/validation/portable-av1/README.md) decodes
+lossless AOM-generated 8/10/12-bit frames in native Rust and Chrome 152
+WebAssembly. Every plane sample matches the known formula; the Wasm module has
+zero host imports. Android target compilation also passes. These tests use a
+single decoder thread and small bounded frames.
+
+This qualification workspace is separate from application builds. AVIF
+container parsing, alpha, geometry, NCLX/ICC, gain maps, encoding, large-image
+memory admission and host integration still require implementation and tests.
