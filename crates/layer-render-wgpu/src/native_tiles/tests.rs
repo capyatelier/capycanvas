@@ -1085,3 +1085,40 @@ fn hdr_half_publication_preserves_finite_codes_subnormals_and_canonical_cache() 
         assert!(read_status(&r,&status).is_err());
     }
 }
+
+#[test]
+fn float32_publication_retains_precision_range_and_rejects_unassociation_overflow() {
+    use layer_core::color::DocumentColor;
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }).unwrap();
+    let encoder = NativeTileEncoder::new(&r.device);
+    let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
+    let status = NativeEncodeStatus::new(&r.device);
+    let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let output = texture(&r, wgpu::TextureFormat::Rgba32Uint);
+    for region in [[0,0,256,256], [5,7,11,13]] {
+        let pixels: Vec<_> = (0..65536).map(|i| {
+            let a = [1., 0.5, 1./65536.][i%3];
+            [1.0000001*a, -100000.125*a, 1e30*a, a]
+        }).collect();
+        upload(&r, &working, &working_bytes(&pixels));
+        let batch = encoder.prepare(&r.device, &[NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
+            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region }], &status).unwrap();
+        submit(&r, &encoder, &status, &[batch], true);
+        assert_eq!(read_status(&r,&status).unwrap().clipped_pixels, 0);
+        let actual = page_bytes(&r, &output);
+        for y in region[1]..region[1]+region[3] { for x in region[0]..region[0]+region[2] {
+            let i = (y*256+x) as usize;
+            let p = pixels[i];
+            let expected = [p[0]/p[3],p[1]/p[3],p[2]/p[3],p[3]];
+            assert_eq!(&actual[i*16..][..16], working_bytes(&[expected]));
+        }}
+    }
+    for pixel in [[f32::MAX,0.,0.,0.125],[f32::NAN,0.,0.,1.],[0.,0.,0.,1.1]] {
+        upload(&r, &working, &working_bytes(&vec![pixel;65536]));
+        let batch = encoder.prepare(&r.device, &[NativeTileRequest { working: &working, encoded: &output, canonical: &canonical, transfer: &transfer,
+            depth: SampleDepth::F32, alpha: AlphaAssociation::Straight, region: [0,0,256,256] }], &status).unwrap();
+        submit(&r,&encoder,&status,&[batch],true);
+        assert!(read_status(&r,&status).is_err());
+    }
+}

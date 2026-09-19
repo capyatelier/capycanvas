@@ -149,7 +149,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         .map_err(|e| e.to_string())?;
         let mut colors = ColorState::default();
         colors.set_rgb_space(engine.document().color.space)?;
-        colors.set_hdr_enabled(engine.document().color.depth.is_float())?;
+        colors.set_document_depth(engine.document().color.depth)?;
         let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -2494,7 +2494,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
-                self.state.colors.set_hdr_enabled(hdr)?;
+                self.state.colors.set_document_depth(self.engine.document().color.depth)?;
                 self.state.colors.apply(action)?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
@@ -13232,7 +13232,7 @@ mod tests {
             // Preserve deliberately invalid samples for the dispatch rejection
             // case below; valid upstream fixtures described linear sRGB.
             let [r, g, b] = [r, g, b].map(|v| RgbSpace::Srgb.encode(v as f64) as f32);
-            RgbColor { space: RgbSpace::Srgb, rgba: [r, g, b, a] }
+            RgbColor { linear_rgb: None, space: RgbSpace::Srgb, rgba: [r, g, b, a] }
         }
         for platform in [
             Platform::Gtk,

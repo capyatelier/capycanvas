@@ -329,6 +329,25 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
         default: p.default.clone(),
     }
 }
+/// Extend only the bundled linear algorithms, whose math is independent of
+/// sample depth. Embedded/custom programs retain their own declared contracts.
+fn float32_program(program: &Arc<layer_core::EffectProgram>, depth: layer_core::color::SampleDepth) -> Arc<layer_core::EffectProgram> {
+    if depth != layer_core::color::SampleDepth::F32 { return program.clone(); }
+    let (key, lower, upper) = match program.id.as_ref() {
+        "curves" => ("hdr_stops", 0., 127.),
+        "exposure" => ("exposure", -126., 126.),
+        _ => return program.clone(),
+    };
+    let Some(bundled) = layer_core::bundled_effect_catalog().get(&program.id) else { return program.clone(); };
+    if program.wgsl != bundled.program().wgsl || program.entry != bundled.program().entry { return program.clone(); }
+    let mut result = program.clone();
+    let parameters = &mut Arc::make_mut(&mut result).parameters;
+    for parameter in Arc::make_mut(parameters) {
+        if parameter.key.as_ref() == key && let EffectParameterKind::Number { min, max, .. } = &mut parameter.kind { *min = lower; *max = upper; }
+    }
+    result
+}
+
 pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
     let Some(layer) = doc.layer(doc.active_layer) else {
         return LayerPropertiesView::default();
@@ -336,9 +355,9 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
     let mut controls = Vec::new();
     let mut curve_max = None;
     let description = if let Some(effect) = &layer.effect {
+        let program = float32_program(&effect.program, doc.color.depth);
         controls.extend(
-            effect
-                .program
+            program
                 .parameters
                 .iter()
                 .zip(&effect.values)
@@ -618,12 +637,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let top = doc.clipping_stack_top(current.id).unwrap();
                 let index = doc.layers.iter().position(|l| l.id == top).unwrap();
                 let parent = current.properties.parent;
-                let hdr = doc.color.depth.is_float();
+                let depth = doc.color.depth;
+                let hdr = depth.is_float();
                 let id = self.engine.allocate_layer_id();
                 let mut layer = Layer::paint(id, effect.label());
                 layer.kind = LayerKind::Effect;
                 layer.properties.parent = parent;
-                let mut instance = EffectInstance::new(effect.program());
+                let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
                 if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
                 layer.effect = Some(Arc::new(instance));
                 self.layer_edit(Edit::Batch(vec![
@@ -707,8 +727,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut layer = self.editable_layer(id)?;
                 let effect = layer.effect.as_mut().ok_or("Not an effect layer")?;
                 let original = effect.clone();
-                Arc::make_mut(effect)
-                    .set(&key, value)
+                let changed = Arc::make_mut(effect);
+                changed.program = float32_program(&changed.program, self.engine.document().color.depth);
+                changed.set(&key, value)
                     .map_err(str::to_string)?;
                 if *effect == original {
                     return Ok(());

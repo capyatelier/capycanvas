@@ -48,6 +48,10 @@ fn thumbnail(
             range_blocked=stats.clipped_channels>0&&!recipe.format.maps_hdr_range();
             fallback=Some(Box::new(present(base,false,false,None,false,None,None)));
             (preview,Some(stats.clipped_channels))
+        } else if recipe.format == layer_ui::ExportFormat::Exr {
+            let (preview, alpha) = renderer.preview_document_with_coverage([220,160], view.space(), headroom)?;
+            transparent = Some(alpha);
+            (preview, Some(0))
         } else if recipe.format.is_hdr() {
             let (preview, stats) = renderer.preview_hdr_output([220, 160], view.space(), headroom)?;
             range_blocked = stats.clipped_channels > 0 && !recipe.format.maps_hdr_range();

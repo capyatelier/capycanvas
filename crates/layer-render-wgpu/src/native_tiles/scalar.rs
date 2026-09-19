@@ -25,7 +25,8 @@ impl crate::WgpuRasterizer {
         }
         for (i, r) in requests.iter().enumerate() {
             let d = r.blob.descriptor;
-            if !scalar_dimensions(r.working)
+            if d.sample != layer_core::color::SampleType::Unsigned
+                || !scalar_dimensions(r.working)
                 || !r.working.usage().contains(wgpu::TextureUsages::COPY_DST)
                 || requests[..i].iter().any(|old| old.working == r.working)
                 || d.channels != 1
@@ -492,7 +493,8 @@ impl NativeScalarEncoder {
     }
 }
 fn validate(r: &NativeScalarRequest<'_>, in_place: bool) -> Result<(), GpuRasterError> {
-    if !scalar_dimensions(r.working)
+    if r.depth.is_float()
+        || !scalar_dimensions(r.working)
         || !scalar_dimensions(r.canonical)
         || (r.working == r.canonical) != in_place
         || !r.working.usage().contains(if in_place {

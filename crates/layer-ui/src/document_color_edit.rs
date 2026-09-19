@@ -199,7 +199,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let mut colors = self.state.colors.clone();
         colors.set_rgb_space(prepared.document().color.space)?;
-        colors.set_hdr_enabled(prepared.document().color.depth.is_float())?;
+        colors.set_document_depth(prepared.document().color.depth)?;
         self.engine
             .commit_color_transition(prepared)
             .map_err(error)?;

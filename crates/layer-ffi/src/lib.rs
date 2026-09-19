@@ -278,12 +278,44 @@ pub unsafe extern "C" fn layer_canvas_create(
     config: *const LayerCanvasConfig,
     output: *mut *mut LayerCanvas,
 ) -> LayerStatus {
+    unsafe { create_canvas(config, output, None) }
+}
+
+/// Create an HDR canvas without changing the existing C config layout.
+/// `float_bits` is 16 or 32; `config.integer_depth` is ignored.
+/// # Safety
+/// Same pointer and ownership requirements as `layer_canvas_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn layer_canvas_create_float(
+    config: *const LayerCanvasConfig,
+    float_bits: u32,
+    output: *mut *mut LayerCanvas,
+) -> LayerStatus {
+    use layer_core::color::SampleDepth;
+    let depth = match float_bits {
+        16 => SampleDepth::F16,
+        32 => SampleDepth::F32,
+        _ => {
+            if let Some(output) = unsafe { output.as_mut() } { *output = ptr::null_mut(); }
+            return LayerStatus::InvalidArgument;
+        }
+    };
+    unsafe { create_canvas(config, output, Some(depth)) }
+}
+
+unsafe fn create_canvas(
+    config: *const LayerCanvasConfig,
+    output: *mut *mut LayerCanvas,
+    depth: Option<layer_core::color::SampleDepth>,
+) -> LayerStatus {
     ffi_boundary(|| {
-        let config = *unsafe { config.as_ref() }.ok_or(LayerStatus::NullPointer)?;
+        let mut config = *unsafe { config.as_ref() }.ok_or(LayerStatus::NullPointer)?;
         let output = unsafe { output.as_mut() }.ok_or(LayerStatus::NullPointer)?;
         *output = ptr::null_mut();
+        if depth.is_some() { config.integer_depth = 8; }
         validate_config(config)?;
-        let color = decode_document_color(config)?;
+        let mut color = decode_document_color(config)?;
+        if let Some(depth) = depth { color.depth = depth; }
         let mut document = Document::new("untitled", config.document_width, config.document_height);
         document.color = color;
 
@@ -1077,6 +1109,24 @@ mod tests {
                 assert_eq!(engine.backend().document_color(), expected);
                 assert_eq!(unsafe { layer_canvas_draw_frame(canvas.0) }, LayerStatus::Ok);
             }
+        }
+    }
+
+    #[test]
+    fn float32_ffi_is_explicit_and_preserves_the_existing_config_abi() {
+        use layer_render::CanvasRenderer;
+        let config = LayerCanvasConfig { document_width: 16, document_height: 16, surface_width: 16, surface_height: 16, ..Default::default() };
+        let mut raw = ptr::dangling_mut();
+        assert_eq!(unsafe { layer_canvas_create_float(&config, 8, &mut raw) }, LayerStatus::InvalidArgument);
+        assert!(raw.is_null());
+        for bits in [16,32] {
+            assert_eq!(unsafe { layer_canvas_create_float(&config, bits, &mut raw) }, LayerStatus::Ok);
+            let canvas = Canvas(raw);
+            let engine = &unsafe { &*canvas.0 }.engine;
+            assert_eq!(engine.document().color.depth.bits(), bits as u8);
+            assert!(engine.document().color.depth.is_float());
+            assert_eq!(engine.backend().document_color(),engine.document().color);
+            assert_eq!(unsafe { layer_canvas_draw_frame(canvas.0) }, LayerStatus::Ok);
         }
     }
 

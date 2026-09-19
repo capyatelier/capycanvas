@@ -611,7 +611,7 @@ mod wheel {
                                 state.render_field_base_linear(side, &mut pixels);
                                 *linear = Some((side, hue, shape, space, pixels));
                             }
-                            crate::display_color::picker_texture_with_gain(view, headroom, space, [side,side], &linear.as_ref().unwrap().4, intensity.exp2())
+                            crate::display_color::picker_texture_with_gain(view, headroom, space, [side,side], &linear.as_ref().unwrap().4, f64::from(intensity).exp2())
                         } else {
                             let mut pixels = vec![0; side as usize * side as usize * 4];
                             state.render_field_in(side, view.space(), &mut pixels);
@@ -1088,7 +1088,7 @@ impl ColorPanel {
             } else {
                 button.remove_css_class("selected-tool");
             }
-            let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Transparent => layer_core::color::RgbColor { space: state.rgb_space(), rgba: [0.; 4] } };
+            let color = match slot { ColorSlot::Foreground => state.foreground, ColorSlot::Background => state.background, ColorSlot::Transparent => layer_core::color::RgbColor { linear_rgb: None, space: state.rgb_space(), rgba: [0.; 4] } };
             sample.set_display_color(color, view, headroom);
         }
     }

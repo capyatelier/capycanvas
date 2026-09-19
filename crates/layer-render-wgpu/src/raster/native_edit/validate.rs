@@ -8,7 +8,7 @@ pub(super) struct Validator {
     tiles_per_dispatch: usize,
 }
 impl Validator {
-    pub fn new(device: &PipelineDevice, hdr: bool) -> Self {
+    pub fn new(device: &PipelineDevice, depth: layer_core::color::SampleDepth) -> Self {
         let tiles_per_dispatch =
             MAX_BATCH_TILES.min(device.limits().max_sampled_textures_per_shader_stage as usize);
         assert!(tiles_per_dispatch > 0);
@@ -49,7 +49,7 @@ impl Validator {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipelines = [if hdr { "hdr_color_error(value)" } else { "color_error(value)" }, "scalar_error(value.r)"].map(|expression| {
+        let pipelines = [match depth { layer_core::color::SampleDepth::F16 => "hdr_color_error(value)", layer_core::color::SampleDepth::F32 => "float32_color_error(value)", _ => "color_error(value)" }, "scalar_error(value.r)"].map(|expression| {
             let source = format!(
                 "{}\n{}",
                 include_str!("../../native_tiles/validity.wgsl"),

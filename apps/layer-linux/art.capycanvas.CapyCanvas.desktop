@@ -9,4 +9,4 @@ Categories=Graphics;2DGraphics;RasterGraphics;
 Keywords=Drawing;Painting;Illustration;
 StartupNotify=true
 StartupWMClass=art.capycanvas.CapyCanvas
-MimeType=application/x-capycanvas;image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/gif;image/heif;image/heic;image/avif;
+MimeType=application/x-capycanvas;image/jpeg;image/png;image/tiff;image/webp;image/bmp;image/gif;image/heif;image/heic;image/avif;image/x-exr;

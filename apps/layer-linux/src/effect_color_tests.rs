@@ -184,7 +184,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     };
     assert_eq!(
         accepted[0].color,
-        RgbColor {
+        RgbColor { linear_rgb: None,
             rgba: [original.rgba[0], original.rgba[1], original.rgba[2], 0.37],
             ..original
         }

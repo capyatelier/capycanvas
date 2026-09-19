@@ -114,7 +114,7 @@ pub(super) struct DecodedTiles {
     clock: u64,
     decoders: VecDeque<(Weak<SourceImage>, layer_color::WorkingDecoder)>,
     pixels: Vec<[f32; 4]>,
-    inputs: [Option<EncodedInput>; 2],
+    inputs: [Option<EncodedInput>; 3],
     transfer: transfer::Tables,
     in_flight: Arc<InFlight>,
     pub hits: u64,
@@ -315,7 +315,7 @@ impl DecodedTiles {
     ) -> Result<u64, GpuRasterError> {
         let bytes = if pending.data.is_some() {
             let samples = pending.pixels.native()?;
-            let index = usize::from(samples.depth != SampleDepth::U8);
+            let index = samples.depth.bytes().ilog2() as usize;
             let pipelines = &r.scene_pipelines.source;
             let input = self.inputs[index].get_or_insert_with(|| {
                 let texture = r.device.create_texture(&wgpu::TextureDescriptor {
@@ -327,6 +327,7 @@ impl DecodedTiles {
                     format: [
                         wgpu::TextureFormat::Rgba8Uint,
                         wgpu::TextureFormat::Rgba16Uint,
+                        wgpu::TextureFormat::Rgba32Uint,
                     ][index],
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
@@ -506,12 +507,12 @@ fn copy_upload(
 pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), GpuRasterError> {
     let d = blob.descriptor;
     if d.channels != 4
-        || !matches!(d.bits_per_channel, 8 | 16)
+        || d.bytes_per_pixel().is_none()
         || !matches!(
             d.alpha,
             AlphaAssociation::Straight | AlphaAssociation::PremultipliedLinear
         )
-        || !(d.sample == layer_core::color::SampleType::Float && d.encoding == TransferEncoding::Linear && d.bits_per_channel == 16
+        || !(d.sample == layer_core::color::SampleType::Float && d.encoding == TransferEncoding::Linear && matches!(d.bits_per_channel, 16 | 32)
             || d.encoding == TransferEncoding::Profile
             || (d.encoding == TransferEncoding::Srgb && space == RgbSpace::Srgb))
     {
@@ -556,10 +557,16 @@ fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, 
                 o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], p[2], p[3]]);
             }
         }
+        (SampleDepth::F32, SourceChannels::Rgb) => {
+            for (p, o) in input.chunks_exact(12).zip(output.chunks_exact_mut(16)) {
+                o[..12].copy_from_slice(p);
+                o[12..].copy_from_slice(&1f32.to_le_bytes());
+            }
+        }
         (SampleDepth::F16, SourceChannels::Rgb) => {
             for (p,o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) { o[..6].copy_from_slice(p); o[6..].copy_from_slice(&0x3c00u16.to_le_bytes()); }
         }
-        (SampleDepth::F16, SourceChannels::Gray | SourceChannels::GrayAlpha) => unreachable!("invalid HDR gray"),
+        (SampleDepth::F16 | SampleDepth::F32, SourceChannels::Gray | SourceChannels::GrayAlpha) => unreachable!("invalid HDR gray"),
         (_, SourceChannels::Rgba | SourceChannels::Cmyk) => unreachable!("RGBA copies directly; CMYK uses its ICC transform"),
     }
 }
@@ -600,6 +607,8 @@ fn rgb_settings(
     }
     data[12] = f32::from(alpha == AlphaAssociation::PremultipliedLinear);
     data[13] = if depth.is_float() { 0. } else { depth.maximum() as f32 };
+    data[16] = f32::from(depth == SampleDepth::F32);
+    data[17] = f32::from(space == destination);
     data[14] = extent[0] as f32;
     data[15] = extent[1] as f32;
     data

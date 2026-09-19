@@ -238,3 +238,35 @@ fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
     assert_eq!(restored.document.layers[0].raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().decode().unwrap(),samples);
     let mut again=Vec::new();restored.write(&mut again).unwrap();assert_eq!(again,encoded);
 }
+
+#[test]
+fn float32_archive_history_preserve_every_bit_including_hidden_rgb() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::F32 };
+    let mut document = Document::new("Float32", 256, 256);
+    document.color = color;
+    assert_eq!(color.paint_descriptor().bytes_per_pixel(), Some(16));
+    assert_eq!(color.coverage_descriptor().depth(), SampleDepth::U16);
+    let values = [f32::MAX, -f32::MAX, f32::MIN_POSITIVE, f32::from_bits(1),
+        -f32::from_bits(1), -0., 1.0000001, 65505., -1234567.125];
+    let bytes: Vec<_> = (0..65536).flat_map(|i| [values[i%values.len()], values[(i+1)%values.len()],
+        values[(i+2)%values.len()], [0., f32::from_bits(1), 0.12345679, 1.][i%4]])
+        .flat_map(f32::to_le_bytes).collect();
+    let key = TileKey { plane: RasterPlane::Color, coordinate: [0,0] };
+    let root = RasterRevision::backed(RasterData { tiles: [(key, RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &bytes).unwrap()))].into(), watercolor: None });
+    let id = document.layers[0].id;
+    document.layers[0].raster = root.clone();
+    let mut editor = Editor::new(document);
+    editor.perform(Edit::SetLayerOpacity { id, opacity: 0.25 }).unwrap();
+    editor.undo().unwrap();
+    editor.redo().unwrap();
+    let project = Project { document: editor.document().clone(), assets: Default::default() };
+    let mut archive = Vec::new(); project.write(&mut archive).unwrap();
+    let restored = Project::read(archive.as_slice(), Default::default()).unwrap();
+    let actual = restored.document.layers[0].raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap();
+    assert_eq!(actual.decode().unwrap(), bytes);
+    assert_eq!(actual.descriptor.depth(), SampleDepth::F32);
+    let mut invalid = bytes.clone(); invalid[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert!(TileBlob::encode(color.paint_descriptor(), &invalid).is_err());
+    invalid = bytes; invalid[12..16].copy_from_slice(&1.0001f32.to_le_bytes());
+    assert!(TileBlob::encode(color.paint_descriptor(), &invalid).is_err());
+}

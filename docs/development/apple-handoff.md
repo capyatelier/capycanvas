@@ -132,6 +132,30 @@ without compiler warnings. Disposable simulator fixtures are removed; the
 physical artist review and its drawings are unchanged.
 Private evidence is under `artifacts/apple-scene-input-v1/`.
 
+## iPad window-control clearance
+
+The physical narrow-window check exposes Capy and the hamburger underneath the
+iPadOS window controls. The iPad canvas adapter now supplies UIKit's horizontally
+adapted safe-area inset to the existing shared header geometry, following Apple's
+[window-control layout guidance](https://developer.apple.com/videos/play/wwdc2025/282/).
+It remeasures on layout and safe-area changes, before the unchanged-drawable-size
+early return. The canvas keeps its full window extent and input coordinates;
+there is no fixed traffic-light width, Stage Manager size heuristic or alternate
+header layout.
+
+After integrating main through `59aff3df`, the iPad Release builds without
+compiler warnings and all eight shared header tests pass, including native
+insets, narrow-width overflow and customization geometry. An isolated UIKit/
+SwiftUI simulator probe verifies native measurement through the same
+`ignoresSafeArea` arrangement; it only establishes the full-screen case. The
+updated physical review is installed with all 14 recovery records and 149
+original files preserved. Its capture shows normal startup at Recovered
+Drawings. The user confirms that Capy and the hamburger are now clear of the
+window controls and usable at half-screen width. This closes the reported
+overlap; the remaining narrow Color/Layers and Pencil/Undo acceptance stays
+separate. Private evidence is under
+`artifacts/apple-ipad-window-controls-v1/`.
+
 ## Retained Pencil sensor qualification
 
 The retained physical prediction recording contains 3,390 real contact samples

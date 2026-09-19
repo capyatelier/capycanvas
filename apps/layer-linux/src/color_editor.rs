@@ -55,7 +55,7 @@ impl Form {
             if self.hdr {
                 let stops = self.intensity.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())?;
                 if !stops.is_finite() || editor.intensity() != Some(stops) {
-                    return Err("Enter an EV value within the color’s half-float range".into());
+                    return Err("Enter an EV value within the document’s color range".into());
                 }
             }
             Ok((editor.color()?, editor.base_color()?))
@@ -139,11 +139,11 @@ fn choose_with_intensity(
     intensity: Option<f32>,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor, Option<f32>) + 'static,
 ) {
-    let Some((space, epoch, hdr)) = workspace.gpu.borrow().as_ref().map(|g| {
+    let Some((space, epoch, depth)) = workspace.gpu.borrow().as_ref().map(|g| {
         (
             g.session.state().colors.rgb_space(),
             g.session.state().document_file.epoch,
-            g.session.engine().document().color.depth.is_float(),
+            g.session.engine().document().color.depth,
         )
     }) else {
         return;
@@ -155,6 +155,8 @@ fn choose_with_intensity(
             return;
         }
     };
+    let hdr = depth.is_float();
+    editor.set_document_depth(depth);
     if hdr {
         editor.set_model(ColorInputModel::LinearRgb).unwrap();
         let stops = intensity.unwrap_or_else(|| definition.brightness_ev(space).ok().flatten().unwrap_or(0.).max(0.));
