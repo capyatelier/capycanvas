@@ -72,6 +72,10 @@ def summarize(report):
     summary["worker_budget_pass"] = report["concurrent"] or all(
         summary[k]["p99_ms"] <= 2. for k in ["worker_cpu", "worker_gpu"])
     summary["renderer_memory_pass"] = report["renderer_resident_bytes"] <= 2 * 1024**3
+    summary["first_response_pass"] = report["concurrent"] or (
+        summary["first_request_to_first_present_ms"] is not None and
+        summary["first_request_to_first_present_ms"] <= 50.)
+    summary["cold_readiness_pass"] = report["guide_ready_ms"] <= (30_000 if report["concurrent"] else 15_000)
     return summary
 
 
@@ -87,4 +91,4 @@ if __name__ == "__main__":
         report["sampled_peak_staging_bytes"] = max(s["staging_bytes"] for s in samples)
         report["sampled_peak_driver_mib"] = max(int(s["gpu_memory"].split()[0]) for s in samples)
     print(json.dumps(report, indent=2))
-    raise SystemExit(0 if all(report[k] for k in ["latency_pass", "missed_slots_pass", "no_artwork_rebuild_pass", "worker_budget_pass", "renderer_memory_pass", "process_memory_pass"]) else 1)
+    raise SystemExit(0 if all(report[k] for k in ["latency_pass", "missed_slots_pass", "no_artwork_rebuild_pass", "worker_budget_pass", "renderer_memory_pass", "process_memory_pass", "first_response_pass", "cold_readiness_pass"]) else 1)
