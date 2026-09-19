@@ -25,7 +25,7 @@ impl Form {
             extent: [self.width.value() as u32, self.height.value() as u32],
             color: DocumentColor {
                 space: RgbSpace::ALL[self.space.selected().min(3) as usize],
-                depth: [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][self.depth.selected().min(2) as usize],
+                depth: [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][self.depth.selected().min(3) as usize],
             },
             background: if self.background.selected() == 0 {
                 DocumentBackground::White
@@ -45,7 +45,7 @@ impl Form {
                 .unwrap() as u32,
         );
         self.depth
-            .set_selected(match options.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2 });
+            .set_selected(match options.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 });
         self.background.set_selected(u32::from(
             options.background == DocumentBackground::Transparent,
         ));
@@ -145,7 +145,7 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     let depth = combo(
         "Bit depth",
         "new-document-depth",
-        &["8-bit SDR", "16-bit SDR", "16-bit float HDR"],
+        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
     );
     group.remove(&space);
     group.remove(&depth);

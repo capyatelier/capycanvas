@@ -58,6 +58,11 @@ impl SnapshotRenderer {
             )
         })
     }
+    pub fn write_exr(&mut self, output: impl std::io::Write + std::io::Seek) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
+        self.hdr_rows(|extent, space, read| layer_color::photo::write_exr_rows(output, extent, space, resolution, read).map(|_| Default::default()))?;
+        Ok(Default::default())
+    }
     pub fn write_hdr_png(
         &mut self,
         output: impl std::io::Write,
@@ -125,7 +130,7 @@ impl SnapshotRenderer {
     ) -> Result<layer_color::OutputStatistics, String> {
         self.check_cancelled().map_err(|e| e.to_string())?;
         if !self.color().depth.is_float() {
-            return Err("PQ delivery requires an HDR document".into());
+            return Err("HDR delivery requires an HDR document".into());
         }
         let extent = self.output_extent;
         let source_extent = self.extent;

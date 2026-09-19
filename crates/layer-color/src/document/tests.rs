@@ -617,3 +617,38 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
     assert!(error.contains("cancelled"), "{error}");
     assert!(pending.document.layers[0].raster.try_data().is_none());
 }
+
+#[test]
+fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
+    let mut document = Document::new("precision", 256, 256); document.color = color;
+    let half: Vec<_> = (0..65536u32).flat_map(|i| {
+        let v = layer_core::color::f16::from_bits(i as u16).to_f32();
+        let v = if v.is_finite() { v } else { 0. };
+        layer_core::color::hdr::encode_pixel([v,-v,0.12345, if i%2==0 {0.} else {1.}]).unwrap()
+    }).flat_map(u16::to_le_bytes).collect();
+    let rgba = Arc::new(TileBlob::encode(color.paint_descriptor(), &half).unwrap());
+    let mask = Arc::new(TileBlob::encode(color.coverage_descriptor(), &vec![123; 65536*2]).unwrap());
+    document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::Wetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: None });
+    let project = Project { document, assets: Default::default() };
+    let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
+    let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
+    let root = result.project.document.layers[0].raster.wait_data().unwrap();
+    let output = root.tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap();
+    for (input, output) in half.chunks_exact(2).zip(output.chunks_exact(4)) {
+        assert_eq!(layer_core::color::f16::from_bits(u16::from_le_bytes(input.try_into().unwrap())).to_f32().to_bits(), u32::from_le_bytes(output.try_into().unwrap()));
+    }
+    assert!(Arc::ptr_eq(&root.tiles[&key(RasterPlane::Wetness)].wait_backing().unwrap(), &mask));
+    let mut editor = Editor::new(project.document.clone());
+    editor.perform(result.edit()).unwrap(); editor.undo().unwrap();
+    assert_eq!(editor.document().color, color); editor.redo().unwrap();
+    assert_eq!(editor.document().color.depth, SampleDepth::F32);
+    let demote = DocumentColorChange::Depth { depth: SampleDepth::F16, dither: OutputDither::None };
+    let narrowed = prepare_document_color(&result.project, demote, LIMIT, || false).unwrap();
+    assert_eq!(narrowed.project.document.layers[0].raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap(), half);
+    assert!(prepare_document_color(&project, promote, LIMIT, || true).is_err());
+    let mut wide = result.project.clone();
+    let bytes: Vec<_> = (0..65536).flat_map(|_| [100000.,-100000.,1.,1.]).flat_map(f32::to_le_bytes).collect();
+    wide.document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed(TileBlob::encode(wide.document.color.paint_descriptor(), &bytes).unwrap()))].into(), watercolor: None });
+    assert!(prepare_document_color(&wide, demote, LIMIT, || false).err().unwrap().contains("range"));
+}

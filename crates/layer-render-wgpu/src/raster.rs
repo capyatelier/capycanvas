@@ -282,10 +282,12 @@ impl TileCapture<'_> {
             wgpu::TextureFormat::Rgba8UnormSrgb => {
                 rgba && d.bits_per_channel == 8 && d.encoding == TransferEncoding::Srgb
             }
-            wgpu::TextureFormat::Rgba8Uint | wgpu::TextureFormat::Rgba16Uint => {
+            wgpu::TextureFormat::Rgba8Uint | wgpu::TextureFormat::Rgba16Uint | wgpu::TextureFormat::Rgba32Uint => {
                 rgba && d.bits_per_channel
                     == if t.format() == wgpu::TextureFormat::Rgba8Uint {
                         8
+                    } else if t.format() == wgpu::TextureFormat::Rgba32Uint {
+                        32
                     } else {
                         16
                     }

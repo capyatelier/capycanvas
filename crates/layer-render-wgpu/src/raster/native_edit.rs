@@ -91,7 +91,7 @@ impl NativeEdit {
                 NativeScalarEncoder::with_device(&r.device)
             },
             promoter: (!in_place).then(|| NativePromoter::with_device(&r.device)),
-            validator: validate::Validator::new(&r.device, r.document_color().depth.is_float()),
+            validator: validate::Validator::new(&r.device, r.document_color().depth),
         }
     }
     pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {

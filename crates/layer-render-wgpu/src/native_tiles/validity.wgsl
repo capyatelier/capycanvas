@@ -20,6 +20,13 @@ fn hdr_color_error(value:vec4<f32>)->u32 {
     if value.a>0. && any(abs(value.rgb)>vec3(65504.*value.a)) {return 4u;}
     return 0u;
 }
+// Check unassociation too: finite premultiplied values can overflow on division.
+fn float32_color_error(value:vec4<f32>)->u32 {
+    let error=color_error(value);
+    if error!=0u {return error;}
+    if value.a>0. {return color_error(vec4(value.rgb/value.a,value.a));}
+    return 0u;
+}
 // IEEE binary16 ties-to-even, including subnormals. Integer operations avoid
 // implementation-dependent half arithmetic/denormal flushing.
 fn half_bits(value:f32)->u32 {

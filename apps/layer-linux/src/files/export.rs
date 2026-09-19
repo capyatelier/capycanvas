@@ -71,7 +71,7 @@ pub(crate) fn write_snapshot(
     job: &ExportJob,
 ) -> Result<u64, String> {
     let result = (|| {
-        recipe.validate()?;
+        recipe.validate_for_document(&snapshot.project.document)?;
         let extent = recipe.size.extent([
             snapshot.project.document.width,
             snapshot.project.document.height,
@@ -93,6 +93,7 @@ pub(crate) fn write_snapshot(
             path,
             |file| {
                 let statistics = match recipe.format {
+                    ExportFormat::Exr => renderer.write_exr(file),
                     ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(file, recipe.format.maps_hdr_range()),
                     ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => renderer.write_gainmap(file,recipe.format.gainmap().unwrap(),recipe.jpeg_quality,recipe.background.matte(),recipe.format.maps_hdr_range()),
                     ExportFormat::Png => renderer.write_png(
@@ -336,7 +337,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     refresh_size();
     let delivery_group = adw::PreferencesGroup::new();
     let gainmaps=layer_color::photo::gainmap_available();
-    let range = combo(&delivery_group, "Output", "export-output", if gainmaps { &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF"] } else { &["SDR", "HDR native · PNG"] });
+    let exr_index = if gainmaps { 4 } else { 2 };
+    let range = combo(&delivery_group, "Output", "export-output", if gainmaps { &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF", "OpenEXR · 32-bit float"] } else { &["SDR", "HDR native · PNG", "OpenEXR · 32-bit float"] });
     range.set_visible(document.depth.is_float());
     let format = combo(&delivery_group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
     let flatten=adw::SwitchRow::builder().title("Flatten transparency").visible(false).build();
@@ -478,13 +480,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             let hdr = choice != 0;
             advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && print_delivery.subtitle().is_some());
             for widget in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), depth.upcast_ref(), background.upcast_ref(), intent.upcast_ref()] { widget.set_visible(!hdr); }
-            rendition_view.set_visible(choice>=2);
-            flatten.set_visible(choice==2);
-            color_link.set_visible(!hdr || choice==2);
-            background.set_visible(!hdr || choice==2);
+            rendition_view.set_visible(choice>=2 && choice != exr_index);
+            flatten.set_visible(choice==2 && choice != exr_index);
+            color_link.set_visible(!hdr || (choice==2 && choice != exr_index));
+            background.set_visible(!hdr || (choice==2 && choice != exr_index));
             depth.set_visible(!hdr && format.selected() != 2);
             dither.set_visible(!hdr && depth.selected() == 0);
-            quality.set_visible(choice>=2 || (!hdr && format.selected() == 2));
+            quality.set_visible((choice>=2 && choice != exr_index) || (!hdr && format.selected() == 2));
             jpeg_hint.set_visible(!hdr && format.selected() == 2);
         }
     ));
@@ -562,10 +564,11 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[strong] apply_background,
             move |recipe: &ExportRecipe| {
                 updating.set(true);
-                range.set_selected(match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())});
+                range.set_selected(if recipe.format == ExportFormat::Exr { exr_index } else { match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())}});
                 flatten.set_active(recipe.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg)&&recipe.background!=ExportBackground::Preserve);
                 clip_hdr.set_active(recipe.format.maps_hdr_range());
                 format.set_selected(match recipe.format {
+                    ExportFormat::Exr => 0,
                     ExportFormat::Png => 0,
                     ExportFormat::Tiff => 1,
                     ExportFormat::Jpeg => 2,
@@ -747,12 +750,13 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
                 size: output_size(),
                 resolution: chosen_resolution(),
                 format: match (range.selected(),clip_hdr.is_active()) {
+                    (v,_) if v == exr_index => ExportFormat::Exr,
                     (1,false)=>ExportFormat::PngHdr,(1,true)=>ExportFormat::PngHdrMapped,
                     (2,false)=>ExportFormat::JpegHdr,(2,true)=>ExportFormat::JpegHdrMapped,
                     (3,false)=>ExportFormat::AvifHdr,(3,true)=>ExportFormat::AvifHdrMapped,
                     _=>FORMATS[format.selected().min(2) as usize],
                 },
-                profile: if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
+                profile: if range.selected() == exr_index { ExportProfile::builtin(document.space) } else if range.selected() != 0 { ExportProfile::builtin(layer_core::color::RgbSpace::Srgb) } else { selected_profile()? },
                 depth: if depth.selected() == 0 {
                     SampleDepth::U8
                 } else {
@@ -804,7 +808,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     range.add_controller(output_input);
 
     range.connect_selected_notify(glib::clone!(#[weak] rendition_view, #[weak] comparison, move |range| {
-        if range.selected()<2 {rendition_view.set_active_name(Some("hdr"));comparison.show_fallback(false);}
+        if range.selected()<2 || range.selected()==exr_index {rendition_view.set_active_name(Some("hdr"));comparison.show_fallback(false);}
     }));
     let validate: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[weak]
@@ -826,10 +830,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         move |_| {
             if let Some(transparent)=comparison.has_transparency.get(){
                 if recommend.replace(false) && gainmaps {range.set_selected(if transparent{3}else{2});}
-                flatten.set_visible(range.selected()==2&&(transparent||flatten.is_active()));
-                color_link.set_visible(range.selected()==0||(range.selected()==2&&(transparent||flatten.is_active())));
+                flatten.set_visible(range.selected()==2&&range.selected()!=exr_index&&(transparent||flatten.is_active()));
+                color_link.set_visible(range.selected()==0||(range.selected()==2&&range.selected()!=exr_index&&(transparent||flatten.is_active())));
             }
-            clip_hdr.set_visible(range.selected() != 0 && (clip_hdr.is_active() || comparison.range_exceeded.get()));
+            clip_hdr.set_visible(range.selected() != 0 && range.selected() != exr_index && (clip_hdr.is_active() || comparison.range_exceeded.get()));
             validate();
         }
     )));
@@ -962,7 +966,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         if let Some(value) = preset.selected_item().and_downcast::<gtk::StringObject>() { preset_link.set_subtitle(&value.string()); }
     }));
     let summarize_color = glib::clone!(#[weak] color_link, #[weak] depth, #[weak] range, #[weak] flatten, #[strong] read_background, #[strong] selected_profile, move || {
-        if range.selected()==2 {color_link.set_title("Background"); color_link.set_subtitle(if flatten.is_active(){match read_background(){ExportBackground::Black=>"Black",_=>"White"}}else{"No flattening"});return;}
+        if range.selected()==2 && range.selected()!=exr_index {color_link.set_title("Background"); color_link.set_subtitle(if flatten.is_active(){match read_background(){ExportBackground::Black=>"Black",_=>"White"}}else{"No flattening"});return;}
         color_link.set_title("Color & transparency");
         if let Ok(profile) = selected_profile() {
             color_link.set_subtitle(&format!("{} · {}-bit · {}", profile.name, if depth.selected() == 0 { 8 } else { 16 },

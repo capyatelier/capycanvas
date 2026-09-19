@@ -681,11 +681,11 @@ mod tests {
             assert_eq!(serde_json::to_vec(&effect).unwrap(), original);
         }
         for color in [
-            RgbColor {
+            RgbColor { linear_rgb: None,
                 space: RgbSpace::ProPhoto,
                 rgba: [f32::MAX, 0., 0., 1.],
             },
-            RgbColor {
+            RgbColor { linear_rgb: None,
                 space: RgbSpace::Srgb,
                 rgba: [0., 0., 0., -0.1],
             },

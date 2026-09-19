@@ -20,7 +20,7 @@ fn project(color: DocumentColor) -> Project {
             }
             let pixel = [((x * 2351 + y * 71) % 65536) as u16, 32123, 51007, 65535];
             let pixel: Vec<_> = match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                 SampleDepth::U16 => pixel.into_iter().flat_map(u16::to_le_bytes).collect(),
                 SampleDepth::U8 => pixel.map(|v| (v >> 8) as u8).to_vec(),
             };

@@ -286,3 +286,12 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     w.window.destroy();
     pump(100);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_float32_gpu_failure_recovery() {
+    let app = native_test_app("art.capycanvas.Float32Recovery");
+    check_gpu_failure_recovery(&app, layer_core::color::DocumentColor {
+        space: layer_core::color::RgbSpace::DisplayP3, depth: layer_core::color::SampleDepth::F32,
+    });
+}

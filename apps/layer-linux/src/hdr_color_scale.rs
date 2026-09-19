@@ -64,8 +64,8 @@ mod imp {
                             (i % width) as f32 / dpi as f32,
                             top + (i / width) as f32 / dpi as f32,
                         ];
-                        let gain = (min as f32 + g.fraction(point) * (max - min) as f32).exp2();
-                        [linear[0] * gain, linear[1] * gain, linear[2] * gain, 1.]
+                        let gain = (min + f64::from(g.fraction(point)) * (max - min)).exp2();
+                        [preview_gain(linear[0], gain), preview_gain(linear[1], gain), preview_gain(linear[2], gain), 1.]
                     })
                     .collect();
                 *cache = Some((
@@ -100,7 +100,7 @@ mod imp {
                 gtk::graphene::Rect::new(cx - radius, cy - radius, radius * 2., radius * 2.);
             let mut p = base.linear_in(base.space).unwrap();
             for v in &mut p[..3] {
-                *v *= (obj.value() as f32).exp2();
+                *v = preview_gain(*v, obj.value().exp2());
             }
             p[3] = 1.;
             snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(thumb, radius));
@@ -267,7 +267,7 @@ impl HdrColorScale {
         let stops = state.hdr_intensity() as f64;
         self.set_range(
             (-2f64).min(stops.floor()),
-            6f64.max(stops.ceil()).min(f64::from(65504f32.log2())),
+            6f64.max(stops.ceil()).min(f64::from(state.hdr_depth().max_linear().log2())),
         );
         self.set_value(stops);
         self.update_property(&[gtk::accessible::Property::ValueText(&format!(
@@ -279,4 +279,9 @@ impl HdrColorScale {
     pub fn updating(&self) -> bool {
         self.imp().updating.get()
     }
+}
+
+// Preview saturation never changes the stored paint definition.
+fn preview_gain(value: f32, gain: f64) -> f32 {
+    (f64::from(value) * gain).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
 }

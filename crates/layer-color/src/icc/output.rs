@@ -274,8 +274,12 @@ impl WorkingEncoder {
                     }
                     if destination.depth.is_float() {
                         let alpha = destination.channels.has_alpha() && channel + 1 == destination.channels.count();
-                        if value.abs() > f64::from(layer_core::color::hdr::MAX_LINEAR) || (alpha && !(0. ..=1.).contains(&value)) { return Err("HDR result exceeds the supported half-float range".into()); }
-                        code.copy_from_slice(&layer_core::color::f16::from_f32(value as f32).to_bits().to_le_bytes());
+                        if value.abs() > f64::from(destination.depth.max_linear()) || (alpha && !(0. ..=1.).contains(&value)) { return Err("HDR result exceeds the selected storage range".into()); }
+                        if destination.depth == layer_core::color::SampleDepth::F32 {
+                            code.copy_from_slice(&(value as f32).to_le_bytes());
+                        } else {
+                            code.copy_from_slice(&layer_core::color::f16::from_f32(value as f32).to_bits().to_le_bytes());
+                        }
                         continue;
                     }
                     let unbounded = (value * maximum).round();

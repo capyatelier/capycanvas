@@ -197,9 +197,8 @@ impl Inspector {
         let hdr = result.color.depth.is_float();
         let bins = result.plot_bins();
         if hdr {
-            use layer_core::color::histogram::hdr_bin_stops;
-            self.axis[0].set_label(&format!("{:+.0} EV", hdr_bin_stops(bins.start)));
-            self.axis[1].set_label(&format!("{:+.0} EV", hdr_bin_stops(bins.end - 1)));
+            self.axis[0].set_label(&format!("{:+.0} EV", result.hdr_bin_stops(bins.start)));
+            self.axis[1].set_label(&format!("{:+.0} EV", result.hdr_bin_stops(bins.end - 1)));
             self.channel.set_tooltip_text(Some("Linear brightness in stops above SDR white"));
         } else {
             self.axis[0].set_label("0"); self.axis[1].set_label("1");
@@ -430,8 +429,7 @@ pub(crate) fn show(w: &Rc<Workspace>) {
             let _ = cr.fill();
         }
         if result.color.depth.is_float() {
-            use layer_core::color::histogram::hdr_bin;
-            let x = (hdr_bin(1.) - plot.start) as f64 / plot.len() as f64 * width as f64;
+            let x = (result.hdr_bin(1.) - plot.start) as f64 / plot.len() as f64 * width as f64;
             cr.set_source_rgba(0.8, 0.8, 0.8, 0.9);
             cr.set_line_width(1.); cr.move_to(x, 18.); cr.line_to(x, height as f64); let _ = cr.stroke();
             cr.set_font_size(11.); cr.move_to((x + 4.).min(width as f64 - 85.), 13.);

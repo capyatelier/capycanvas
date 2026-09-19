@@ -590,7 +590,7 @@ fn native_sdr_document_modes() {
                         match depth {
                             SampleDepth::U8 => row.push((value / 257) as u8),
                             SampleDepth::U16 => row.extend_from_slice(&value.to_le_bytes()),
-                            SampleDepth::F16 => unreachable!("SDR fixture"),
+                            SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR fixture"),
                         }
                     }
                 }

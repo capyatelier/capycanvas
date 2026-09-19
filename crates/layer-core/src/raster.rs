@@ -16,7 +16,7 @@ use std::{
 };
 
 pub const TILE_SIZE: u32 = 256;
-pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 8) as usize;
+pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 16) as usize;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -119,10 +119,10 @@ impl std::fmt::Debug for TileBlob {
             .finish()
     }
 }
-fn shuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+fn shuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     let bpp = descriptor
         .bytes_per_pixel()
-        .expect("validated integer16 descriptor");
+        .expect("validated multibyte descriptor");
     let pixels = bytes.len() / bpp;
     let mut result = vec![0; bytes.len()];
     for (pixel, source) in bytes.chunks_exact(bpp).enumerate() {
@@ -132,10 +132,10 @@ fn shuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     }
     result
 }
-fn unshuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     let bpp = descriptor
         .bytes_per_pixel()
-        .expect("validated integer16 descriptor");
+        .expect("validated multibyte descriptor");
     let pixels = bytes.len() / bpp;
     let mut result = vec![0; bytes.len()];
     for (pixel, destination) in result.chunks_exact_mut(bpp).enumerate() {
@@ -167,10 +167,10 @@ impl TileBlob {
             return Err("Invalid raster tile byte count".into());
         }
         descriptor.validate_samples(bytes)?;
-        // Integer16 source channels benefit from byte planes: smooth high
+        // Multibyte source channels benefit from byte planes: smooth high
         // bytes no longer alternate with noisy low bytes. This is a reversible
         // permutation, not a precision change; the digest covers original bytes.
-        let shuffled = (descriptor.bits_per_channel == 16).then(|| shuffle16(descriptor, bytes));
+        let shuffled = (descriptor.bits_per_channel > 8).then(|| shuffle_samples(descriptor, bytes));
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
@@ -208,8 +208,8 @@ impl TileBlob {
         }
         let mut bytes =
             zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
-        if bytes.len() == size && self.descriptor.bits_per_channel == 16 {
-            bytes = unshuffle16(self.descriptor, &bytes);
+        if bytes.len() == size && self.descriptor.bits_per_channel > 8 {
+            bytes = unshuffle_samples(self.descriptor, &bytes);
         }
         if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
@@ -474,19 +474,15 @@ mod tests {
     fn pending_history_charges_each_retained_tiles_own_precision() {
         use crate::color::{DocumentColor, SampleDepth, RgbSpace};
         use crate::{Document, Edit, Editor, LayerId};
-        for (bits, expected_undo) in [(8, 4), (16, 2), (32, 2)] {
+        for (bits, expected_undo) in [(8, 4), (16, 2), (32, 1)] {
             // Even while the current document is still sRGB8, old revision
             // tickets own their layout. No pixel allocation/readback is needed
             // to enforce the 512 MiB history ceiling.
             let mut editor = Editor::new(Document::new("pending history", 6400, 5120));
-            let descriptor = PixelDescriptor {
-                bits_per_channel: bits,
-                ..DocumentColor {
-                    space: RgbSpace::ProPhoto,
-                    depth: SampleDepth::U16,
-                }
-                .paint_descriptor()
-            };
+            let descriptor = DocumentColor {
+                space: RgbSpace::ProPhoto,
+                depth: match bits { 8 => SampleDepth::U8, 16 => SampleDepth::U16, _ => SampleDepth::F32 },
+            }.paint_descriptor();
             for _ in 0..3 {
                 let data = RasterData {
                     tiles: (0..500)

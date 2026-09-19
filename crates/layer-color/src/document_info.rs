@@ -65,7 +65,7 @@ impl DocumentInfo {
                 ),
             ),
         ];
-        if self.color.depth.is_float() { rows.push(("HDR reference white".into(), "203 cd/m² · linear RGB · finite range −65504 to 65504".into())); }
+        if self.color.depth.is_float() { rows.push(("HDR reference white".into(), format!("203 cd/m² · linear RGB · finite magnitude ≤ {}", self.color.depth.max_linear()))); }
         for source in &self.sources {
             let i = &source.interpretation;
             let profile = crate::profile_description(&i.profile)?;

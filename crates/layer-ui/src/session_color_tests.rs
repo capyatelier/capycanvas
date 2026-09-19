@@ -578,3 +578,36 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
     assert_eq!(s.proof_panel_mode(), ProofMode::Print, "SDR artwork opens Print setup");
     assert_eq!(s.proof_mode(), ProofMode::Off);
 }
+
+#[test]
+fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
+    use layer_core::{EffectInstance, EffectValue, Layer, LayerKind};
+    use std::sync::Arc;
+    use layer_core::color::SampleDepth;
+    for (name, key, value) in [("exposure", "exposure", 30.), ("curves", "hdr_stops", 40.)] {
+        // An older embedded program keeps its original range when promoted.
+        let mut document = Document::new("Float32", 32, 32);
+        document.color.depth = SampleDepth::F32;
+        let id = document.allocate_layer_id();
+        let mut layer = Layer::paint(id, name);
+        layer.kind = LayerKind::Effect;
+        layer.effect = Some(Arc::new(EffectInstance::new(layer_core::bundled_effect_catalog().get(name).unwrap().program())));
+        document.layers.insert(0, layer);
+        document.active_layer = id;
+        let renderer = Recorder { color: document.color, ..Default::default() };
+        let mut s = UiSession::new(renderer, document, [32,32]).unwrap();
+        s.set_platform(Platform::Gtk);
+        let before = s.engine.document().clone();
+        let set = |value| UiAction::Effect { action: EffectAction::Set { layer: id.0, key: key.into(), value: EffectValue::Number(value) } };
+        s.dispatch(set(value)).unwrap();
+        assert_eq!(s.engine.document().layer(id).unwrap().effect.as_ref().unwrap().value(key), Some(&EffectValue::Number(value)));
+        let edited = s.engine.document().clone();
+        assert!(s.dispatch(set(200.)).is_err());
+        assert_eq!(s.engine.document().layers, edited.layers);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layers, before.layers);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers, edited.layers);
+        s.capture_project_recovery().unwrap().validate(Default::default()).unwrap();
+    }
+}

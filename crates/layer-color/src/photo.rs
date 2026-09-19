@@ -13,6 +13,8 @@ mod memory;
 pub use memory::PhotoMemoryBudget;
 mod gainmap;
 mod hdr_png;
+mod exr_io;
+pub use exr_io::{read_exr, write_exr_rows};
 mod metadata;
 #[cfg(test)]
 mod metadata_tests;
@@ -48,6 +50,7 @@ pub struct PhotoFormat {
     pub mime_types: &'static [&'static str],
 }
 pub const PHOTO_FORMATS: &[PhotoFormat] = &[
+    PhotoFormat { name: "OpenEXR", extensions: &["exr"], mime_types: &["image/x-exr"] },
     PhotoFormat {
         name: "TIFF",
         extensions: &["tif", "tiff"],
@@ -202,6 +205,8 @@ fn read_photo_impl(
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
     let source = if signature == *b"\x89PNG\r\n\x1a\n" {
         png_io::read_with_cancel(input, limits, _cancelled)
+    } else if signature[..4] == [0x76, 0x2f, 0x31, 0x01] {
+        read_exr(input, limits, _cancelled)
     } else if signature[..2] == [0xff, 0xd8] {
         jpeg_io::read_jpeg_with_cancel(input, limits, _cancelled)
     } else if matches!(
