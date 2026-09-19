@@ -139,7 +139,7 @@ pub const SDR_READOUT_ICONS: [&str; 4] = [
 ];
 
 /// Fixed directional illustration, never a sampled/modified document preview.
-/// Broad liquid cells on the left become finer to the right; the top
+/// Broad flowing pools on the left become fine, defined cells to the right; the top
 /// increases contrast and the bottom approaches neutral gray. Hosts cache it
 /// as an immutable texture. Opaque RGBA8 transport, bounded to 512².
 pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
@@ -180,12 +180,12 @@ fn sdr_glass_sample(x: f32, y: f32) -> [f32; 3] {
     let px = x * lens + 0.04 * y * (1. - radius2);
     let py = y * lens - 0.04 * x * (1. - radius2);
     let up = ((y + 1.) * 0.5).clamp(0., 1.);
-    let cell = liquid_cells(px, py);
+    let cell = liquid_cells(px, py, ((x + 1.) * 0.5).clamp(0., 1.));
     // Clean cell centers without a broad white reflection or surface glow. Contrast
     // follows screen-space up so the bottom still fades toward neutral gray.
     let contrast = 0.49 * up.powf(0.8);
     let v = 0.5 + contrast * (1.9 * cell).tanh();
-    let tint = 0.015 * up * cell;
+    let tint = 0.010 * up * cell.tanh();
     // A narrow, angle-dependent rim defines the dome without a drop shadow.
     // Let it dominate at the silhouette, where compressed cells are subpixel.
     let rim = (1. - dome).powi(3);
@@ -193,37 +193,57 @@ fn sdr_glass_sample(x: f32, y: f32) -> [f32; 3] {
     [v - 0.7 * tint, v + 0.05 * tint, v + tint].map(|c| c * (1. - rim) + rim_light * rim)
 }
 
-fn liquid_cells(x: f32, y: f32) -> f32 {
-    // A gentle flow bends the cell boundaries. The complex exponential then
-    // increases density toward the right without stretching cells into stripes.
-    let xw = x + 0.12 * (2.2 * y + 0.8 * x.sin()).sin();
-    let yw = y + 0.10 * (2.5 * x - 0.65 * (2. * y).sin()).sin();
-    let radius = 4.5 * (0.75 * xw).exp();
-    let u = radius * (0.75 * yw).cos() + 8.1;
-    let v = radius * (0.75 * yw).sin() + 5.7;
+fn liquid_cells(x: f32, y: f32, across: f32) -> f32 {
+    // Anchor the flow/detail transition to the visible horizontal direction,
+    // even where refraction pulls the pattern coordinates toward the rim.
+    let across = ((across - 0.225) / 0.5).clamp(0., 1.);
+    let detail = across * across * (3. - 2. * across);
+    // Two broad counter-currents deform neighboring regions together. Stronger
+    // leftward bending creates necks and winding pools instead of isolated tiles.
+    let mut p = [x, y];
+    for (center, turn) in [([-0.45, 0.3], 1.8), ([0.1, -0.45], -1.6)] {
+        let dx = p[0] - center[0];
+        let dy = p[1] - center[1];
+        let angle = turn * (1. - 0.9 * detail) * (-1.5 * (dx * dx + dy * dy)).exp();
+        let (sn, cs) = angle.sin_cos();
+        p = [center[0] + cs * dx - sn * dy, center[1] + sn * dx + cs * dy];
+    }
+    // Increase point density toward the right while keeping small cells rounded.
+    let radius = 4.5 * (0.75 * p[0]).exp();
+    let u = radius * (0.75 * p[1]).cos() + 8.1;
+    let v = radius * (0.75 * p[1]).sin() + 5.7;
     let ix = u.floor() as i32;
     let iy = v.floor() as i32;
+    let falloff = 1.4 + 4.1 * detail;
     let mut sum = 0.;
     let mut strongest: f32 = 0.;
-    let mut shade = 0.;
-    for j in -1..=1 {
-        for i in -1..=1 {
+    let mut field = 0.;
+    for j in -2..=2 {
+        for i in -2..=2 {
             let h = liquid_cell_hash(ix + i, iy + j);
             let sx = (ix + i) as f32 + 0.18 + 0.64 * (h & 1023) as f32 / 1023.;
             let sy = (iy + j) as f32 + 0.18 + 0.64 * ((h >> 10) & 1023) as f32 / 1023.;
             let d2 = (u - sx).powi(2) + (v - sy).powi(2);
-            let w = (-5.5 * d2).exp();
+            // Compact support makes the bounded neighborhood continuous across
+            // grid boundaries, including the broader influences on the left.
+            let tail = (d2 - 3.).clamp(0., 1.);
+            let support = 1. - tail * tail * (3. - 2. * tail);
+            let w = (-falloff * d2).exp() * support;
             sum += w;
             strongest = strongest.max(w);
-            shade += w * ((h >> 20) & 1023) as f32 / 1023.;
+            let strength = 0.35 + 1.1 * ((h >> 20) & 1023) as f32 / 1023.;
+            field += w * strength;
         }
     }
-    // Soft ownership rounds the corners into liquid patches and leaves narrow
-    // connecting channels. Small shade variations keep the centers uncluttered.
+    // Overlapping influences join into flowing contours on the left. Local
+    // ownership separates them into defined cells on the right. Interpolate
+    // the implicit field before shading: no image blur, haze or opacity layer.
+    let pooled = (0.9 * std::f32::consts::PI / falloff - field) * 1.8;
     let ownership = strongest / sum;
-    let t = ((ownership - 0.47) / 0.24).clamp(0., 1.);
-    let core = t * t * (3. - 2. * t);
-    (1. - core) * 0.9 + core * (-0.75 + 0.45 * shade / sum)
+    let edge = ((ownership - 0.47) / 0.24).clamp(0., 1.);
+    let core = edge * edge * (3. - 2. * edge);
+    let separated = 0.7 - 1.25 * core;
+    pooled * (1. - detail) + separated * detail
 }
 
 fn liquid_cell_hash(x: i32, y: i32) -> u32 {

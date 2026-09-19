@@ -3,9 +3,9 @@
 Follow-up to the [Proof control polish](color-management-proof-polish.md).
 
 The glass field has pronounced spherical refraction, a small fluid twist and a
-narrow grazing rim. It has no surface glow or drop shadow. Rounded liquid cells
-become finer to the right; contrast follows the original screen-space
-vertical coordinate, so the bottom remains the low-contrast direction. This is
+narrow grazing rim. It has no surface glow or drop shadow. Connected liquid pools
+on the left become finer, more defined cells on the right; contrast follows the
+original screen-space vertical coordinate, so the bottom remains the low-contrast direction. This is
 an illustration, independent of the document's tone mapping.
 
 ## Cache audit and change
@@ -135,3 +135,31 @@ generate once off the UI thread. Screenshots at 128, 226 and 400 logical pixels
 were visually inspected. Logs and screenshots are under
 `artifacts/color-m4/proof-cells/`. Prior real-pointer and 60 MP evidence remains
 archived; those checks were not repeated for this pattern-only change.
+
+## Flowing pools and defined cells
+
+The next revision changes the pattern geometry as well as its boundary definition.
+Two broad, opposing currents deform the same seeded point field, with stronger
+bending on the left. Broad point influences overlap into joined lobes and winding
+pools. Toward the right, influence falls off faster, point density increases,
+and local ownership separates the regions into small cells with narrow, clear
+channels. The transition is anchored to screen-space horizontal position so the
+left/right cue stays consistent through the dome's refraction.
+
+This is interpolation of an implicit shape field before its contours are shaded.
+There is no raster blur, haze or translucent overlay. The vertical contrast cue,
+crisp dome rim and refraction are retained. Tint is bounded and reduced.
+
+Generation uses at most 25 nearby sites per sample. Each influence has compact
+support with a smooth cutoff so the finite neighborhood introduces no jump at
+grid boundaries. The deterministic field is still generated once on the existing
+worker into the shared 512² texture. Control interaction, image processing,
+document data and export behavior do not change.
+
+Validation: release and native-test builds passed. The five-size GTK
+hit-region/cache check passed: one texture build, 600 changed-value updates and
+no unchanged arc redraws. Native screenshots at 128, 226 and 400 logical pixels
+were inspected. The more complex field took 175.76 ms to generate once off the
+UI thread; no regeneration occurs during dragging or resizing. Evidence is in
+`artifacts/color-m4/proof-flow/`. This is a pattern-only revision; prior real-input
+and 60 MP workflow measurements were not rerun.
