@@ -17,6 +17,14 @@ pub struct ToneKey {
     layers: Vec<layer_core::Layer>,
 }
 impl ToneKey {
+    /// Stale illumination is a useful drawing preview only within the same
+    /// document geometry and color interpretation. Layer/background edits can
+    /// retain it; replacing/resizing/converting a document must clear it.
+    /// Hosts must additionally match their device/owner generation.
+    pub fn can_preview(&self, next: &Self) -> bool {
+        self.epoch == next.epoch && self.color == next.color && self.extent == next.extent
+    }
+    pub fn background(&self) -> [f32;4] { self.background }
     pub fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Option<Self> {
         let d = s.engine().document();
         (d.color.depth.is_float() && !s.rendering_suspended()).then(|| Self {

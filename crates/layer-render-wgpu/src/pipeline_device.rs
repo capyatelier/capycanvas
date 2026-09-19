@@ -30,6 +30,8 @@ pub(crate) struct PipelineDevice {
     working_space: layer_core::color::RgbSpace,
     hdr: bool,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] // pending browser owner migration
+    pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::local_tone::Pipelines>>>,
     #[cfg(not(target_arch = "wasm32"))]
     cache: Option<std::sync::Arc<super::shader_cache::Cache>>,
 }
@@ -37,6 +39,7 @@ impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
         Self {
             device,
+            tone_pipelines: Default::default(),
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
             hdr: false,
@@ -110,6 +113,7 @@ impl PipelineDevice {
         Self {
             device,
             cache,
+            tone_pipelines: Default::default(),
             working_format: super::SRGB8_FORMAT,
             working_space: Default::default(),
             hdr: false,

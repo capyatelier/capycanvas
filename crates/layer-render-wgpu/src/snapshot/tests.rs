@@ -679,6 +679,36 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
 }
 
 #[test]
+fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+    let mut project = rich_project(color,1);
+    project.document.width = 2053;
+    for layer in &mut project.document.layers {
+        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.0[4] += 800.; }
+    }
+    let extent = [project.document.width,project.document.height];
+    let (live,pixels) = frame(&project);
+    let mut cpu = layer_core::color::hdr::LocalToneBuilder::new(extent,color.space).unwrap();
+    for row in pixels.chunks_exact(extent[0] as usize) { cpu.push(row).unwrap(); }
+    let expected = cpu.finish(||false).unwrap();
+    let mut capture = live.snapshot_gpu().capture(project,[0.;4],0.,Default::default(),Default::default()).unwrap();
+    let gpu = capture.gpu_local_tone_guide().unwrap();
+    assert!(Arc::ptr_eq(&gpu,&capture.gpu_local_tone_guide().unwrap()));
+    let actual = capture.local_tone_guide().unwrap();
+    assert_eq!(actual.extent,expected.extent);
+    for (a,b) in actual.samples.iter().zip(&expected.samples) {
+        for c in 0..3 { assert!((a[c]-b[c]).abs() < 0.0003,"masked/filter guide: {a:?} != {b:?}"); }
+    }
+    capture.control().cancel();
+    assert!(capture.gpu_local_tone_guide().is_err(),"cancellation also rejects cached output");
+    assert!(capture.local_tone_guide().is_err(),"CPU delivery observes the same cancellation");
+    capture.control = Default::default();
+    capture.gpu_local_tone = None;
+    capture.limits.planned_pixel_bytes = 1;
+    assert!(capture.gpu_local_tone_guide().unwrap_err().contains("limit is 1"));
+}
+
+#[test]
 fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
     for color in [
         DocumentColor::default(),

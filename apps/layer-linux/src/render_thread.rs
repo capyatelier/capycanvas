@@ -69,7 +69,7 @@ impl Frame {
     }
 }
 enum Command {
-    LocalTone(Option<Arc<layer_core::color::hdr::LocalToneGuide>>, mpsc::Sender<Result<(),String>>),
+    LocalTone(Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     HdrView(Option<layer_core::color::hdr::SdrRendition>, bool),
     PrepareColor(Box<color::Request>),
@@ -178,7 +178,7 @@ pub struct RenderWorker {
 impl RenderWorker {
     pub(crate) fn set_local_tone(
         &self,
-        guide: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+        guide: Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>,
     ) -> Result<mpsc::Receiver<Result<(), String>>, String> {
         let (tx, rx) = mpsc::channel();
         self.send(Command::LocalTone(guide, tx)).map_err(error)?;
@@ -954,7 +954,7 @@ impl Worker {
                 Command::LocalTone(guide, reply) => {
                     let result = self
                         .presenter
-                        .set_local_tone_guide(&self.renderer, guide)
+                        .set_gpu_local_tone_guide(&self.renderer, guide)
                         .map_err(error);
                     if result.is_ok() {
                         self.pending_present = self.last_view.is_some();

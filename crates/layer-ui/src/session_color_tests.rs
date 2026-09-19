@@ -1,5 +1,24 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn tone_preview_survives_edits_but_not_document_replacement() {
+    use crate::proof_workflow::ToneKey;
+    use layer_core::color::{SampleDepth,hdr::SdrRendition};
+    let mut document=Document::new("HDR",32,32); document.color.depth=SampleDepth::F32;
+    let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32]).unwrap();
+    let mut s=make();
+    let original=ToneKey::current(&s).unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
+    let edited=ToneKey::current(&s).unwrap();
+    assert!(edited != original && original.can_preview(&edited));
+    s.set_sdr_view(Some(SdrRendition {exposure:2.,..Default::default()}),true).unwrap();
+    assert!(ToneKey::current(&s).unwrap() == edited,"appearance changes reuse exact analysis");
+    let epoch=s.state.document_file.epoch; let revision=s.engine.document().revision;
+    assert!(s.adopt_project(Box::new(make()),epoch,revision,None).is_ok());
+    let replacement=ToneKey::current(&s).unwrap();
+    assert!(!original.can_preview(&replacement),"same-size replacement must reject old illumination");
+}
+
+#[test]
 fn print_panel_first_use_has_no_target_and_off_rejects_late_publication() {
     use crate::proof_workflow::{proof_form,ProofPreparation};
     use layer_core::color::{ColorProfile,ProofRecipe,RgbSpace};

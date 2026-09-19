@@ -137,6 +137,8 @@ impl SnapshotGpu {
 pub struct SnapshotRenderer {
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
     backing: HashMap<LayerId, Arc<RasterData>>,
@@ -287,6 +289,8 @@ impl SnapshotRenderer {
                 .is_float()
                 .then_some(project.document.sdr_rendition),
             local_tone: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_local_tone: None,
             renderer,
             layers,
             backing,
@@ -497,10 +501,12 @@ impl SnapshotRenderer {
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
     /// mask-area tint, checkerboard or UI overlays participate. Waits on this
     /// capture only; call from the owning file/inspection worker.
-    fn prepare_region(
+    fn capture_region_gpu<T>(
         &mut self,
         [x, y, width, height]: [u32; 4],
-    ) -> Result<RegionReadback, GpuRasterError> {
+        reserved_bytes: u64,
+        consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
+    ) -> Result<T, GpuRasterError> {
         self.check_cancelled()?;
         let region = PixelRect::new(
             x,
@@ -520,6 +526,7 @@ impl SnapshotRenderer {
         let mut selected = HashMap::new();
         let mut masks = HashMap::new();
         let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
+            .saturating_add(reserved_bytes)
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
             .saturating_add((self.layers.len() as u64 * 3 + 32) * 256 * 256 * 16);
         for layer in &self.layers {
@@ -670,34 +677,37 @@ impl SnapshotRenderer {
         let captured = scene.capture_region(r, packet, &target, region, None, &mut encoder);
         r.scene = Some(scene);
         captured?;
-        let stride = (width * 16).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let size = stride as u64 * height as u64;
-        let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("snapshot region readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: None,
-                },
-            },
-            target.size(),
-        );
+        let result = consume(&r.device, &target, &mut encoder);
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
-        Ok(RegionReadback {
-            buffer,
-            stride,
-            width,
-            height,
+        Ok(result)
+    }
+
+    fn prepare_region(&mut self, region: [u32; 4]) -> Result<RegionReadback, GpuRasterError> {
+        let [_, _, width, height] = region;
+        self.capture_region_gpu(region, 0, |device, target, encoder| {
+            let stride = (width * 16).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+            let size = stride as u64 * height as u64;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("snapshot region readback"),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: None,
+                    },
+                },
+                target.size(),
+            );
+            RegionReadback { buffer, stride, width, height }
         })
     }
 
