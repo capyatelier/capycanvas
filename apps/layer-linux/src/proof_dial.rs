@@ -12,6 +12,86 @@ use std::{
     rc::{Rc, Weak},
 };
 
+// One bounded worker and one immutable 512² texture per GTK thread. No document,
+// recipe, layout size or animation frame is part of this decorative cache key.
+enum PatternState {
+    Empty,
+    Loading(Vec<glib::WeakRef<DialLayout>>),
+    Ready(gdk::Texture),
+    Failed,
+}
+thread_local! {
+    static GLASS_PATTERN: RefCell<PatternState> = const { RefCell::new(PatternState::Empty) };
+    #[cfg(test)]
+    static PATTERN_METRICS: Cell<(u32, f64)> = const { Cell::new((0, 0.)) };
+}
+fn pattern_texture() -> Option<gdk::Texture> {
+    GLASS_PATTERN.with(|cache| match &*cache.borrow() {
+        PatternState::Ready(texture) => Some(texture.clone()),
+        _ => None,
+    })
+}
+fn request_pattern(root: &DialLayout) {
+    let start = GLASS_PATTERN.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match &mut *cache {
+            PatternState::Empty => {
+                *cache = PatternState::Loading(vec![root.downgrade()]);
+                true
+            }
+            PatternState::Loading(waiters) => {
+                waiters.push(root.downgrade());
+                false
+            }
+            _ => false,
+        }
+    });
+    if !start {
+        return;
+    }
+    #[cfg(test)]
+    PATTERN_METRICS.with(|metrics| metrics.set((metrics.get().0 + 1, 0.)));
+    glib::spawn_future_local(async {
+        let result = gtk::gio::spawn_blocking(|| {
+            let start = std::time::Instant::now();
+            let bytes = layer_ui::proof_panel::sdr_direction_texture(512);
+            (bytes, start.elapsed().as_secs_f64() * 1000.)
+        })
+        .await;
+        let next = match result {
+            Ok((bytes, _elapsed_ms)) => {
+                #[cfg(test)]
+                PATTERN_METRICS.with(|metrics| metrics.set((metrics.get().0, _elapsed_ms)));
+                PatternState::Ready(
+                    gdk::MemoryTexture::new(
+                        512,
+                        512,
+                        gdk::MemoryFormat::R8g8b8a8Premultiplied,
+                        &glib::Bytes::from_owned(bytes),
+                        512 * 4,
+                    )
+                    .upcast(),
+                )
+            }
+            Err(_) => {
+                eprintln!("Proof glass texture worker stopped");
+                PatternState::Failed
+            }
+        };
+        let waiting = GLASS_PATTERN.with(|cache| std::mem::replace(&mut *cache.borrow_mut(), next));
+        if let PatternState::Loading(waiters) = waiting {
+            for root in waiters.into_iter().filter_map(|w| w.upgrade()) {
+                root.queue_draw();
+            }
+        }
+    });
+}
+#[cfg(test)]
+pub(crate) fn pattern_cache_metrics() -> (u32, f64, Option<gdk::Texture>) {
+    let (count, time) = PATTERN_METRICS.with(Cell::get);
+    (count, time, pattern_texture())
+}
+
 mod layout {
     use super::*;
     #[derive(Default)]
@@ -80,6 +160,17 @@ mod layout {
             let Some(p) = self.owner.borrow().upgrade() else {
                 return;
             };
+            let size = obj.width().min(obj.height()) as f32;
+            let Some(g) = ParameterDialGeometry::new(size) else {
+                return;
+            };
+            snapshot.save();
+            snapshot.translate(&gtk::graphene::Point::new(
+                (obj.width() as f32 - size) * 0.5,
+                0.,
+            ));
+            p.snapshot_field(snapshot, &g);
+            snapshot.restore();
             for child in [
                 p.field.upcast_ref::<gtk::Widget>(),
                 p.arcs[0].upcast_ref(),
@@ -91,47 +182,13 @@ mod layout {
             for icon in &p.icons {
                 obj.snapshot_child(icon, snapshot);
             }
-            let size = obj.width().min(obj.height()) as f32;
-            let Some(g) = ParameterDialGeometry::new(size) else {
-                return;
-            };
-            let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
+            snapshot.save();
+            snapshot.translate(&gtk::graphene::Point::new(
+                (obj.width() as f32 - size) * 0.5,
                 0.,
-                0.,
-                obj.width() as f32,
-                obj.height() as f32,
             ));
-            cr.translate((obj.width() as f64 - f64::from(size)) * 0.5, 0.);
-            let v = p.pad.get();
-            let r = p.recipe.get();
-            let values = [
-                format!("{:.0}%", v[1].exp2() * 100.),
-                format!("{:+.0}%", v[0] * 100.),
-                format!("{:+.0}%", r.exposure * 25.),
-                format!("{:.0}%", r.highlight_color * 100.),
-            ];
-            for (text, readout) in values.iter().zip(g.readouts(size)) {
-                if let Some((radius, angle, reverse)) = readout.curve {
-                    curved_text(
-                        &cr,
-                        obj.upcast_ref(),
-                        text,
-                        g.field.center,
-                        radius as f64,
-                        angle as f64,
-                        reverse,
-                        size,
-                    );
-                } else {
-                    text_style(&cr, obj.upcast_ref(), size);
-                    let width = cr.text_extents(text).unwrap().x_advance();
-                    cr.move_to(
-                        f64::from(readout.text[0]) - width * 0.5,
-                        f64::from(readout.text[1]),
-                    );
-                    let _ = cr.show_text(text);
-                }
-            }
+            p.snapshot_readouts(snapshot, &g, size);
+            snapshot.restore();
         }
     }
 }
@@ -142,6 +199,8 @@ mod arc_scale {
     #[derive(Default)]
     pub struct ArcScale {
         pub index: Cell<usize>,
+        #[cfg(test)]
+        pub snapshots: Cell<u64>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for ArcScale {
@@ -160,6 +219,8 @@ mod arc_scale {
             (0, 0, -1, -1)
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            #[cfg(test)]
+            self.snapshots.set(self.snapshots.get() + 1);
             let obj = self.obj();
             let Some(g) = obj.geometry() else {
                 return;
@@ -209,7 +270,12 @@ mod arc_scale {
             marker(&cr, g.point(f), g.marker_radius, obj.has_visible_focus());
         }
     }
-    impl RangeImpl for ArcScale {}
+    impl RangeImpl for ArcScale {
+        fn value_changed(&self) {
+            self.parent_value_changed();
+            self.obj().queue_draw();
+        }
+    }
     impl ScaleImpl for ArcScale {}
 }
 glib::wrapper! { pub struct ArcScale(ObjectSubclass<arc_scale::ArcScale>) @extends gtk::Scale,gtk::Range,gtk::Widget, @implements gtk::Accessible,gtk::Buildable,gtk::ConstraintTarget,gtk::Orientable; }
@@ -222,6 +288,12 @@ impl ArcScale {
     }
 }
 
+struct ReadoutCache {
+    size: f32,
+    ink: gdk::RGBA,
+    text: String,
+    node: gtk::gsk::RenderNode,
+}
 type Changed = Box<dyn Fn(ContactPhase, SdrRendition)>;
 pub(crate) struct ProofDial {
     pub root: DialLayout,
@@ -236,8 +308,10 @@ pub(crate) struct ProofDial {
     double: Cell<bool>,
     updating: Cell<bool>,
     changed: RefCell<Vec<Changed>>,
-    image: RefCell<Option<cairo::ImageSurface>>,
     icons: [gtk::Image; 4],
+    readouts: RefCell<[Option<ReadoutCache>; 4]>,
+    #[cfg(test)]
+    readout_builds: Cell<[u64; 4]>,
 }
 impl ProofDial {
     pub fn new() -> Rc<Self> {
@@ -309,15 +383,13 @@ impl ProofDial {
             double: Cell::new(false),
             updating: Cell::new(false),
             changed: Default::default(),
-            image: Default::default(),
             icons,
+            readouts: Default::default(),
+            #[cfg(test)]
+            readout_builds: Cell::new([0; 4]),
         });
         *p.root.imp().owner.borrow_mut() = Rc::downgrade(&p);
-        p.field.set_draw_func(glib::clone!(
-            #[weak]
-            p,
-            move |area, cr, w, h| p.draw_field(area, cr, w, h)
-        ));
+        request_pattern(&p.root);
         for (part, widget) in [
             p.field.upcast_ref::<gtk::Widget>(),
             p.arcs[0].upcast_ref(),
@@ -370,6 +442,14 @@ impl ProofDial {
         p.refresh();
         p
     }
+    #[cfg(test)]
+    pub(crate) fn arc_snapshot_counts(&self) -> [u64; 2] {
+        self.arcs.each_ref().map(|arc| arc.imp().snapshots.get())
+    }
+    #[cfg(test)]
+    pub(crate) fn readout_cache_counts(&self) -> [u64; 4] {
+        self.readout_builds.get()
+    }
     pub fn recipe(&self) -> SdrRendition {
         self.recipe.get()
     }
@@ -395,7 +475,6 @@ impl ProofDial {
             } else {
                 format!("{:.0}% color intensity", r.highlight_color * 100.)
             })]);
-            a.queue_draw();
         }
         let v = self.pad.get();
         let text = format!(
@@ -422,6 +501,9 @@ impl ProofDial {
         }
     }
     fn change(self: &Rc<Self>, recipe: SdrRendition, pad: [f64; 2]) {
+        if self.recipe.get() == recipe && self.pad.get() == pad {
+            return;
+        }
         self.recipe.set(recipe);
         self.pad.set(pad);
         self.refresh();
@@ -630,45 +712,101 @@ impl ProofDial {
             }
         ));
     }
-    fn draw_field(&self, area: &gtk::DrawingArea, cr: &cairo::Context, w: i32, h: i32) {
-        let g = ParameterDialGeometry::new(w.min(h) as f32).unwrap().field;
-        let r = g.disc_radius() as f64;
-        let center = g.center.map(f64::from);
-        cr.arc(center[0], center[1], r, 0., std::f64::consts::TAU);
-        let _ = cr.save();
-        cr.clip();
-        let edge = ((2. * r * f64::from(area.scale_factor())).ceil() as u32).clamp(64, 512);
-        if self
-            .image
-            .borrow()
-            .as_ref()
-            .is_none_or(|image| image.width() != edge as i32)
-        {
-            let bytes = layer_ui::proof_panel::sdr_direction_texture(edge);
-            *self.image.borrow_mut() = cairo::ImageSurface::create_for_data(
-                bytes,
-                cairo::Format::ARgb32,
-                edge as i32,
-                edge as i32,
-                edge as i32 * 4,
-            )
-            .ok();
-        }
-        if let Some(image) = self.image.borrow().as_ref() {
-            cr.translate(center[0] - r, center[1] - r);
-            cr.scale(2. * r / f64::from(edge), 2. * r / f64::from(edge));
-            if cr.set_source_surface(image, 0., 0.).is_ok() {
-                let _ = cr.paint();
+    fn snapshot_readouts(&self, snapshot: &gtk::Snapshot, g: &ParameterDialGeometry, size: f32) {
+        let pad = self.pad.get();
+        let recipe = self.recipe.get();
+        let values = [
+            format!("{:.0}%", pad[1].exp2() * 100.),
+            format!("{:+.0}%", pad[0] * 100.),
+            format!("{:+.0}%", recipe.exposure * 25.),
+            format!("{:.0}%", recipe.highlight_color * 100.),
+        ];
+        let ink = self.root.color();
+        let mut cache = self.readouts.borrow_mut();
+        for (i, (text, readout)) in values.iter().zip(g.readouts(size)).enumerate() {
+            if cache[i]
+                .as_ref()
+                .is_none_or(|c| c.size != size || c.ink != ink || &c.text != text)
+            {
+                let local = gtk::Snapshot::new();
+                let font = ParameterDialGeometry::text_size(size);
+                let half_width = font * 2.5 + 4.;
+                let x = (readout.text[0] - half_width).max(0.);
+                let y = (readout.text[1] - font - 4.).max(0.);
+                let width = (readout.text[0] + half_width).min(size) - x;
+                let height = (readout.text[1] + 5.).min(size) - y;
+                // Each caption has its own small retained node. Changing the
+                // dot never rasterizes the full dial or the unchanged arcs.
+                {
+                    let cr = local.append_cairo(&gtk::graphene::Rect::new(x, y, width, height));
+                    if let Some((radius, angle, reverse)) = readout.curve {
+                        curved_text(
+                            &cr,
+                            self.root.upcast_ref(),
+                            text,
+                            g.field.center,
+                            radius as f64,
+                            angle as f64,
+                            reverse,
+                            size,
+                        );
+                    } else {
+                        text_style(&cr, self.root.upcast_ref(), size);
+                        let width = cr.text_extents(text).unwrap().x_advance();
+                        cr.move_to(
+                            f64::from(readout.text[0]) - width * 0.5,
+                            f64::from(readout.text[1]),
+                        );
+                        let _ = cr.show_text(text);
+                    }
+                }
+                cache[i] = Some(ReadoutCache {
+                    size,
+                    ink,
+                    text: text.clone(),
+                    node: local.to_node().unwrap(),
+                });
+                #[cfg(test)]
+                self.readout_builds.set({
+                    let mut counts = self.readout_builds.get();
+                    counts[i] += 1;
+                    counts
+                });
             }
+            snapshot.append_node(&cache[i].as_ref().unwrap().node);
         }
-        let _ = cr.restore();
-        {
-            let v = self.pad.get();
-            let f = layer_ui::proof_panel::sdr_tone_pad().fractions(v);
-            let point = g.disc_marker(f.map(|v| v as f32));
-            let size = self.root.width().min(self.root.height()) as f32;
-            let marker_radius = ParameterDialGeometry::new(size).unwrap().arcs[0].marker_radius;
-            marker(cr, point, marker_radius, area.has_visible_focus());
+    }
+    fn snapshot_field(&self, snapshot: &gtk::Snapshot, geometry: &ParameterDialGeometry) {
+        let g = geometry.field;
+        let r = g.disc_radius();
+        let [x, y] = g.center;
+        let bounds = gtk::graphene::Rect::new(x - r, y - r, 2. * r, 2. * r);
+        let outline = gtk::gsk::RoundedRect::from_rect(bounds, r);
+        snapshot.append_outset_shadow(&outline, &gdk::RGBA::new(0., 0., 0., 0.20), 0., 1.5, 0., 3.);
+        snapshot.push_rounded_clip(&outline);
+        if let Some(texture) = pattern_texture() {
+            snapshot.append_texture(&texture, &bounds);
+        } else {
+            snapshot.append_color(&gdk::RGBA::new(0.5, 0.5, 0.5, 1.), &bounds);
+        }
+        snapshot.pop();
+        let fraction = layer_ui::proof_panel::sdr_tone_pad().fractions(self.pad.get());
+        let point = g.disc_marker(fraction.map(|v| v as f32));
+        let radius = geometry.arcs[0].marker_radius;
+        let ring = |r: f32, width: f32, color: gdk::RGBA| {
+            snapshot.append_border(
+                &gtk::gsk::RoundedRect::from_rect(
+                    gtk::graphene::Rect::new(point[0] - r, point[1] - r, 2. * r, 2. * r),
+                    r,
+                ),
+                &[width; 4],
+                &[color; 4],
+            );
+        };
+        ring(radius + 2., 4., gdk::RGBA::new(0., 0., 0., 0.65));
+        ring(radius + 1., 2., gdk::RGBA::WHITE);
+        if self.field.has_visible_focus() {
+            ring(radius + 3.5, 1., gdk::RGBA::new(1., 1., 1., 0.65));
         }
     }
 }

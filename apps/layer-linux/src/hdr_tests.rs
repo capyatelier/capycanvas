@@ -909,6 +909,7 @@ fn native_hdr_large_proof_dial_responsiveness() {
     let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
     let rendition=||w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
     let before=rendition();
+    let cached_pattern=crate::proof_dial::pattern_cache_metrics().2.expect("glass texture ready");
     let started=Instant::now();
     drag.emit_by_name::<()>("drag-begin",&[&(start[0] as f64),&(start[1] as f64)]);
     for i in 1..=60 {
@@ -920,6 +921,8 @@ fn native_hdr_large_proof_dial_responsiveness() {
     eprintln!("PROOF_DIAL_60MP updates=60 elapsed_ms={elapsed:.2} max_heartbeat_gap_ms={:.2}",heartbeat.borrow().1 as f64/1000.);
     assert!(heartbeat.borrow().1<500_000,"UI stalled during local proof adjustment");
     assert_eq!(w.local_tone.ready_count(),count,"drag must not rescan the 60 MP master");
+    assert_eq!(crate::proof_dial::pattern_cache_metrics().2.as_ref(),Some(&cached_pattern));
+    assert_eq!(crate::proof_dial::pattern_cache_metrics().0,1);
     assert_ne!(rendition(),before);
     invoke(&w,CommandId::Undo);ready(&w);assert_eq!(rendition(),before);
     assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document().layers,layers,"Proof must preserve the master");
@@ -931,6 +934,7 @@ fn native_hdr_large_proof_dial_responsiveness() {
 #[ignore = "private Wayland display; GTK widget picking including Scale children"]
 fn native_proof_dial_hit_regions() {
     let _app = native_test_app("art.capycanvas.ProofDialHits");
+    let mut shared_pattern = None;
     for size in [128, 160, 226, 320, 400] {
         let dial = crate::proof_dial::ProofDial::new();
         let window = gtk::Window::builder().default_width(size).default_height(size).child(&dial.root).build();
@@ -955,6 +959,41 @@ fn native_proof_dial_hit_regions() {
                 assert_eq!(hit,arc.clone().upcast::<gtk::Widget>(),"visible arc {i} at {n}%");
             }
         }
+        let deadline=Instant::now()+Duration::from_secs(3);
+        while crate::proof_dial::pattern_cache_metrics().2.is_none() {pump(5);assert!(Instant::now()<deadline,"asynchronous glass texture");}
+        pump(50);
+        let (builds,generation_ms,texture)=crate::proof_dial::pattern_cache_metrics();
+        let texture=texture.unwrap();assert_eq!(builds,1);
+        if let Some(previous)=&shared_pattern {assert_eq!(previous,&texture,"share one texture across panels and sizes");}
+        shared_pattern=Some(texture.clone());
+        let arcs_before=dial.arc_snapshot_counts();
+        let captions_before=dial.readout_cache_counts();
+        let start=Instant::now();
+        for i in 0..120 {
+            dial.set_recipe(layer_ui::proof_panel::sdr_from_pad(SdrRendition::default(),[(i as f64*0.1).sin(),i as f64/60.-1.]));
+            pump(2);
+            assert_eq!(crate::proof_dial::pattern_cache_metrics().2.as_ref(),Some(&texture));
+        }
+        pump(40);
+        assert_eq!(dial.arc_snapshot_counts(),arcs_before,"circle movement must reuse both arc snapshots");
+        let captions_after=dial.readout_cache_counts();
+        assert_eq!(&captions_before[2..],&captions_after[2..],"circle movement must reuse unchanged arc readouts");
+        assert!(captions_after[0]>captions_before[0] && captions_after[1]>captions_before[1],"changing side values must still repaint");
+        assert_eq!(crate::proof_dial::pattern_cache_metrics().0,1,"no rebuild during motion");
+        eprintln!("PROOF_CACHE size={size} builds={builds} worker_ms={generation_ms:.2} updates=120 elapsed_with_event_pumping_ms={:.2} arc_redraws=0",start.elapsed().as_secs_f64()*1000.);
+        dial.set_recipe(SdrRendition::default());
+        // Repeated contacts inside the same quantized value must not dispatch
+        // additional edits or redraw the full application.
+        let moves=Rc::new(Cell::new(0));
+        dial.connect_changed({let moves=moves.clone();move |phase,_| if phase==layer_ui::ContactPhase::Move {moves.set(moves.get()+1);}});
+        let controllers=field.observe_controllers();
+        let drag=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::GestureDrag>()).unwrap();
+        let point=g.field.disc_marker([0.7,0.5]);
+        drag.emit_by_name::<()>("drag-begin",&[&(point[0] as f64),&(point[1] as f64)]);
+        for _ in 0..120 {drag.emit_by_name::<()>("drag-update",&[&0f64,&0f64]);}
+        drag.emit_by_name::<()>("drag-end",&[&0f64,&0f64]);
+        assert_eq!(moves.get(),1,"identical pad input should dispatch only one edit");
+        dial.set_recipe(SdrRendition::default());pump(30);
         let output=std::env::var_os("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/proof-polish/controls"));
         std::fs::create_dir_all(&output).unwrap();
