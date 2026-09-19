@@ -154,17 +154,26 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
             // One continuous glass fold family makes the axes legible at
             // small panel sizes. Spacing tightens to the right, instead of
             // adding unrelated high-frequency noise over the broad folds.
-            let flow = right + 0.14 * (2.8 * y - 0.2).sin() + 0.03 * (5. * y).sin();
-            let phase = std::f32::consts::TAU * (0.4 * flow + 4.2 * flow.powi(3)) + 0.7 * y;
-            let wave = 0.8 * phase.sin() + 0.25 * (2. * phase + 0.3).sin();
-            let reflection = (phase - 0.7).cos().max(0.).powf(4. + 12. * right);
+            let flow = right
+                + 0.23 * (2.7 * y - 0.35).sin() * (1. - 0.25 * right)
+                + 0.06 * (4.5 * y + 2. * right).sin();
+            let phase = std::f32::consts::TAU * (0.4 * flow + 3.6 * flow.powi(3))
+                + 0.35 * (3. * y + right).sin();
+            let wave = 0.7 * phase.sin() + 0.16 * (2. * phase + 0.3).sin();
+            let reflection = (phase - 0.7).cos().max(0.).powf(4. + 10. * right);
+            // A broad internal reflection under the narrow crest gives the
+            // folds a softer glass surface without another family of ripples.
+            let inner_reflection = (phase + 0.5).cos().max(0.).powi(2);
             // Bound the amplitude separately: the bottom visibly converges
             // to gray even where a reflection would otherwise stay bright.
             let contrast = 0.49 * up.powf(1.05);
-            let v =
-                0.5 + contrast * ((1.5 + 2. * up) * (0.9 * wave + 0.5 * reflection - 0.1)).tanh();
-            let tint = 0.018 * up * (phase - 1.).sin();
-            let rgb = [v - 0.6 * tint, v + 0.1 * tint, v + tint]
+            let v = 0.5
+                + contrast
+                    * ((1.1 + 1.6 * up)
+                        * (0.8 * wave + 0.55 * reflection + 0.18 * inner_reflection - 0.17))
+                        .tanh();
+            let tint = 0.085 * up * (reflection - 0.5 * wave);
+            let rgb = [v - 0.7 * tint, v + 0.05 * tint, v + tint]
                 .map(|c| (c.clamp(0., 1.) * 255.).round() as u32);
             bytes.extend_from_slice(
                 &(0xff000000 | rgb[0] << 16 | rgb[1] << 8 | rgb[2]).to_ne_bytes(),

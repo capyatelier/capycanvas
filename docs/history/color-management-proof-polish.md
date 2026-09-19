@@ -103,3 +103,11 @@ at 128, 160, 226, 320 and 400 logical pixels (`native-controls.log`, `controls/`
 The existing shared default/texture check and GTK release build pass. This is a
 cached UI illustration change; the previous tone-mapping, export, input and
 performance qualification remains recorded above, not claimed as newly rerun.
+
+The next visual pass softens the reflections into a broader, asymmetric glass
+sweep, with a second internal reflection and a restrained cool pearl tint.
+Progressive fold spacing and the independent gray-to-contrast envelope retain
+the same directional cues. Evidence and native-size captures for this pass are
+under `artifacts/color-m4/proof-glass/`; tone mapping and control semantics are
+unchanged. The existing shared check, native render/hit sweep at all five panel
+sizes and GTK release build pass for this visual refinement.
