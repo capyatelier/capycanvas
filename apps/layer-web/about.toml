@@ -52,3 +52,19 @@ license = "Zlib"
 path = "LICENSE-ZLIB"
 license = "Zlib"
 checksum = "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352"
+
+# Retain the exact upstream notice for the Rust AV1 dependency graph.
+[rav1d.clarify]
+license = "BSD-2-Clause"
+[[rav1d.clarify.files]]
+path = "COPYING"
+license = "BSD-2-Clause"
+checksum = "6477f5c0674c89dc9251708a442343449bcb9c14b969b09286eb61d0640b284a"
+
+# Retain the exact upstream notice for the Rust AV1 dependency graph.
+[to_method.clarify]
+license = "CC0-1.0"
+[[to_method.clarify.files]]
+path = "LICENSE"
+license = "CC0-1.0"
+checksum = "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
