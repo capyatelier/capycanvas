@@ -609,3 +609,30 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
         s.capture_project_recovery().unwrap().validate(Default::default()).unwrap();
     }
 }
+
+
+#[test]
+fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+        let mut s=session();s.set_platform(platform);
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetPanelVisible {panel:Panel::Color,visible:true}}).unwrap();
+        let before=s.engine.document().clone();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        let layout=&s.state.workspace.layout;
+        let group=layout.panel_group(Panel::Proof).unwrap();
+        assert_eq!(layout.panel_group(Panel::Color),Some(group));
+        assert_eq!(layout.active_panel(Panel::Proof),Some(Panel::Proof));
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert!(s.state.customization.expanded.is_none(),"Reopening must not toggle expanded controls");
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetColumnCollapsed {group,collapsed:true}}).unwrap();
+        let column=s.state.workspace.layout.collapsed_column_for_group(group).unwrap();
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetColumnDrawers {column,drawers:true}}).unwrap();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert_eq!(s.state.customization.column_drawers.len(),1);
+        let layout=s.state.workspace.layout.clone();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert_eq!(s.state.customization.column_drawers.len(),1);
+        assert_eq!(s.state.workspace.layout,layout);
+        assert_eq!(s.engine.document(),&before);
+    }
+}

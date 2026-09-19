@@ -207,46 +207,12 @@ impl ProofPanel {
     }
     pub fn open(self: &Rc<Self>, w: &Rc<Workspace>, page: Page) -> Result<(), String> {
         self.ensure(w);
-        w.dispatch(UiAction::Customize {
-            action: CustomizationAction::SetPanelVisible {
-                panel: Panel::Proof,
-                visible: true,
-            },
-        });
-        let group = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.session.state().workspace.layout.panel_group(Panel::Proof));
-        if let Some(group) = group {
-            let (active, collapsed, drawer_open) = {
-                let gpu = w.gpu.borrow();
-                let state = gpu.as_ref().unwrap().session.state();
-                let layout = &state.workspace.layout;
-                let collapsed = layout.collapsed_column_for_group(group);
-                let open=collapsed.is_some_and(|column| {
-                    let settings=layout.column_stack(column);
-                    if settings.drawers {state.customization.column_drawers.iter().any(|d| matches!(d.anchor, layer_ui::DrawerAnchor::Column {group:g,origin,..} if g==group && origin==Panel::Proof))}
-                    else {settings.open_column==Some(column) && layout.active_panel(Panel::Proof)==Some(Panel::Proof)}
-                });
-                (layout.active_panel(Panel::Proof), collapsed, open)
-            };
-            if collapsed.is_some() {
-                if !drawer_open {
-                    w.dispatch(UiAction::Customize {
-                        action: CustomizationAction::ToggleColumnDrawer {
-                            group,
-                            panel: Panel::Proof,
-                        },
-                    });
-                }
-            } else if active != Some(Panel::Proof) {
-                w.dispatch(UiAction::SelectPanelTab {
-                    group,
-                    panel: Panel::Proof,
-                });
-            }
-        }
+        let change = {
+            let mut gpu = w.gpu.borrow_mut();
+            let session = &mut gpu.as_mut().ok_or("Canvas is not ready")?.session;
+            layer_ui::proof_panel::reveal(session)?
+        };
+        w.changed(Ok(change));
         self.set_page(w, page);
         self.update_all(w);
         Ok(())

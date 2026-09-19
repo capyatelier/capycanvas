@@ -292,6 +292,8 @@ Float32 document storage remains outside scope.
 shared HDR editing, native persistence/recovery, GTK picker/dial controls, print
 proofing and EXR/PQ/SDR delivery in real desktop/tablet Chrome and native Android.
 Web has an explicit 12 MP HDR admission limit after larger documents exceeded
-memory budgets. Native Float16 measurements reach 60 MP. Physical HDR surfaces,
-gain-map delivery, full presentation/thermal qualification and Proof workspace
-projection remain explicit follow-up work; this entry is not global signoff.
+memory budgets. Native Float16 measurements reach 60 MP. Proof now uses the
+shared GTK reveal workflow in docked, floating and drawer views, with pen/touch
+dragging, cancellation and workspace undo/redo checked on both hosts. Physical
+HDR surfaces, gain-map delivery and full presentation/thermal qualification
+remain explicit follow-up work; this entry is not global signoff.

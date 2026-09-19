@@ -337,6 +337,45 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun proofWorkspaceDragCancelAndDrawer() {
+        val source=InstrumentationRegistry.getArguments().getString("hdrFile")
+        Assume.assumeTrue("Supply -e hdrFile",source!=null)
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val file=File(files,"workspace-hdr.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
+        open(file);tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun edit(value:JSONObject){compose.runOnUiThread{host.customize(value)};compose.waitForIdle()}
+        fun group()=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("proof")}
+        fun recipe()=native{JSONObject(Native.proofForm(it)).getJSONObject("rendition").toString()}
+        action("sdr_rendition")
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
+        val original=group().getInt("id");val appearance=recipe()
+        // A workspace tab starts moving after slop, without a touch hold.
+        compose.onNodeWithTag("tab-proof").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(24f,-24f),16);moveTo(center+androidx.compose.ui.geometry.Offset(550f,-320f),64);up()}
+        compose.waitUntil(10_000){group().optBoolean("floating")}
+        action("undo_workspace");compose.waitUntil(10_000){group().getInt("id")==original&&!group().getBoolean("floating")}
+        action("redo_workspace");compose.waitUntil(10_000){group().getBoolean("floating")}
+        val before=native{state(it).getJSONObject("workspace").getJSONObject("layout").toString()}
+        compose.onNodeWithTag("tab-proof").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(80f,60f),64);cancel()}
+        compose.waitForIdle();assertEquals(before,native{state(it).getJSONObject("workspace").getJSONObject("layout").toString()})
+        action("undo_workspace");compose.waitUntil(10_000){group().getInt("id")==original&&!group().getBoolean("floating")}
+        edit(obj("type" to "set_column_collapsed","group" to original,"collapsed" to true))
+        compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("collapsed").objects().any{it.getJSONArray("groups").objects().any{g->g.getInt("group")==original}}}
+        val column=host.snapshot!!.getJSONObject("layout").getJSONArray("collapsed").objects().first{it.getJSONArray("groups").objects().any{g->g.getInt("group")==original}}.getInt("id")
+        edit(obj("type" to "set_column_drawers","column" to column,"drawers" to true))
+        action("sdr_rendition")
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
+        fun drawers()=native{state(it).getJSONObject("customization").getJSONArray("column_drawers").length()}
+        compose.waitUntil(10_000){drawers()==1};action("sdr_rendition");assertEquals(1,drawers())
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput{down(center);moveTo(center+androidx.compose.ui.geometry.Offset(30f,-20f));cancel()}
+        compose.waitForIdle();assertEquals(appearance,recipe())
+        automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"hdr-proof-drawer.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        edit(obj("type" to "set_column_collapsed","group" to original,"collapsed" to false))
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("tab-proof").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(appearance,recipe());assertNull(host.actionError)
+        println("Proof workspace touch tab drag, one-step layout history, cancellation and collapsed drawer passed")
+    }
+
     @Test fun proofSetupCompareEditPortabilityExportAndRecovery() {
         val profilePath=InstrumentationRegistry.getArguments().getString("proofProfile")
         Assume.assumeTrue("Supply -e proofProfile /data/local/tmp/capy-proof-cmyk.icc",profilePath!=null)
@@ -347,20 +386,20 @@ class AndroidRasterTest {
         fun setup(command:String="soft_proof_setup") {
             action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isNotEmpty()}
             compose.waitUntil(10_000){compose.onAllNodes(hasTestTag("proof-mode-print") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
-            compose.onNodeWithTag("proof-mode-print").performClick()
+            compose.onNodeWithTag("proof-mode-print").performScrollTo().performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile").fetchSemanticsNodes().isNotEmpty()}
         }
         fun pick(name:String){
             selectedName=name
-            compose.onNodeWithTag("proof-profile").performClick()
+            compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
             compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).onFirst().performScrollTo().performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile-picker").fetchSemanticsNodes().isEmpty()}
             compose.onNodeWithTag("proof-profile").assertTextContains(name)
         }
         fun apply(){
-            if(host.proof.error!=null)compose.onNodeWithText("Retry").performClick()
+            if(host.proof.error!=null)compose.onNodeWithText("Retry").performScrollTo().performClick()
             compose.waitUntil(120_000){!host.proof.busy&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getString("name")}==selectedName&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getJSONObject("profile").has("Icc")}}
-            assertNull(host.proof.error);compose.onNodeWithText("Close").performClick();compose.waitForIdle()
+            assertNull(host.proof.error);compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
         }
         fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
         fun status()=native{JSONObject(Native.proofStatus(it))}
@@ -368,7 +407,7 @@ class AndroidRasterTest {
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
-        compose.onNodeWithText("Close").performClick();compose.waitForIdle()
+        compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
         assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
         val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
@@ -384,10 +423,10 @@ class AndroidRasterTest {
         val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
         runBlocking{ProfileStore.remove(activity,originalEntry.getString("id"))}
         val baseline=manifest(save("proof-original.capy"))
-        setup();compose.onNodeWithTag("proof-profile").performClick()
+        setup();compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
         compose.onNodeWithText("Document Profile").assertExists()
         compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
-        compose.onNodeWithText("Done").performClick();pick(target.getString("name"));compose.onNodeWithText("Close").performClick();compose.waitForIdle()
+        compose.onNodeWithText("Done").performClick();pick(target.getString("name"));compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
         assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
         assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
         // An unwritable library path fails before document/history publication.
@@ -438,7 +477,7 @@ class AndroidRasterTest {
         repeat(2){case->
             setup()
             val flag=Native.captureControl()
-            val task=native{h->val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
+            val task=native{h->Native.dispatch(h,obj("type" to "invoke","command" to "soft_proof_setup").toString());val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
             try{
                 if(case==0){
                     val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
@@ -449,7 +488,7 @@ class AndroidRasterTest {
                     assertFalse("Cancelled proof worker must stop",worker.isAlive)
                     assertNotNull("Cancellation must reject preparation",failure.get())
                 }else Native.proofWork(task)
-                compose.onNodeWithText("Close").performClick();compose.waitForIdle()
+                compose.onNodeWithText("Close").performScrollTo().performClick();compose.waitForIdle()
                 assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
                 assertEquals(retained,current().toString())
                 assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})

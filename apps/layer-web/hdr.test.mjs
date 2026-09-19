@@ -31,6 +31,7 @@ export async function checkHdr({call,evaluate,settle}) {
     mark('Independent FFmpeg PQ input opens as HDR, retains above-white samples, and completes mapped SDR analysis');
     // The GTK corner edit action, no palette footer, and HDR numeric fields.
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}})`);
+    await evaluate(`[...document.querySelectorAll('.dock-tab[data-panel="color"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);
     await wait(`!![...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0)`);
     assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
     await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
@@ -42,16 +43,45 @@ export async function checkHdr({call,evaluate,settle}) {
     mark('Picker matches GTK corner action, removes palettes, and edits HDR intensity');
     await wait(`!document.querySelector('dialog[open]')`);
     await evaluate(`layerApp.dispatch({type:'select_brush',id:1});const form=layerApp.app.color_ui({type:'form',request:{color:{space:'Srgb',rgba:[0,0,0,1]},document_space:'Srgb',model:'linear_rgb',intensity:0,fields:['-4','4','1','100']}});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:form.value}});`);
+    await wait('layerApp.app.brush_ready()');await settle();
     const center=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()`);
+    assert.ok(await evaluate(`[-50,0,50].every(dx=>document.elementFromPoint(${center.x}+dx,${center.y})===layerApp.canvas)`),'The complete pen stroke must start and finish on the canvas');
     for(const[type,dx,buttons]of[['mousePressed',-50,1],['mouseMoved',0,1],['mouseMoved',50,1],['mouseReleased',50,0]]){await call('Input.dispatchMouseEvent',{type,x:center.x+dx,y:center.y,button:'left',buttons,pointerType:'pen',force:buttons?.85:0});await settle();}
     const painted=await hist();assert.ok(painted.channels.some(c=>c.below>0),'Negative finite HDR paint survives the GPU');assert.notDeepEqual(painted,original);
     await invoke('undo');assert.deepEqual(await hist(),original);await invoke('redo');assert.deepEqual(await hist(),painted);original=painted;
     mark('Pen painting preserves negative and above-white channels with exact one-step undo/redo');
     const master0=await save();
     await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
+    if(process.env.LAYER_PROOF_WORKSPACE) {
+      const layout=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().workspace.layout,(_,v)=>typeof v==="bigint"?Number(v):v))');
+      const before=await layout();
+      const point=await evaluate(`(()=>{const r=document.querySelector('.dock-group .dock-tab[data-panel="proof"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      const target=await evaluate('({x:innerWidth*.55,y:innerHeight*.3})');
+      for(const[type,p,buttons]of[['mousePressed',point,1],['mouseMoved',{x:point.x+20,y:point.y-20},1],['mouseMoved',target,1],['mouseReleased',target,0]]){await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons,pointerType:'pen',force:buttons?.7:0});await settle();}
+      await wait(`!!document.querySelector('.floating-panel .dock-tab[data-panel="proof"]')`);
+      const moved=await layout();assert.notDeepEqual(moved,before);
+      await invoke('undo_workspace');assert.deepEqual(await layout(),before);
+      await invoke('redo_workspace');assert.deepEqual(await layout(),moved);
+      const start=await evaluate(`(()=>{const r=document.querySelector('.floating-panel .dock-tab[data-panel="proof"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:8,...start}]});
+      await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:8,x:start.x+90,y:start.y+80}]});await settle();
+      await call('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await settle();assert.deepEqual(await layout(),moved);
+      await invoke('undo_workspace');assert.deepEqual(await layout(),before);
+      const group=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('proof')).id`);
+      await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_column_collapsed',group:${group},collapsed:true}})`);
+      const column=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.group===${group})).id`);
+      await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_column_drawers',column:${column},drawers:true}})`);
+      await invoke('sdr_rendition');await settle();
+      await wait(`document.querySelector('.proof-tone-pad')?.getBoundingClientRect().width>0&&!!document.querySelector('.proof-tone-pad')?.closest('.content-drawer')`);
+      assert.equal(await evaluate('layerApp.state().customization.column_drawers.length'),1);
+      await invoke('sdr_rendition');assert.equal(await evaluate('layerApp.state().customization.column_drawers.length'),1);
+      await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_column_collapsed',group:${group},collapsed:false}})`);await settle();
+      await wait(`!!document.querySelector('.dock-group .proof-tone-pad')`);
+      mark('Proof tab pen drag, layout undo/redo, touch cancellation and idempotent collapsed drawer reveal pass');
+    }
     const beforeRecipe=await evaluate('layerApp.app.proof_form().rendition');
     // A floating workspace panel must not steal contacts from the active Proof.
-    const occlusion=await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad'),r=c.getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:256,recipe:layerApp.app.proof_form().rendition});return d.arcs.flatMap(a=>[16,48].map(i=>{const p=a.path[i];return document.elementFromPoint(r.x+p[0]*r.width/256,r.y+p[1]*r.height/256)===c}))})()`);
+    const occlusion=await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad'),r=c.getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:r.width,recipe:layerApp.app.proof_form().rendition});return d.arcs.flatMap(a=>[16,48].map(i=>{const p=a.path[i];return document.elementFromPoint(r.x+p[0],r.y+p[1])===c}))})()`);
     assert.ok(occlusion.every(Boolean),'Proof arcs remain reachable above floating workspace panels');
     const r=await evaluate(`(()=>{const r=document.querySelector('.proof-tone-pad').getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height}})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,x:r.x+r.w*.5,y:r.y+r.h*.5}]});
@@ -62,7 +92,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await settle();const changed=await evaluate('layerApp.app.proof_form().rendition');assert.notDeepEqual(changed,beforeRecipe);
     await invoke('undo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),beforeRecipe);
     await invoke('redo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
-    const arc=await evaluate(`(()=>{const d=layerApp.app.color_ui({type:'proof_dial',size:256,recipe:layerApp.app.proof_form().rendition}),r=document.querySelector('.proof-tone-pad').getBoundingClientRect();return[16,48].map(i=>{const p=d.arcs[0].path[i];return{x:r.x+p[0]*r.width/256,y:r.y+p[1]*r.height/256}})})()`);
+    const arc=await evaluate(`(()=>{const r=document.querySelector('.proof-tone-pad').getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:r.width,recipe:layerApp.app.proof_form().rendition});return[16,48].map(i=>{const p=d.arcs[0].path[i];return{x:r.x+p[0],y:r.y+p[1]}})})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:2,...arc[0]}]});
     await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:2,...arc[1]}]});
     await call('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await settle();
@@ -74,7 +104,7 @@ export async function checkHdr({call,evaluate,settle}) {
     const master=await save();assert.deepEqual(master.blobs,master0.blobs);assert.deepEqual(master.document.layers,master0.document.layers);
     mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
     await settle();await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
-    assert.ok(await evaluate(`document.querySelector('.proof-tone-pad').getContext('2d').getImageData(120,120,1,1).data[3]===255`),await evaluate(`document.querySelector('.proof-panel').innerText`));
+    assert.ok(await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad');return c.getContext('2d').getImageData(c.width/2,c.height/2,1,1).data[3]===255})()`),await evaluate(`document.querySelector('.proof-panel').innerText`));
     await click('Close','.proof-panel');
     await evaluate(`hdrTest.files.set('hdr-master.capy',hdrTest.last.slice())`);
     await open('hdr-master.capy');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);

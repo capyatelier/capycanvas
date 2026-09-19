@@ -408,5 +408,6 @@ records their supported HDR editing and delivery routes. Both reuse the GTK
 picker placement and shared Proof dial; displays currently show mapped SDR.
 Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
 open artwork. Neither host currently offers gain-map output or physical HDR
-presentation. The report distinguishes implemented controls from outstanding
-workspace projection and hardware qualification.
+presentation. Proof shares Color's Paint/Photo tab group and supports the normal
+docked, floating and drawer views. The report separates these tested workflows
+from outstanding hardware qualification and measured performance limits.

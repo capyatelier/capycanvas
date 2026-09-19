@@ -20,7 +20,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     build(form,finish);root.showModal();
   });
   const cancel=(footer,finish)=>footer.append(button("Cancel",()=>finish(null)));
-  const proof=createProof({app,dialog,element,button,icon,applyChange,wake});
+  const proof=createProof({app,dialog,element,button,icon,applyChange,wake,dispatch});
   async function newDocument() {
     const spec=app.editor_models(innerWidth,innerHeight).document_options,model=spec.creation;
     return dialog(spec.new_title,(form,finish)=>{
@@ -287,7 +287,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   document.addEventListener("visibilitychange",()=>{if(document.hidden)autosave();});
   // Exposed on the existing host controller for deterministic lifecycle tests.
   window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
-  return {handle,autosave,startRecovery,refresh(){
+  return {mountProof:proof.mount,handle,autosave,startRecovery,refresh(){
     proof.sync();
     const published=state();
     images.refresh(published);

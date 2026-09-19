@@ -643,7 +643,9 @@ function buildPanels() {
 }
 function contentPanel(id) {
   const panel=element("div",`panel ${id}-panel`);
-  if(id==="layers") {
+  if(id==="proof") {
+    panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
+  } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["adjustments","properties","stats"].includes(id)) {
@@ -1441,6 +1443,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker});
+  documents.mountProof(panels.get("proof"));
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js"), { onSettled: () => workspaceManager?.wake() }), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
   update(255);

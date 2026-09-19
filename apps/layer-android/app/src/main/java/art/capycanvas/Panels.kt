@@ -91,6 +91,10 @@ import kotlin.math.roundToInt
 }
 
 @Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
+    if(panel.getString("id")=="proof") {
+        ProofPanel(host,modifier,scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
+        return
+    }
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
     if (layers) {

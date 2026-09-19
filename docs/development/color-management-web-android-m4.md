@@ -88,9 +88,41 @@ including the original OpenEXR BSD notices and pinned upstream Zlib notice.
   precision or image dimensions to admit an oversized file. SDR limits are
   unchanged. Native Android's measured Float16 workload reaches 60 MP.
 
-This first integration uses a nonmodal Proof surface on Web/Android. Docked,
-floating and drawer projections are the next workspace integration milestone;
-the GTK dockability requirement is not claimed complete by this entry.
+The first integration was merged to `origin/main` at `32de7e6e`. Its initial
+nonmodal Proof surface is superseded by the workspace milestone below.
+
+### Proof workspace milestone — 2026-09-19
+
+Proof is now a regular workspace panel on Web and Android, sharing Color's tab
+group in Paint and Photo. The existing host controllers handle tab dragging,
+floating, cancellation, layout undo/redo and collapsed-column drawers. The
+reviewed GTK reveal action now lives in shared Rust and all three hosts use it:
+showing Proof preserves placement, selects its tab and opens its drawer without
+closing an already open drawer. This is workspace history, separate from the
+document's appearance history.
+
+Web retains one live control view while moving between dock and drawer mounts.
+The dial uses shared geometry at the available size, with device-pixel rendering,
+so compact tablet panels keep both arcs reachable. Android respects the outer
+drawer's scrolling and drains gesture cancellation when a view is removed.
+Both hosts refresh print controls after document undo and retain the current
+document profile selection. Hidden browser panels do not redraw their dial.
+
+`browser-docking-final-ready.log` and `tablet-browser-docking.log` cover the full
+HDR journey with pen tab dragging, workspace undo/redo, touch cancellation and
+idempotent drawer reveal. `android-docking-final.log` runs all three native
+HDR, print and workspace workflows with real fixture arguments. Earlier compact
+dial clipping and Android nested-scroll failures are fixed and superseded by
+these runs. Screenshots in the review bundle show docked and drawer controls.
+`browser-docking-final-proof.log` checks the SDR/print journey, and
+`browser-docking-package-offline.log` checks the rebuilt static package offline.
+`shared-proof-reveal-final.log` checks shared reveal behavior on GTK/Web/Android;
+`gtk-proof-reveal.log` validates the actual GTK action on hardware Vulkan.
+
+The large-document measurements below remain from the first milestone; they
+are not presented as new measurements of the docked controls. Neither this
+workspace change nor passing workflow tests remove the failed performance gates
+or missing hardware qualification listed below.
 
 ### Correctness evidence
 
@@ -109,7 +141,8 @@ of a pass. `browser-final-proof.log` and `browser-final-shared-trace.log` record
 SDR/print and full shared file/color workflows. The incomplete earlier shared
 run is superseded by the clean traced run.
 
-Shared checks: 482 layer-ui tests; 10 core HDR, 8 color HDR and 3 EXR tests;
+Shared checks: 482 layer-ui tests plus the new shared reveal regression;
+10 core HDR, 8 color HDR and 3 EXR tests;
 28 native-host tests pass, one platform-specific test ignored. Package and
 pointer unit tests pass. The packaged offline suite is run separately with
 `--package --package-offline`: it does not claim the old fullscreen/title-bar
@@ -177,7 +210,7 @@ unqualified. This report does not close the global phase-4 acceptance checklist.
 ### Reproduction
 
 ```sh
-LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --hdr
+LAYER_PROOF_WORKSPACE=1 LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --hdr
 LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --proof
 LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --shared-workflows
 LAYER_WASM_BINDGEN=/path/to/wasm-bindgen tools/performance/workspace-motion.sh web --package --package-offline
