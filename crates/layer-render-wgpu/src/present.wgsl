@@ -132,6 +132,12 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     return Vertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), uv);
 }
 fn display_color(rgb: vec3<f32>) -> vec3<f32> {
+    if VIEW_EXTENDED_SRGB {
+        // Extended sRGB mirrors the transfer below zero. Preserve signed gamut
+        // coordinates and above-white values for the browser's color transform.
+        let magnitude=abs(rgb);
+        return sign(rgb)*select(magnitude*12.92,1.055*pow(magnitude,vec3(1./2.4))-.055,magnitude>vec3(.0031308));
+    }
     return select(rgb * 12.92, 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, rgb > vec3<f32>(0.0031308));
 }
 // Some attachment conversions truncate instead of rounding to nearest. Select

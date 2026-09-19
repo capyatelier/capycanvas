@@ -1,8 +1,8 @@
 // headroom.x>1 requires a host-negotiated linear HDR surface and compositor headroom.
-// headroom.w selects uncompressed PQ delivery to the OS's tone mapper.
+// headroom.w selects uncompressed HDR delivery to the host's tone mapper.
 struct HdrView { rendition: vec4<f32>, headroom: vec4<f32> }
 @group(0) @binding(9) var<uniform> hdr_view: HdrView;
-fn compositor_hdr()->bool {return VIEW_PQ && hdr_view.headroom.w!=0.;}
+fn compositor_hdr()->bool {return (VIEW_PQ || VIEW_EXTENDED_SRGB) && hdr_view.headroom.w!=0.;}
 struct LocalToneGuide { size:vec4<u32>, samples:array<vec4<f32>> }
 @group(0) @binding(10) var<storage,read> local_tone:LocalToneGuide;
 fn local_tone_artwork(paint:vec4<f32>,position:vec2<f32>)->vec4<f32> {

@@ -405,7 +405,12 @@ manual availability is evidence of expectations, not a substitute for these chec
 
 Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
 records their supported HDR editing and delivery routes. Both reuse the GTK
-picker placement and shared Proof dial. Web displays mapped SDR. Android 15+
+picker placement and shared Proof dial. Web uses extended-range `rgba16float`
+WebGPU canvases when the browser accepts extended tone mapping and the display
+reports HDR support. Canvas and Navigator pass signed, above-white sRGB values
+to the browser; the browser and system choose display brightness. SDR/Print
+proofing uses the shared SDR rendition on standard canvases. Unsupported
+browsers/displays keep mapped SDR. Android 15+
 uses a floating-point BT.2100 PQ surface for HDR artwork with Proof Off when
 both the HDR10 display and the Vulkan format/encoding support it. Android chooses
 brightness and tone mapping; reported headroom does not precompress the artwork

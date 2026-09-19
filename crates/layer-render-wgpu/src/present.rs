@@ -164,16 +164,16 @@ impl ViewportPresenter {
         self.set_hdr_options(renderer, rendition, headroom, false)
     }
 
-    /// Submit the artwork's absolute PQ brightness to the OS tone mapper.
-    /// This bypasses the display-headroom shoulder, not the PQ encoding limits
-    /// (BT.2020, 0–10,000 cd/m²). Explicit print/gamut proof still takes precedence.
+    /// Submit HDR to the host's tone mapper without the display-headroom shoulder.
+    /// PQ is absolute and bounded to BT.2020 / 10,000 cd/m²; WebGPU extended sRGB
+    /// is SDR-relative. Explicit print/gamut proof still takes precedence.
     pub fn set_compositor_hdr_view(
         &mut self,
         renderer: &WgpuRasterizer,
         rendition: layer_core::color::hdr::SdrRendition,
     ) -> Result<(), GpuRasterError> {
-        if self.color != SdrSurfaceColor::Bt2100Pq {
-            return Err(GpuRasterError::Color("Compositor HDR requires a PQ surface".into()));
+        if !matches!(self.color, SdrSurfaceColor::Bt2100Pq | SdrSurfaceColor::ExtendedSrgb) {
+            return Err(GpuRasterError::Color("Compositor HDR requires a PQ or extended sRGB surface".into()));
         }
         self.set_hdr_options(renderer, Some(rendition), 1., true)
     }
@@ -377,6 +377,15 @@ impl ViewportPresenter {
         }
     }
 
+    /// Standalone Navigator with the same explicit encoding as its main canvas.
+    pub fn for_overview_surface(
+        renderer: &WgpuRasterizer,
+        format: wgpu::TextureFormat,
+        color: SdrSurfaceColor,
+    ) -> Result<Self, GpuRasterError> {
+        Ok(Self { standalone_overview: true, ..Self::for_surface(renderer, format, color)? })
+    }
+
     fn with_device(
         device: &crate::PipelineDevice,
         format: wgpu::TextureFormat,
@@ -502,10 +511,11 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
+                    color == SdrSurfaceColor::ExtendedSrgb,
                     crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),

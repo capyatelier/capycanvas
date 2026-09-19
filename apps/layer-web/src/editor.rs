@@ -230,18 +230,21 @@ impl WebApp {
                 slot.canvas.set_width(width);
                 slot.canvas.set_height(height);
                 surface.configure(gpu.renderer.device(), &config);
-                let presenter = ViewportPresenter::for_overviews(&gpu.renderer, config.format);
+                let presenter = ViewportPresenter::for_overview_surface(&gpu.renderer, config.format, gpu.color).map_err(js)?;
                 slot.gpu = Some((surface, presenter, config, space));
             }
             let (surface, presenter, config, presented_space) = slot.gpu.as_mut().unwrap();
             // Retained DOM canvases can outlive document/color adoption. Their
             // display transform must follow the new renderer, including undo.
-            if *presented_space != space {
-                *presenter = ViewportPresenter::for_overviews(&gpu.renderer, config.format);
+            let output_changed = config.format != gpu.config.format || config.color_space != gpu.config.color_space;
+            if *presented_space != space || output_changed {
+                config.format = gpu.config.format;
+                config.color_space = gpu.config.color_space;
+                *presenter = ViewportPresenter::for_overview_surface(&gpu.renderer, config.format, gpu.color).map_err(js)?;
                 *presented_space = space;
             }
             presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
-            if config.width != width || config.height != height {
+            if output_changed || config.width != width || config.height != height {
                 config.width = width;
                 config.height = height;
                 slot.canvas.set_width(width);

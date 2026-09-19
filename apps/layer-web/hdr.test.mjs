@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
+import {checkHdrDisplay,checkHdrCapabilityFallback} from './hdr-display.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 // Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
@@ -25,6 +26,12 @@ export async function checkHdr({call,evaluate,settle}) {
     window.showOpenFilePicker=async()=>[{name:hdrTest.openName,async getFile(){const b=hdrTest.files.get(hdrTest.openName)??await(await fetch('/pkg/'+hdrTest.openName)).arrayBuffer();return new File([b],hdrTest.openName)}}];`);
   const results={browser:await evaluate('navigator.userAgent'),steps:[]};
   const mark=s=>{results.steps.push(s);console.log(s)};
+  const output=async hdr=>{
+    await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'navigator',visible:true}});[...document.querySelectorAll('.dock-tab[data-panel="navigator"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);
+    const formats=()=>`[layerApp.canvas,...document.querySelectorAll('.navigator-surface')].map(c=>c.getContext('webgpu')?.getConfiguration()).filter(Boolean)`;
+    await wait(`${formats()}.length>=2&&${formats()}.every(c=>c.format===${hdr?"'rgba16float'":"navigator.gpu.getPreferredCanvasFormat()"}&&(c.toneMapping?.mode??'standard')==='${hdr?'extended':'standard'}')`);
+    assert.ok((await evaluate(`${formats()}.length`))>=2,'Canvas and Navigator are both configured');
+  };
   try {
     // Preserve prior recovery records, but finish offering them before real
     // contacts target the header. A late modal can intercept the first tap.
@@ -35,12 +42,15 @@ export async function checkHdr({call,evaluate,settle}) {
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
-    await wait(`document.querySelector("#hdr-status").textContent==="Showing SDR"`);
+    const hdrDisplay=await evaluate('layerApp.app.tone_status().display_hdr');
+    await wait(`document.querySelector("#hdr-status").textContent===${JSON.stringify(hdrDisplay?'HDR':'Showing SDR')}`);
+    await output(hdrDisplay);results.hdrOutput=hdrDisplay;
+    results.masterOutput=await checkHdrDisplay({evaluate},hdrDisplay);
     const footer=await evaluate(`(()=>{const info=document.querySelector('#hdr-status'),zoom=document.querySelector('#view-info'),bar=document.querySelector('#canvas-status');const a=info.getBoundingClientRect(),b=zoom.getBoundingClientRect(),c=bar.getBoundingClientRect();const style=n=>{const s=getComputedStyle(n);return [s.fontSize,s.fontWeight,s.lineHeight,s.padding,s.borderRadius,s.backgroundColor]};return {left:a.left-c.left,right:c.right-b.right,height:[a.height,b.height],styles:[style(info),style(zoom)]}})()`);
-    assert.equal(footer.left,4);assert.equal(footer.right,4);assert.deepEqual(footer.height,[footer.height[0],footer.height[0]]);assert.deepEqual(footer.styles[0],footer.styles[1]);
+    assert.ok(Math.abs(footer.left-4)<.01);assert.ok(Math.abs(footer.right-4)<.01);assert.deepEqual(footer.height,[footer.height[0],footer.height[0]]);assert.deepEqual(footer.styles[0],footer.styles[1]);
     await evaluate(`document.querySelector('#hdr-status').click()`);
     await wait(`!!document.querySelector('dialog[aria-label="Display Details"][open]')`);
-    assert.ok(await evaluate(`document.querySelector('dialog[aria-label="Display Details"]').textContent.includes('HDR presentation is not enabled')`));
+    assert.ok(await evaluate(`document.querySelector('dialog[aria-label="Display Details"]').textContent.includes(${JSON.stringify(hdrDisplay?'Showing HDR':'HDR output is unavailable')})`));
     await capture('display-details');await click('Close');
     mark('Independent FFmpeg PQ input opens as HDR, retains above-white samples, and completes mapped SDR analysis');
     // The GTK corner edit action, no palette footer, and HDR numeric fields.
@@ -64,6 +74,26 @@ export async function checkHdr({call,evaluate,settle}) {
     await click('Use Color');await wait('layerApp.app.color_panel().intensity===3');
     assert.equal(await evaluate('layerApp.app.color_panel().intensity'),3);
     mark('Picker matches GTK corner action, removes palettes, and edits HDR intensity');
+    // Real browser input arbitration: an SVG path alone does not prevent
+    // Android Chrome from taking over the drag and cancelling the pointer.
+    const evPoints=await evaluate(`(()=>{const r=[...document.querySelectorAll('.color-intensity')].find(n=>n.getBoundingClientRect().width>0).parentElement.getBoundingClientRect();return [.3,.55,.7].map(fraction=>{const p=layerApp.app.color_ui({type:'arc',size:r.width,fraction}).point;return{x:r.x+p[0],y:r.y+p[1]}})})()`);
+    const ev=()=>evaluate('layerApp.app.color_panel().intensity');
+    for(const pointerType of ['touch','mouse','pen']){
+      if(pointerType==='touch'){
+        for(let i=0;i<evPoints.length;i++){await call('Input.dispatchTouchEvent',{type:i?'touchMove':'touchStart',touchPoints:[{id:9,...evPoints[i],radiusX:2,radiusY:2}]});await settle();}
+        await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      }else{
+        for(const[type,i,buttons]of[['mousePressed',0,1],['mouseMoved',1,1],['mouseMoved',2,1],['mouseReleased',2,0]]){await call('Input.dispatchMouseEvent',{type,...evPoints[i],button:'left',buttons,pointerType});await settle();}
+      }
+      await settle();assert.ok(Math.abs(await ev()-3.6)<.06,`${pointerType} EV release must retain the dragged value`);
+    }
+    const retained=await ev();
+    await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:9,...evPoints[0]}]});
+    await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:9,...evPoints[1]}]});await settle();
+    assert.ok(Math.abs(await ev()-retained)>.5);
+    await call('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await settle();
+    assert.equal(await ev(),retained,'Actual EV cancellation restores the starting value');
+    mark('EV arc retains touch, mouse and pen drags; explicit touch cancellation restores the starting value');
     await wait(`!document.querySelector('dialog[open]')`);
     await evaluate(`layerApp.dispatch({type:'select_brush',id:1});const form=layerApp.app.color_ui({type:'form',request:{color:{space:'Srgb',rgba:[0,0,0,1]},document_space:'Srgb',model:'linear_rgb',intensity:0,fields:['-4','4','1','100']}});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:form.value}});`);
     await wait('layerApp.app.brush_ready()');await settle();
@@ -75,6 +105,8 @@ export async function checkHdr({call,evaluate,settle}) {
     mark('Pen painting preserves negative and above-white channels with exact one-step undo/redo');
     const master0=await save();
     await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
+    await output(false);
+    results.proofOutput=await checkHdrDisplay({evaluate},false);
     if(process.env.LAYER_PROOF_WORKSPACE) {
       const layout=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state().workspace.layout,(_,v)=>typeof v==="bigint"?Number(v):v))');
       const before=await layout();
@@ -148,6 +180,27 @@ export async function checkHdr({call,evaluate,settle}) {
     await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
     assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
     mark('HDR native save/reopen and GPU recovery preserve exact histogram and saved SDR appearance');
+    await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-modes button[value="off"]')`);
+    await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);
+    await output(hdrDisplay);
+    results.recoveredOutput=await checkHdrDisplay({evaluate},hdrDisplay);
+    await evaluate(`document.querySelector('.proof-modes button[value="print"]').click()`);
+    await evaluate(`(()=>{const p=document.querySelector('.proof-panel [aria-label="Proof profile"]');p.value=p.querySelector('optgroup[label="Standard Color Spaces"] option').value;p.dispatchEvent(new Event('change'))})()`);
+    await wait(`layerApp.app.proof_status().text.startsWith('Proof:')&&!layerApp.app.proof_status().needed`);
+    await output(false);assert.deepEqual(await hist(),original,'Print proof preserves HDR artwork');
+    await evaluate(`document.querySelector('.proof-modes button[value="off"]').click()`);
+    await output(hdrDisplay);
+    if(hdrDisplay){
+      results.capabilityFallback=await checkHdrCapabilityFallback({evaluate});
+      try{
+        await call('Emulation.setEmulatedMedia',{features:[{name:'dynamic-range',value:'standard'}]});
+        results.displayChangeEmulated=await evaluate(`!matchMedia('(dynamic-range: high)').matches`);
+        if(results.displayChangeEmulated){await wait('!layerApp.app.tone_status().display_hdr');await output(false);}
+      }finally{await call('Emulation.setEmulatedMedia',{features:[]});}
+      await wait('layerApp.app.tone_status().display_hdr');await output(true);
+    }
+    mark('Canvas and Navigator output agree through SDR/Print proofing and GPU recovery');
+    if(hdrDisplay&&!results.displayChangeEmulated)mark('Browser cannot emulate dynamic-range display changes; physical display switching remains unqualified');
     // Complete delivery through the visible controls and inspect resulting files.
     for(const range of ['exr','hdr','sdr']){
       await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);

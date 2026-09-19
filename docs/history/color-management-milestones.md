@@ -342,3 +342,19 @@ actual tablet display switching/recovery tests validate the signal route. The
 user accepted the tablet's HDR appearance. Final cleanup removes unused
 headroom feedback, simulation plumbing and verbose footer details; the status
 reads **HDR**. Color controls and layer thumbnails remain SDR previews. This is not whole phase-4 signoff.
+
+## Web HDR output and EV drag follow-up — 2026-09-19
+
+The [Web/Android integration follow-up](../development/color-management-web-android-m4.md#web-hdr-display-and-ev-drag-follow-up--2026-09-19)
+replaces Web's mapped-SDR-only display route with qualified extended-range WebGPU
+canvas and Navigator output. Browser/display capability checks retain mapped SDR
+on unsupported hosts. Explicit SDR and Print proofing keep their existing shared
+mapping. Signed extended-sRGB encoding reuses the shared Rust presenter, with
+numerical GPU checks alongside the unchanged Android PQ route.
+
+The browser EV arc no longer snaps back when Chrome takes over a touch drag:
+touch arbitration is disabled on its SVG viewport. Actual cancellation still
+restores the starting value. Review evidence covers mouse/touch/pen, submitted
+HDR/SDR pixels, proof switching, save/reopen, delivery and GPU recovery. Color
+controls, layer thumbnails and export comparisons remain SDR previews; this does
+not close whole phase 4 or qualify physical screen luminance.

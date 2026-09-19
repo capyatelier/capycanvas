@@ -2,7 +2,7 @@
 use layer_core::color::RgbSpace;
 
 /// Surface encodings, independent of document storage. Extended linear sRGB
-/// carries wide-gamut SDR; scRGB and PQ additionally support negotiated HDR.
+/// carries wide-gamut SDR; scRGB, PQ and extended sRGB also support HDR.
 /// Surface selection never changes the document's reference white.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SdrSurfaceColor {
@@ -10,6 +10,8 @@ pub enum SdrSurfaceColor {
     Srgb,
     DisplayP3,
     ExtendedLinearSrgb,
+    /// WebGPU extended-range canvas: signed sRGB transfer, SDR-relative white.
+    ExtendedSrgb,
     /// Wayland Windows-scRGB: linear sRGB with RGB 1 = 80 cd/m².
     WindowsScrgb,
     /// Full-range BT.2020 PQ; RGB 1 in the artwork remains 203 cd/m².
@@ -20,6 +22,7 @@ impl SdrSurfaceColor {
         match self {
             Self::Srgb => wgpu::SurfaceColorSpace::Srgb,
             Self::DisplayP3 => wgpu::SurfaceColorSpace::DisplayP3,
+            Self::ExtendedSrgb => wgpu::SurfaceColorSpace::ExtendedSrgb,
             Self::ExtendedLinearSrgb | Self::WindowsScrgb => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
             Self::Bt2100Pq => wgpu::SurfaceColorSpace::Bt2100Pq,
         }
@@ -35,16 +38,16 @@ impl SdrSurfaceColor {
         self,
         format: wgpu::TextureFormat,
     ) -> Result<bool, crate::GpuRasterError> {
-        if matches!(self, Self::ExtendedLinearSrgb | Self::WindowsScrgb | Self::Bt2100Pq) {
+        if matches!(self, Self::ExtendedLinearSrgb | Self::ExtendedSrgb | Self::WindowsScrgb | Self::Bt2100Pq) {
             if !matches!(
                 format,
                 wgpu::TextureFormat::Rgba16Float | wgpu::TextureFormat::Rgba32Float
             ) {
                 return Err(crate::GpuRasterError::Color(
-                    "Extended linear viewing requires a floating-point surface".into(),
+                    "Extended viewing requires a floating-point surface".into(),
                 ));
             }
-            Ok(false)
+            Ok(self == Self::ExtendedSrgb)
         } else {
             Ok(!format.is_srgb())
         }
