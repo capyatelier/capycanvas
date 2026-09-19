@@ -285,6 +285,16 @@ node apps/layer-linux/package.mjs
 dist/capycanvas-linux/bin/capycanvas
 ```
 
+Normal packaging also builds pinned GTK 4.22.4 with the null-surface tablet-pad
+startup fix. Meson, Ninja, GTK development dependencies and `glslc` are required.
+The cache defaults to `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it).
+The package launcher selects `lib/capycanvas/gtk/libgtk-4.so.1` before executing
+`bin/capycanvas-bin`; use `bin/capycanvas` for both ordinary and file launches.
+No system GTK is replaced. Corresponding source, patch, LGPL license, a standalone
+rebuild recipe and checksums travel in `share/doc/capycanvas-gtk`. Rebuild from a
+relocated package with the command in that manifest. The build uses system GTK
+dependencies, so this remains a native bundle for compatible distributions.
+
 The codec recipe verifies source hashes and builds libheif 1.23.4 with
 libde265 1.1.3 for HEIF, and libavif 1.4.2 with dav1d 1.5.3 for AVIF. Bridge ABI 2
 supports AVIF sequences and applies clean aperture/rotation/mirroring while
@@ -310,7 +320,7 @@ The launcher accepts local
 file lists (`%F`) and declares the currently decoded image formats. An installer
 must register the staged desktop entry and refresh its desktop/MIME databases;
 staging does not change a user's default file associations.
-GTK/libadwaita remain system dependencies. The script
+Libadwaita and GTK's dependencies remain system dependencies. The script
 does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 
@@ -328,7 +338,7 @@ python3 tools/validation/gtk_package_photo.py \
 
 This uses a private compositor, isolated settings and the existing
 `LAYER_UI_CAPTURE` diagnostic, which now also captures documents opened by file
-launch. It verifies loaded codec paths and records captures/build hashes. Its
+launch. It verifies loaded GTK/codec paths and records captures/build hashes. Its
 four-second capture delay is not a decode-performance measurement.
 
 ## Validate

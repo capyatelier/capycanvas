@@ -139,8 +139,13 @@ versions and registry checksums. [deny.toml](deny.toml) enforces the reviewed Ru
 including build/dev dependencies and non-Linux targets. An allowed license is
 not permission to omit its copyright notices or other distribution conditions.
 
-The native frontend uses separately installed GTK, libadwaita and their system
-dependencies. They are not relicensed to Apache-2.0. In particular,
+The native frontend uses GTK, libadwaita and their system dependencies. Normal
+Linux packages include a replaceable GTK 4.22.4 library with the null-surface
+tablet-pad startup guard. Its LGPL-2.1-or-later license, complete pinned upstream
+source, local patch, build recipe and hash manifest are shipped under
+`share/doc/capycanvas-gtk`; the library is in `lib/capycanvas/gtk`. Libadwaita
+and GTK's dependencies remain separately installed. They are not relicensed to
+Apache-2.0. In particular,
 [GTK](https://www.gtk.org/docs/architecture/) and
 [libadwaita](https://gitlab.gnome.org/GNOME/libadwaita/-/blob/main/COPYING)
 have LGPL obligations; using their public APIs is distinct from copying their

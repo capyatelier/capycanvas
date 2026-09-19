@@ -571,24 +571,29 @@ mod wheel {
                 // Retain the managed guide at display DPI; ordinary color
                 // changes and panel motion only sample the cached texture.
                 let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
-                let logical_pixel = size / side as f32;
                 let shape = state.wheel_shape();
                 let space = state.rgb_space();
                 {
                     let mut cache = self.ring.borrow_mut();
                     if cache.as_ref().is_none_or(|(s, p, c, v, _)| *s != side || *p != shape || *c != space || *v != view) {
-                        let mut pixels = vec![0; side as usize * side as usize * 4];
-                        for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
-                            let point = [
-                                ((i as u32 % side) as f32 + 0.5) * logical_pixel,
-                                ((i as u32 / side) as f32 + 0.5) * logical_pixel,
-                            ];
+                        // Quantizing P3 to eight bits before GTK converts back
+                        // to sRGB amplifies dark-channel error at gamut edges.
+                        // Keep this small display derivative in half precision;
+                        // the cached texture and document precision are separate.
+                        let mut pixels = Vec::with_capacity(side as usize * side as usize * 8);
+                        let logical_pixel = size / side as f32;
+                        for i in 0..side * side {
+                            let point = [((i % side) as f32 + 0.5) * logical_pixel,
+                                         ((i / side) as f32 + 0.5) * logical_pixel];
                             let hue = state.wheel_hue_at(&geometry, point);
                             let rgb = state.wheel_hue_color_in(hue, view.space());
-                            for c in 0..3 { p[c] = (rgb[c] * 255.).round() as u8; }
-                            p[3] = 255;
+                            for value in rgb.into_iter().chain([1.]) {
+                                pixels.extend_from_slice(&layer_core::color::f16::from_f32(value).to_bits().to_ne_bytes());
+                            }
                         }
-                        *cache = Some((side, shape, space, view, view.rgba8([side, side], pixels)));
+                        let texture = view.texture([side, side], gtk::gdk::MemoryFormat::R16g16b16a16Float,
+                            side as usize * 8, pixels);
+                        *cache = Some((side, shape, space, view, texture));
                     }
                     snapshot.append_texture(&cache.as_ref().unwrap().4, &bounds);
                 }

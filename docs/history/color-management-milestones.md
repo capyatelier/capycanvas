@@ -273,3 +273,14 @@ workstation budgets. GTK mapped-SDR operation is qualified within that envelope.
 Physical HDR display/monitor moves, constrained/mobile devices and other hosts'
 HDR integration remain outstanding; this is not a cross-platform phase-4 signoff.
 User feature feedback precedes any push to origin/master.
+
+## Phase 4 GTK follow-up qualification — 2026-09-19
+
+[GTK follow-up report](../development/color-management-m4-gtk-qualification.md)
+records the normal-package startup fix, unchanged-tolerance SDR hue correction,
+sustained local-tone presentation measurements, full 60 MP gain-map delivery,
+concurrent process/driver/staging memory, guide limits and animation assessment.
+The feature branch and runnable build are for review before merging. Existing
+JPEG numerical failures and missing physical-input/mixed-monitor evidence remain
+explicit; neither this entry nor software texture tests close whole phase 4.
+Float32 document storage remains outside scope.

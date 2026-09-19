@@ -153,6 +153,38 @@ mod tests {
     #[cfg(all(feature = "heif", target_os = "linux"))]
     #[test]
     #[ignore = "requires pinned native HDR codec bundle"]
+    fn avif_grid_preserves_partial_cells_alpha_and_gain_samples() {
+        let extent = [1031, 1037];
+        let cancel = AtomicBool::new(false);
+        let pixel = |x: u32, y: u32| {
+            let a = 0.25 + 0.75 * x as f32 / 1030.;
+            let v = if x < 516 { 0.125 } else { 4. };
+            [v*a, (0.1+y as f32/1036.)*a, 0.2*a, a]
+        };
+        let read = |y, row: &mut [[f32; 4]]| { for (x,p) in row.iter_mut().enumerate() { *p = pixel(x as u32,y); } Ok(()) };
+        let mut encoded = Vec::new();
+        write_gainmap_rows(&mut encoded, extent, RgbSpace::Srgb, SdrRendition::default(),
+            GainMapFormat::Avif, 90, Some(layer_core::ImageResolution::ppi(300)), None, false, &cancel, read).unwrap();
+        let source = read_photo(std::io::Cursor::new(encoded), Default::default()).unwrap();
+        assert_eq!(source.extent, extent);
+        assert_eq!(source.interpretation.depth, SampleDepth::F16);
+        assert!(source.resolution.is_some());
+        let mut rows = source.rows();
+        let mut row = vec![0; source.row_bytes()];
+        for y in [0, 517, 518, 519, 520, 1036] {
+            rows.read(y, &mut row).unwrap();
+            for x in [0, 514, 515, 516, 517, 1030] {
+                let at = x as usize*8;
+                let p = layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| u16::from_le_bytes([row[at+c*2], row[at+c*2+1]]))).unwrap();
+                let expected = pixel(x,y);
+                for c in 0..3 { assert!((p[c]-expected[c]/expected[3]).abs() < 0.03+0.04*expected[c]/expected[3], "grid ({x},{y}) channel {c}: {p:?} != {expected:?}"); }
+                assert!((p[3]-expected[3]).abs() < 0.001);
+            }
+        }
+    }
+    #[cfg(all(feature = "heif", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires pinned native HDR codec bundle"]
     fn unified_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
         let cancel = AtomicBool::new(false);
         for format in [GainMapFormat::Jpeg, GainMapFormat::Avif] {
