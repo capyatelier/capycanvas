@@ -149,53 +149,56 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
         for i in 0..edge {
             let x = (i as f32 + 0.5) / edge as f32 * 2. - 1.;
             let y = 1. - (j as f32 + 0.5) / edge as f32 * 2.;
-            let radius2 = (x * x + y * y).min(1.);
-            let dome = (1. - radius2).sqrt();
-            // Convex refraction magnifies the center and gently twists the
-            // flowing folds. Screen-space up still controls contrast.
-            let lens = 1. - 0.36 * (1. - radius2);
-            let px = x * lens + 0.055 * y * (1. - radius2);
-            let py = y * lens - 0.055 * x * (1. - radius2);
-            let right = (px + 1.) * 0.5;
-            let up = (y + 1.) * 0.5;
-            // One continuous glass fold family makes the axes legible at
-            // small panel sizes. Spacing tightens to the right, instead of
-            // adding unrelated high-frequency noise over the broad folds.
-            let flow = right
-                + 0.23 * (2.7 * py - 0.35).sin() * (1. - 0.25 * right)
-                + 0.06 * (4.5 * py + 2. * right).sin();
-            let phase = std::f32::consts::TAU * (0.4 * flow + 3.6 * flow.powi(3))
-                + 0.35 * (3. * py + right).sin();
-            let wave = 0.7 * phase.sin() + 0.16 * (2. * phase + 0.3).sin();
-            let reflection = (phase - 0.7).cos().max(0.).powf(4. + 10. * right);
-            // Keep the internal reflection faint so the folds stay clear.
-            let inner_reflection = (phase + 0.5).cos().max(0.).powi(2);
-            // Bound the amplitude separately: the bottom visibly converges
-            // to gray even where a reflection would otherwise stay bright.
-            let contrast = 0.49 * up.powf(1.05);
-            let v = 0.5
-                + contrast
-                    * ((1.1 + 1.6 * up)
-                        * (0.8 * wave + 0.55 * reflection + 0.07 * inner_reflection - 0.17))
-                        .tanh();
-            let tint = 0.085 * up * (reflection - 0.5 * wave);
-            // A restrained, narrow glint and faint rim retain the lens shape
-            // without a broad hazy reflection. Keep the lower interior gray.
-            let light = (-0.5 * x + 0.45 * y + 0.73993 * dome).max(0.);
-            let glint = 0.10 * light.powi(110);
-            let rim = (1. - dome).powi(3);
-            let rim_light = 0.07 + 0.18 * (-0.55 * x + 0.83 * y).max(0.);
-            let shadow = 0.035 * (0.65 * x - 0.76 * y).max(0.) * radius2;
-            let rgb = [v - 0.7 * tint, v + 0.05 * tint, v + tint];
-            let rgb: [u8; 3] = std::array::from_fn(|c| {
-                let lit = rgb[c] * (1. - shadow) + glint * (1. - rgb[c]);
-                let lit = lit * (1. - rim * 0.2) + rim * rim_light * (0.88 + 0.06 * c as f32);
-                (lit.clamp(0., 1.) * 255.).round() as u8
-            });
+            // Integrate the tightly bent perimeter over a pixel footprint.
+            // This happens only during the host's one-time texture generation.
+            let rgb = if x * x + y * y > 0.8 {
+                let d = 0.5 / edge as f32;
+                let samples = [(-d, -d), (d, -d), (-d, d), (d, d)]
+                    .map(|(dx, dy)| sdr_glass_sample(x + dx, y + dy));
+                std::array::from_fn(|c| samples.iter().map(|s| s[c]).sum::<f32>() * 0.25)
+            } else {
+                sdr_glass_sample(x, y)
+            };
+            let rgb = rgb.map(|c| (c.clamp(0., 1.) * 255.).round() as u8);
             bytes.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         }
     }
     bytes
+}
+
+fn sdr_glass_sample(x: f32, y: f32) -> [f32; 3] {
+    let radius2 = (x * x + y * y).min(1.);
+    let dome = (1. - radius2).sqrt();
+    // Orthographic ray through an air/glass hemisphere (IOR 1.52) to its
+    // base plane. Unlike a polynomial bulge, the spherical normal turns
+    // sharply at the silhouette. Amplify that edge bend for this small guide;
+    // this is an illustration, not a physically calibrated glass renderer.
+    let eta = 1. / 1.52;
+    let bend = (1. - eta * eta * radius2).sqrt() - eta * dome;
+    let snell = eta / (eta + bend * dome);
+    let lens = eta + 2.8 * (snell - eta);
+    let px = x * lens + 0.04 * y * (1. - radius2);
+    let py = y * lens - 0.04 * x * (1. - radius2);
+    let right = (px + 1.) * 0.5;
+    let up = ((y + 1.) * 0.5).clamp(0., 1.);
+    // Keep the same flowing fold family, with finer texture to the right.
+    let flow = right
+        + 0.23 * (2.7 * py - 0.35).sin() * (1. - 0.25 * right)
+        + 0.06 * (4.5 * py + 2. * right).sin();
+    let phase = std::f32::consts::TAU * (0.4 * flow + 3.6 * flow.powi(3))
+        + 0.35 * (3. * py + right).sin();
+    let wave = 0.7 * phase.sin() + 0.16 * (2. * phase + 0.3).sin();
+    let reflection = (phase - 0.7).cos().max(0.).powf(4. + 10. * right.clamp(0., 1.));
+    // Clear folds without a broad white reflection or surface glow. Contrast
+    // follows screen-space up so the bottom still fades toward neutral gray.
+    let contrast = 0.49 * up.powf(0.8);
+    let v = 0.5 + contrast * ((2.4 + 1.8 * up) * (0.8 * wave + 0.55 * reflection - 0.17)).tanh();
+    let tint = 0.025 * up * (reflection - 0.5 * wave);
+    // A narrow, angle-dependent rim defines the dome without a drop shadow.
+    // Let it dominate at the silhouette, where compressed folds are subpixel.
+    let rim = (1. - dome).powi(3);
+    let rim_light = 0.12 + 0.70 * (-0.55 * x + 0.83 * y).clamp(0., 1.).powi(6);
+    [v - 0.7 * tint, v + 0.05 * tint, v + tint].map(|c| c * (1. - rim) + rim_light * rim)
 }
 pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};

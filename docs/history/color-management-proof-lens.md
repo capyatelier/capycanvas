@@ -2,8 +2,8 @@
 
 Follow-up to the [Proof control polish](color-management-proof-polish.md).
 
-The glass field has a gentle convex refraction, a small fluid twist, a faint
-off-axis glint and a restrained rim. It has no drop shadow. Pattern
+The glass field has pronounced spherical refraction, a small fluid twist and a
+narrow grazing rim. It has no surface glow or drop shadow. Pattern
 spacing still tightens to the right; contrast follows the original screen-space
 vertical coordinate, so the bottom remains the low-contrast direction. This is
 an illustration, independent of the document's tone mapping.
@@ -81,3 +81,35 @@ passed again: one shared texture, 600 changed-value updates, no unchanged arc
 redraws. GTK screenshots were visually inspected. Evidence is under
 `artifacts/color-m4/proof-lens-quiet/`; the earlier pointer and 60 MP results above
 were not rerun for this illustration-only adjustment.
+
+## Spherical edge refraction
+
+The next revision replaces the polynomial bulge with a hemisphere ray mapping.
+The research reference is [PBRT's specular transmission chapter](https://www.pbr-book.org/4ed/Reflection_Models/Specular_Reflection_and_Transmission):
+Snell's law controls the ray direction, while reflectance depends on the angle
+at the surface. Its glass IOR range is 1.5–1.6. [Apple's Liquid Glass design
+discussion](https://developer.apple.com/videos/play/wwdc2025/219/) emphasizes
+lensing that bends and concentrates light. The [POV-Ray sphere reference](https://news.povray.org/povray.binaries.images/thread/%3C3D695DF1.8040507%40faricy.net%3E/)
+was inspected for the tightly curved image near its perimeter. No reference
+image is used as an application asset.
+
+For this static guide, an orthographic ray enters a hemisphere at IOR 1.52 and
+intersects its base plane. The surface normal turns sharply near the silhouette;
+we amplify the resulting edge displacement by 2.8 to make that curvature visible
+at panel size. A narrow angle-dependent rim blends toward reflection at the
+silhouette. This is an art-directed illustration, not a complete physical glass
+simulation. It keeps the smooth-left/fine-right and gray-below/contrast-above cues.
+
+The broad inner reflection and off-axis glint have been removed. Fold transitions
+are crisper, with less tint. Four samples per pixel in the tightly compressed
+perimeter reduce aliasing. All of this is baked once by the existing bounded
+worker into the same shared 512² texture; it adds no work during dragging and
+does not change the tone-mapping algorithm or HDR image data.
+
+Validation: release and native-test builds passed. The GTK hit-region/cache check
+passed at 128, 160, 226, 320 and 400 logical pixels, with one texture build,
+600 changed-value updates and no unchanged arc redraws. One-time generation took
+34.15 ms on the background worker. Native screenshots at 128, 226 and 400 pixels
+were visually inspected, including the compressed rim. Evidence is under
+`artifacts/color-m4/proof-dome/`. The earlier real-pointer and 60 MP checks were
+not repeated; this revision changes only the cached illustration.
