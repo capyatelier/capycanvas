@@ -89,7 +89,17 @@ function Select-Filter([string]$Id,[string]$Label){
     Select-Panel 'properties'
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'properties'}).Count -gt 0} 'Properties did not appear'
 }
-function Preview-Hash([string]$Id){
+function Has-Tint($Image){
+    $count=0
+    for($y=0;$y -lt $Image.Height;$y++){for($x=0;$x -lt $Image.Width;$x++){
+        $pixel=$Image.GetPixel($x,$y)
+        if($pixel.G-$pixel.R -gt 20 -and $pixel.B-$pixel.R -gt 20 -and [Math]::Abs($pixel.G-$pixel.B) -lt 10){
+            $count++;if($count -ge 100){return $true}
+        }
+    }}
+    $false
+}
+function Preview-Hash([string]$Id,[switch]$Tinted){
     $image=Control ('filter-preview-'+$Id)
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
     $r=$image.Current.BoundingRectangle
@@ -103,7 +113,7 @@ function Preview-Hash([string]$Id){
         $area=[Drawing.Rectangle]::new([int]$r.X-$window.left+2,[int]$r.Y-$window.top+2,[int]$r.Width-4,[int]$r.Height-4)
         $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
         $stream=[IO.MemoryStream]::new();$sha=[Security.Cryptography.SHA256]::Create()
-        try{$crop.Save($stream,[Drawing.Imaging.ImageFormat]::Png);[Convert]::ToBase64String($sha.ComputeHash($stream.ToArray()))}
+        try{if($Tinted -and !(Has-Tint $crop)){return ''};$crop.Save($stream,[Drawing.Imaging.ImageFormat]::Png);[Convert]::ToBase64String($sha.ComputeHash($stream.ToArray()))}
         finally{$crop.Dispose();$stream.Dispose();$sha.Dispose()}
     }finally{$bitmap.Dispose()}
 }
@@ -199,8 +209,9 @@ try {
     Select-Panel 'adjustments'
     Edit 'filter-search' 'Tinted Tent'
     Wait-Until {(Model).state.filter_picker.search -eq 'Tinted Tent' -and $null -ne (Find 'filter-example:tent_blur')} 'New filter metadata did not refresh retained search'
-    Wait-Until {(Preview-Hash 'example:tent_blur') -ne ''} 'Replacement preview did not render' 30
-    if((Preview-Hash 'example:tent_blur') -eq $initialPreview){throw 'Replacement did not change the rendered preview'}
+    # Ready can still describe the retained bitmap before the replacement is
+    # composed. Require pixels from the new shader, with the same time bound.
+    Wait-Until {$hash=Preview-Hash 'example:tent_blur' -Tinted;$hash -ne '' -and $hash -ne $initialPreview} 'Replacement preview did not render its changed shader' 30
     Capture 'replacement-picker'
     if((Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash -ne $beforeBinary){throw 'Executable changed during runtime package checks'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved

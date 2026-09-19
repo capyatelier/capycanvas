@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 public static class CapyDocumentControls {
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
+    [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
@@ -67,6 +68,24 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8) {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do {if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Document review exited unexpectedly'};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
+}
+function Request-Close([switch]$WithPreferences) {
+    # Shared completion precedes native dialog teardown. RequestClose ignores
+    # window close while a document dialog is open; wait for native readiness.
+    # The Preferences case intentionally verifies committing its focused draft.
+    if(!$WithPreferences){
+        Wait-Until {
+            $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+            $canvas -and $canvas.Current.IsEnabled
+        } 'Native document dialog did not finish closing'
+    }
+    # Send to the known application owner and retain its process guard.
+    $handle=[IntPtr]$root.Current.NativeWindowHandle
+    $owner=[uint32]0;[CapyDocumentControls]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+    if($owner -ne $review.Id){throw 'Close target does not belong to this review'}
+    Wait-Until {[CapyDocumentControls]::IsWindowEnabled($handle)} 'Native owner remained disabled after picker completion'
+    if(![CapyDocumentControls]::PostMessage($handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Native owner rejected the close request'}
 }
 function Wait-Closed([string]$Message) {
     # Preserve the five-second bound and reject silent native teardown faults.
@@ -235,7 +254,7 @@ function Start-RecoveryReview([string]$label){
     # GPU readiness can precede the asynchronous restoration of saved Zen/layout.
     Wait-Until {$model=Model;$model.brush_ready -and $model.windows_workspace.ready} 'GPU save review did not restore its workspace' 60
     if((Model).state.workspace.zen_mode){
-        Invoke-Control 'Zen mode'
+        (Find-Id 'zen-button').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Wait-Until {!(Model).state.workspace.zen_mode -and !(Model).chrome_hidden} 'Reopened review could not leave Zen'
     }
     Wait-Until {
@@ -245,6 +264,17 @@ function Start-RecoveryReview([string]$label){
 }
 function Draw {
     $script:scope=$root
+    # Image placement deliberately selects Move and its source layer. Select the
+    # ink layer and Pen explicitly so recovery checks exercise painted pixels.
+    if((Model).state.layer_tools.editing_layer.id -ne $paint){
+        (Find-Id "layer-$paint-content").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $paint} 'Ink layer did not select'
+    }
+    if(!((Model).state.commands|Where-Object id -eq 'pen').selected){
+        $tile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.command -eq 'pen'}|Select-Object -First 1
+        (Find-Id "tile-toolbar-$($tile.id)").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
+    Wait-Until {(Model).brush_ready -and ((Model).state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready' 45
     $revision=(Model).state.document_file.revision
     Invoke-Control 'Test pen'
     Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
@@ -402,12 +432,12 @@ $script:scope=$root
 $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#223344')
-$review.CloseMainWindow()|Out-Null
+Request-Close -WithPreferences
 Confirm-Dialog;Invoke-Control 'Cancel';Idle
 Wait-Until {(Model).state.settings.dark_base -eq '#223344'} 'Close request lost the active Preferences draft'
 if((Model).state.document_file.close_ready -or !(Model).state.document_file.modified){throw 'Cancel closed or cleared the dirty drawing'}
 $script:scope=$root
-$review.CloseMainWindow()|Out-Null
+Request-Close
 Confirm-Dialog;Invoke-Control 'Save'
 Wait-Closed 'Saved close exceeded five seconds'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Native review reported stderr'}
@@ -428,7 +458,7 @@ if(!(Model).state.document_file.modified -or (Model).state.document_file.locatio
     throw 'Cancelling the close-time picker lost the untitled drawing'
 }
 File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Cancel';Idle
-$review.CloseMainWindow()|Out-Null
+Request-Close
 Confirm-Dialog;Invoke-Control 'Discard Changes'
 Wait-Closed 'Discarded close exceeded five seconds'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
@@ -440,7 +470,7 @@ if($FailGpu){
     Wait-Until {Test-Path -LiteralPath $before} 'Baseline export did not finish'
     $script:scope=$root
     $revision=(Model).state.document_file.revision
-    Invoke-Control 'Zen mode'
+    (Find-Id 'zen-button').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {(Model).state.workspace.zen_mode -and (Model).chrome_hidden} 'Zen did not hide the editor before GPU failure'
     # Completed raster pixels remain saveable. Contacts admitted during failed
     # reconstruction must be canceled without preventing the save workflow.
@@ -451,7 +481,7 @@ if($FailGpu){
     File-Command 'save_document_as';Picker 'Save As';Choose-Path $recovered;Idle
     Wait-Until {(Test-Path -LiteralPath $recovered) -and !(Model).state.document_file.modified} 'Save As after GPU failure did not complete durably'
     File-Command 'save_document';Idle
-    $review.CloseMainWindow()|Out-Null
+    Request-Close
     Wait-Closed 'GPU save-as close exceeded five seconds'
     if((Get-Item -LiteralPath $stderr).Length){throw 'GPU save-as reported stderr'}
     Remove-Item Env:CAPY_TEST_GPU_UNAVAILABLE
@@ -462,7 +492,7 @@ if($FailGpu){
     File-Command 'export_document';Picker 'Save As';Choose-Path $after;Idle
     Wait-Until {Test-Path -LiteralPath $after} 'Reopened project did not export'
     if((Get-FileHash -LiteralPath $before).Hash -ne (Get-FileHash -LiteralPath $after).Hash){throw 'Saved recovery project changed exported pixels'}
-    $review.CloseMainWindow()|Out-Null
+    Request-Close
     Wait-Closed 'Reopened recovery project close exceeded five seconds'
     if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
 }

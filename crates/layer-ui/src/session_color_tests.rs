@@ -3,7 +3,7 @@
 fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_jobs() {
     use crate::proof_workflow::{ProofPreparation, ProofView};
     use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};
-    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         let mut s = session(); s.set_platform(platform);
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
         let original = ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(bytes.clone().into()));
@@ -116,11 +116,9 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     assert_eq!(s.engine.document().proof, Some(recipe.clone()));
     assert!(!s.state.document_file.modified);
     assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
-    for platform in [Platform::Windows] {
-        s.set_platform(platform);
-        assert!(!s.command(CommandId::SoftProofSetup).enabled);
-        assert!(s.set_proof_recipe(Some(recipe.clone())).is_err());
-    }
+    s.set_platform(Platform::Windows);
+    assert!(s.command(CommandId::SoftProofSetup).enabled);
+    assert!(s.set_proof_recipe(Some(recipe)).is_ok());
 }
 
 #[test]

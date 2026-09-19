@@ -1,109 +1,164 @@
-# Windows feature parity port
+# Windows feature-gap review against Web and Android
 
-Baseline: main pulled to `eafd1d51` on 2026-09-17, then integrated through
-`1f96d5a6` before publishing. Release build and the explicit D3D12 workflow check
-were repeated after the incoming shared tile-rendering optimization. The port consumes
-upstream C1–C6 from the [shared workflow handoff](shared-workflow-centralization-handoff.md)
-and the shared retained-image placement transaction. This document records the
-implemented scope and its validation; device acceptance is tracked separately.
+Fresh review: 2026-09-18–19. Started from a clean Windows worktree, pulled
+main from `20cecad7` to `59aff3df`, then integrated the disjoint Apple update
+`c1472101`, the concurrent Float32/OpenEXR change `537464b7`, and shared
+snapshot/HDR fixes through `68903c46`, using fast-forward/autostash integration
+without overwriting local work. Earlier acceptance is historical;
+the checks below are scoped to this review.
 
-## Implemented features and ownership
+Read `AGENTS.md`, the [drag convention](../ui/drag-and-reorder.md),
+[drag inventory](../ui/drag-inventory.md), [Windows acceptance](windows-acceptance.md),
+[title-bar acceptance](title-bar-windows-acceptance.md), and the
+[color](color-management-m2-windows-handoff.md) and
+[shared-workflow](shared-workflow-centralization-handoff.md) handoffs. Compared
+current shared command availability and host-request routing, Windows native
+forms/workers/presentation, Web JavaScript/Rust, and Android Kotlin/Rust.
+Web/Android source inspection is not a fresh browser/tablet acceptance run.
 
-| Feature | Windows integration | Shared owner of business/rendering behavior |
+## Findings and fixes
+
+| Area | Independent current-code finding | Result |
 | --- | --- | --- |
-| SDR document precision | Native U8/U16 and existing Float32 rendering for startup, Open and recovery. | `layer-render-wgpu` native renderer, document color state and prepared projects. |
-| Effect and gradient colors | Tagged effect fields, shared swatches, sampled gradient previews and working-space color-wheel rasters. | Shared color forms, color conversion and gradient sampling; WinUI displays their results. |
-| New document | Working space, integer depth, background, defaults and named preset save/delete. | `layer-ui` New-document drafts, validation and preference actions. |
-| Photo Open | Retained photo decoding, missing-profile interpretation and separate editable master on Save. | Shared import preparation and photo adoption policy; native picker/worker/file transport. |
-| Import, Paste and external Drop | Multi-file picker, clipboard files/bitmap, canvas/layer drops, insertion hints and Apply/Cancel placement. | `ImageImportBatch`, shared target validation and placement transaction with one-step history. |
-| Document color | Properties, Assign, Convert, depth changes, comparison and flattened converted copy. | `ColorWorkflow`, candidate identity, color/brush/view remapping and exact history in shared Rust. |
-| Source operations | Profile repair, rasterization and comparison. | `SourceWorkflow`, baked-edit handling, preview readiness and shared commit/history. |
-| Export | PNG/JPEG/TIFF, profile, resize, resolution, intent/BPC, matte, dither, quality, comparison and presets. | Shared export draft actions, recipes, output planning, resampler, CMM and codecs. |
-| Precise color and palettes | Color-readout context menu opens numeric color and tagged palette editing. Primary click retains readout switching. | Shared color editor and palette commands own values, validation and mutations. |
-| Color preferences and ICC library | Native preferences and profile import/list/remove controls with app-owned storage. | Shared preferences and profile-library policy own identities, validation, limits and deduplication. Windows supplies atomic files and locks. |
-| Histogram and area eyedropper | Native histogram display and shared point/3×3/5×5 sampling choices. | Shared histogram and sampling computation; native worker scheduling and chart controls. |
-| Artwork restart recovery | Periodic committed checkpoints, Restore/Later/Discard, recovery errors/retry and close coordination. | `RecoveryState` owns checkpoint/retirement decisions and durable replacement ordering. Native worker supplies atomic storage and per-window leases. |
-| Floating panel sizing | Native content/scroll measurements for panels and retained drawers. | Shared release sizing and layout publication; existing input arbitration stays native. |
-| Toolbar drawer switching | One-click switching through the shared toolbar behavior. | Existing shared drawer policy and workspace history. |
-| Predicted pointer input | Windows App SDK `PointerPredictor`, capability enabled only when available, predicted points flagged separately from actual samples. | OS supplies prediction; shared engine owns provisional rendering and stroke semantics. |
+| Print proofing | Web and Android consume `ProofPreparation`/`ProofView`; Windows excluded the three proof commands, did not handle `SoftProofSetup`, and never called `ViewportPresenter::set_proof`. The previous report's “deferred” label was stale relative to those ports. | Implemented native Proof Setup, Proof Colors and Gamut Warning, shared option projection, profile import/management, asynchronous preparation and status. Canvas and Navigator share the proof presenter. |
+| Proof history and portability | Recipes belong to document history; temporary viewing switches do not. Replacing an embedded ICC requires preserving its original bytes locally. GPU replacement and recipe history can invalidate view resources. | Windows uses the shared preparation identity, validation, preservation decision, LUT cache and commit. Native file workers atomically preserve the old ICC before adoption. Stale/cancelled jobs cannot commit. View preparation is rebuilt after history/document changes and GPU resources are recreated by the shared presenter. |
+| Previously blocked color-input check | The earlier foreground-ownership rejection did not reproduce in the fresh run. This exposed two later fixture failures: smoke-test buttons covered the bottom color swatches, and the drawer test required retired partial Zen. | Removed the unrelated smoke overlay from this fixture and used the current ordinary toolbar Color drawer. Foreground ownership and target-process guards remain intact. The complete mouse/pen/touch/keyboard journey passed. |
+| SDR creation, document/source color, import/placement and export | Windows already uses shared creation drafts, `ColorWorkflow`, `SourceWorkflow`, `ImageImportBatch`, retained placement and export recipes/plans. New upstream HDR adoption is explicitly rejected on Windows, Web and Android. | Retained the existing shared ownership; requalified the Windows paths below rather than copying Web/Android rules. |
+| Filters and thumbnail scheduling | The native document fixture exposed thumbnail starvation: shared `NativeHost` used the general dirty flag, which stays set while unrelated shaders warm up. Request traces showed settled document pixels but no accepted thumbnails. Windows filter previews already consume the shared preview cache protocol. | Changed shared thumbnail eligibility to ready canvas/export pipelines with no active input, pending edits or shared background editing. Added a D3D12 regression for both rejected unsettled imports and accepted thumbnails during unrelated warmup. Kept the native fixture’s original 15-second assertion. |
+| Runtime filter fixture | An initial preview timeout did not repeat in isolated tracing; valid atlases reached the native cache. The subsequent replacement check could compare a retained bitmap before the new one was composed. | The fixture now waits, within its existing 30-second bound, for actual cyan pixels from the changed WGSL as well as a changed capture hash. The complete journey passed after removing diagnostic tracing. No production filter scheduling change was made. |
+| Native recovery fixture | The expanded image-import journey left Move and the source layer active before its pen replay. Its early revision checks could therefore exercise image movement; the later ink check correctly failed. | Explicitly select the original ink layer and Pen and wait for brush readiness before replay. Keep the pixel, history, recovery and close-time assertions. |
+| Workspace, header, layers and input | Current Windows registrations classify visible tile/row/grip/tab targets and pointer devices, with shared drop validation/publication/history. This change adds no reorderable surface. | The app-wide drag convention remains required. This review does not extend previous synthetic drag results to physical devices or claim to rerun the full drag matrix. |
 
-Host adapters are in `apps/layer-windows/native/src/document_workflows.rs`,
-`document_color.rs`, `document_source.rs`, `document_export.rs`,
-`color_storage.rs` and `recovery.rs`. WinUI owns controls, pickers, clipboard,
-OS input and presentation. These adapters schedule preparation, forward shared
-workflow transitions and retire old GPU resources off the editor owner.
-They do not add a parallel implementation of color conversion, placement,
-export rendering, profile policy or recovery policy.
+## Ownership and implementation
 
-The port also adds a reusable complete export validator to `layer-ui`. The shared
-proof-view shader now advances its tetrahedral interpolation coordinate without
-a dynamically indexed vector assignment: the previous expression failed in the
-D3D12 FXC compiler. The interpolation math remains shared across backends.
+- `crates/layer-ui/src/proof_workflow.rs` owns preparation identity, stale-result
+  rejection, embedded-profile preservation policy, recipe commit and view cache.
+  `PrintProofSettings` owns intent/BPC/simulation semantics; its new reusable
+  `from_recipe` projects saved recipes back into settings.
+- `layer-color` builds the proof LUT; `layer-render-wgpu` applies it only during
+  presentation, including the Navigator. No Windows copy of proof conversion,
+  gamut calculation or shader math was introduced.
+- `apps/layer-windows/native/src/document_proof.rs` adapts the existing document
+  worker to those shared operations. Validation occurs on the editor owner
+  before profile preservation and again before commit. Atomic file writes and
+  storage locks reuse `color_storage.rs`.
+- `native/src/proof.rs` schedules background view preparation, cancels obsolete
+  work and joins workers before service teardown. The owner retains CPU LUTs;
+  the presenter owns device-specific resources.
+- `ProofForm.h` and `DocumentView.cpp` provide native controls, pickers and
+  profile-library navigation, preserving the setup draft across those dialogs.
+  Options/availability come from shared Rust. First use can be cancelled without
+  editing the document. Errors leave the setup available for correction.
+- The previously implemented native precision, tagged colors/palettes, color
+  preferences, ICC storage, histogram/sampling, source operations, multi-image
+  placement, export presets, restart recovery, panel sizing, toolbar drawer
+  switching and prediction adapters remain present. Their implementation
+  baseline is recorded in the earlier history of this document.
 
-Native modal ordering is explicit: an import progress sheet closes before the
-shared placement begins. Focus cancellation still applies to real application
-switches and minimization, while invisible tablet/IME helper windows do not
-cancel placement.
+## Fresh validation
 
-## Validation
+The review build is an unpackaged Release executable in
+`artifacts/windows/parity-final` on `68903c46` plus this change. Color, successful
+pen recovery, restart recovery and runtime-filter journeys passed on the preceding
+`537464b7` integrated build with these production fixes. Proof, failed-GPU saving
+and explicit D3D12 checks were rerun after the final shared snapshot integration.
+Logs and disposable fixture profiles are
+under ignored `artifacts/windows/parity-*`, `proof-ui`, `compact-color`,
+`document-ui` and `artwork-recovery`.
 
-- Release Rust library and WinUI executable build passed; strict Windows Clippy
-  (`--all-targets --no-deps -- -D warnings`) passed.
-- `cargo test -p layer-windows -p layer-ui --lib --locked`: 453 shared UI tests
-  and 113 Windows tests passed; 12 Windows hardware/integration tests remain
-  ignored by the ordinary suite.
-- Native C++ input, query-queue and presentation checks passed.
-- Explicit D3D12 integration test
-  `d3d12_native_color_import_export_source_and_history_round_trip` passed on the
-  hardware adapter. It checks native renderer/recovery preparation, Assign,
-  Convert, U16 depth and exact color-state Undo/Redo; PNG/JPEG/TIFF resize and
-  resolution; retained multi-image placement; source repair/rasterization;
-  histogram; and profile-library import/list/remove.
-- Native document UI regression passed: New validation, import picker cancellation
-  and decoder error recovery, placement Apply/Undo/Redo, thumbnail and embedded
-  image reopen, Unicode paths, export cancellation/dimensions/checkpoint, Save As,
-  corrupt Open preservation, save-before-open, Preferences draft preservation and
-  Save/Discard/Cancel close paths. This run did not inject GPU removal.
-- Artwork restart recovery UI regression passed: committed stroke checkpoint,
-  forced process termination, restore, durable replacement before origin deletion,
-  another restart, Later surviving clean close and explicit Discard. Recovery
-  adoption waits for shared document-idle eligibility during startup filter
-  validation. Storage tests also cover concurrent live leases and failed atomic
-  replacement preserving the previous copy.
-- Compact-color synthetic input regression stopped at its foreground-ownership
-  guard (`Review does not own foreground input`). It is incomplete; the guard
-  was not bypassed. This run does not qualify all mouse/pen/touch picker paths.
-- Runtime filter UI regression passed: startup package, rendered previews, native
-  picker/properties, live WGSL/metadata replacement, compatible value preservation,
-  invalid WGSL and missing-module rejection, retry and changed GPU preview.
-  Windows now signals completion of startup catalog loading to the native
-  renderer; this also releases previews after fallback or GPU replacement.
+Host: Intel Iris Xe Graphics, driver `32.0.101.6737`; Windows reports
+2256 × 1504 at 59 Hz. Hardware D3D12 checks reject CPU/fallback adapters.
+This identifies functional evidence, not high-refresh acceptance.
 
-Reproduction uses `apps/layer-windows/scripts/build.ps1`, `test-input.ps1`,
-`exercise-documents.ps1`, `exercise-artwork-recovery.ps1` and
-`exercise-runtime-filters.ps1`. The D3D12 test is
-explicitly ignored by default and can be selected with `cargo test -p
-layer-windows --lib d3d12_native_color_import_export_source_and_history_round_trip
--- --ignored --test-threads=1`; use an isolated `CAPY_SETTINGS_DIRECTORY`.
-Local logs and fixture files live under ignored `artifacts/windows/port-*`.
+| Check | Fresh result and limits |
+| --- | --- |
+| Release Windows build | Passed; native C++/WinUI and Rust linked. Environmental CS1668 warnings reference two missing Visual Studio library search directories. Log: `parity-final-build.log`. |
+| Rust library suites | Passed: 28 shared-host, 481 shared-UI and 117 Windows tests (626 total); 13 explicitly ignored in this ordinary run. Includes proof cancellation before/after preparation, stale requests, invalid ICC retry, exact recipe history, worker supersession and shutdown/restart. Log: `parity-final-rust.log`. |
+| Strict Clippy | Passed for Windows and shared host, all targets, no dependency linting, warnings denied. Log: `parity-final-clippy.log`. |
+| Native C++ input/queue tests | Passed bounded admission, cancellation/refusal ownership, ordering, retained models, query scheduling and completion. Log: `parity-native-input.log`. |
+| Native proof journey | Passed first-use cancel, intent/BPC, profile-picker cancel and library draft return, setup/toggles, recipe and artwork Undo/Redo, identical PNG bytes with viewing on/off, D3D12 device replacement, Unicode save/reopen with recipe retained and view switches reset. Log: `parity-final-proof-ui.log`. |
+| Guarded native color input | Passed mouse/pen/touch field/ring input, cancellation, keyboard/retained controls, slots/swap, context menus, mouse-hold exclusion and ordinary Color drawer; no document edit. Guard code was not changed. Log: `parity-color.log`. |
+| Native document/recovery journey | Passed creation expressions/errors, image picker cancellation/drafts, invalid input recovery, placement/thumbnails/history, save/export cancellation and Unicode, corrupt-open preservation, replace/save-before-open, Preferences draft/close cancellation, two GPU replacements with queued/active pen and exact pixels, durable close and untitled discard. Log: `parity-documents.log`. |
+| Failed-GPU native journey | Passed Save/Save As after recovery exhaustion, committed-raster preservation, queued contact cancellation, Cancel/Discard, durable reopen and identical exported pixels. Native close passed its original five-second bound after waiting for dialog completion. The ordinary document checks above also passed in this final build. Log: `parity-failed-gpu.log`. |
+| Crash/restart recovery | Passed checkpoint restore, origin retirement, later edits surviving clean close and explicit discard. Log: `parity-artwork-recovery.log`. |
+| Runtime filters | Passed startup package, native controls, live WGSL/metadata, compatible parameter retention, invalid/missing-module preservation and retry, changed GPU preview with actual new-shader pixels. Log: `parity-runtime-filters.log`. |
+| Explicit native D3D12 integration | Passed import/export/source color, proof recipe persistence and ICC preservation, proof/export separation, exact Undo/Redo and thumbnail eligibility during unrelated warmup (111.75 s). Log: `parity-d3d12.log`. |
+| D3D12 proof CPU/GPU oracle | Passed on the explicitly selected Intel hardware D3D12 adapter: 1,280 CPU/GPU comparisons across four working spaces, U8/U16, two display primaries, 16 pixel vectors and five proof/warning states; artwork and export remain unchanged (84.28 s). Log: `parity-d3d12-proof.log`. |
+| Presentation analysis | Synthetic fixtures passed; this checks analysis math, not measured presentation cadence. Log: `parity-presentation.log`. |
 
-## Remaining acceptance
+One proof recovery run during concurrent compilation exhausted the existing
+hardware-adapter recovery budget and correctly offered saving. The isolated rerun
+passed. The cause was not established; this does not qualify recovery under CPU
+or driver stress. No software fallback or longer recovery deadline was introduced.
 
-The feature implementations above are present. This does not extend historical
-acceptance to untested hardware or workloads. Still required:
+The failed-GPU fixture also exposed stale Zen accessibility selectors and a
+native-readiness race: shared export completion precedes progress-dialog teardown.
+Windows correctly ignores window close while a document dialog remains open,
+so those attempts never reached shared close handling. The fixture now uses the
+stable Zen ID, waits for the canvas to become enabled, and posts close to the
+known application HWND after checking its process ownership. Its explicit
+Preferences-draft close case remains allowed. The five-second shutdown bound
+is unchanged.
 
-- Physical pen/touch prediction quality, pressure/tilt, capture and cancellation;
-  multi-DPI/display transitions, suspend/resume and 120 Hz painting.
-- Large retained-photo and color workflows, including the 61 MP acceptance set,
-  peak memory, latency and export throughput. The D3D12 integration fixture is
-  small and does not establish these limits.
-- Exhaustive native-control interaction and accessibility review of the new
-  forms, picker/clipboard format matrix and mixed-profile image batches.
-- Cross-platform pixel comparisons, package installation/update and full release
-  qualification from [Windows acceptance](windows-acceptance.md) and the
-  [color handoff](color-management-m2-windows-handoff.md).
+The broader shared-host suite also exposed an outdated Windows drag-preview
+assertion; it now checks the same pointer-following geometry already implemented
+for the other native hosts. A workspace create-failure fixture now injects its fault specifically into the
+create transaction, allowing its prerequisite outgoing flush to complete. No production workspace policy was changed.
 
-Existing deferred scope stays deferred: HDR, print proofing, unsupported codecs
-and the dirty-rendering redesign. The app-wide
-[drag convention](../ui/drag-and-reorder.md) continues to apply to panels,
-retained drawers and toolbars; this port does not redefine it.
+An integrated rebuild initially exhausted disk space. Removing only the verified
+workspace Rust incremental cache allowed the Release rebuild to complete; source
+files and UI evidence were retained.
+
+## Reproduction
+
+Run native GUI fixtures serially in disposable profiles:
+
+~~~powershell
+./apps/layer-windows/scripts/build.ps1 -Configuration Release -SkipRestore -OutputDirectory artifacts/windows/parity-final
+cargo test --locked -p layer-windows -p layer-ui -p layer-host --lib
+cargo clippy --locked -p layer-windows -p layer-host --all-targets --no-deps -- -D warnings
+./apps/layer-windows/scripts/test-input.ps1
+./apps/layer-windows/scripts/test-presentation-analysis.ps1
+./apps/layer-windows/scripts/exercise-proof.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-compact-color.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe -RecoverGpu
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe -FailGpu
+./apps/layer-windows/scripts/exercise-artwork-recovery.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable artifacts/windows/parity-final/CapyCanvas.exe
+~~~
+
+`test-input.ps1` needs the Visual Studio developer environment. For the explicit
+D3D12 integration test, set `CAPY_SETTINGS_DIRECTORY` to a new absolute directory
+under ignored artifacts, then run:
+
+~~~powershell
+cargo test --locked -p layer-windows --lib d3d12_native_color_import_export_source_and_history_round_trip -- --ignored --test-threads=1
+cargo test --locked -p layer-render-wgpu --lib d3d12_proof_view_matches_cpu_without_changing_artwork_or_export -- --ignored --test-threads=1 --nocapture
+~~~
+
+The second test reuses the shared proof CPU/GPU oracle with an explicitly
+selected D3D12 hardware device rather than inferring the backend from the OS.
+
+## Remaining gaps and acceptance
+
+- Physical pen/touch prediction, pressure/tilt/eraser, capture/cancellation and
+  the full drag matrix; synthetic input does not qualify a digitizer.
+- Mixed-display/DPI, suspend/resume and actual sustained 120 Hz painting and
+  input-to-present latency. The available display cannot close those gates.
+- The 61 MP photo set, peak process/driver memory, navigation latency, export
+  throughput and constrained-device behavior. Small functional fixtures do not
+  establish those limits.
+- Physical printer/paper matching and a representative licensed CMYK printer
+  profile matrix. Builtin RGB and generated embedded ICC fixtures qualify the
+  integration paths, not physical proof accuracy.
+- Complete accessibility/native-control review, clipboard/codec/profile-batch
+  coverage, and fresh whole-editor cross-platform pixel comparisons.
+- Clean-machine portable deployment and signed MSIX install/update/uninstall.
+  This review builds an unpackaged executable; it does not refresh or qualify
+  distribution packages.
+
+HDR authoring/display integration, unsupported codecs and the dirty-rendering
+redesign remain separate work. HDR is not currently an extra supported feature
+of Web or Android that Windows silently omits. Print proofing is now implemented
+and is no longer in that deferred list. See [Windows acceptance](windows-acceptance.md)
+for the wider release gates.

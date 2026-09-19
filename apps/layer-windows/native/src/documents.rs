@@ -418,6 +418,7 @@ impl ImageImport {
     }
 }
 pub(crate) struct DocumentService {
+    pub proof: crate::proof::Service,
     import: Option<ImageImport>,
     next_import: u64,
     worker: Worker,
@@ -429,9 +430,12 @@ pub(crate) struct DocumentService {
     workflow_running: bool,
 }
 impl DocumentService {
-    pub(crate) fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
+    pub(crate) fn open(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
+        let wake = std::sync::Arc::new(wake);
+        let notify = wake.clone();
         Ok(Self {
-            worker: Worker::start(wake)?,
+            proof: crate::proof::Service::new(wake),
+            worker: Worker::start(move || notify())?,
             import: None,
             next_import: 1,
             active: None,
@@ -631,6 +635,7 @@ impl DocumentService {
                 }
             };
             if let Err(error) = result { self.workflow = Some(task); return Err(error); }
+            task.retain_proof(&mut self.proof.view)?;
             self.workflow_control = None;
             self.worker.retire_workflow(task);
             host.invalidate_snapshot();
@@ -916,7 +921,7 @@ impl DocumentService {
                 self.worker.retire_workflow(task);
             } else {
                 match task.prepare_owner(host) {
-                    Ok(true) => { self.workflow_running = true; self.worker.submit(Job::Workflow { task, action: crate::document_workflows::Action::Compare }); return Ok(()); }
+                    Ok(true) => { self.workflow_running = true; let action = if task.stage == "proof_preserve" { crate::document_workflows::Action::ProofPreserve } else { crate::document_workflows::Action::Compare }; self.worker.submit(Job::Workflow { task, action }); return Ok(()); }
                     Err(error) => { task.fail(error); }
                     _ => {}
                 }
@@ -924,7 +929,7 @@ impl DocumentService {
                 // Its queued focus-loss event must precede the shared placement.
                 if task.stage == "commit" && !task.awaits_placement_ui() {
                     match task.commit(host) {
-                        Ok(()) => { self.workflow_control = None; self.worker.retire_workflow(task); host.invalidate_snapshot(); return Ok(()); }
+                        Ok(()) => { task.retain_proof(&mut self.proof.view)?; self.workflow_control = None; self.worker.retire_workflow(task); host.invalidate_snapshot(); return Ok(()); }
                         Err(error) => task.fail(error),
                     }
                 }
@@ -1035,9 +1040,11 @@ impl DocumentService {
         task.preview(index)
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
+        let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() { self.worker.retire_workflow(task); }
-        self.worker.stop()
+        let worker = self.worker.stop();
+        proof.and(worker)
     }
 }
 

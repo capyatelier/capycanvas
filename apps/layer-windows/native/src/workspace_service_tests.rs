@@ -14,6 +14,7 @@ use std::{
 #[derive(Default)]
 struct Faults {
     fail: Cell<bool>,
+    fail_create: Cell<bool>,
     hold: Cell<bool>,
     hold_reads: Cell<bool>,
     read_waiting: Cell<bool>,
@@ -41,7 +42,11 @@ impl WorkspaceStore for TestStore {
             request,
             StoreRequest::Switcher | StoreRequest::WorkspaceOrder
         );
-        if commit && self.faults.fail.get() {
+        // Faults can target the create transaction after its prerequisite flush.
+        let fail_create = self.faults.fail_create.get() && matches!(&request,
+            StoreRequest::Commit { batch } if serde_json::to_value(batch).unwrap()["writes"]
+                .as_array().unwrap().iter().any(|write| write["create"] == true));
+        if (commit && self.faults.fail.get()) || fail_create {
             return Err(StoreError::new(
                 layer_workspace::ErrorKind::FailedWrite,
                 "Simulated write failure",

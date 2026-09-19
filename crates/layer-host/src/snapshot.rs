@@ -615,7 +615,7 @@ mod tests {
                 let expected =
                     if matches!(
                         platform,
-                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
                     ) {
                         layer_ui::Bounds {
                             x: x - 10.,

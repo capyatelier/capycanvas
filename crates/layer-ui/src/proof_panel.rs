@@ -109,6 +109,18 @@ impl Default for PrintProofSettings {
     }
 }
 impl PrintProofSettings {
+    pub fn from_recipe(recipe: &ProofRecipe) -> Result<Self, String> {
+        Ok(Self {
+            profile: Some(ExportProfile {
+                name: recipe.name.clone(),
+                channels: layer_color::profile_channels(&recipe.profile)?,
+                profile: recipe.profile.clone(),
+            }),
+            intent: recipe.conversion.intent,
+            bpc: recipe.conversion.black_point_compensation,
+            simulation: ProofSimulation::from_recipe(recipe),
+        })
+    }
     pub fn bpc_available(&self) -> bool {
         self.intent != RenderingIntent::AbsoluteColorimetric
     }

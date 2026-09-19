@@ -2,6 +2,7 @@
 #include "DocumentView.h"
 #include "UiControls.h"
 #include "ExportForm.h"
+#include "ProofForm.h"
 #include <winrt/Microsoft.Windows.Storage.Pickers.h>
 #include <microsoft.ui.xaml.window.h>
 #include <array>
@@ -23,7 +24,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     hstring workflowStamp,recoveryStamp;
     bool busyDialog=false,busyCompleted=false,recoveryProgress=false;
     std::function<void()> changed;
-    J catalog,model;
+    J catalog,model,proofDraft;
+    hstring proofProfileId;
+    uint32_t proofRequest=0;
+    bool proofManaging=false;
     Window window{nullptr};
     ContentDialog dialog{nullptr};
     winrt::Windows::Foundation::IAsyncOperation<Pickers::PickFileResult> picker{nullptr};
@@ -281,26 +285,41 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto kind=str(request,L"kind"),stage=str(request,L"stage");auto details=object(request,L"details");
         if((kind==L"place"||kind==L"paste")&&stage==L"options"){showing=false;pickImages(request);co_return;}
         J action=O({{L"op",S(L"cancel")}});
-        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;ComboBox profileList;A profileChoices;
+        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;A profileChoices;
+        if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
+        bool library=kind==L"profiles"||(kind==L"proof"&&proofManaging);
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.CloseButtonText(L"Cancel");
             dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
-            auto title=kind==L"profiles"?L"ICC profile library":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
+            auto title=library?L"ICC profile library":kind==L"proof"?L"Proof Setup":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
                 kind==L"place"||kind==L"paste"?L"Interpret untagged image":kind==L"repair"?L"Repair source profile":kind==L"rasterize"?L"Rasterize source":kind==L"histogram"?L"Histogram":L"Document properties";
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
             auto text=[&](hstring value){TextBlock label;label.Text(value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);};
             ComboBox space,depth,intent;CheckBox copy,dither,blackPoint;
             auto spaces=array(request,L"spaces");
-            if(stage==L"error"){
-                text(str(request,L"error"));dialog.CloseButtonText(L"Close");
-            }else if(kind==L"profiles"){
+            if(!str(request,L"error").empty())text(str(request,L"error"));
+            if(stage==L"error"&&kind!=L"proof"){
+                dialog.CloseButtonText(L"Close");
+            }else if(library){
                 text(L"Imported profiles are kept in app storage. Removing a profile does not alter existing drawings or saved export recipes.");
                 auto entries=array(details,L"profiles");profileList.Header(box_value(L"Profiles"));profileList.HorizontalAlignment(HorizontalAlignment::Stretch);
                 for(auto item:entries){auto entry=item.GetObject();profileList.Items().Append(box_value(str(entry,L"name")+L" · "+str(entry,L"channels")+(entry.HasKey(L"issue")?L" · "+str(entry,L"issue"):L"")));}
                 if(entries.Size())profileList.SelectedIndex(0);body.Children().Append(profileList);
                 dialog.PrimaryButtonText(L"Import profile…");dialog.SecondaryButtonText(L"Remove selected");dialog.IsSecondaryButtonEnabled(entries.Size()!=0);dialog.CloseButtonText(L"Done");
+            }else if(kind==L"proof"){
+                proofForm=std::make_shared<ProofFormView>();proofForm->init(details,proofDraft,proofProfileId);body.Children().Append(proofForm->root);
+                StackPanel buttons;buttons.Orientation(Orientation::Horizontal);buttons.Spacing(8);
+                auto add=[&](hstring title,hstring op){
+                    Button button;button.Content(box_value(title));AutomationProperties::SetName(button,title);
+                    button.Click([this,proofForm,scripted,op](auto&&,auto&&){
+                        proofDraft=proofForm->current();proofProfileId=proofForm->profileId;
+                        *scripted=O({{L"op",S(op)}});dialog.Hide();
+                    });buttons.Children().Append(button);
+                };
+                add(L"Add Profile…",L"proof_import");add(L"Manage Profiles…",L"proof_manage");body.Children().Append(buttons);
+                dialog.PrimaryButtonText(L"Apply");
             }else if(kind==L"export"&&stage==L"options"){
                 exportForm=std::make_shared<ExportFormView>();exportForm->init(details);
                 auto presets=object(details,L"presets");ComboBox preset;preset.Header(box_value(L"Export preset"));preset.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -361,12 +380,16 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             }
             ScrollViewer scroll;scroll.Content(body);scroll.MaxHeight(std::max(180.,double(window.Content().XamlRoot().Size().Height)-220));dialog.Content(scroll);
             auto result=co_await dialog.ShowAsync();
-            if(kind==L"profiles"&&result==ContentDialogResult::Secondary&&profileList.SelectedIndex()>=0)
+            if(library&&result==ContentDialogResult::Secondary&&profileList.SelectedIndex()>=0)
                 action=O({{L"op",S(L"profile_remove")},{L"id",S(str(array(details,L"profiles").GetObjectAt(profileList.SelectedIndex()),L"id"))}});
             if(result==ContentDialogResult::Primary){
-                if(kind==L"profiles"){
+                if(library){
+                    action=O({{L"op",S(L"describe")}});
                     Pickers::FileOpenPicker open(window.AppWindow().Id());open.FileTypeFilter().Append(L".icc");open.FileTypeFilter().Append(L".icm");picker=open.PickSingleFileAsync();
                     auto selected=co_await picker;if(selected)action=O({{L"op",S(L"profile_import")},{L"path",S(selected.Path())}});
+                }else if(kind==L"proof"){
+                    proofDraft=proofForm->current();proofProfileId=proofForm->profileId;
+                    action=O({{L"op",S(L"proof_options")},{L"settings",proofDraft},{L"profile_id",proofProfileId.empty()?JsonValue::CreateNullValue():S(proofProfileId)}});
                 }else if(kind==L"export"&&stage==L"options"){
                     action=O({{L"op",S(L"export_options")},{L"recipe",exportForm->current()},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});
                 }else if(kind==L"export"&&stage==L"preview"){
@@ -388,6 +411,13 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     if(stage==L"interpret_image")action=O({{L"op",S(L"interpret_image")},{L"profile",profileChoices.GetAt(space.SelectedIndex())}});
                     else action=O({{L"op",S(L"prepare")},{L"choice",choice},{L"copy",B(kind==L"convert"&&copy.IsChecked().Value())}});
                 }
+            }
+            if(kind==L"proof"&&library&&result==ContentDialogResult::None){proofManaging=false;action=O({{L"op",S(L"describe")}});}
+            if(str(*scripted,L"op")==L"proof_manage"){proofManaging=true;*scripted=O({{L"op",S(L"describe")}});}
+            if(str(*scripted,L"op")==L"proof_import"){
+                *scripted=O({{L"op",S(L"describe")}});
+                Pickers::FileOpenPicker open(window.AppWindow().Id());open.FileTypeFilter().Append(L".icc");open.FileTypeFilter().Append(L".icm");picker=open.PickSingleFileAsync();
+                auto selected=co_await picker;if(selected)*scripted=O({{L"op",S(L"profile_import")},{L"path",S(selected.Path())}});
             }
         }catch(hresult_canceled const&){}catch(hresult_error const& e){if(!stopping)report(to_string(e.message()));}
         dialog=nullptr;picker=nullptr;
@@ -453,7 +483,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(flag(model,L"windows_importing"))return;
         for(auto value:array(object(model,L"state"),L"requests")) {
             auto envelope=value.GetObject();
-            if(str(object(envelope,L"kind"),L"type")==L"histogram"){
+            if(str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
                 auto id=uint32_t(num(envelope,L"id"));if(id!=handled){handled=id;send(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(id)}}).Stringify()));}break;
             }
             if(str(object(envelope,L"kind"),L"type")!=L"document")continue;
