@@ -34,7 +34,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   const hdrDisplay=matchMedia('(dynamic-range: high)');
   let displayDevice=null,extendedCanvas=false;
   function syncDisplay(){
-    const device=document.getElementById('canvas').getContext('webgpu')?.getConfiguration()?.device;
+    const device=document.getElementById('canvas').getContext('webgpu')?.getConfiguration?.()?.device;
     if(device!==displayDevice){
       displayDevice=device;extendedCanvas=false;
       if(device){
