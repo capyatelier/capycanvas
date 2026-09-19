@@ -8,10 +8,9 @@ Commit and push significant milestones to `origin/main`.
 
 ## Remaining work
 
-- Replace native AVIF: rav1e/ravif encoding, Rust container and gain-map handling,
-  upstream rav1d decoding. The patched decoder passes actual WebAssembly
-  decoding; connect it to the application container/color path with bounded
-  memory and cancellation before replacing native dispatch.
+- Replace native AVIF export and encoded previews with rav1e/ravif and the Rust
+  container/gain-map path. Rust AVIF import is integrated; qualify larger images
+  and device latency alongside the remaining host work.
 - Replace HEIC import with heif-oxide. Its current fidelity limitations are
   accepted for the initial integration; retain explicit capability reporting.
 - Finish GTK integration and remove native codec build, bundle discovery and
@@ -139,3 +138,61 @@ single decoder thread and small bounded frames.
 This qualification workspace is separate from application builds. AVIF
 container parsing, alpha, geometry, NCLX/ICC, gain maps, encoding, large-image
 memory admission and host integration still require implementation and tests.
+
+## Shared AVIF import milestone — 2026-09-19
+
+Application AVIF imports now use Rust BMFF parsing and the patched, assembly-free
+rav1d decoder. AVIF import capability is always present, including when GTK has
+no codec bundle. HEIC and AVIF writing still use the old adapters pending their
+own replacements.
+
+The reader retains 8/10/12-bit samples, straight alpha, ICC/NCLX and bitstream
+color descriptions, crop/rotation/mirror geometry and Exif print density. Grid
+tiles are joined in YUV before chroma interpolation, avoiding internal seams.
+Sequences select the actual first color/alpha samples and their track metadata,
+even with a different primary poster; grid tiles are excluded from collection
+disclosure. Unsupported timeline edits and display scaling are rejected.
+
+Preferred `tmap` alternatives reconstruct SDR-base HDR gain maps in linear
+application RGB, using the same validated per-channel metadata and ICC matrix
+transforms as JPEG. Reduced grayscale/RGB maps, distinct alternate primaries,
+and alpha are supported. Reconstructed source samples use linear sRGB F16;
+out-of-gamut negative RGB is retained. Unsupported gain-map versions leave the
+SDR primary available; malformed fractions and inconsistent geometry fail.
+HDR-base/backward maps and standalone PQ/HLG AVIF remain explicitly unsupported.
+
+Container records, extents and references are bounded before allocation. AV1
+sequence dimensions are checked before decoder allocation, including subsequent
+sequence headers. Admission reserves encoded bytes, joined planes, source bands
+and conservative single-thread decoder working/reference storage. This is an
+admission estimate, not a replacement allocator enforcing a hard decoder quota.
+Cancellation is checked during parsing, row conversion and codec-stage boundaries;
+an individual synchronous rav1d decode does not yet expose mid-call cancellation.
+Large-photo and physical-device latency qualification remain outstanding.
+
+Verification:
+
+- Color suite without native features: 98 passed, 10 optional tests ignored.
+  With the legacy HEIC feature: 101 passed, 27 optional tests ignored, including
+  missing-bundle capability behavior.
+- Permanent synthetic fixtures independently verify exact high-bit-depth P3
+  samples, alpha, geometry and density; three native gain-map references agree
+  within 0.00049 in nonnegative linear RGB. Metadata corruption, truncated input,
+  inflated counts, dimension limits, low budgets and cancellation/retry pass.
+  Fixture generation and hashes are in
+  [the fixture record](../../crates/layer-color/tests/fixtures/avif/README.md).
+- The 22 external lossless still fixtures, photographic grids and three sequence
+  references pass. The six existing AVIF regression tests pass through the new
+  dispatch, including embedded ICC, bitstream-only P3, rotated alpha, unsupported
+  geometry and PQ rejection.
+- The photographic gain-map fixture matches the previous native import within
+  0.00098 per linear RGB channel. The existing JPEG/transparent-AVIF edited HDR
+  and authored SDR roundtrip test passes with native AVIF writing and Rust import.
+- GTK, WebAssembly and Android target checks pass. WebAssembly/Android color
+  dependency graphs contain no `cc`, `nasm-rs`, `zstd-sys`, `sha2-asm`, `dav1d-sys`
+  or `libaom-sys`.
+- [The integrated browser check](../../tools/validation/portable_photo.py) runs
+  actual application dispatch, AV1 decoding, gain reconstruction, ICC and raster
+  storage in Chrome 152 WebAssembly, with zero host imports. Exact SDR and HDR
+  reference comparisons plus failed-budget/cancellation retry pass. This checks
+  the shared core; browser UI and Android device integration are still pending.

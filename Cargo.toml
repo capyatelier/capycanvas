@@ -28,6 +28,7 @@ wgpu-types = { path = "vendor/wgpu-types" }
 image-webp = { path = "vendor/image-webp" }
 zrip-core = { path = "vendor/zrip-core" }
 zrip-encode = { path = "vendor/zrip-encode" }
+rav1d = { path = "vendor/rav1d" }
 
 [workspace.package]
 edition = "2024"

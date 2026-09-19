@@ -14,8 +14,10 @@ are omitted.
 `asm` feature. Pointer-sized C integer aliases use the matching Rust primitives.
 The native `off_t` and errno values remain from libc; `wasm32-unknown-unknown`
 uses an i64 offset and conventional Linux result codes without a libc dependency
-or syscalls. The AV1 decoding algorithm is unchanged. Both bit-depth features are
-enabled and default/assembly features disabled by the
+or syscalls. The public error enum lets callers match target-correct EAGAIN
+without hard-coding Unix errno values. The AV1 decoding algorithm is unchanged.
+Both bit-depth features are enabled and default/assembly features disabled by
+the application and the
 [portability check](../tools/validation/portable-av1/README.md).
 
 That independent check proves exact lossless 8/10/12-bit plane decoding in native

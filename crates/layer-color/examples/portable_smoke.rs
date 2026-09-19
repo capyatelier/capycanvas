@@ -1,5 +1,5 @@
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
-use layer_core::color::{ColorProfile, SampleDepth, RgbSpace};
+use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
 #[unsafe(no_mangle)]
 pub extern "C" fn portable_smoke() -> u32 {
     let profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
@@ -45,4 +45,82 @@ pub extern "C" fn portable_smoke() -> u32 {
     transform.gray(&[[0.5]], &mut values).unwrap();
     assert!(values[0][0] > 0.49 && values[0][0] < 0.51);
     1
+}
+
+/// Exercises application dispatch, Rust AV1, HDR reconstruction and raster
+/// storage together in browsers, with no host codec imports.
+#[unsafe(no_mangle)]
+pub extern "C" fn portable_avif() -> u32 {
+    use layer_color::photo::{DecodeLimits, read_photo_detailed_with_cancel};
+    use std::{
+        io::Cursor,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+    let cancel = AtomicBool::new(false);
+    let limits = DecodeLimits {
+        codec_bytes: 16 * 1024 * 1024,
+        source_bytes: 8 * 1024 * 1024,
+        dimension: 128,
+    };
+    let fixtures: [(&[u8], &[u8], SampleDepth, [u32; 2]); 3] = [
+        (
+            include_bytes!("../tests/fixtures/avif/p3-12bit.avif"),
+            include_bytes!("../tests/fixtures/avif/p3-12bit.rgba16"),
+            SampleDepth::U16,
+            [64, 32],
+        ),
+        (
+            include_bytes!("../tests/fixtures/avif/hdr-rgb.avif"),
+            include_bytes!("../tests/fixtures/avif/hdr-rgb.rgba16f"),
+            SampleDepth::F16,
+            [16, 12],
+        ),
+        (
+            include_bytes!("../tests/fixtures/avif/hdr-small-gray.avif"),
+            include_bytes!("../tests/fixtures/avif/hdr-small-gray.rgba16f"),
+            SampleDepth::F16,
+            [16, 12],
+        ),
+    ];
+    for (encoded, expected, depth, extent) in fixtures {
+        cancel.store(true, Ordering::Release);
+        assert!(read_photo_detailed_with_cancel(Cursor::new(encoded), limits, &cancel).is_err());
+        cancel.store(false, Ordering::Release);
+        assert!(
+            read_photo_detailed_with_cancel(
+                Cursor::new(encoded),
+                DecodeLimits {
+                    codec_bytes: 128 * 1024,
+                    ..limits
+                },
+                &cancel
+            )
+            .is_err()
+        );
+        let photo = read_photo_detailed_with_cancel(Cursor::new(encoded), limits, &cancel).unwrap();
+        assert_eq!(photo.source.extent, extent);
+        assert_eq!(photo.source.interpretation.depth, depth);
+        let mut rows = photo.source.rows();
+        let mut row = vec![0; photo.source.row_bytes()];
+        for (y, expected) in expected.chunks_exact(row.len()).enumerate() {
+            rows.read(y as u32, &mut row).unwrap();
+            if depth == SampleDepth::U16 {
+                assert_eq!(row, expected);
+            } else {
+                for (a, b) in row.chunks_exact(8).zip(expected.chunks_exact(8)) {
+                    let pixel = |b: &[u8]| {
+                        layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| {
+                            u16::from_le_bytes(b[c * 2..c * 2 + 2].try_into().unwrap())
+                        }))
+                        .unwrap()
+                    };
+                    let (a, b) = (pixel(a), pixel(b));
+                    for c in 0..4 {
+                        assert!((a[c].max(0.) - b[c]).abs() < 0.004);
+                    }
+                }
+            }
+        }
+    }
+    3
 }

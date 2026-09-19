@@ -9,6 +9,7 @@ mod jpeg_codec;
 mod jpeg_io;
 mod jpeg_markers;
 mod jpeg_mpf;
+mod avif_io;
 mod memory;
 pub use memory::PhotoMemoryBudget;
 mod gainmap;
@@ -87,7 +88,6 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
         extensions: &["heif", "heic", "hif"],
         mime_types: &["image/heif", "image/heic"],
     },
-    #[cfg(all(feature = "heif", target_os = "linux"))]
     PhotoFormat {
         name: "AVIF",
         extensions: &["avif"],
@@ -97,7 +97,7 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
 pub fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
     PHOTO_FORMATS.iter().filter(|_format| {
         #[cfg(all(feature = "heif", target_os = "linux"))]
-        if matches!(_format.name, "HEIF" | "AVIF") {
+        if _format.name == "HEIF" {
             return heif_io::available();
         }
         true
@@ -221,10 +221,13 @@ fn read_photo_impl(
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
         bmp_io::read(input, limits)
     } else if &signature[4..8] == b"ftyp" {
+        if avif_io::is_avif(&mut input, _cancelled)? {
+            return avif_io::read(input, limits, _cancelled);
+        }
         #[cfg(all(feature = "heif", target_os = "linux"))]
         return heif_io::read(input, limits, _cancelled);
         #[cfg(not(all(feature = "heif", target_os = "linux")))]
-        return Err("HEIF/AVIF decoding is not available on this host".into());
+        return Err("HEIF decoding is not available on this host".into());
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;

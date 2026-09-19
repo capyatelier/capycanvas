@@ -254,7 +254,7 @@ pub(super) fn write(
 struct Pair {
     base: Image,
     gain: Image,
-    metadata: super::jpeg_container::Metadata,
+    metadata: Metadata,
     color: crate::icc::GainMapColor,
 }
 impl Pair {

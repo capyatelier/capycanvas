@@ -31,6 +31,8 @@ impl GainMapMetadata {
 mod native;
 mod jpeg;
 mod jpeg_container;
+mod metadata;
+pub(super) use metadata::Metadata;
 pub fn gainmap_available() -> bool {
     true
 }

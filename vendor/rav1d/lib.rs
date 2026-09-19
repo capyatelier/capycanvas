@@ -48,7 +48,7 @@ pub mod src {
     pub(crate) mod disjoint_mut;
     pub(crate) mod enum_map;
     mod env;
-    pub(crate) mod error;
+    pub mod error;
     mod ffi_safe;
     mod fg_apply;
     mod filmgrain;

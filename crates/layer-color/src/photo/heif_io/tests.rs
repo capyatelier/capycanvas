@@ -237,12 +237,13 @@ fn heif_missing_bundle_hides_formats_and_reports_error() {
     const CHILD: &str = "CAPY_CODEC_UNAVAILABLE_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
         assert!(!available());
-        assert!(!extensions().any(|name| matches!(name, "heif" | "heic" | "avif")));
+        assert!(!extensions().any(|name| matches!(name, "heif" | "heic")));
+        assert!(extensions().any(|name| name == "avif"));
         assert!(
-            !mime_types().any(|mime| matches!(mime, "image/heif" | "image/heic" | "image/avif"))
+            !mime_types().any(|mime| matches!(mime, "image/heif" | "image/heic"))
         );
         let message = read_photo_detailed(
-            Cursor::new(b"\0\0\0\x10ftypavif\0\0\0\0"),
+            Cursor::new(b"\0\0\0\x10ftypheic\0\0\0\0"),
             Default::default(),
         )
         .err()
@@ -504,7 +505,7 @@ fn heif_avif_real_metadata_and_sdr_policy() {
 
 #[test]
 #[ignore = "requires independent libavif/AOM references from tools/validation/avif_reference.c"]
-fn heif_avif_bitstream_color_rotation_alpha_and_gainmap_match_reference() {
+fn heif_avif_bitstream_color_rotation_and_alpha_match_reference() {
     let root = std::path::PathBuf::from(
         std::env::var_os("LAYER_AVIF_REFERENCES").expect("AVIF references"),
     );
@@ -526,13 +527,6 @@ fn heif_avif_bitstream_color_rotation_alpha_and_gainmap_match_reference() {
         (
             "abc_color_irot_alpha_irot",
             [256, 512],
-            SampleDepth::U8,
-            RgbSpace::Srgb,
-            257,
-        ),
-        (
-            "seine_sdr_gainmap_srgb",
-            [400, 300],
             SampleDepth::U8,
             RgbSpace::Srgb,
             257,
@@ -587,9 +581,7 @@ fn heif_avif_bitstream_color_rotation_alpha_and_gainmap_match_reference() {
             max_rgb_error <= tolerance,
             "{name}: RGB differs by {max_rgb_error}/65535"
         );
-        if name != "seine_sdr_gainmap_srgb" {
-            assert!(partial_alpha > 0);
-        }
+        assert!(partial_alpha > 0);
     }
     // This independent AOM decode reports P3/PQ from the AV1 payload even with
     // colr absent. The application must still detect and reject that HDR input.

@@ -280,7 +280,7 @@ impl GainMapColor {
         let base = open(base)?;
         let mut linear = match application { Some(p) => open(p)?, None => base.clone() };
         if !matrix_only(&base) || !matrix_only(&linear) {
-            return Err("JPEG gain maps require a matrix RGB color profile".into());
+            return Err("Gain maps require a matrix RGB color profile".into());
         }
         linear.red_trc = Some(ToneReprCurve::Parametric(vec![1.]));
         linear.green_trc = linear.red_trc.clone();

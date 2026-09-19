@@ -74,6 +74,15 @@
 
  pub mod include {
      pub mod common {
+@@ -46,7 +48,7 @@
+     pub(crate) mod disjoint_mut;
+     pub(crate) mod enum_map;
+     mod env;
+-    pub(crate) mod error;
++    pub mod error;
+     mod ffi_safe;
+     mod fg_apply;
+     mod filmgrain;
 --- /dev/null
 +++ b/vendor/rav1d/portable.rs
 @@ -0,0 +1,22 @@
