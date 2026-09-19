@@ -67,7 +67,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneStatus(
     let animated = a.host.session.engine().document().has_animated_effects()
         && (a.host.session.engine().animation_time() - a.tone.analysed_time).abs() >= 0.5;
     string(&mut env,Ok(serde_json::json!({"generation":a.tone.generation,"hdr":a.tone.key.is_some(),"ready":a.tone.guide.is_some(),"error":a.tone.error,
-        "display_hdr":a.hdr_capable(),"compositor_hdr":a.compositor_hdr(),"display_headroom":a.hdr_headroom(),"reported_headroom":a.display_headroom,"requested_headroom":a.requested_headroom(),"proof_mode":a.host.session.proof_panel_mode(),
+        "display_hdr":a.hdr_capable(),"hdr_output":a.hdr_output(),"proof_mode":a.host.session.proof_panel_mode(),
         "needed":a.tone.key.is_some()&&(a.tone.guide.is_none()||animated)&&a.tone.error.is_none()&&a.host.session.require_document_snapshot_idle().is_ok()}).to_string()))
 }
 #[unsafe(no_mangle)]

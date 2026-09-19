@@ -334,10 +334,11 @@ display with useful headroom; global phase-4 signoff remains open.
 
 ## Android compositor-managed HDR review — 2026-09-19
 
-The [PQ follow-up](../development/android-hdr-display.md#android-managed-pq-follow-up)
+The [PQ follow-up](../development/android-hdr-display.md#pq-display-validation)
 supersedes Android's 1.05× SDR-fallback threshold. HDR Off now submits PQ to
 Android with automatic brightness policy, independently of reported headroom;
 SDR/Print retain explicit mapped output. The shared GPU numerical oracle and
 actual tablet display switching/recovery tests validate the signal route. The
-user's physical display review remains pending; Color controls and layer
-thumbnails remain SDR previews. This is not whole phase-4 signoff.
+user accepted the tablet's HDR appearance. Final cleanup removes unused
+headroom feedback, simulation plumbing and verbose footer details; the status
+reads **HDR**. Color controls and layer thumbnails remain SDR previews. This is not whole phase-4 signoff.
