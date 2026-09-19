@@ -179,22 +179,7 @@ impl WebApp {
         let candidate = c.workflow.preview(&self.session, c.converted.clone(), c.control.is_cancelled(), true).map_err(js)?;
         Ok(future_to_promise(async move {
             for project in [&c.workflow.project, &candidate] {
-                let mut snapshot = c
-                    .gpu
-                    .capture(
-                        project.clone(),
-                        c.background,
-                        c.time,
-                        Default::default(),
-                        c.control.clone(),
-                    )
-                    .map_err(js)?;
-                c.previews.push(
-                    snapshot
-                        .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
-                        .await
-                        .map_err(js)?,
-                );
+                c.previews.push(hdr::preview_document(&c.gpu,project.clone(),c.background,c.time,c.control.clone()).await?);
             }
             output::cancelled(&c.control)?;
             c.workflow.comparison_completed().map_err(js)?;

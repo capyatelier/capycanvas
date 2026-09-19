@@ -120,6 +120,7 @@ impl WebApp {
         source_name: Option<String>,
         options: JsValue,
         interpret: Option<js_sys::Function>,
+        cancelled: Option<js_sys::Function>,
     ) -> Result<js_sys::Promise, JsValue> {
         self.session.require_document_idle().map_err(js)?;
         if self.session.state().document_file.epoch != epoch
@@ -196,6 +197,11 @@ impl WebApp {
                 serde_wasm_bindgen::from_value(options).map_err(js)?
             };
         Ok(future_to_promise(async move {
+            let check_cancelled=||->Result<(),JsValue>{
+                if let Some(check)=&cancelled {if check.call0(&JsValue::NULL)?.as_bool()==Some(true){let error=js_sys::Error::new("Opening cancelled");error.set_name("AbortError");return Err(error.into());}}
+                Ok(())
+            };
+            check_cancelled()?;
             // Yield before decoding so the file-progress UI is painted first.
             yield_browser().await?;
             let limits = ProjectLimits {
@@ -222,6 +228,7 @@ impl WebApp {
                 }
                 None => layer_ui::ImportedDocument { project: new_options.project().map_err(js)?, source: layer_ui::ImportSource::Master },
             };
+            check_cancelled()?;
             if let Some(source) = imported.interpretation_required(photo_policy) {
                     let callback = interpret
                         .as_ref()
@@ -237,7 +244,6 @@ impl WebApp {
                     let profile = serde_wasm_bindgen::from_value(choice).map_err(js)?;
                     imported.interpret(profile).map_err(js)?;
             }
-            layer_ui::require_sdr_host(&imported.project.document, "Web").map_err(js)?;
             let source_kind = imported.source;
             let project = imported.project;
             if placing {
@@ -299,6 +305,7 @@ impl WebApp {
             renderer.startup_catalog_submitted();
             let start = js_sys::Date::now();
             loop {
+                check_cancelled()?;
                 renderer.compile_startup_step().await.map_err(js)?;
                 if validating && let Some(result) = renderer.take_effect_validation() {
                     result.result.map_err(js)?;
@@ -312,6 +319,18 @@ impl WebApp {
                     return Err(js("Project canvas preparation timed out"));
                 }
                 yield_browser().await?;
+            }
+            // Finite-range and digest validation of cold HDR samples can take
+            // seconds at photo sizes. Yield in bounded batches before rendering.
+            if project.document.color.depth.is_float() {
+                let mut batch=0;
+                for source in project.document.layers.iter().filter_map(|layer| layer.source.as_ref()) {
+                    for tile in source.tiles.values() {
+                        renderer.prepare_source_sample(tile).map_err(js)?;
+                        batch+=1;
+                        if batch==4 {batch=0;yield_browser().await?;check_cancelled()?;}
+                    }
+                }
             }
             let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
             let gpu = WebGpu {

@@ -1717,7 +1717,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (enabled, selected) = self.command_flags(id);
         let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
             "Restore Starting Layout…"
-        } else if id == CommandId::SoftProof && self.state.platform == Platform::Gtk {
+        } else if id == CommandId::SoftProof && matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) {
             "Proof"
         } else {
             id.label()
@@ -1777,7 +1777,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::SoftProof if self.state.platform == Platform::Gtk => self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SoftProof if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProof => document.proof.is_some()
                 || (self.require_document_idle().is_ok() && !self.state.document_file.busy),
             CommandId::GamutWarning => document.proof.is_some(),
@@ -3455,7 +3455,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request(HostRequestKind::SoftProofSetup)?;
                 Ok((HOST, false))
             }
-            CommandId::SoftProof if self.state.platform == Platform::Gtk => {
+            CommandId::SoftProof if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) => {
                 let change = self.toggle_proof()?;
                 let mut regions = change.regions;
                 if self.proof_panel_mode() != ProofMode::Off {
@@ -4098,7 +4098,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let icon = self.command_icon(id);
             let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
                 "Restore Starting Layout…"
-            } else if id == CommandId::SoftProof && self.state.platform == Platform::Gtk {
+            } else if id == CommandId::SoftProof && matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android) {
                 "Proof"
             } else {
                 id.label()

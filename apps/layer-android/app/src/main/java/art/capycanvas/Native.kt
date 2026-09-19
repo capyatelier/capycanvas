@@ -52,6 +52,7 @@ internal object Native {
     @JvmStatic external fun projectProfilePrompt(task: Long): String
     @JvmStatic external fun projectAssumeProfile(task: Long, profile: String)
     @JvmStatic external fun projectOptions(task: Long, options: String)
+    @JvmStatic external fun projectOpenControl(task: Long, control: Long)
     @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)
     @JvmStatic external fun projectAdopt(handle: Long, task: Long, location: String)
     @JvmStatic external fun projectFree(task: Long)
@@ -73,6 +74,14 @@ internal object Native {
     @JvmStatic external fun colorWriteCopy(task: Long, fd: Int)
     @JvmStatic external fun colorFree(task: Long)
     @JvmStatic external fun captureControl(): Long
+    @JvmStatic external fun proofTexture(edge: Int): IntArray
+    @JvmStatic external fun proofControl(handle: Long, action: String)
+    @JvmStatic external fun toneStatus(handle: Long): String
+    @JvmStatic external fun toneTask(handle: Long, control: Long): Long
+    @JvmStatic external fun toneWork(task: Long)
+    @JvmStatic external fun toneApply(handle: Long, task: Long)
+    @JvmStatic external fun toneFailed(handle: Long, generation: Int, error: String)
+    @JvmStatic external fun toneRelease(task: Long)
     @JvmStatic external fun proofStatus(handle: Long): String
     @JvmStatic external fun proofForm(handle: Long): String
     @JvmStatic external fun presentationTimings(handle: Long, enabled: Boolean): String
@@ -97,5 +106,6 @@ internal object Native {
     @JvmStatic external fun colorPanelLayout(size: Float): String
     @JvmStatic external fun colorHueStops(shape: String, space: String): String
     /** Shared sRGB field raster as Android ARGB pixels; no session access. */
+    @JvmStatic external fun colorFieldMapped(size: Int, state: String, rendition: String): IntArray
     @JvmStatic external fun colorFieldPixels(size: Int, hue: Float, shape: String, space: String): IntArray
 }

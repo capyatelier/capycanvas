@@ -154,21 +154,7 @@ impl WebApp {
                     (original, old_background),
                     (project.clone(), view.background_rgba_linear),
                 ] {
-                    let mut snapshot = gpu
-                        .capture(
-                            source,
-                            background,
-                            time,
-                            Default::default(),
-                            control.clone(),
-                        )
-                        .map_err(js)?;
-                    previews.push(
-                        snapshot
-                            .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
-                            .await
-                            .map_err(js)?,
-                    );
+                    previews.push(hdr::preview_document(&gpu,source,background,time,control.clone()).await?);
                 }
             }
             let renderer = if copy {

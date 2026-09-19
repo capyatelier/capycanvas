@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -149,7 +150,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
         Text(view.getString("title"), fontWeight = FontWeight.Bold)
         if(curves.isNotEmpty()) {
             PropertyChoice("Channel", curves.map { it.getString("label") }, selectedCurve, enabled) { selectedCurve = it }
-            CurveControl(host, layer, curves[selectedCurve.coerceIn(curves.indices)], enabled)
+            CurveControl(host, layer, curves[selectedCurve.coerceIn(curves.indices)], enabled, if(view.isNull("curve_max"))null else view.number("curve_max"))
         }
         controls.forEachIndexed { index, control ->
             val section = control.takeUnless { it.isNull("section") }?.getString("section")
@@ -210,7 +211,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     }
 }
 
-@Composable private fun CurveControl(host: CanvasHost, layer: Long, control: JSONObject, enabled: Boolean) {
+@Composable private fun CurveControl(host: CanvasHost, layer: Long, control: JSONObject, enabled: Boolean, curveMax:Float?) {
     val colors = LocalPalette.current
     val current by rememberUpdatedState(control)
     val key = control.getString("key")
@@ -243,6 +244,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             drawLine(colors.text.copy(alpha=.2f),Offset(size.width*i/4,0f),Offset(size.width*i/4,size.height))
             drawLine(colors.text.copy(alpha=.2f),Offset(0f,size.height*i/4),Offset(size.width,size.height*i/4))
         }
+        curveMax?.let{peak->val white=1f/peak;drawLine(colors.text,Offset(size.width*white,0f),Offset(size.width*white,size.height),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)));drawLine(colors.text,Offset(0f,size.height*(1-white)),Offset(size.width,size.height*(1-white)),pathEffect=PathEffect.dashPathEffect(floatArrayOf(3f,3f)))}
         val path = Path()
         control.getJSONArray("plot").values().forEachIndexed { i, raw ->
             val p = raw as JSONArray; val x = p.getDouble(0).toFloat()*size.width; val y = (1-p.getDouble(1).toFloat())*size.height
@@ -253,6 +255,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             val p=raw as JSONArray;drawCircle(colors.text,(if(selected==i)5f else 3.5f).dp.toPx(),Offset(p.getDouble(0).toFloat()*size.width,(1-p.getDouble(1).toFloat())*size.height))
         }
     }
+    curveMax?.let{Text("SDR white · 0 EV; range 0–${it.toInt()} (+${kotlin.math.log2(it).toInt()} EV)",style=MaterialTheme.typography.labelSmall)}
     val count = control.getJSONObject("value").getJSONArray("value").length()
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         TextButton(enabled = enabled && selected != null && selected!! > 0 && selected!! < count - 1,

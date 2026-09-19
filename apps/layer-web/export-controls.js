@@ -10,6 +10,8 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const number=(label,value,min,max)=>{const node=element("input");Object.assign(node,{type:"number",value,min,max,step:1});return field(label,node);};
     form.append(element("p","","Export a profiled copy. The editable drawing stays unchanged."));
     const destination=select("Destination",library.names.map((name,i)=>[i,name]));
+    const range=select("Dynamic range",app.document_color().depth==="F16"?[["sdr","SDR rendition"],["hdr","HDR PNG · BT.2020 PQ"]]:[["sdr","SDR"]]);
+    const clip=field("Clip out-of-range HDR colors",element("input"));clip.type="checkbox";
     const format=select("Format",[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"]]);
     const profile=select("Output profile",model.profiles.map((p,i)=>[i,p.name]));
     const depth=select("Bit depth",[["U8","8-bit"],["U16","16-bit"]]);
@@ -20,10 +22,10 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const size=select("Pixel size",[["Original","Original"],["Fit","Fit within bounds"]]);
     const width=number("Maximum width",2048,1,32768),height=number("Maximum height",2048,1,32768);
     const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
-    const visible=()=>{quality.closest("label").hidden=format.value!=="Jpeg";for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
+    const visible=()=>{const hdr=range.value==="hdr";clip.closest("label").hidden=!hdr;for(const n of[format,profile,depth,background,intent,dither])n.closest("label").hidden=hdr;quality.closest("label").hidden=format.value!=="Jpeg";for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
     const load=()=>{
       if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
-      format.value=recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
+      range.value=recipe.format.startsWith("PngHdr")?"hdr":"sdr";clip.checked=recipe.format==="PngHdrMapped";format.value=range.value==="hdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
       intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
       if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;visible();
     };
@@ -35,6 +37,8 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       }
       load();
     };
+    range.onchange=()=>updateDraft({type:"format",value:range.value==="hdr"?(clip.checked?"PngHdrMapped":"PngHdr"):"Png"});
+    clip.onchange=()=>updateDraft({type:"format",value:clip.checked?"PngHdrMapped":"PngHdr"});
     format.onchange=()=>updateDraft({type:"format",value:format.value});
     profile.onchange=()=>updateDraft({type:"profile",value:model.profiles[Number(profile.value)]});
     depth.onchange=()=>updateDraft({type:"depth",value:depth.value});
@@ -46,11 +50,11 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       catch(e){error.textContent=String(e);}
     }));
     form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
-    const readRecipe=()=>({format:format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
+    const readRecipe=()=>({format:range.value==="hdr"?(clip.checked?"PngHdrMapped":"PngHdr"):format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
       size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
       resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
-    const selected=()=>app.export_validate(readRecipe());
+    const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
     const presetName=field("Preset name",element("input"));presetName.maxLength=80;
     const presetButtons=element("div","document-size");
@@ -84,7 +88,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
           output.previews.forEach((image,index)=>{const figure=element("figure"),canvas=element("canvas");[canvas.width,canvas.height]=image.extent;
             canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?"Output preview":"Artwork preview");
             figure.append(canvas,element("figcaption","",index?"Output":"Artwork"));comparison.append(figure);});
-          status.textContent="sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts."+(output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
+          status.textContent=(recipe.format.startsWith("PngHdr")?"Mapped SDR preview of PQ delivery. Native HDR display and gain-map delivery are unavailable on Web.":"sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")+(output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
         }catch(e){if(!closed&&!control.cancelled())error.textContent=String(e);}
         finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);presetAvailability();}}
       })();

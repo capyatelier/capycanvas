@@ -1,4 +1,4 @@
-import { chooseColor, choosePalette } from './color-controls.js';
+import { chooseColor } from './color-controls.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const updates = new Map(), navigators = new Set();
@@ -77,23 +77,31 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
   }
   function colorWheel(root) {
     const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
-    const edit=button("Edit Color…",async()=>{
+    const edit=button("",async()=>{
       const slot=state().colors.slot==="background"?"background":"foreground";
-      const selected=await chooseColor({app,color:state().colors[slot],element,button});
-      if(selected)color({op:"set_slot",slot,color:selected});
-    });
-    const palettes=button("Palettes…",async()=>{const slot=state().colors.slot==="background"?"background":"foreground";
-      const selected=await choosePalette({app,element,button,applyChange});if(selected)color({op:"set_slot",slot,color:selected});});
-    const tools=element("div","color-library-actions");tools.append(edit,palettes);root.append(tools);
+      let intensity;const selected=await chooseColor({app,color:state().colors[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
+      if(selected)color(intensity==null?{op:"set_slot",slot,color:selected}:{op:"set_slot_intensity",slot,color:selected,stops:intensity});
+    },"color-edit color-utility");
+    edit.title="Edit Color…";edit.setAttribute("aria-label","Edit Color");edit.append(icon("pencil"));stage.append(edit);
     const wheel=element("canvas","color-wheel");wheel.setAttribute("aria-label","Color wheel");stage.append(wheel);
     // Paint order also controls hit testing in the intentional swatch overlap.
     const choices=["background","foreground","transparent"].map(slot=>{
-      const node=button("",()=>color({op:"select",slot}),"color-swatch");node.dataset.colorSlot=slot;
+      const node=button("",()=>color({op:"select",slot}),"color-swatch");node.dataset.colorSlot=slot;node.ondblclick=()=>{if(slot!=='transparent'){color({op:'select',slot});edit.click();}};
       const paint=element("span");node.append(paint);stage.append(node);return{slot,node,paint};
     });
     const shapes=[0,1].map(i=>{const node=button("",()=>color({op:"shape",shape:view.other_shapes[i]}),"color-shape");stage.append(node);return node;});
     const swap=button("",()=>color({op:"swap"}),"color-swap color-utility");
     swap.title="Swap foreground and background";swap.setAttribute("aria-label",swap.title);swap.append(icon("color-swap"));stage.append(swap);
+    const arc=document.createElementNS("http://www.w3.org/2000/svg","svg"),track=document.createElementNS(arc.namespaceURI,"path"),marker=document.createElementNS(arc.namespaceURI,"circle");
+    arc.classList.add('color-intensity');arc.style.cssText='position:absolute;inset:0;overflow:visible;pointer-events:none';
+    track.setAttribute('fill','none');track.setAttribute('stroke','transparent');track.setAttribute('stroke-linecap','round');track.style.pointerEvents='stroke';track.style.touchAction='none';track.setAttribute('tabindex','0');track.setAttribute('role','slider');track.setAttribute('aria-label','Color intensity');
+    const ramp=document.createElementNS(arc.namespaceURI,'g'),caption=document.createElementNS(arc.namespaceURI,'text');ramp.style.pointerEvents='none';caption.style.pointerEvents='none';caption.setAttribute('fill','currentColor');arc.append(ramp);
+    marker.setAttribute('fill','white');marker.setAttribute('stroke','black');marker.setAttribute('stroke-width','2');arc.append(track,marker,caption);stage.append(arc);
+    let arcContact=null,originalIntensity=0;
+    const arcPick=e=>{const r=stage.getBoundingClientRect();const hit=app.color_ui({type:'arc',size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});color({op:'hdr_intensity',stops:-2+8*hit.fraction});};
+    track.onpointerdown=e=>{if(e.button!==0||state().colors.slot==='transparent')return;arcContact=e.pointerId;originalIntensity=view.intensity;track.setPointerCapture(e.pointerId);e.preventDefault();arcPick(e);};track.onpointermove=e=>{if(e.pointerId===arcContact)arcPick(e)};track.onpointerup=e=>{if(e.pointerId===arcContact){arcPick(e);arcContact=null;}};
+    for(const event of ['pointercancel','lostpointercapture'])track.addEventListener(event,e=>{if(e.pointerId===arcContact){arcContact=null;color({op:'hdr_intensity',stops:originalIntensity});}});
+    track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
     let view,layout,layoutWidth=0,paintKey="",fieldKey="",ringKey="";
@@ -103,12 +111,17 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
       const width=stage.clientWidth;if(!view||width<128)return;
-      if(width!==layoutWidth){
-        layoutWidth=width;layout=app.color_panel_layout(width);
+      if(width!==layoutWidth||layout?.hdr!==view.hdr){
+        layoutWidth=width;layout=app.color_ui({type:"layout",size:width,hdr:view.hdr});layout.hdr=view.hdr;stage.style.height=`${layout.height}px`;const outer=frame.clientWidth;const ratio=app.color_ui({type:"layout",size:outer,hdr:view.hdr}).height/outer;frame.style.aspectRatio=`1 / ${ratio}`;stage.style.width=`min(100cqw,${100/ratio}cqh)`;
         place(wheel,layout.wheel);
         choices.forEach(({slot,node})=>place(node,layout[slot]));
         shapes.forEach((node,i)=>place(node,layout.shapes[i]));
-        place(swap,layout.swap);place(readout,layout.readout);
+        place(swap,layout.swap);place(readout,layout.readout);place(edit,layout.edit);
+      }
+      arc.hidden=!view.hdr;arc.style.display=view.hdr?'':'none';
+      if(view.hdr){const g=app.color_ui({type:'arc',size:width,fraction:(view.intensity+2)/8});const a=g.geometry,start=app.color_ui({type:'arc',size:width,fraction:0}).point,end=app.color_ui({type:'arc',size:width,fraction:1}).point;arc.setAttribute('width',width);arc.setAttribute('height',layout.height);track.setAttribute('d',`M${start} A${a.radius} ${a.radius} 0 0 0 ${end}`);track.setAttribute('stroke-width',a.width);marker.setAttribute('cx',g.point[0]);marker.setAttribute('cy',g.point[1]);marker.setAttribute('r',a.marker_radius);track.setAttribute('aria-valuenow',view.intensity);track.setAttribute('aria-valuetext',`${view.intensity.toFixed(1)} EV`);track.setAttribute('aria-valuemin','-2');track.setAttribute('aria-valuemax','6');
+        ramp.replaceChildren(...g.path.slice(1).map((p,i)=>{const segment=document.createElementNS(arc.namespaceURI,'path');segment.setAttribute('d',`M${g.path[i]} L${p}`);segment.setAttribute('stroke',rgba(view.intensity_ramp[i]));segment.setAttribute('stroke-width',a.width);segment.setAttribute('stroke-linecap','round');return segment;}));marker.setAttribute('fill',rgba(view.marker_color));
+        const font=Math.min(12,Math.max(9,width*.044)),radius=a.radius+a.width/2+font+3,x=a.center[0]+radius*Math.cos(76*Math.PI/180),y=a.center[1]+radius*Math.sin(76*Math.PI/180);caption.setAttribute('x',x);caption.setAttribute('y',y);caption.setAttribute('text-anchor','middle');caption.setAttribute('font-size',font);caption.setAttribute('transform',`rotate(-14 ${x} ${y})`);caption.textContent=`${view.intensity>=0?'+':''}${view.intensity.toFixed(2)} EV`;
       }
       shapes.forEach((node,i)=>{node.firstElementChild.style.transform=`rotate(${layout.shape_rotations[i]}deg)`;});
       const half=layout.readout[2],r=layout.wheel[2]*view.geometry.outer+2;
@@ -121,7 +134,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
       const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
-      const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],fieldPixels]);
+      const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],view.intensity,view.rendition,fieldPixels]);
       if(key!==fieldKey) {
         fieldKey=key;if(field.width!==fieldPixels){field.width=field.height=fieldPixels;}
         const bytes=app.color_field_pixels(fieldPixels);
@@ -182,10 +195,11 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     // Preserve native button activation instead of treating Space as canvas pan.
     for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});
     for(const name of ["focus","blur"])readout.addEventListener(name,draw);
-    const resize=new ResizeObserver(draw);resize.observe(stage);
-    root.navigatorDispose=()=>resize.disconnect();
+    let resizeFrame;const resize=new ResizeObserver(()=>{if(!resizeFrame)resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;draw()})});resize.observe(stage);
+    root.navigatorDispose=()=>{resize.disconnect();cancelAnimationFrame(resizeFrame)};
     return ()=>{
       view=app.color_panel();
+      edit.disabled=state().colors.slot==="transparent";
       choices.forEach(choice=>{
         const {slot,node,paint}=choice,swatch=view.swatches.find(s=>s.slot===slot),key=JSON.stringify(swatch);if(choice.key===key)return;choice.key=key;
         if(node.title!==swatch.label){node.setAttribute("aria-label",swatch.label);node.title=swatch.label;}

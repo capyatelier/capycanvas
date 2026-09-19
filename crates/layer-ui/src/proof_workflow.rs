@@ -6,6 +6,27 @@ use layer_render::CanvasRenderer;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Image-analysis identity deliberately excludes camera, proof and rendition
+/// settings. Hosts additionally check their GPU generation before publishing.
+#[derive(Clone, PartialEq)]
+pub struct ToneKey {
+    epoch: u64,
+    color: layer_core::color::DocumentColor,
+    extent: [u32; 2],
+    background: [f32; 4],
+    layers: Vec<layer_core::Layer>,
+}
+impl ToneKey {
+    pub fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Option<Self> {
+        let d = s.engine().document();
+        (d.color.depth.is_float() && !s.rendering_suspended()).then(|| Self {
+            epoch: s.state().document_file.epoch, color: d.color,
+            extent: [d.width, d.height], background: s.engine().view().background_rgba_linear,
+            layers: d.layers.iter().map(layer_core::Layer::composite_snapshot).collect(),
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofKey {
     epoch: u64,
@@ -26,6 +47,8 @@ impl ProofKey {
 pub struct ProofPreparation {
     original: ProofKey,
     request: Option<u32>,
+    #[serde(default)]
+    edit: bool,
     pub recipe: ProofRecipe,
 }
 impl ProofPreparation {
@@ -42,9 +65,16 @@ impl ProofPreparation {
         let job = Self {
             original,
             request,
+            edit: request.is_some(),
             recipe,
         };
         job.validate(s)?;
+        Ok(job)
+    }
+    pub fn panel<R: CanvasRenderer>(s: &UiSession<R>, recipe: ProofRecipe) -> Result<Self,String> {
+        let mut job=Self::begin(s,None,Some(recipe))?;
+        s.require_document_idle()?;
+        job.edit=true;
         Ok(job)
     }
     pub fn space(&self) -> RgbSpace {
@@ -63,8 +93,11 @@ impl ProofPreparation {
         if ProofKey::current(s) != self.original || s.rendering_suspended() {
             return Err("The drawing changed; reopen Proof Setup".into());
         }
-        if let Some(id) = self.request {
+        if self.edit {
             s.require_document_idle()?;
+            if s.state().document_file.busy { return Err("A document operation is in progress".into()); }
+        }
+        if let Some(id) = self.request {
             if s.state().document_file.busy
                 || !s
                     .state()
@@ -80,7 +113,7 @@ impl ProofPreparation {
     /// Only the replaced embedded ICC needs a durable local copy. Builtins are
     /// always selectable. The document still embeds only its active recipe.
     pub fn preservation(&self) -> Option<&[u8]> {
-        if self.request.is_none() {
+        if !self.edit {
             return None;
         }
         let old = self.original.recipe.as_ref()?;
@@ -101,11 +134,13 @@ impl ProofPreparation {
         if self.preservation().is_some() && !preserved {
             return Err("Save the original in Saved Profiles before replacing it".into());
         }
-        if let Some(id) = self.request {
+        if self.edit {
             let mut change = s.set_proof_recipe(Some(self.recipe.clone()))?;
-            let done = s.dispatch(UiAction::CompleteRequest { id, error: None })?;
-            change.regions |= done.regions;
-            change.revision = done.revision;
+            if let Some(id) = self.request {
+                let done = s.dispatch(UiAction::CompleteRequest { id, error: None })?;
+                change.regions |= done.regions;
+                change.revision = done.revision;
+            }
             Ok(change)
         } else {
             Ok(UiChange {
@@ -213,6 +248,12 @@ impl ProofView {
 pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
     let document = s.engine().document();
     serde_json::json!({
+        "mode": s.proof_panel_mode(),
+        "hdr": document.color.depth.is_float(),
+        "rendition": s.effective_sdr_rendition(),
+        "numbers": crate::proof_panel::sdr_number_controls(),
+        "pad": crate::proof_panel::sdr_tone_pad(),
+        "pad_values": crate::proof_panel::sdr_pad_values(s.effective_sdr_rendition()),
         "recipe": document.proof.clone().unwrap_or_else(|| ProofRecipe::new(document.color.space.name().into(), ColorProfile::Builtin(document.color.space))),
         "document_profile": document.proof,
         "profiles": RgbSpace::ALL.map(crate::ExportProfile::builtin),

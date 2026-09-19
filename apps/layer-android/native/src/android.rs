@@ -284,11 +284,14 @@ impl App {
                 })
             })
             .collect();
+        let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
+        surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
+        surface.presenter.set_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
             surface.config.width = extent[0];

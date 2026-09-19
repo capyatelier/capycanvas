@@ -45,6 +45,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         private set
     private var profileDecision: CompletableDeferred<JSONObject?>? = null
     fun chooseProfile(value: JSONObject?) { profileDecision?.complete(value); profilePrompt = null }
+    var opening by mutableStateOf(false)
+        private set
     var exporting by mutableStateOf(false)
         private set
     var publishing by mutableStateOf(false)
@@ -53,7 +55,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         private set
     private var exportControl = 0L
     fun cancelExport() {
-        if (exporting && !publishing) { exportCancelled = true; if (exportControl != 0L) Native.captureCancel(exportControl) }
+        if ((exporting || opening) && !publishing) { exportCancelled = true; profileDecision?.complete(null); if (exportControl != 0L) Native.captureCancel(exportControl) }
     }
     private var activeId: Int? = null
     private var approval = 0L to 0L
@@ -132,13 +134,14 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     val extensions = when (exportRecipe?.getString("format")) { "Tiff" -> listOf("tif", "tiff"); "Jpeg" -> listOf("jpg", "jpeg"); else -> listOf("png") }
                     check(location!!.getString("name").substringAfterLast('.').lowercase() in extensions) { "Use a .${extensions.first()} filename for this image format." }
                 }
-                if (kind == "export") { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = true }
+                if (kind in listOf("export", "open", "new")) { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = kind == "export"; opening = !exporting }
                 if (kind == "export") withTimeout(30_000) {
                     while (task == 0L) {
                         task = host.withNative { Native.projectExportTask(it, id, System.nanoTime(), control) }
                         if (task == 0L) { host.documentChanged(); delay(16) }
                     }
                 } else task = host.withNative { Native.projectTask(it, id, location?.toString() ?: "null", approved.first, approved.second) }
+                if (opening) Native.projectOpenControl(task, control)
                 if (kind == "save" || kind == "export") {
                     // Finish encoding before opening/truncating the destination.
                     temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", if (kind == "export") ".png" else ".capy", application.cacheDir) }
@@ -168,6 +171,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         if (options != null) Native.projectOptions(task, options.toString())
                         Native.projectWork(task, fd, width, height)
                     }
+                    if (exportCancelled) { finish(id, false); return@launch }
                     val prompt = withContext(Dispatchers.IO) { Native.projectProfilePrompt(task) }
                     if (prompt != "null") {
                         val decision = CompletableDeferred<JSONObject?>(); profileDecision = decision; profilePrompt = JSONObject(prompt)
@@ -175,6 +179,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         if (profile == null) { finish(id, false); return@launch }
                         withContext(Dispatchers.IO) { Native.projectAssumeProfile(task, profile.toString()); Native.projectWork(task, -1, 0, 0) }
                     }
+                    if (exportCancelled) { finish(id, false); return@launch }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
                     host.documentChanged()
                     if (kind == "new" || kind == "open") host.recovery.retire()
@@ -183,9 +188,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 withContext(NonCancellable) { finish(id, false) }
                 throw e
             } catch (e: Exception) {
-                finish(id, false, if (kind == "export" && exportCancelled) null else e.message ?: "Could not complete the file operation")
+                finish(id, false, if (exportCancelled) null else e.message ?: "Could not complete the file operation")
             } finally {
-                exportControl = 0; exporting = false; publishing = false
+                exportControl = 0; exporting = false; opening = false; publishing = false
                 withContext(NonCancellable + Dispatchers.IO) { if (task != 0L) Native.projectFree(task); if (control != 0L) Native.captureFree(control); temporary?.delete() }
                 working = false
             }
@@ -220,12 +225,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     if (histogramOpen) HistogramWindow(host) { histogramOpen = false }
     val controller = host.documents
-    if (controller.exporting) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
+    if (controller.exporting || controller.opening) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
         properties = androidx.compose.ui.window.PopupProperties(focusable = false)) {
         Surface(shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium, modifier = Modifier.padding(16.dp)) {
             Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text(if (controller.publishing) "Writing image…" else if (controller.exportCancelled) "Cancelling…" else "Preparing image…")
+                Text(if (controller.publishing) "Writing image…" else if (controller.exportCancelled) "Cancelling…" else if (controller.opening) "Preparing drawing…" else "Preparing image…")
                 TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text("Cancel") }
             }
         }

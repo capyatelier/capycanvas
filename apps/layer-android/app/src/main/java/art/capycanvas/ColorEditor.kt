@@ -37,13 +37,15 @@ private fun colorEpoch(host: CanvasHost): Long =
     editing?.let { color -> ColorEditorDialog(host, color, { editing = null }) { selected -> editing = null; onChange(selected) } }
 }
 
-@Composable internal fun ColorEditorDialog(host: CanvasHost, initial: JSONObject, onDismiss: () -> Unit, onUse: (JSONObject) -> Unit) {
+@Composable internal fun ColorEditorDialog(host: CanvasHost, initial: JSONObject, onDismiss: () -> Unit, initialIntensity:Float?=null, onIntensity:(Float?)->Unit={}, onUse: (JSONObject) -> Unit) {
     val epoch = remember { colorEpoch(host) }
+    val hdrIntensity=initialIntensity ?: if(host.panelContent?.objectOrNull("color_panel")?.optBoolean("hdr")==true)0f else null
     var form by remember {
         mutableStateOf(JSONObject(Native.colorUi(obj("type" to "form", "request" to obj(
-            "color" to initial, "document_space" to documentRgbSpace(host), "model" to "document_rgb"
+            "color" to initial, "document_space" to documentRgbSpace(host), "model" to (if(hdrIntensity!=null)"linear_rgb" else "document_rgb"), "intensity" to hdrIntensity, "rendition" to host.panelContent?.objectOrNull("color_panel")?.objectOrNull("rendition")
         )).toString())))
     }
+    var intensityText by remember {mutableStateOf(if(form.getJSONObject("draft").isNull("intensity"))"" else form.getJSONObject("draft").getDouble("intensity").toString())}
     var transportError by remember { mutableStateOf<String?>(null) }
     fun change(draft: JSONObject) {
         try { form = JSONObject(Native.colorUi(obj("type" to "form", "request" to draft).toString())); transportError = null }
@@ -55,7 +57,7 @@ private fun colorEpoch(host: CanvasHost): Long =
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit Color") },
         confirmButton = {
             TextButton(enabled = !form.isNull("value") && transportError == null, onClick = {
-                if (colorEpoch(host) == epoch) onUse(form.getJSONObject("value")) else onDismiss()
+                if (colorEpoch(host) == epoch) {onIntensity(if(draft.isNull("intensity"))null else draft.number("intensity"));onUse(form.getJSONObject("value"))} else onDismiss()
             }) { Text("Use Color") }
         }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
         text = {
@@ -74,8 +76,12 @@ private fun colorEpoch(host: CanvasHost): Long =
                         }
                     }
                 }
+                if(!draft.isNull("intensity")) OutlinedTextField(value=intensityText,onValueChange={text->intensityText=text;val n=text.toFloatOrNull();if(n!=null)change(JSONObject(draft.toString()).put("change_intensity",n))else transportError="Enter an intensity in stops"},label={Text("Intensity (EV)")},singleLine=true,modifier=Modifier.testTag("color-intensity-value"))
                 form.objectOrNull("preview")?.let { preview ->
-                    Box(Modifier.fillMaxWidth().height(48.dp).background(displayColor(preview)))
+                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                        form.objectOrNull("base_preview")?.let{base->Column(Modifier.weight(1f)){Box(Modifier.fillMaxWidth().height(48.dp).background(displayColor(base)));Text("Base")}}
+                        Column(Modifier.weight(1f)){Box(Modifier.fillMaxWidth().height(48.dp).background(displayColor(preview)));if(!form.isNull("base_preview"))Text("Adjusted")}
+                    }
                     if (!preview.getBoolean("in_gamut")) Text("Outside the sRGB preview gamut. The stored color is preserved.")
                 }
                 for (i in 0..3) if (labels.getString(i).isNotBlank()) {

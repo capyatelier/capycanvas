@@ -32,7 +32,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
         return field(i?spec.height_label:spec.width_label,input);
       });
       const space=select("Color space",model.spaces,model.options.color.space);
-      const depth=select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"]],model.options.color.depth);
+      const depth=select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"],["F16","16-bit float HDR"]],model.options.color.depth);
       const background=select("Background",[["White","White"],["Transparent","Transparent"]],model.options.background);
       const read=()=>({extent:fields.map(i=>Number(i.value)),color:{space:space.value,depth:depth.value},background:background.value});
       preset.onchange=()=>{const p=model.presets[Number(preset.value)];if(!p)return;fields.forEach((f,i)=>f.value=p.options.extent[i]);space.value=p.options.color.space;depth.value=p.options.color.depth;background.value=p.options.background;};
@@ -89,20 +89,20 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     const old=request.location && handles.get(request.location.uri);
     if(old)return{location:request.location,handle:old};
     if(window.showSaveFilePicker) {
-      const formats={Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"]};
+      const formats={PngHdr:["png","image/png","HDR PQ PNG"],PngHdrMapped:["png","image/png","HDR PQ PNG"],Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"]};
       const [extension,mime,description]=recipe?formats[recipe.format]:["capy","application/octet-stream","Capy Canvas drawing"];
       const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
     }
-    const extension=recipe?{Png:"png",Tiff:"tif",Jpeg:"jpg"}[recipe.format]:null;
+    const extension=recipe?{PngHdr:"png",PngHdrMapped:"png",Png:"png",Tiff:"tif",Jpeg:"jpg"}[recipe.format]:null;
     return {location:location(extension?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name)};
   }
   async function handle(request) {
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
     try {
-      if(request.kind.type==="soft_proof_setup"){await proof.run(request.id);if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
+      if(["soft_proof_setup","sdr_rendition"].includes(request.kind.type)){await proof.run(request.id,request.kind.type==="sdr_rendition");if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type==="histogram"){histogram.open();dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
       const r=request.kind.request,id=request.id;
@@ -144,21 +144,26 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       } else if(["place","paste"].includes(r.type)) {
         await images.run(id,async()=>r.type==="paste"?clipboardImage():(await chooseFile(true))?.map(c=>c.file));
       } else if(["new","open"].includes(r.type)) {
-        const fileState=app.state().document_file;let bytes,extent=[0,0],target=null,options;
+        const fileState=app.state().document_file;let bytes,inputFile,extent=[0,0],target=null,options;
         if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
         else {const chosen=(await chooseFile())?.[0];if(!chosen){applyChange(app.finish_document(id,false));return;}
-          bytes=new Uint8Array(await chosen.file.arrayBuffer());target=location(chosen.file.name,chosen.handle);}
-        message("Preparing drawing…");
-        candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button})));
-        applyChange(app.adopt_document(candidate,target));candidate=null;message("");wake();
-        if(r.type==="new"||r.type==="open")await retireRecovery();
+          inputFile=chosen.file;target=location(chosen.file.name,chosen.handle);}
+        const progress=element("aside","file-progress");progress.setAttribute("role","status");let cancelled=false;
+        progress.append(element("span","","Preparing drawing…"),button("Cancel",()=>{cancelled=true;progress.firstChild.textContent="Cancelling…";rasterWorker({operation:"cancel-read",metadata:"",buffers:[]}).catch(()=>{});}));document.body.append(progress);
+        try{
+          if(inputFile)bytes=new Uint8Array(await inputFile.arrayBuffer());
+          candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
+          if(cancelled)throw new DOMException("Opening cancelled","AbortError");
+          applyChange(app.adopt_document(candidate,target));candidate=null;wake();
+          await retireRecovery();
+        }finally{progress.remove();}
       } else if(r.type==="save"||r.type==="export") {
         const choice=r.type==="export"?await chooseExport({app,dialog,element,button,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r,recipe);
         if(recipe){
-          const extensions={Png:['png'],Tiff:['tif','tiff'],Jpeg:['jpg','jpeg']}[recipe.format];
+          const extensions={PngHdr:['png'],PngHdrMapped:['png'],Png:['png'],Tiff:['tif','tiff'],Jpeg:['jpg','jpeg']}[recipe.format];
           if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(`Use a .${extensions[0]} filename for this image format.`);
           const master=handles.get(app.state().document_file.location?.uri);
           if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
@@ -177,7 +182,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
             const stream=await target.handle.createWritable();
             try {await stream.write(bytes);await stream.close();success=true;}
             catch(error){try{await stream.abort();}catch{}throw error;}
-          } else success=!!await download(bytes,target.location.name,recipe?{Png:"image/png",Tiff:"image/tiff",Jpeg:"image/jpeg"}[recipe.format]:"application/octet-stream");
+          } else success=!!await download(bytes,target.location.name,recipe?{PngHdr:"image/png",PngHdrMapped:"image/png",Png:"image/png",Tiff:"image/tiff",Jpeg:"image/jpeg"}[recipe.format]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
           if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(`Image saved; export preferences were not saved: ${error}`);}
           if(success && r.type==="save" && !app.state().document_file.modified) {

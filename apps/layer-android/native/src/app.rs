@@ -1,5 +1,6 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
+    pub tone: crate::hdr::ToneState,
     pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
     pub workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
@@ -27,6 +28,7 @@ impl App {
         })?;
         Ok(Self {
             proof: Default::default(),
+            tone: Default::default(),
             host,
             workspaces: None,
             blank_presented: false,

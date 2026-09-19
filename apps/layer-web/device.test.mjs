@@ -1,3 +1,6 @@
+import {measureHdr} from "./hdr-performance.test.mjs";
+import {checkHdr} from "./hdr.test.mjs";
+import {checkProof} from "./proof.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkStagedStartup} from "./startup.test.mjs";
 import {checkFilterPreviews} from "./filter-previews.test.mjs";
@@ -37,7 +40,7 @@ socket.onmessage=event=>{
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},60000);
+  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},180000);
   pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));
 });
 const evaluate=async expression=>{
@@ -75,7 +78,13 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--filter-previews")) {
+  if(process.argv.includes("--hdr-performance")){
+    await measureHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--hdr")){
+    await checkHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--proof")){
+    await checkProof({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--filter-previews")) {
     await checkFilterPreviews({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--staged-startup")) {

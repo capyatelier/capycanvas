@@ -99,6 +99,15 @@ import org.json.JSONObject
                 val value = recipe; val model = form
                 if (value != null && model != null && !preview.busy && !preferenceBusy) {
                     ColorChoice("Destination",presetNames.mapIndexed{i,name->i.toString() to name},destination){scope.launch{preference(obj("type" to "get","index" to it.toInt()))}}
+                    val hdrOutput=value.getString("format").startsWith("PngHdr")
+                    if(documentColor?.optString("depth")=="F16") {
+                        ColorChoice("Dynamic range",listOf("sdr" to "SDR rendition","hdr" to "HDR PNG · BT.2020 PQ"),if(hdrOutput)"hdr" else "sdr") { change("format",if(it=="hdr")"PngHdr" else "Png") }
+                        if(hdrOutput) {
+                            Row { Checkbox(value.getString("format")=="PngHdrMapped",{change("format",if(it)"PngHdrMapped" else "PngHdr")});Text("Clip out-of-range HDR colors") }
+                            Text("Mapped SDR preview. Native HDR display and gain-map delivery are unavailable on Android.")
+                        }
+                    }
+                    if(!hdrOutput) {
                     ColorChoice("Format", choices("formats",listOf("Png" to "PNG", "Tiff" to "TIFF", "Jpeg" to "JPEG")), value.getString("format")) { change("format",it) }
                     val profiles = model.getJSONArray("profiles").objects()
                     val profile = profiles.indexOfFirst { it.toString() == value.getJSONObject("profile").toString() }.coerceAtLeast(0)
@@ -108,6 +117,7 @@ import org.json.JSONObject
                         change("profile", imported)
                     }
                     ColorChoice("Bit depth", choices("depths",listOf("U8" to "8-bit", "U16" to "16-bit")), value.getString("depth")) { change("depth", it) }
+                    }
                     ColorChoice("Transparency", choices("backgrounds",listOf("Preserve" to "Preserve", "White" to "White background", "Black" to "Black background")), value.getString("background")) { change("background", it) }
                     val encoding = value.getJSONObject("encoding")
                     val conversion = encoding.getJSONObject("conversion")

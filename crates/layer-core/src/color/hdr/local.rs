@@ -30,6 +30,22 @@ pub struct LocalToneBuilder {
     peak: f32,
 }
 impl LocalToneBuilder {
+    /// Bounded worker handoff after all source rows have been reduced. The
+    /// expensive Laplacian reconstruction can run away from the input owner.
+    pub fn into_worker_samples(self) -> Result<(Vec<[f32; 3]>, f32), String> {
+        if self.next_row != self.document[1] { return Err("Incomplete local tone analysis".into()); }
+        Ok((self.sums, self.peak))
+    }
+    pub fn from_worker_samples(document: [u32; 2], space: RgbSpace, sums: Vec<[f32; 3]>, peak: f32) -> Result<Self, String> {
+        let mut builder = Self::new(document, space)?;
+        if sums.len() != builder.sums.len() || (!peak.is_finite() || peak<1.) || sums.iter().any(|s|s.iter().any(|v|!v.is_finite())||s[1]<0.||s[2]<s[1]-1e-5) {
+            return Err("Invalid local tone worker samples".into());
+        }
+        builder.sums = sums;
+        builder.peak = peak;
+        builder.next_row = document[1];
+        Ok(builder)
+    }
     pub fn new(document: [u32; 2], space: RgbSpace) -> Result<Self, String> {
         if document.contains(&0) || document.iter().any(|&v| v > 32768) {
             return Err("Invalid local tone-map dimensions".into());
@@ -302,6 +318,20 @@ mod tests {
             b.push(row).unwrap();
         }
         b.finish(|| false).unwrap()
+    }
+    #[test]
+    fn bounded_worker_handoff_matches_native_analysis_and_rejects_invalid_data() {
+        let pixels:Vec<_>=(0..17*9).map(|i| {let a=if i%7==0 {0.}else{0.5};let v=2f32.powf(i as f32/20.-4.);[v*a,-0.1*a,0.3*a,a]}).collect();
+        let expected=guide([17,9],&pixels);
+        let mut builder=LocalToneBuilder::new([17,9],RgbSpace::Srgb).unwrap();
+        for row in pixels.chunks_exact(17){builder.push(row).unwrap();}
+        let (samples,peak)=builder.into_worker_samples().unwrap();
+        let actual=LocalToneBuilder::from_worker_samples([17,9],RgbSpace::Srgb,samples.clone(),peak).unwrap().finish(||false).unwrap();
+        assert_eq!(actual.samples,expected.samples);assert_eq!(actual.peak,expected.peak);
+        assert!(LocalToneBuilder::from_worker_samples([17,9],RgbSpace::Srgb,samples.clone(),f32::NAN).is_err());
+        let mut invalid=samples;invalid[0][1]=-1.;
+        assert!(LocalToneBuilder::from_worker_samples([17,9],RgbSpace::Srgb,invalid,peak).is_err());
+        assert!(LocalToneBuilder::new([17,9],RgbSpace::Srgb).unwrap().into_worker_samples().is_err());
     }
     #[test]
     fn hidden_rgb_does_not_contribute_and_analysis_is_cancellable() {

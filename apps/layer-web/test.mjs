@@ -1,6 +1,7 @@
+import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
-import {checkHdrLimits} from "./hdr-limits.test.mjs";
+import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
@@ -66,6 +67,7 @@ const chrome = spawn(
     "--remote-debugging-pipe",
     `--user-data-dir=${profile}`,
     "--no-first-run",
+    "--password-store=basic",
     "--no-default-browser-check",
     // GTK reference PNGs are sRGB; do not bake the monitor's gamma into captures.
     "--force-color-profile=srgb",
@@ -141,7 +143,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes("--shared-workflows") ? 150000 : 30000);
+    }, process.argv.some(x=>["--shared-workflows","--hdr","--hdr-performance","--proof"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -231,8 +233,10 @@ try {
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
   if (process.argv.includes("--gainmap-interchange")) {
     await checkGainmapInterchange({evaluate});
-  } else if (process.argv.includes("--hdr-limits")) {
-    await checkHdrLimits({evaluate});
+  } else if (process.argv.includes("--hdr-performance")) {
+    await measureHdr({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--hdr")) {
+    await checkHdr({call,evaluate,settle});
     checkRasterErrors();
   } else if (process.argv.includes("--image-placement")) {
     await checkImagePlacement({call,evaluate,settle});
@@ -242,6 +246,7 @@ try {
     checkRasterErrors();
   } else if (process.argv.includes("--proof")) {
     await checkProof({call,evaluate,settle});
+    checkRasterErrors();
   } else if (process.argv.includes("--shared-workflows")) {
     await checkSdrColor({call,evaluate,settle});
     await checkColorEdits({call,evaluate,settle});

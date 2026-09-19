@@ -6,6 +6,7 @@ mod color_edit;
 mod source_edit;
 mod color_preferences;
 mod proof;
+mod hdr;
 mod output;
 mod editor;
 mod header;
@@ -23,6 +24,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    tone: hdr::ToneState,
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
@@ -401,6 +403,7 @@ impl WebApp {
             .map_err(js)?;
         Ok(Self {
             proof: Default::default(),
+            tone: Default::default(),
             session,
             workspaces: None,
             canvas,
@@ -1009,10 +1012,12 @@ impl WebApp {
             }
         }
         change.canvas_wake |= !self.startup.complete;
+        let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
             gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
+            gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;
         }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;

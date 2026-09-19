@@ -41,6 +41,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.*
 import org.json.JSONArray
@@ -64,14 +68,18 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         override val minimumTouchTargetSize = DpSize.Zero
     } }
     fun color(action: JSONObject) = host.dispatch(obj("type" to "color", "action" to action))
+    var edit by remember {mutableStateOf(false)}
     Column {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val side = minOf(maxWidth, (availableHeight - 112.dp).coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
-        SideEffect { onHeight(maxWidth.coerceAtLeast(128.dp).value + 96f, side.value + 96f) }
-        val layout = remember(side) { JSONObject(Native.colorPanelLayout(side.value)) }
+        val side = minOf(maxWidth, availableHeight.coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
+
+        val hdr=view.optBoolean("hdr")
+        val layout = remember(side,hdr) { JSONObject(Native.colorUi(obj("type" to "layout","size" to side.value,"hdr" to hdr).toString())) }
+        SideEffect {onHeight(layout.number("height"),layout.number("height"))}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
-            Box(Modifier.size(side).testTag("color-panel")) {
-                ColorWheel(view, Modifier.place(layout.array("wheel")), ::color)
+            Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
+                if(hdr)ColorIntensityArc(view,Modifier.matchParentSize(),::color)
+                ColorWheel(host,view, Modifier.place(layout.array("wheel")), ::color)
                 // Foreground paints/hits above background in their shared overlap.
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
@@ -91,6 +99,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                     Canvas(Modifier.matchParentSize()) { if (hovered) drawCircle(colors.text.copy(alpha = .12f)) }
                     SharedIcon("color-swap", null, Modifier.size(16.dp))
                 }
+                ColorButton("Edit Color",Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.panelContent?.objectOrNull("state")?.objectOrNull("colors")?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
                 val readoutClip = remember(layout) { ReadoutCorner(layout.array("wheel").getDouble(2).toFloat() * view.getJSONObject("geometry").number("outer") + 2f) }
                 ColorButton(view.getString("readout_description"), Modifier.place(layout.array("readout")).testTag("color-readout"),
                     shape = readoutClip, showFocusRing = false, onClick = { color(obj("op" to "toggle_readout")) }) { focused, _ ->
@@ -99,7 +108,14 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
             }
         }
     }
-    ColorControls(host)
+    }
+    if(edit) {
+        val state=host.panelContent!!.getJSONObject("state").getJSONObject("colors")
+        val slot=if(state.getString("slot")=="background")"background" else "foreground"
+        var intensity:Float?=null
+        ColorEditorDialog(host,state.getJSONObject(slot),{edit=false},initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) {selected->
+            edit=false;color(if(intensity!=null)obj("op" to "set_slot_intensity","slot" to slot,"color" to selected,"stops" to intensity)else obj("op" to "set_slot","slot" to slot,"color" to selected))
+        }
     }
 }
 
@@ -138,6 +154,13 @@ private class ReadoutCorner(private val radius: Float) : Shape {
     val selected = swatch.getBoolean("selected")
     var menu by remember { mutableStateOf(false) }
     var edit by remember { mutableStateOf(false) }
+    var lastTap by remember { mutableLongStateOf(0L) }
+    val tapTimeout = LocalViewConfiguration.current.doubleTapTimeoutMillis
+    fun select() {
+        color(obj("op" to "select", "slot" to slot))
+        val now=android.os.SystemClock.uptimeMillis()
+        if(slot!="transparent" && now-lastTap<=tapTimeout) { edit=true;lastTap=0 } else lastTap=now
+    }
     val focusedWindow = LocalWindowInfo.current.isWindowFocused
     ColorButton(swatch.getString("label"), modifier.testTag("color-swatch-$slot").semantics { this.selected = selected }.clip(CircleShape)
         .then(if (slot == "transparent") Modifier else Modifier
@@ -166,7 +189,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                             if (change.isConsumed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) break
                             if (!change.pressed) {
                                 change.consume()
-                                color(obj("op" to "select", "slot" to slot))
+                                select()
                                 break
                             }
                         }
@@ -183,7 +206,7 @@ private class ReadoutCorner(private val radius: Float) : Shape {
                         } while (change.pressed)
                     }
                 }
-            }), onClick = { color(obj("op" to "select", "slot" to slot)) }) { _, hovered ->
+            }), onClick = { select() }) { _, hovered ->
         Canvas(Modifier.fillMaxSize()) {
             val radius = size.minDimension / 2
             val padding = (if (slot == "foreground") 3.dp else 1.dp).toPx()
@@ -202,19 +225,21 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         if (edit) {
             val paintSlot = if (slot == "background") "background" else "foreground"
             val definition = host.panelContent!!.getJSONObject("state").getJSONObject("colors").getJSONObject(paintSlot)
-            ColorEditorDialog(host, definition, { edit = false }) { selected ->
-                edit = false; color(obj("op" to "set_slot", "slot" to paintSlot, "color" to selected))
+            var intensity:Float?=null
+            val view=host.panelContent!!.getJSONObject("color_panel")
+            ColorEditorDialog(host, definition, { edit = false },initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) { selected ->
+                edit = false; color(if(intensity!=null)obj("op" to "set_slot_intensity", "slot" to paintSlot, "color" to selected,"stops" to intensity)else obj("op" to "set_slot", "slot" to paintSlot, "color" to selected))
             }
         }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Edit Color…") }, onClick = { menu = false; edit = true })
+            DropdownMenuItem(text = { Text("Edit Color…") }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); edit = true })
             DropdownMenuItem(text = { Text("Swap foreground and background") }, leadingIcon = { SharedIcon("color-swap", null) },
                 modifier = Modifier.testTag("color-swap-menu"), onClick = { menu = false; color(obj("op" to "swap")) })
         }
     }
 }
 
-@Composable private fun ColorWheel(view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
+@Composable private fun ColorWheel(host:CanvasHost,view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
     val rgbSpace = view.getString("rgb_space")
     val hue = view.array("wheel_components").getDouble(0).toFloat()
@@ -232,8 +257,8 @@ private class ReadoutCorner(private val radius: Float) : Shape {
         val pixels = ceil(maxWidth.value * if (shape == "circle") 1f else density).toInt().coerceIn(1, 2048)
         // Like GTK/Web, sample the smooth disc once per logical pixel. Keep the
         // ring, clip, triangle and marker outlines at the tablet's physical DPI.
-        val field = remember(shape, hue, pixels, rgbSpace) {
-            Bitmap.createBitmap(Native.colorFieldPixels(pixels, hue, shape, rgbSpace), pixels, pixels, Bitmap.Config.ARGB_8888).asImageBitmap()
+        val field = remember(shape, hue, pixels, rgbSpace,view.optDouble("intensity"),view.optJSONObject("rendition")?.toString()) {
+            Bitmap.createBitmap(if(view.optBoolean("hdr"))Native.colorFieldMapped(pixels,host.panelContent!!.getJSONObject("state").getJSONObject("colors").toString(),view.getJSONObject("rendition").toString())else Native.colorFieldPixels(pixels, hue, shape, rgbSpace), pixels, pixels, Bitmap.Config.ARGB_8888).asImageBitmap()
         }
         Canvas(Modifier.fillMaxSize().testTag("color-wheel").semantics { contentDescription = "Color wheel" }
             .pointerInput(shape, focused) {
@@ -358,5 +383,33 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             }
             canvas.restore()
         }
+    }
+}
+
+@Composable private fun ColorIntensityArc(view:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+    val current by rememberUpdatedState(view)
+    val action by rememberUpdatedState(color)
+    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}.pointerInput(Unit) {
+        var lastTap=0L
+        var lastPoint=Offset.Zero
+        awaitEachGesture {
+            val down=awaitFirstDown(requireUnconsumed=false)
+            fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width,"point" to JSONArray(listOf(point.x,point.y))).toString()))
+            if(!query(down.position).getBoolean("hit"))return@awaitEachGesture
+            val original=current.number("intensity");var complete=false
+            val doubleTap=down.uptimeMillis-lastTap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position-lastPoint).getDistance()<viewConfiguration.touchSlop
+            var moved=false
+            fun pick(point:Offset){action(obj("op" to "hdr_intensity","stops" to (-2f+8f*query(point).number("fraction"))))}
+            try{down.consume();pick(down.position);while(true){val c=awaitPointerEvent().changes.firstOrNull{it.id==down.id}?:break;if(c.isConsumed)break;c.consume();if((c.position-down.position).getDistance()>viewConfiguration.touchSlop)moved=true;pick(c.position);if(!c.pressed){complete=true;if(!moved&&doubleTap){action(obj("op" to "hdr_intensity","stops" to 0f));lastTap=0L}else if(!moved){lastTap=c.uptimeMillis;lastPoint=c.position}else lastTap=0L;break}}}
+            finally{if(!complete)action(obj("op" to "hdr_intensity","stops" to original))}
+        }
+    }) {
+        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width,"fraction" to ((view.number("intensity")+2f)/8f)).toString()))
+        val g=arc.getJSONObject("geometry");val center=g.array("center").point(1f);val radius=g.number("radius");val angle=g.number("end_angle")*180f/PI.toFloat()
+        val path=arc.array("path");val ramp=view.array("intensity_ramp")
+        for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f),path.getJSONArray(i+1).point(1f),g.number("width"),cap=StrokeCap.Round)
+        val font=(size.width*.044f).coerceIn(9f,12f);val labelRadius=radius+g.number("width")/2f+font+3f;val x=center.x+labelRadius*cos(76f*PI.toFloat()/180f);val y=center.y+labelRadius*sin(76f*PI.toFloat()/180f)
+        drawIntoCanvas{canvas->val native=canvas.nativeCanvas;native.save();native.rotate(-14f,x,y);native.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER});native.restore()}
+        val p=arc.array("point").point(1f);drawCircle(view.array("marker_color").color(),g.number("marker_radius"),p);drawCircle(Color.Black,g.number("marker_radius"),p,style=Stroke(2f))
     }
 }

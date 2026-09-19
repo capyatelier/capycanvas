@@ -188,9 +188,7 @@ import kotlin.math.roundToInt
     ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
         host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
     }
-    var palettes by remember { mutableStateOf(false) }
-    OutlinedButton({ palettes = true }) { Text("Palettes…") }
-    if (palettes) ColorLibraryDialog(host, slot, { palettes = false })
+
 }
 @Composable internal fun ConfigurePanel(host: CanvasHost, panel: JSONObject, onHeight: (Float) -> Unit = {}) {
     val density = LocalDensity.current.density

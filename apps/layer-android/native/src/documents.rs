@@ -59,6 +59,7 @@ struct Task {
     source: layer_ui::ImportSource,
     place: Option<layer_core::LayerId>,
     gpu_generation: u64,
+    open_control: layer_render_wgpu::snapshot::CaptureControl,
     payload: Payload,
 }
 unsafe fn task<'a>(handle: jlong) -> &'a mut Task {
@@ -143,6 +144,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             source: layer_ui::ImportSource::Master,
             place,
             gpu_generation: a.gpu_generation,
+            open_control: Default::default(),
             payload,
         })) as jlong)
     })();
@@ -155,7 +157,20 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
     }
 }
 
+// Configure before starting the worker; cancellation subsequently touches only
+// the shared atomic control, never the task borrowed by that worker.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectOpenControl(
+    _: JNIEnv, _: JClass, handle: jlong, control: jlong,
+) {
+    unsafe { task(handle) }.open_control = crate::inspection::control(control);
+}
+fn check_open(t: &Task) -> Result<(), String> {
+    if t.open_control.is_cancelled() { Err("Opening cancelled".into()) } else { Ok(()) }
+}
 fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result<(), String> {
+    check_open(t)?;
+    let control = t.open_control.clone();
     let Payload::Open {
         environment,
         candidate,
@@ -176,7 +191,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         Some(file) => {
             let imported = layer_ui::read_import(file,
                 if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
-                e.photo_policy, &e.source_name, limits, Default::default(), &Default::default())?;
+                e.photo_policy, &e.source_name, limits, Default::default(), control.cancellation_flag())?;
             t.source = imported.source;
             if let Some(source) = imported.interpretation_required(e.photo_policy) {
                 e.source_name = imported.project.document.layers[0].name.to_string();
@@ -202,7 +217,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
             }
         }
     };
-    layer_ui::require_sdr_host(&project.document, "Android")?;
+    if control.is_cancelled() { return Err("Opening cancelled".into()); }
     if t.place.is_some() {
         let source = project
             .document
@@ -266,6 +281,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         .map_err(error)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
+        if control.is_cancelled() { return Err("Opening cancelled".into()); }
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         if validating && let Some(result) = gpu.take_effect_validation() {
             result.result?;
@@ -405,7 +421,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     let target = recipe.interpretation();
                     let mut out = BufWriter::new(input.ok_or("Missing export output")?);
                     match recipe.format {
-                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped | layer_ui::ExportFormat::JpegHdr | layer_ui::ExportFormat::JpegHdrMapped | layer_ui::ExportFormat::AvifHdr | layer_ui::ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
+                        layer_ui::ExportFormat::PngHdr | layer_ui::ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut out, recipe.format.maps_hdr_range()),
+                        layer_ui::ExportFormat::JpegHdr | layer_ui::ExportFormat::JpegHdrMapped | layer_ui::ExportFormat::AvifHdr | layer_ui::ExportFormat::AvifHdrMapped => Err("HDR gain-map delivery is unavailable on Android; choose HDR PNG".into()),
                         layer_ui::ExportFormat::Png => renderer.write_png(
                             &mut out,
                             &target,
@@ -457,6 +474,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
     let result = (|| {
         let a = unsafe { app(handle) };
         let t = unsafe { task(transfer) };
+        check_open(t)?;
         let location: Option<DocumentLocation> =
             serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
         if let Some(target) = t.place {
@@ -616,6 +634,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             source: layer_ui::ImportSource::Master,
             place: None,
             gpu_generation: a.gpu_generation,
+            open_control: Default::default(),
             payload: Payload::Export {
                 gpu,
                 snapshot: Some(snapshot),
@@ -720,6 +739,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             source: layer_ui::ImportSource::Master,
             place: None,
             gpu_generation: a.gpu_generation,
+            open_control: Default::default(),
             payload,
         })) as jlong)
     })();

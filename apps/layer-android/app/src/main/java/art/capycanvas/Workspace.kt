@@ -317,6 +317,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
             if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+                if(host.hdr.status.isNotEmpty()) Text(host.hdr.status,modifier=Modifier.testTag("hdr-status"),maxLines=1)
                 if(host.proof.status.isNotEmpty()) Surface(color=colors.surround,shape=RoundedCornerShape(20.dp)) {
                     TextButton({host.invoke("soft_proof_setup")},Modifier.testTag("proof-status")){Text(host.proof.status,maxLines=1)}
                 }

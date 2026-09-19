@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+
+// Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
+// Files go through real codecs/workers/storage; only native file-picker handles
+// are supplied by the harness. Input uses the browser's touch/pen dispatch path.
+export async function checkHdr({call,evaluate,settle}) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/color-m4-web-android/browser';
+  await mkdir(directory,{recursive:true});
+  const wait=c=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${c})resolve(true);else if(performance.now()-start>55000)reject(Error(${JSON.stringify(c)}+': '+document.body.innerText.slice(-1800)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
+  const click=(label,root='dialog[open]')=>evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(root+' button')})].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
+  const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
+  const hist=()=>evaluate(`(async()=>{const c=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(c)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v))}finally{c.free()}})()`);
+  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');return evaluate('hdrTest.manifest(hdrTest.last)');};
+  const open=async name=>{const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');await evaluate(`hdrTest.openName=${JSON.stringify(name)}`);await invoke('open_document');await wait(`Number(layerApp.state().document_file.epoch)!==${epoch}&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()`);};
+  await wait('layerApp.startupTimes.complete!==null && layerApp.app.brush_ready()');
+  await evaluate(`window.hdrTest={files:new Map(),open:showOpenFilePicker,save:showSaveFilePicker};
+    hdrTest.manifest=b=>JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));
+    hdrTest.dismiss=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>['Keep for Later','Discard Changes'].includes(b.textContent))?.click(),50);
+    window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){let b;return{async write(v){b=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){hdrTest.last=b;hdrTest.files.set(o.suggestedName,b)},async abort(){}}}});
+    window.showOpenFilePicker=async()=>[{name:hdrTest.openName,async getFile(){const b=hdrTest.files.get(hdrTest.openName)??await(await fetch('/pkg/'+hdrTest.openName)).arrayBuffer();return new File([b],hdrTest.openName)}}];`);
+  const results={browser:await evaluate('navigator.userAgent'),steps:[]};
+  const mark=s=>{results.steps.push(s);console.log(s)};
+  try {
+    await open('hdr-pq.png');
+    assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
+    await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
+    await wait(`document.querySelector("#hdr-status").textContent.includes("mapped SDR")`);
+    mark('Independent FFmpeg PQ input opens as HDR, retains above-white samples, and completes mapped SDR analysis');
+    // The GTK corner edit action, no palette footer, and HDR numeric fields.
+    await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}})`);
+    await wait(`!![...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0)`);
+    assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
+    await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
+    await wait(`!!document.querySelector('dialog[aria-label="Edit Color"][open]')`);
+    assert.equal(await evaluate(`document.querySelector('[aria-label="Color model"]').value`),'linear_rgb');
+    await evaluate(`(()=>{const n=document.querySelector('[aria-label="Intensity (EV)"]');n.value=3;n.dispatchEvent(new Event('input'));})()`);
+    await click('Use Color');await wait('layerApp.app.color_panel().intensity===3');
+    assert.equal(await evaluate('layerApp.app.color_panel().intensity'),3);
+    mark('Picker matches GTK corner action, removes palettes, and edits HDR intensity');
+    await wait(`!document.querySelector('dialog[open]')`);
+    await evaluate(`layerApp.dispatch({type:'select_brush',id:1});const form=layerApp.app.color_ui({type:'form',request:{color:{space:'Srgb',rgba:[0,0,0,1]},document_space:'Srgb',model:'linear_rgb',intensity:0,fields:['-4','4','1','100']}});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:form.value}});`);
+    const center=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()`);
+    for(const[type,dx,buttons]of[['mousePressed',-50,1],['mouseMoved',0,1],['mouseMoved',50,1],['mouseReleased',50,0]]){await call('Input.dispatchMouseEvent',{type,x:center.x+dx,y:center.y,button:'left',buttons,pointerType:'pen',force:buttons?.85:0});await settle();}
+    const painted=await hist();assert.ok(painted.channels.some(c=>c.below>0),'Negative finite HDR paint survives the GPU');assert.notDeepEqual(painted,original);
+    await invoke('undo');assert.deepEqual(await hist(),original);await invoke('redo');assert.deepEqual(await hist(),painted);original=painted;
+    mark('Pen painting preserves negative and above-white channels with exact one-step undo/redo');
+    const master0=await save();
+    await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
+    const beforeRecipe=await evaluate('layerApp.app.proof_form().rendition');
+    const r=await evaluate(`(()=>{const r=document.querySelector('.proof-tone-pad').getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height}})()`);
+    await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,x:r.x+r.w*.5,y:r.y+r.h*.5}]});
+    await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:1,x:r.x+r.w*.7,y:r.y+r.h*.35}]});
+    await call('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]});await settle();
+    assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),beforeRecipe,'Touch cancellation restores saved appearance');
+    for(const[type,x,y,buttons]of[['mousePressed',.5,.5,1],['mouseMoved',.7,.35,1],['mouseReleased',.7,.35,0]])await call('Input.dispatchMouseEvent',{type,x:r.x+r.w*x,y:r.y+r.h*y,button:'left',buttons,pointerType:'pen',force:buttons?.6:0});
+    await settle();const changed=await evaluate('layerApp.app.proof_form().rendition');assert.notDeepEqual(changed,beforeRecipe);
+    await invoke('undo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),beforeRecipe);
+    await invoke('redo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
+    assert.deepEqual(await hist(),original,'SDR appearance does not change HDR artwork');
+    const master=await save();assert.deepEqual(master.blobs,master0.blobs);assert.deepEqual(master.document.layers,master0.document.layers);
+    mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
+    await settle();assert.ok(await evaluate(`document.querySelector('.proof-tone-pad').getContext('2d').getImageData(120,120,1,1).data[3]===255`));
+    await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await click('Close','.proof-panel');
+    await evaluate(`hdrTest.files.set('hdr-master.capy',hdrTest.last.slice())`);
+    await open('hdr-master.capy');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
+    await evaluate('layerApp.restartGpu()');await wait('layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    assert.deepEqual(await hist(),original);assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
+    mark('HDR native save/reopen and GPU recovery preserve exact histogram and saved SDR appearance');
+    // Complete delivery through the visible controls and inspect resulting files.
+    for(const range of ['hdr','sdr']){
+      await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
+      await set('Dynamic range',range);if(range==='sdr')await set('Bit depth','U8');
+      if(range==='hdr'){
+        await click('Preview Output');await wait(`!!document.querySelector('dialog[open] .error-message')?.textContent`);
+        assert.equal(await evaluate(`document.querySelectorAll('dialog[open] .color-comparison canvas').length`),0,'Strict HDR rejects unrepresentable colors');
+        await evaluate(`(()=>{const c=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');c.checked=true;c.dispatchEvent(new Event('change'))})()`);
+      }
+      await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
+      await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+      const bytes=await evaluate('Array.from(hdrTest.last)');assert.ok(bytes.length>100);
+      await writeFile(`${directory}/${range}-delivery.png`,new Uint8Array(bytes));
+      await evaluate(`hdrTest.files.set('${range}-delivery.png',hdrTest.last.slice())`);
+    }
+    await open('sdr-delivery.png');assert.equal(await evaluate('layerApp.app.document_color().depth'),'U8');
+    await open('hdr-delivery.png');assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');assert.ok((await hist()).channels.some(c=>c.above>0));
+    mark('HDR PQ and authored SDR PNG previews, exports and reopening complete through the browser UI');
+    assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+    await writeFile(`${directory}/workflow.json`,JSON.stringify(results,null,2)+'\n');
+  } finally {
+    await evaluate('clearInterval(hdrTest.dismiss);window.showOpenFilePicker=hdrTest.open;window.showSaveFilePicker=hdrTest.save');
+  }
+}

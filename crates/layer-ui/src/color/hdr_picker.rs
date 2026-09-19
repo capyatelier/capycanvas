@@ -44,6 +44,32 @@ impl HdrPaint {
     }
 }
 impl ColorState {
+    pub fn view_mapped(&self, recipe: layer_core::color::hdr::SdrRendition) -> ColorPanelView {
+        let mut view=self.view();
+        if self.hdr_picker.is_none() {return view;}
+        view.rendition=Some(recipe);
+        let base=self.picker_base().linear_in(self.rgb_space).unwrap();
+        let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
+        view.intensity_ramp=(0..=64).map(|i| {
+            let gain=(-2.+8.*i as f32/64.).exp2();
+            let rgb=mapper.map_rgb([base[0]*gain,base[1]*gain,base[2]*gain]);
+            [RgbSpace::Srgb.encode(rgb[0] as f64) as f32,RgbSpace::Srgb.encode(rgb[1] as f64) as f32,RgbSpace::Srgb.encode(rgb[2] as f64) as f32,1.]
+        }).collect();
+        let preview=|color| super::form::mapped_preview(color,self.rgb_space,RgbSpace::Srgb,Some(recipe)).unwrap().rgba;
+        view.marker_color=preview(self.definition())[..3].try_into().unwrap();
+        for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4]};}
+        view.outside_document_gamut=!self.definition().in_hdr_gamut(self.rgb_space).unwrap();
+        view.outside_display_gamut=!self.definition().in_hdr_gamut(RgbSpace::Srgb).unwrap();
+        view
+    }
+    pub fn render_field_mapped(&self, side:u32, recipe:layer_core::color::hdr::SdrRendition, bytes:&mut [u8]) -> bool {
+        if bytes.len()!=side as usize*side as usize*4{return false;}
+        let mut pixels=vec![[0.;4];side as usize*side as usize];
+        if !self.render_field_linear(side,&mut pixels){return false;}
+        let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
+        for (out,p) in bytes.chunks_exact_mut(4).zip(pixels){let rgb=mapper.map_rgb([p[0],p[1],p[2]]);for c in 0..3{out[c]=(RgbSpace::Srgb.encode(rgb[c] as f64).clamp(0.,1.)*255.).round() as u8;}out[3]=255;}
+        true
+    }
     /// Called at document/workspace boundaries; changing mode never alters paint.
     pub fn set_hdr_enabled(&mut self, enabled: bool) -> Result<(), String> {
         if enabled == self.hdr_picker.is_some() {

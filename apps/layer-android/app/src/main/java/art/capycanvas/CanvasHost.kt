@@ -36,6 +36,7 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val proof=ProofController(this)
+    internal val hdr=HdrController(this)
     companion object {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
@@ -335,6 +336,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
 
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
         proof.resume()
+        hdr.resume()
         filterPreviewCache.resume()
         currentSurface = surface
         surfaceReady = false
@@ -380,6 +382,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
         proof.pause()
+        hdr.pause()
         filterPreviewCache.pause()
         currentSurface = null
         surfaceReady = false
@@ -680,6 +683,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     override fun onCleared() {
         proof.pause()
+        hdr.pause()
         documents.images.cancel()
         recovery.close()
         worker.post {

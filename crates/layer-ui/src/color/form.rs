@@ -5,6 +5,8 @@ use super::*;
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ColorUiRequest {
+    Layout { size: f32, #[serde(default)] hdr: bool },
+    Arc { size: f32, point: Option<[f32;2]>, #[serde(default)] fraction: f32 },
     Form {
         request: ColorFormRequest,
     },
@@ -22,6 +24,16 @@ pub enum ColorUiRequest {
 }
 pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
     let value = match request {
+        ColorUiRequest::Layout {size,hdr} => {
+            let layout=if hdr {ColorPanelLayout::with_hdr(size)}else{ColorPanelLayout::new(size)}.ok_or("Invalid color panel size")?;
+            let mut value=serde_json::to_value(layout).map_err(|e|e.to_string())?;
+            value["height"]=serde_json::json!(layout.height().max(size));
+            return Ok(value);
+        }
+        ColorUiRequest::Arc {size,point,fraction} => {
+            let arc=HdrIntensityArc::new(size).ok_or("Invalid HDR arc size")?;
+            return Ok(serde_json::json!({"geometry":arc,"point":arc.point(fraction),"path":(0..=64).map(|i|arc.point(i as f32/64.)).collect::<Vec<_>>(),"hit":point.is_some_and(|p|arc.contains(p)),"fraction":point.map(|p|arc.fraction(p))}));
+        }
         ColorUiRequest::Form { request } => serde_json::to_value(color_form(request)?),
         ColorUiRequest::Preview {
             colors,
@@ -71,6 +83,9 @@ pub struct ColorFormRequest {
     pub model: ColorInputModel,
     pub fields: Option<[String; 4]>,
     pub change_model: Option<ColorInputModel>,
+    pub intensity: Option<f32>,
+    pub change_intensity: Option<f32>,
+    pub rendition: Option<layer_core::color::hdr::SdrRendition>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,6 +96,7 @@ pub struct ColorFormView {
     pub description: String,
     pub value: Option<RgbColor>,
     pub preview: Option<ColorPreview>,
+    pub base_preview: Option<ColorPreview>,
     pub error: Option<String>,
 }
 
@@ -98,15 +114,27 @@ pub fn color_preview(color: RgbColor, display_space: RgbSpace) -> Result<ColorPr
     })
 }
 
+pub(super) fn mapped_preview(color:RgbColor, document:RgbSpace, display:RgbSpace, rendition:Option<layer_core::color::hdr::SdrRendition>) -> Result<ColorPreview,String> {
+    let Some(recipe)=rendition else {return color_preview(color,display)};
+    recipe.validate().map_err(str::to_string)?;
+    let p=color.linear_in(document)?;
+    let rgb=recipe.mapper(document,display).map_rgb([p[0],p[1],p[2]]);
+    Ok(ColorPreview {space:display,rgba:[display.encode(rgb[0] as f64) as f32,display.encode(rgb[1] as f64) as f32,display.encode(rgb[2] as f64) as f32,p[3]],in_gamut:color.in_hdr_gamut(display)?})
+}
+
 pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
     let mut editor = ColorEditor::new(request.color, request.document_space)?;
     editor.set_model(request.model)?;
+    if let Some(stops) = request.intensity { editor.enable_hdr(stops)?; }
     if let Some(fields) = request.fields {
         for (i, text) in fields.into_iter().enumerate() {
             editor.set_field(i, text)?;
         }
     }
     let mut error = None;
+    if let Some(stops) = request.change_intensity {
+        if let Err(message) = editor.set_intensity(stops) { error = Some(message); }
+    }
     if let Some(model) = request.change_model {
         if let Err(message) = editor.set_model(model) {
             error = Some(message);
@@ -120,7 +148,7 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
         }
     };
     let preview = value
-        .map(|color| color_preview(color, request.display_space))
+        .map(|color| mapped_preview(color, request.document_space, request.display_space, request.rendition))
         .transpose()?;
     Ok(ColorFormView {
         draft: ColorFormRequest {
@@ -130,6 +158,9 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
             model: editor.model(),
             fields: Some(editor.fields().clone()),
             change_model: None,
+            intensity: editor.intensity(),
+            change_intensity: None,
+            rendition: request.rendition,
         },
         models: ColorInputModel::ALL
             .into_iter()
@@ -139,6 +170,7 @@ pub fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> {
         description: editor.description(),
         value,
         preview,
+        base_preview: editor.intensity().and_then(|_| editor.base_color().ok()).map(|c| mapped_preview(c,request.document_space,request.display_space,request.rendition)).transpose()?,
         error,
     })
 }
@@ -154,6 +186,9 @@ mod tests {
             model: Default::default(),
             fields: None,
             change_model: None,
+            intensity: None,
+            change_intensity: None,
+            rendition: None,
         }
     }
     #[test]

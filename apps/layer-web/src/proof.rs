@@ -44,7 +44,7 @@ impl WebProof {
 #[wasm_bindgen]
 impl WebApp {
     pub fn proof_form(&self) -> Result<JsValue, JsValue> {
-        serialize(&proof_form(&self.session))
+        js_sys::JSON::parse(&proof_form(&self.session).to_string())
     }
     pub fn proof_status(&mut self) -> Result<JsValue, JsValue> {
         serialize(&self.proof.observe(&self.session))
@@ -56,7 +56,8 @@ impl WebApp {
             Some(serde_wasm_bindgen::from_value(recipe).map_err(js)?)
         };
         Ok(WebProof {
-            job: ProofPreparation::begin(&self.session, (id != 0).then_some(id), recipe)
+            job: (if id == u32::MAX { ProofPreparation::panel(&self.session,recipe.ok_or_else(||js("Choose a proof profile"))?) }
+                else { ProofPreparation::begin(&self.session, (id != 0).then_some(id), recipe) })
                 .map_err(js)?,
             lut: None,
         })

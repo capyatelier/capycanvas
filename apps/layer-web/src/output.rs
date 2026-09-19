@@ -40,6 +40,7 @@ struct OutputMetadata {
     recipe: ExportRecipe,
     original: Option<String>,
     preview: bool,
+    rendition: Option<layer_core::color::hdr::SdrRendition>,
     flatten: Option<layer_core::color::DocumentColor>,
 }
 
@@ -80,10 +81,10 @@ impl WebApp {
                     control.clone(),
                 )
                 .map_err(js)?;
-            let result = renderer.histogram_async().await;
+            let result = renderer.histogram_async().await.map_err(js)?;
             cancelled(&control)?;
             serialize(
-                &serde_json::json!({"epoch":epoch,"revision":revision,"histogram":result.map_err(js)?,"sampled_time":sampled_time}),
+                &serde_json::json!({"epoch":epoch,"revision":revision,"axis":result.axis(),"histogram":result,"sampled_time":sampled_time}),
             )
         }))
     }
@@ -137,6 +138,7 @@ pub(super) async fn render_output(
         recipe,
         original: None,
         preview,
+        rendition: snapshot.project.document.color.depth.is_float().then_some(snapshot.project.document.sdr_rendition),
         flatten,
     };
     let mut capture = gpu
@@ -148,7 +150,7 @@ pub(super) async fn render_output(
             control.clone(),
         )
         .map_err(js)?;
-    let before = if preview {
+    let before = if preview && metadata.rendition.is_none() {
         Some(
             capture
                 .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
@@ -159,7 +161,7 @@ pub(super) async fn render_output(
         None
     };
     let extent = metadata.recipe.size.extent(metadata.extent).map_err(js)?;
-    let original = flatten.is_none().then(|| capture.output_source(
+    let original = (flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
         extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
     )).flatten();
     let buffers = if let Some(original) = original {
@@ -176,18 +178,16 @@ pub(super) async fn render_output(
     } else {
         js_sys::Array::new()
     };
-    metadata.token = JsFuture::from(raster_worker::call(
-        "output-begin",
-        "",
-        &js_sys::Array::new(),
-    )?)
-    .await?
+    metadata.token = raster_worker::call_cancellable(
+        "output-begin", "", &js_sys::Array::new(), control.clone(),
+    ).await?
     .as_string()
     .ok_or_else(|| js("Missing output worker token"))?;
     let result = async {
         if metadata.original.is_none() {
             let mut y = 0;
             while y < metadata.extent[1] {
+                cancelled(&control)?;
                 let (rows, pixels) = capture.read_band_async(y).await.map_err(js)?;
                 let mut bytes = Vec::with_capacity(pixels.len() * 16);
                 for pixel in pixels {
@@ -204,12 +204,10 @@ pub(super) async fn render_output(
             }
         }
         drop(capture);
-        JsFuture::from(raster_worker::call(
-            "output-encode",
-            &serde_json::to_string(&metadata).map_err(js)?,
-            &buffers,
-        )?)
-        .await
+        raster_worker::call_cancellable(
+            "output-encode", &serde_json::to_string(&metadata).map_err(js)?,
+            &buffers, control.clone(),
+        ).await
     }
     .await;
     if result.is_err() || control.is_cancelled() {
@@ -296,6 +294,54 @@ pub async fn raster_worker_output(
         position: 0,
         length: 0,
     };
+    let row_bytes = metadata.extent[0] as usize * 16;
+    let mut bytes = vec![0; row_bytes];
+    let mut read_row = |y: u32, pixels: &mut [[f32;4]]| {
+                let result = read
+                    .call2(
+                        &JsValue::NULL,
+                        &JsValue::from_f64(y as f64 * row_bytes as f64),
+                        &JsValue::from_f64(row_bytes as f64),
+                    )
+                    .map_err(|e| format!("{e:?}"))?;
+                let data = js_sys::Uint8Array::new(&result);
+                if data.length() as usize != row_bytes {
+                    return Err("Incomplete output source row".into());
+                }
+                data.copy_to(&mut bytes);
+                for (pixel, source) in pixels.iter_mut().zip(bytes.chunks_exact(16)) {
+                    *pixel = std::array::from_fn(|c| {
+                        f32::from_le_bytes(source[c * 4..c * 4 + 4].try_into().unwrap())
+                    });
+                }
+                Ok(())
+            };
+    let before = if metadata.preview && metadata.rendition.is_some() {
+        Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, &mut read_row).map_err(js)?)
+    } else { None };
+    if recipe.format.is_hdr() {
+        if !metadata.color.depth.is_float() { return Err(js("HDR output requires HDR artwork")); }
+        if recipe.format.gainmap().is_some() { return Err(js("HDR gain-map output is unavailable in this browser; choose HDR PNG")); }
+        let mut resampler = layer_color::RowResampler::new(metadata.extent, extent).map_err(js)?;
+        let mut rows = |y,pixels: &mut [[f32;4]]| resampler.read_row(y,pixels,&mut read_row);
+        let (preview, stats) = if metadata.preview {
+            let (size, mut pixels, stats) = layer_color::photo::preview_hdr_rows(extent,[512,384],metadata.color.space,&mut rows).map_err(js)?;
+            let guide = layer_color::build_local_tone_guide(metadata.extent,metadata.color.space,||false,&mut read_row).map_err(js)?;
+            let to_working = layer_core::color::RgbSpace::Srgb.linear_transform(metadata.color.space);
+            let mapper = metadata.rendition.unwrap_or_default().mapper(metadata.color.space,layer_core::color::RgbSpace::Srgb);
+            for (i,p) in pixels.iter_mut().enumerate() {
+                let rgb=layer_core::color::rgb::apply(to_working,[p[0],p[1],p[2]].map(f64::from));
+                p[..3].copy_from_slice(&rgb.map(|v|v as f32));
+                *p=mapper.map_local_premultiplied(*p,std::array::from_fn(|c| (if c==0 { i as u32%size[0] } else { i as u32/size[0] }) as f32 * metadata.extent[c] as f32/size[c] as f32 + 0.5*metadata.extent[c] as f32/size[c] as f32),&guide);
+            }
+            (Some(layer_render_wgpu::snapshot::SnapshotPreview {extent:size,pixels,space:layer_core::color::RgbSpace::Srgb}),stats)
+        } else {
+            (None,layer_color::photo::write_hdr_png_rows(output,extent,metadata.color.space,metadata.resolution,recipe.format.maps_hdr_range(),rows).map_err(js)?)
+        };
+        let result=serialize(&serde_json::json!({"clipped_channels":stats.clipped_channels,"extent":extent}))?;
+        if let Some(after)=preview { let values=js_sys::Array::new(); values.push(&preview_value(&before.unwrap())?);values.push(&preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?; }
+        return Ok(result);
+    }
     let mut preview = None;
     let mut flattened = None;
     let write = |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
@@ -370,8 +416,6 @@ pub async fn raster_worker_output(
         write(extent, &target, &mut |y, row| rows.read(y, row)).map_err(js)?;
         0
     } else {
-        let row_bytes = metadata.extent[0] as usize * 16;
-        let mut bytes = vec![0; row_bytes];
         layer_color::encode_working_rows(
             metadata.color.space,
             metadata.extent,
@@ -379,27 +423,8 @@ pub async fn raster_worker_output(
             &target,
             recipe.encoding,
             recipe.background.matte(),
-            None,
-            |y, pixels| {
-                let result = read
-                    .call2(
-                        &JsValue::NULL,
-                        &JsValue::from_f64(y as f64 * row_bytes as f64),
-                        &JsValue::from_f64(row_bytes as f64),
-                    )
-                    .map_err(|e| format!("{e:?}"))?;
-                let data = js_sys::Uint8Array::new(&result);
-                if data.length() as usize != row_bytes {
-                    return Err("Incomplete output source row".into());
-                }
-                data.copy_to(&mut bytes);
-                for (pixel, source) in pixels.iter_mut().zip(bytes.chunks_exact(16)) {
-                    *pixel = std::array::from_fn(|c| {
-                        f32::from_le_bytes(source[c * 4..c * 4 + 4].try_into().unwrap())
-                    });
-                }
-                Ok(())
-            },
+            if metadata.flatten.is_some_and(|c|c.depth.is_float()) { None } else { metadata.rendition },
+            &mut read_row,
             write,
         )
         .map_err(js)?
@@ -413,6 +438,7 @@ pub async fn raster_worker_output(
     let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))?;
     if let Some(preview) = preview {
         js_sys::Reflect::set(&result, &js("preview"), &preview_value(&preview)?)?;
+        if let Some(before)=before { let values=js_sys::Array::new(); values.push(&preview_value(&before)?); values.push(&preview_value(&preview)?); js_sys::Reflect::set(&result,&js("previews"),&values)?; }
     }
     Ok(result)
 }
@@ -428,4 +454,14 @@ fn preview_value(
         &js_sys::Uint8Array::from(preview.srgb_bytes().map_err(js)?.as_slice()),
     )?;
     Ok(value.into())
+}
+
+fn mapped_preview(extent:[u32;2],space:layer_core::color::RgbSpace,rendition:Option<layer_core::color::hdr::SdrRendition>,read:&mut impl FnMut(u32,&mut [[f32;4]])->Result<(),String>) -> Result<layer_render_wgpu::snapshot::SnapshotPreview,String> {
+    let target=layer_ui::ExportRecipe::web_share().interpretation();
+    let mut preview=None;
+    layer_color::encode_working_rows(space,extent,extent,&target,Default::default(),None,rendition,read,|size,target,rows| {
+        let (extent,pixels)=layer_color::preview_encoded_rows(size,[512,384],layer_core::color::RgbSpace::Srgb,target,rows)?;
+        preview=Some(layer_render_wgpu::snapshot::SnapshotPreview{extent,pixels,space:layer_core::color::RgbSpace::Srgb});Ok(())
+    })?;
+    Ok(preview.unwrap())
 }

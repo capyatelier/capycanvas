@@ -48,7 +48,7 @@ internal class ProofController(private val host: CanvasHost) {
             try {
                 val view=JSONObject(host.withNative{Native.proofStatus(it)})
                 status=view.getString("text")
-                if(!setup){
+                if(!setup || running?.isActive!=true){
                     val next=view.getLong("generation")
                     if(next!=generation || !view.getBoolean("needed"))cancel()
                     generation=next
@@ -57,7 +57,7 @@ internal class ProofController(private val host: CanvasHost) {
             } finally {observing=false}
         }
     }
-    fun apply(id:Int,recipe:JSONObject) { if(!committing&&!busy){cancel();start(id,recipe)} }
+    fun apply(id:Int,recipe:JSONObject) { if(!committing){cancel();start(id,recipe)} }
     private fun start(id:Int,recipe:JSONObject?) {
         val ticket=serial
         running=host.viewModelScope.launch {
@@ -78,7 +78,7 @@ internal class ProofController(private val host: CanvasHost) {
                     val bytes=Native.proofPreservation(task)
                     if(bytes!=null)ProfileStore.import(host.getApplication<Application>(),bytes)
                     host.withNative{Native.proofApply(it,task,bytes!=null)}
-                    if(id!=0)setup=false
+                    if(id>0)setup=false
                     host.documentChanged()
                 } catch(e:Exception) {
                     if(ticket==serial&&!paused){
@@ -97,13 +97,16 @@ internal class ProofController(private val host: CanvasHost) {
 
 @Composable internal fun ProofRequests(host:CanvasHost,state:JSONObject) {
     LaunchedEffect(state.optLong("revision")){host.proof.sync()}
-    val request=state.array("requests").objects().firstOrNull{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}
-    if(request!=null)key(request.getInt("id")){ProofDialog(host,request.getInt("id"))}
+    val request=state.array("requests").objects().firstOrNull{it.getJSONObject("kind").getString("type")in listOf("soft_proof_setup","sdr_rendition")}
+    if(request!=null)key(request.getInt("id")){ProofDialog(host,request.getInt("id"),request.getJSONObject("kind").getString("type")=="sdr_rendition")}
 }
 
-@Composable private fun ProofDialog(host:CanvasHost,id:Int) {
+@Composable private fun ProofDialog(host:CanvasHost,id:Int,sdr:Boolean) {
     val controller=host.proof
     val context=LocalContext.current
+    val scope=rememberCoroutineScope()
+    var mode by remember { mutableStateOf("off") }
+    var formGeneration by remember { mutableIntStateOf(0) }
     var form by remember{mutableStateOf<JSONObject?>(null)}
     var profiles by remember{mutableStateOf<List<JSONObject>>(emptyList())}
     var saved by remember{mutableStateOf<List<JSONObject>>(emptyList())}
@@ -111,12 +114,14 @@ internal class ProofController(private val host: CanvasHost) {
     var intent by remember{mutableStateOf("RelativeColorimetric")}
     var bpc by remember{mutableStateOf(true)}
     var simulation by remember{mutableStateOf("1")}
+    var retry by remember{mutableIntStateOf(0)}
     var library by remember{mutableStateOf(false)}
     var picker by remember{mutableStateOf(false)}
     var localError by remember{mutableStateOf<String?>(null)}
     LaunchedEffect(id){
         controller.open()
         try{
+            if(sdr)host.withNative{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())}
             val model=JSONObject(host.withNative{Native.proofForm(it)})
             val recipe=model.getJSONObject("recipe")
             val original=model.objectOrNull("document_profile")
@@ -125,31 +130,44 @@ internal class ProofController(private val host: CanvasHost) {
             intent=recipe.getJSONObject("conversion").getString("intent");bpc=recipe.getJSONObject("conversion").getBoolean("black_point_compensation")
             simulation=if(recipe.getBoolean("simulate_paper"))"2" else if(recipe.getBoolean("simulate_black_ink"))"1" else "0"
             saved=ProfileStore.list(context)
-            form=model
+            form=model;mode=model.getString("mode")
         }catch(e:Exception){localError=e.message}
     }
     DisposableEffect(id){onDispose{if(!controller.committing)controller.close(id)}}
-    AlertDialog(onDismissRequest={controller.close(id)},title={Text("Proof Setup")},
-        dismissButton={TextButton({controller.close(id)},enabled=!controller.committing){Text("Cancel")}},
-        confirmButton={TextButton({
-            val profile=profiles[selection]
-            controller.apply(id,obj("name" to profile.getString("name"),"profile" to profile.getJSONObject("profile"),
-                "conversion" to obj("intent" to intent,"black_point_compensation" to bpc),"simulate_paper" to (simulation=="2"),"simulate_black_ink" to (simulation!="0")))
-        },enabled=form!=null&&!controller.busy){Text("Apply")}},text={
-            Column(Modifier.fillMaxWidth().heightIn(max=600.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
-                Text("Preview how colors will look in print.")
-                if(form!=null&&!controller.busy){
+    fun action(value:JSONObject) { scope.launch { try { host.withNative{Native.proofControl(it,value.toString())};host.documentChanged();formGeneration++ } catch(e:Exception){localError=e.message} } }
+    LaunchedEffect(formGeneration,host.panelContent?.objectOrNull("state")?.optLong("revision")) {
+        if(form!=null) { val updated=JSONObject(host.withNative{Native.proofForm(it)});form=updated;mode=updated.getString("mode") }
+    }
+    LaunchedEffect(mode,selection,intent,bpc,simulation,form!=null,retry) {
+        if(form!=null && mode=="print") {
+            controller.cancel();delay(180)
+            val p=profiles[selection]
+            controller.apply(-1,obj("name" to p.getString("name"),"profile" to p.getJSONObject("profile"),
+                "conversion" to obj("intent" to intent,"black_point_compensation" to (bpc&&intent!="AbsoluteColorimetric")),"simulate_paper" to (simulation=="2"),"simulate_black_ink" to (simulation!="0")))
+        }
+    }
+    androidx.compose.ui.window.Popup(alignment=androidx.compose.ui.Alignment.TopEnd,properties=androidx.compose.ui.window.PopupProperties(focusable=false)) {
+        Surface(Modifier.padding(top=64.dp,end=12.dp).width(320.dp),shape=MaterialTheme.shapes.large,shadowElevation=8.dp) {
+            Column(Modifier.padding(16.dp).heightIn(max=600.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("Proof",style=MaterialTheme.typography.titleLarge);TextButton({controller.close(id)},enabled=!controller.committing){Text("Close")}}
+                ColorChoice("Proof mode",listOf("off" to "Off")+(if(form?.optBoolean("hdr")==true)listOf("sdr" to "SDR")else emptyList())+listOf("print" to "Print"),mode,enabled=form!=null&&!controller.committing){controller.cancel();mode=it;action(obj("type" to "mode","mode" to it))}
+                if(mode=="sdr") form?.let{ProofSdrControls(it,::action)}
+                if(mode=="print") {
+                if(form!=null){
                     Text("Proof profile",style=MaterialTheme.typography.labelMedium)
-                    TextButton({picker=true},Modifier.testTag("proof-profile")){Text(profiles[selection].getString("name"))}
-                    ColorChoice("Rendering intent",listOf("RelativeColorimetric" to "Relative colorimetric","Perceptual" to "Perceptual","Saturation" to "Saturation","AbsoluteColorimetric" to "Absolute colorimetric"),intent){intent=it;if(it=="AbsoluteColorimetric")bpc=false}
-                    Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){Checkbox(bpc,{bpc=it},enabled=intent!="AbsoluteColorimetric");Text("Black point compensation")}
-                    ColorChoice("Print simulation",listOf("0" to "Colors only","1" to "Black ink","2" to "Paper and ink"),simulation){simulation=it}
+                    TextButton({picker=true},Modifier.testTag("proof-profile"),enabled=!controller.committing){Text(profiles[selection].getString("name"))}
+                    ColorChoice("Rendering intent",listOf("RelativeColorimetric" to "Relative colorimetric","Perceptual" to "Perceptual","Saturation" to "Saturation","AbsoluteColorimetric" to "Absolute colorimetric"),intent,enabled=!controller.committing){intent=it;if(it=="AbsoluteColorimetric")bpc=false}
+                    Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){Checkbox(bpc,{bpc=it},enabled=!controller.committing&&intent!="AbsoluteColorimetric");Text("Black point compensation")}
+                    ColorChoice("Print simulation",listOf("0" to "Colors only","1" to "Black ink","2" to "Paper and ink"),simulation,enabled=!controller.committing){simulation=it}
                 }
-                if(controller.busy){CircularProgressIndicator();Text(if(controller.committing)"Applying proof…" else "Preparing preview…")}
-                (localError?:controller.error)?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+
+                    Row { Checkbox(host.panelContent?.objectOrNull("state")?.optBoolean("gamut_warning")==true,{host.invoke("gamut_warning")},enabled=form?.objectOrNull("document_profile")!=null);Text("Gamut warning") }
+                    if(controller.busy){CircularProgressIndicator();Text(if(controller.committing)"Applying proof…" else "Preparing preview…");TextButton({controller.cancel()},enabled=!controller.committing){Text("Cancel preparation")}}
+                }
+                (localError?:controller.error)?.let{Text(it,color=MaterialTheme.colorScheme.error);if(mode=="print")TextButton({retry++}){Text("Retry")}}
             }
-        })
-    val scope=rememberCoroutineScope()
+        }
+    }
     fun select(p:JSONObject){profiles=profiles+p;selection=profiles.lastIndex;picker=false}
     if(picker)AlertDialog(onDismissRequest={picker=false},title={Text("Proof profile")},confirmButton={TextButton({picker=false}){Text("Done")}},text={
         Column(Modifier.fillMaxWidth().heightIn(max=520.dp).verticalScroll(rememberScrollState()).testTag("proof-profile-picker")){

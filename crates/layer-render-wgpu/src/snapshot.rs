@@ -98,6 +98,11 @@ impl WgpuRasterizer {
     pub fn source_sample_cache_stats(&self) -> layer_core::raster::DecodedTileCacheStats {
         self.device.source_samples.stats()
     }
+    /// Hosts can prewarm immutable samples in bounded batches before first
+    /// presentation. Rendering and snapshot workers reuse the same cache.
+    pub fn prepare_source_sample(&self, tile: &Arc<layer_core::raster::TileBlob>) -> Result<(), GpuRasterError> {
+        self.device.source_samples.decode(tile).map(|_| ()).map_err(GpuRasterError::Color)
+    }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             #[cfg(target_arch = "wasm32")]
@@ -435,7 +440,11 @@ impl SnapshotRenderer {
         if y >= height {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        // Keep browser readback conversion and inspection below a frame-sized
+        // input-owner slice. Native workers retain their larger bands.
+        let maximum = if self.color().depth.is_float() {
+            (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
+        } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
             match self.read_region([0, y, width, rows]) {
@@ -701,7 +710,11 @@ impl SnapshotRenderer {
         if y >= height {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        // Keep browser readback conversion and inspection below a frame-sized
+        // input-owner slice. Native workers retain their larger bands.
+        let maximum = if self.color().depth.is_float() {
+            (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
+        } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
             match self.read_region_async([0, y, width, rows]).await {

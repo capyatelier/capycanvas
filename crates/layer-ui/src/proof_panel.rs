@@ -4,6 +4,24 @@ use crate::{ExportProfile, NumericControl, NumericKind};
 use layer_core::color::{ProofRecipe, RenderingIntent};
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProofAction {
+    Mode { mode: crate::ProofMode },
+    Rendition { phase: crate::ContactPhase, recipe: layer_core::color::hdr::SdrRendition },
+    Pad { phase: crate::ContactPhase, values: [f64;2] },
+}
+pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
+    match action {
+        ProofAction::Mode { mode } => session.select_proof_mode(mode),
+        ProofAction::Rendition { phase, recipe } => session.edit_sdr_rendition(phase, recipe),
+        ProofAction::Pad { phase, values } => {
+            let recipe=sdr_from_pad(session.effective_sdr_rendition(),values);
+            session.edit_sdr_rendition(phase,recipe)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ProofChoice<T> {
     pub value: T,

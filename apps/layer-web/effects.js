@@ -89,6 +89,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     const graph=svg("svg",{viewBox:"0 0 200 200",preserveAspectRatio:"none",class:"curve-editor",role:"img","aria-label":"Tone curve"});
     const grid=svg("path",{d:"M50 0V200M100 0V200M150 0V200M0 50H200M0 100H200M0 150H200",stroke:"currentColor",opacity:.2});
     const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g",{fill:"currentColor"});graph.append(grid,path,points);
+    const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7}),axis=svg("text",{x:5,y:13,fill:"currentColor","font-size":10});graph.append(white,axis);
     let control,drag;
     const position=e=>{const b=graph.getBoundingClientRect();return [(e.clientX-b.left)/b.width,1-(e.clientY-b.top)/b.height];};
     const nearest=p=>control.value.value.findIndex(q=>Math.hypot((q[0]-p[0])*graph.clientWidth,(q[1]-p[1])*graph.clientHeight)<12);
@@ -100,7 +101,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     graph.onpointermove=e=>{if(drag==null)return;e.preventDefault();send({op:"curve_point",layer,key,index:drag,point:position(e),remove:false});};
     graph.onpointerup=graph.onpointercancel=()=>{drag=null;};
     graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();const index=nearest(position(e));if(index>=0)send({op:"curve_point",layer,key,index,point:[0,0],remove:true});};
-    return {node:graph,update:c=>{control=c;path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
+    return {node:graph,update:c=>{control=c;const peak=state().layer_properties.curve_max;white.setAttribute("d",peak?`M${200/peak} 0V200M0 ${200-200/peak}H200`:"");axis.textContent=peak?`SDR white · 0 EV | ${peak} · +${Math.log2(peak)} EV`:"Output / Input";path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
   }
   function refresh(){
     refreshPicker();

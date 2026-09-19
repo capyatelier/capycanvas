@@ -41,7 +41,19 @@ pub struct Histogram {
     #[serde(skip)]
     luminance: [f64; 3],
 }
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct HistogramAxis {
+    pub bins: [usize; 2],
+    pub stops: Option<[f64; 2]>,
+    pub white: Option<f64>,
+}
 impl Histogram {
+    pub fn axis(&self) -> HistogramAxis {
+        let bins=self.plot_bins();
+        let stops=self.color.depth.is_float().then(|| [hdr_bin_stops(bins.start),hdr_bin_stops(bins.end-1)]);
+        HistogramAxis {bins:[bins.start,bins.end],white:stops.map(|s| -s[0]/(s[1]-s[0])),stops}
+    }
+
     /// Positive HDR bins shown by an inspector. Keep white and nearby stops in
     /// view; expand to include occupied tails. Bin zero has a separate count.
     pub fn plot_bins(&self) -> std::ops::Range<usize> {

@@ -33,7 +33,7 @@ impl WebApp {
     pub fn editor_models(&self, _width: f32, _height: f32) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         js_sys::JSON::parse(&serde_json::to_string(&json!({
-            "color_panel": state.colors.view(),
+            "color_panel": state.colors.view_mapped(self.session.effective_sdr_rendition()),
             "partial_zen": false,
             "zen_toolbars": {"sections": []},
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id":menu, "label":menu.label(), "model":self.session.application_menu(menu)})),
@@ -50,14 +50,14 @@ impl WebApp {
         })).map_err(js)?)
     }
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.state().colors.view())
+        serialize(&self.session.state().colors.view_mapped(self.session.effective_sdr_rendition()))
     }
     /// Static for each shape; fetch when switching models, not on every drag.
     pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().colors.wheel_hue_stops())
     }
     pub fn color_panel_layout(&self, size: f32) -> Result<JsValue, JsValue> {
-        serialize(&layer_ui::ColorPanelLayout::new(size))
+        serialize(&if self.session.engine().document().color.depth.is_float() {layer_ui::ColorPanelLayout::with_hdr(size)} else {layer_ui::ColorPanelLayout::new(size)})
     }
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
@@ -66,7 +66,7 @@ impl WebApp {
         }
         let state = &self.session.state().colors;
         let mut pixels = vec![0; side as usize * side as usize * 4];
-        let valid = state.render_field(side, &mut pixels);
+        let valid = if self.session.engine().document().color.depth.is_float() {state.render_field_mapped(side,self.session.effective_sdr_rendition(),&mut pixels)} else {state.render_field(side, &mut pixels)};
         if !valid {
             return Err(js("Color field does not use a raster"));
         }

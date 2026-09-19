@@ -34,6 +34,24 @@ pub(super) fn call(
         .dyn_into()
 }
 
+/// The callback stays alive until the isolated output worker has settled.
+pub(super) async fn call_cancellable(
+    operation: &str, metadata: &str, buffers: &js_sys::Array,
+    control: layer_render_wgpu::snapshot::CaptureControl,
+) -> Result<JsValue, JsValue> {
+    let cancelled = wasm_bindgen::closure::Closure::<dyn Fn() -> bool>::new(move || control.is_cancelled());
+    let request = js_sys::Object::new();
+    js_sys::Reflect::set(&request, &js("operation"), &js(operation))?;
+    js_sys::Reflect::set(&request, &js("metadata"), &js(metadata))?;
+    js_sys::Reflect::set(&request, &js("buffers"), buffers)?;
+    js_sys::Reflect::set(&request, &js("cancelled"), cancelled.as_ref())?;
+    let promise = WORKER.with(|slot| slot.borrow().as_ref()
+        .ok_or_else(|| js("Raster worker unavailable"))?.call1(&JsValue::NULL, &request))?;
+    let result = JsFuture::from(promise.dyn_into::<js_sys::Promise>()?).await;
+    drop(cancelled);
+    result
+}
+
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
     // Browser capacity-based admission is documented separately from native
     // measured headroom. Retain only this document's completed display pixels.
