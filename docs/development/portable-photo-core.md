@@ -191,6 +191,10 @@ Verification:
 - GTK, WebAssembly and Android target checks pass. WebAssembly/Android color
   dependency graphs contain no `cc`, `nasm-rs`, `zstd-sys`, `sha2-asm`, `dav1d-sys`
   or `libaom-sys`.
+- After merging current `origin/main`, the color suite passes 102 tests with
+  the legacy HEIC feature and GTK compilation still passes. The repository
+  license/source check passes with rav1d's BSD-2-Clause notice retained and a
+  pinned CC0-1.0 exception for its `to_method` 1.1.0 dependency.
 - [The integrated browser check](../../tools/validation/portable_photo.py) runs
   actual application dispatch, AV1 decoding, gain reconstruction, ICC and raster
   storage in Chrome 152 WebAssembly, with zero host imports. Exact SDR and HDR

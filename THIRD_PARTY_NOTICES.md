@@ -5,6 +5,41 @@ Capy Canvas's original code and non-brand assets are licensed under
 retains its own terms; our dual license does not relicense dependencies.
 The project-owned capybara mark is a separate exception under [BRANDING.md](BRANDING.md).
 
+## Rust AV1 decoding — BSD-2-Clause
+
+`rav1d` 1.1.0 supplies AVIF decoding. The portability patch and upstream
+provenance are recorded in `vendor/README.md`; the AV1 algorithm is unchanged.
+Its `to_method` 1.1.0 conversion-trait dependency is dedicated under CC0-1.0;
+the generated dependency notices retain its original license text.
+The complete rav1d notice follows.
+
+```text
+Copyright © 2018-2019, VideoLAN and dav1d authors
+Copyright © 2023-2024, VideoLAN, dav1d authors, and Internet Security Research Group
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
 ## Portable Zstd raster storage — MIT
 
 `zrip-core` 0.10.1, `zrip-encode` 0.8.7 and `zrip-decode` 0.8.7 use the

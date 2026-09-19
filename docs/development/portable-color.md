@@ -1,9 +1,10 @@
 # Portable photo codecs and color management
 
-`layer-color` uses `libjpeg-turbo-rs` 0.8.0 and `moxcms` 0.9.1. JPEG and ICC
-processing no longer require libjpeg-turbo headers, LittleCMS, `pkg-config`, or
-a C compiler. Other workspace dependencies, including GTK and source-tile zstd
-compression, retain their existing platform build requirements.
+`layer-color` uses `libjpeg-turbo-rs` 0.8.0, `moxcms` 0.9.1 and patched `rav1d`
+1.1.0. JPEG, AVIF import, ICC and source-tile Zstd processing use Rust. Native
+HEIC import and AVIF writing remain until their replacements are qualified;
+GTK/GPU platform APIs retain their build requirements. See the
+[migration record](portable-photo-core.md) for current capability and validation.
 
 JPEG import/export supports RGB, gray and explicitly profiled Adobe CMYK/YCCK
 input. Original ICC bytes, integer source samples, alpha, orientation and print
@@ -13,7 +14,8 @@ delivery continues to consume rows.
 
 Camera JPEGs with an MPF directory containing a baseline primary photograph and
 only large thumbnails open the primary photograph. Unknown auxiliary image
-types, multi-frame images and recognized HDR gain maps remain unsupported.
+types and multi-frame JPEG images remain unsupported. JPEG and AVIF support
+SDR-base HDR gain maps through the shared Rust reconstruction path.
 The Sony ILCE-7RM5 sample `sony_a7r_v_29.jpg` was checked at 9504×6336 pixels.
 
 ## Available-memory budgets
