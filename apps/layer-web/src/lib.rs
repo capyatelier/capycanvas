@@ -291,6 +291,7 @@ impl WebApp {
         let filters = if self.gpu_ready() {
             serde_wasm_bindgen::from_value(filters).map_err(js)?
         } else { Vec::new() };
+        self.prepare_ui_previews()?;
         let cache = serde_wasm_bindgen::from_value(cache).map_err(js)?;
         let update = self.session.poll_filter_previews(
             (now_ms.max(0.) * 1_000_000.) as u64, filters, [width, height],
@@ -320,6 +321,7 @@ impl WebApp {
         if !self.startup.complete || self.session.engine().has_pending_document_edits() {
             return Ok(false);
         }
+        self.prepare_ui_previews()?;
         self.session
             .renderer_mut()
             .request_thumbnail(request, layer_core::LayerId(target))
@@ -613,6 +615,14 @@ impl WebGpu {
 }
 
 impl WebApp {
+    fn prepare_ui_previews(&mut self) -> Result<(), JsValue> {
+        let rendition = self.session.engine().document().color.depth.is_float()
+            .then(|| self.session.effective_sdr_rendition());
+        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            gpu.renderer.set_ui_rendition(rendition).map_err(js)?;
+        }
+        Ok(())
+    }
     fn install_filters(
         &mut self,
         manifest: &str,

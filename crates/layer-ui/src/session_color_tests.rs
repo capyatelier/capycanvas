@@ -442,7 +442,10 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     s.set_hdr_display_available(true);
     assert!(s.command(CommandId::PreviewSdr).enabled);
     let recipe = SdrRendition { exposure: -2., ..Default::default() };
+    let thumbnail_revisions = || s.state.layers.iter().map(|l| (l.paint_revision, l.mask_revision)).collect::<Vec<_>>();
+    let original_thumbnails = thumbnail_revisions();
     s.preview_sdr_appearance(Some(recipe)).unwrap();
+    assert!(s.state.layers.iter().zip(&original_thumbnails).all(|(l, &(paint, mask))| l.paint_revision != paint && l.mask_revision == mask));
     assert_eq!(s.effective_sdr_rendition(), recipe);
     assert_eq!(s.engine.document(), &original);
     assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition, original.sdr_rendition);
@@ -450,6 +453,7 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     assert!(!s.command(CommandId::PreviewSdr).enabled);
     s.preview_sdr_appearance(None).unwrap();
     assert_eq!(s.effective_sdr_rendition(), original.sdr_rendition);
+    assert_eq!(s.state.layers.iter().map(|l| (l.paint_revision, l.mask_revision)).collect::<Vec<_>>(), original_thumbnails);
     assert!(s.command(CommandId::PreviewSdr).enabled);
     s.set_sdr_rendition(recipe).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();

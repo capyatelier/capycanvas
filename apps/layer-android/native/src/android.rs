@@ -29,6 +29,7 @@ pub(crate) struct Surface {
     presenter: ViewportPresenter,
     color: SdrSurfaceColor,
     presented_headroom: Option<f32>,
+    presented_tone_generation: Option<u32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
     _instance: wgpu::Instance,
     _window: Window,
@@ -52,7 +53,9 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "color_space": format!("{:?}", surface.config.color_space),
                 "hdr_capable": surface.color == SdrSurfaceColor::ExtendedLinearSrgb,
                 "headroom": a.hdr_headroom(),
+                "reported_headroom": a.display_headroom,
                 "presented_headroom": surface.presented_headroom,
+                "presented_tone_generation": surface.presented_tone_generation,
                 "formats": caps.format_capabilities.iter().map(|f| serde_json::json!({
                     "format": format!("{:?}", f.format),
                     "color_spaces": format!("{:?}", f.color_spaces),
@@ -89,7 +92,8 @@ pub(crate) struct OverviewSlot {
 
 impl App {
     fn sync_hdr_display(&mut self) {
-        self.host.session.set_hdr_display_available(self.hdr_capable() && self.display_headroom > 1.);
+        self.host.session.set_hdr_display_available(self.hdr_capable()
+            && crate::display::presentation_headroom(self.display_headroom, 100.) > 1.);
     }
     pub(crate) fn hdr_capable(&self) -> bool {
         self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.color==SdrSurfaceColor::ExtendedLinearSrgb)
@@ -99,11 +103,11 @@ impl App {
             && self.host.session.proof_panel_mode()==layer_ui::ProofMode::Off
             && !self.host.session.state().gamut_warning
             && self.host.session.state().sdr_appearance_preview.is_none() {
-            self.host.session.effective_sdr_rendition().headroom.clamp(1.,100.)
+            crate::display::requested_headroom(self.host.session.effective_sdr_rendition().headroom)
         } else {1.}
     }
     pub(crate) fn hdr_headroom(&self) -> f32 {
-        self.display_headroom.min(self.requested_headroom())
+        crate::display::presentation_headroom(self.display_headroom, self.requested_headroom())
     }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
         let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
@@ -254,6 +258,7 @@ impl App {
             presenter,
             color,
             presented_headroom: None,
+            presented_tone_generation: None,
             first_frame_complete: None,
             _instance: instance,
             _window: window,
@@ -406,6 +411,7 @@ impl App {
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         surface.presented_headroom = Some(headroom);
+        surface.presented_tone_generation = self.tone.guide.as_ref().map(|_| self.tone.generation);
         if surface.first_frame_complete.is_none() {
             let complete = Arc::new(AtomicBool::new(false));
             surface.first_frame_complete = Some(complete.clone());

@@ -310,6 +310,23 @@ The [tablet display investigation](../development/android-hdr-display.md) replac
 the Android hardcoded SDR surface with Android 15 extended-linear float
 presentation, negotiated headroom and idle/lifecycle refresh. The attached Wacom
 now activates a real HDR layer, but its firmware grants only 1.004× headroom
-for the 2.300448× test request. Web remains mapped SDR. Both hosts use the GTK
+for the initial 2.300448× test request. The follow-up below corrects the
+request units and the near-SDR presentation policy. Web remains mapped SDR. Both hosts use the GTK
 left-side footer display button with matching zoom/rotation styling and details.
 Physical luminance, other displays and sustained thermal qualification remain open.
+
+
+## Android canvas and shared thumbnail follow-up — 2026-09-19
+
+The [same investigation](../development/android-hdr-display.md#canvas-navigator-and-layer-thumbnail-follow-up)
+records the pixel-level follow-up. Android now publishes Proof changes and
+completed tone analysis to an idle canvas. Its headroom request converts EV to a
+linear ratio. Below 1.05× granted headroom it keeps the authored SDR appearance,
+matching its SDR picker instead of changing color treatment for negligible HDR
+brightness. Float buffer readback verifies above-white canvas and Navigator
+output with simulated usable headroom; it does not establish physical HDR.
+Web/Android layer and filter previews now receive the shared SDR recipe, and
+native photo-thumbnail preparation uses GTK's bounded batches. Painted/photo
+pixel oracles and visible thumbnail edit/undo/redo checks cover the fix. The
+Android Compose picker still needs a qualified HDR presentation route on a
+display with useful headroom; global phase-4 signoff remains open.

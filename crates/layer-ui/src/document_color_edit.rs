@@ -106,8 +106,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             recipe.validate().map_err(str::to_string)?;
         }
         self.state.sdr_appearance_preview = recipe;
+        self.refresh_document();
         self.refresh_commands();
-        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
     pub fn set_hdr_display_available(&mut self, available: bool) -> bool {
         if self.state.hdr_display_available == available { return false; }
@@ -130,8 +131,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.proof_setup_pending = false;
             self.last_proof_mode = Some(ProofMode::Sdr);
         }
+        self.refresh_document();
         self.refresh_commands();
-        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
 
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {

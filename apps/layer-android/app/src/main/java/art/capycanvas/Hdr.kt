@@ -46,9 +46,10 @@ internal class HdrController(private val host:CanvasHost) {
                         host.documentChanged()
                     }
                     val headroom=state.number("display_headroom",1.0)
+                    val reported=state.number("reported_headroom",1.0)
                     status=when {
                         !state.getBoolean("hdr")->""
-                        headroom>1f->if(headroom<1.05f)"HDR (limited)" else "HDR"
+                        headroom>1f->"HDR"
                         !state.isNull("error")->"SDR preview unavailable"
                         !state.getBoolean("ready")->"Preparing SDR…"
                         state.optString("proof_mode")=="sdr"->"SDR preview"
@@ -58,11 +59,11 @@ internal class HdrController(private val host:CanvasHost) {
                     val route=if(state.optBoolean("display_hdr"))"Linear extended-range HDR surface."
                         else "Android has not offered a supported HDR surface and brightness-control path for this window."
                     val viewing=when {
-                        headroom>1f->"HDR presentation · ${String.format(java.util.Locale.ROOT,"%.3f",headroom)}× Android headroom."+
-                            if(headroom<1.05f)" The display currently grants very little brightness above SDR white." else ""
+                        headroom>1f->"HDR presentation · ${String.format(java.util.Locale.ROOT,"%.3f",headroom)}× Android headroom."
                         !state.isNull("error")->"SDR preview unavailable: ${state.getString("error")}"
                         state.optString("proof_mode")=="sdr"->"Showing the saved SDR appearance. Turn Proof Off to view HDR when available."
                         state.optString("proof_mode")=="print"->"Showing the SDR print preview."
+                        reported>1f->"Showing the saved SDR appearance. Android currently grants only ${String.format(java.util.Locale.ROOT,"%.3f",reported)}× headroom; at least 1.05× is needed to switch this canvas to HDR."
                         else->"Showing the saved SDR appearance. Android has not reported HDR headroom for this window."
                     }
                     details="$viewing\n\n$route\n\nArtwork reference white: 203 cd/m². Display limits come from Android, not a brightness measurement. The HDR master is preserved."

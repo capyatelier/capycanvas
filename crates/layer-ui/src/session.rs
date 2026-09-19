@@ -4168,6 +4168,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.reconcile_transform();
         self.source_preview_revisions.update(&self.engine.document().layers);
+        let ui_rendition = self.effective_sdr_rendition();
         if self
             .rulers
             .selected
@@ -4230,7 +4231,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .identity()
                 .wrapping_mul(4099)
                 .wrapping_add(if doc.color.depth.is_float() {
-                    doc.sdr_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
+                    ui_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
                 } else { 0 })
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))

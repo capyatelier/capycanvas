@@ -345,6 +345,43 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
 }
 
 #[test]
+fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
+    use layer_core::{color::hdr::SdrRendition, raster::*};
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
+    let pixel = [4., 1., 0.25, 1.];
+    let sample: Vec<_> = pixel.into_iter().flat_map(|v| layer_core::color::f16::from_f32(v).to_bits().to_le_bytes()).collect();
+    let raw = sample.repeat(256 * 256);
+    for retained in [false, true] {
+        let mut layer = Layer::paint(LayerId(1), "HDR thumbnail");
+        if retained {
+            let mut builder = SourceBuilder::new([256; 2], SourceInterpretation {
+                channels: SourceChannels::Rgba, depth: SampleDepth::F16,
+                profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
+            }, 4 * 1024 * 1024).unwrap();
+            for row in raw.chunks_exact(256 * 8) { builder.push_row(row).unwrap(); }
+            layer.source = Some(Arc::new(builder.finish().unwrap()));
+        } else {
+            layer.raster = RasterRevision::backed(RasterData {
+                tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
+                    RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &raw).unwrap()))].into(),
+                watercolor: None,
+            });
+        }
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+        frame(&mut r, &layer);
+        let original = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        for recipe in [SdrRendition::default(), SdrRendition { exposure: -2., ..Default::default() }, SdrRendition::default()] {
+            r.set_ui_rendition(Some(recipe)).unwrap();
+            r.request_thumbnail(7, layer.id).unwrap(); complete(&r);
+            let thumbnail = r.take_thumbnail().unwrap().unwrap();
+            let expected = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb).map_rgb(pixel[..3].try_into().unwrap());
+            close(&thumbnail.bytes[(16 * 32 + 16) * 4..][..4], bytes(expected.map(f64::from), 1.), "HDR thumbnail");
+        }
+        assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), original);
+    }
+}
+
+#[test]
 fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork() {
     for native in [false, true] {
         let mut r = if native {

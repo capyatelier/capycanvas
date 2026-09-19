@@ -101,6 +101,12 @@ export async function checkHdr({call,evaluate,settle}) {
       mark('Proof tab pen drag, layout undo/redo, touch cancellation and idempotent collapsed drawer reveal pass');
     }
     const beforeRecipe=await evaluate('layerApp.app.proof_form().rendition');
+    await evaluate(`hdrTest.thumbnailCanvas=()=>[...document.querySelectorAll('.layer-thumbnail canvas')].find(c=>c.getBoundingClientRect().height>0);
+      hdrTest.thumbnail=()=>{const c=hdrTest.thumbnailCanvas();return c?Array.from(c.getContext('2d').getImageData(0,0,32,32).data).join(','):null};
+      hdrTest.thumbnailReady=()=>{const c=hdrTest.thumbnailCanvas(),s=layerApp.state(),layer=s.layers.find(l=>String(l.id)===c?.closest('.layer-row')?.dataset.layer);return layer&&c.dataset.previewRevision===String(s.document_file.epoch)+':'+String(layer.paint_revision)};`);
+    await wait('hdrTest.thumbnail()&&hdrTest.thumbnail().split(",").some(x=>Number(x)>0)');
+    await wait('hdrTest.thumbnailReady()');
+    await evaluate('hdrTest.beforeThumbnail=hdrTest.thumbnail();true');
     // A floating workspace panel must not steal contacts from the active Proof.
     const occlusion=await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad'),r=c.getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:r.width,recipe:layerApp.app.proof_form().rendition});return d.arcs.flatMap(a=>[16,48].map(i=>{const p=a.path[i];return document.elementFromPoint(r.x+p[0],r.y+p[1])===c}))})()`);
     assert.ok(occlusion.every(Boolean),'Proof arcs remain reachable above floating workspace panels');
@@ -111,8 +117,13 @@ export async function checkHdr({call,evaluate,settle}) {
     assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),beforeRecipe,'Touch cancellation restores saved appearance');
     for(const[type,x,y,buttons]of[['mousePressed',.5,.5,1],['mouseMoved',.7,.35,1],['mouseReleased',.7,.35,0]])await call('Input.dispatchMouseEvent',{type,x:r.x+r.w*x,y:r.y+r.h*y,button:'left',buttons,pointerType:'pen',force:buttons?.6:0});
     await settle();const changed=await evaluate('layerApp.app.proof_form().rendition');assert.notDeepEqual(changed,beforeRecipe);
+    await wait('hdrTest.thumbnailReady()&&hdrTest.thumbnail()!==hdrTest.beforeThumbnail');
+    await evaluate('hdrTest.changedThumbnail=hdrTest.thumbnail();true');
     await invoke('undo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),beforeRecipe);
+    await wait('hdrTest.thumbnailReady()&&hdrTest.thumbnail()===hdrTest.beforeThumbnail');
     await invoke('redo');assert.deepEqual(await evaluate('layerApp.app.proof_form().rendition'),changed);
+    await wait('hdrTest.thumbnailReady()&&hdrTest.thumbnail()===hdrTest.changedThumbnail');
+    mark('Visible HDR layer thumbnails follow the saved SDR appearance and restore exactly on undo/redo');
     const arc=await evaluate(`(()=>{const r=document.querySelector('.proof-tone-pad').getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:r.width,recipe:layerApp.app.proof_form().rendition});return[16,48].map(i=>{const p=d.arcs[0].path[i];return{x:r.x+p[0],y:r.y+p[1]}})})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:2,...arc[0]}]});
     await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:2,...arc[1]}]});

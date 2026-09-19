@@ -227,7 +227,10 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     try {
       for (let image; (image = app.take_layer_thumbnail());) {
         const [id, width, height, bytes] = image, target = pending.get(id); pending.delete(id);target?.owned.delete(id);
-        if (target && target.revision === target.revisions.get(target.key)) target.canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(bytes),width,height),0,0);
+        if (target && target.revision === target.revisions.get(target.key)) {
+          target.canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(bytes),width,height),0,0);
+          target.canvas.dataset.previewRevision = target.revision;
+        }
       }
       const viewport = rows.getBoundingClientRect();
       for (const [id, r] of records) {

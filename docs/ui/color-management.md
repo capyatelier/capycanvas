@@ -409,12 +409,14 @@ picker placement and shared Proof dial. Web displays mapped SDR. Android 15+
 negotiates a floating-point HDR canvas when the display and Vulkan surface both
 support it, respecting Android's current headroom; older/unsupported hosts retain
 mapped SDR. The left footer button matches zoom/rotation styling and opens
-Display Details. **HDR (limited)** means Android grants less than 1.05× headroom.
+Display Details. Below 1.05× reported headroom, Android retains the saved SDR appearance and
+reports **Showing SDR**; Display Details explains the current limit.
 The [tablet display investigation](../development/android-hdr-display.md) records
-the Wacom firmware's observed 1.004× limit and separates it from app support.
+the Wacom firmware's observed 1.004× limit, float-pixel validation and the
+remaining SDR picker limitation on a display with useful HDR headroom.
 Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
-open artwork. Neither host currently offers gain-map output or physical HDR
-presentation. Proof shares Color's Paint/Photo tab group and supports the normal
+open artwork. Neither host currently offers gain-map output. Physical HDR brightness remains
+unqualified on the attached tablet. Proof shares Color's Paint/Photo tab group and supports the normal
 docked, floating and drawer views. The report separates these tested workflows
 from outstanding hardware qualification and measured performance limits.
 

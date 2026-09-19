@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub(crate) struct ToneState {
     key: Option<ToneKey>,
     owner: u64,
-    generation: u32,
+    pub generation: u32,
     pub guide: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     error: Option<String>,
     analysed_time: f32,
@@ -40,7 +40,10 @@ pub extern "system" fn Java_art_capycanvas_Native_proofControl(
 ) {
     let result = (|| {
         let action = serde_json::from_str(&read(&mut env, &action)?).map_err(error)?;
-        layer_ui::proof_panel::apply(&mut unsafe { app(handle) }.host.session, action)?;
+        let a = unsafe { app(handle) };
+        let previous = a.host.session.state().revision;
+        let change = layer_ui::proof_panel::apply(&mut a.host.session, action)?;
+        a.host.apply_change(previous, change);
         Ok(())
     })();
     fail(&mut env, result)
@@ -59,11 +62,12 @@ pub extern "system" fn Java_art_capycanvas_Native_toneStatus(
         a.tone.generation = a.tone.generation.wrapping_add(1);
         a.tone.guide = None;
         a.tone.error = None;
+        a.host.dirty = true;
     }
     let animated = a.host.session.engine().document().has_animated_effects()
         && (a.host.session.engine().animation_time() - a.tone.analysed_time).abs() >= 0.5;
     string(&mut env,Ok(serde_json::json!({"generation":a.tone.generation,"hdr":a.tone.key.is_some(),"ready":a.tone.guide.is_some(),"error":a.tone.error,
-        "display_hdr":a.hdr_capable(),"display_headroom":a.hdr_headroom(),"requested_headroom":a.requested_headroom(),"proof_mode":a.host.session.proof_panel_mode(),
+        "display_hdr":a.hdr_capable(),"display_headroom":a.hdr_headroom(),"reported_headroom":a.display_headroom,"requested_headroom":a.requested_headroom(),"proof_mode":a.host.session.proof_panel_mode(),
         "needed":a.tone.key.is_some()&&(a.tone.guide.is_none()||animated)&&a.tone.error.is_none()&&a.host.session.require_document_snapshot_idle().is_ok()}).to_string()))
 }
 #[unsafe(no_mangle)]
@@ -146,6 +150,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneApply(
     } else {
         a.tone.guide = t.guide.clone();
         a.tone.analysed_time = t.time;
+        a.host.dirty = true;
         Ok(())
     };
     fail(&mut env, result)

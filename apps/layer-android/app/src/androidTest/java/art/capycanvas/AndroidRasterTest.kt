@@ -235,6 +235,22 @@ class AndroidRasterTest {
         action("sdr_rendition")
         compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
         val before=form().getJSONObject("rendition").toString()
+        compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "layers","visible" to true))};refresh()
+        val layerGroup=host.snapshot!!.getJSONObject("layout").array("groups").objects().first{ "layers" in it.array("panels").values() }.getInt("id")
+        compose.runOnUiThread{host.dispatch(obj("type" to "select_panel_tab","group" to layerGroup,"panel" to "layers"))};refresh()
+        val thumbnailId=host.panelContent!!.getJSONObject("state").array("layers").objects().first{!it.optBoolean("group")&&it.isNull("content_icon")}.getLong("id")
+        val thumbnailTag="layer-thumbnail-$thumbnailId-false"
+        try{compose.waitUntil(10_000){compose.onAllNodesWithTag(thumbnailTag,useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}}
+        catch(e:AssertionError){File(activity.getExternalFilesDir(null),"thumbnail-failure-tree.txt").writeText(compose.onRoot(useUnmergedTree=true).printToString());File(activity.getExternalFilesDir(null),"thumbnail-failure-state.json").writeText(host.snapshot.toString());throw e}
+        fun thumbnail():List<Byte> {
+            val image=compose.onNodeWithTag(thumbnailTag,useUnmergedTree=true).captureToImage().toPixelMap()
+            val bytes=ByteArray(image.width*image.height*3)
+            for(y in 0 until image.height)for(x in 0 until image.width){val color=image[x,y];val i=(y*image.width+x)*3
+                bytes[i]=(color.red*255).toInt().toByte();bytes[i+1]=(color.green*255).toInt().toByte();bytes[i+2]=(color.blue*255).toInt().toByte()}
+            return hash(bytes)
+        }
+        SystemClock.sleep(400)
+        val originalThumbnail=thumbnail()
         compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(50f,-30f));cancel()}
         refresh();assertEquals(before,form().getJSONObject("rendition").toString())
         // Inject through Android InputDispatcher with a stylus tool, not a mouse.
@@ -249,8 +265,12 @@ class AndroidRasterTest {
             SystemClock.sleep(30)
         }
         refresh();val changed=form().getJSONObject("rendition").toString();assertNotEquals(before,changed)
+        compose.waitUntil(10_000){thumbnail()!=originalThumbnail}
+        val changedThumbnail=thumbnail()
         action("undo");assertEquals(before,form().getJSONObject("rendition").toString())
+        compose.waitUntil(10_000){thumbnail()==originalThumbnail}
         action("redo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        compose.waitUntil(10_000){thumbnail()==changedThumbnail}
         val density=activity.resources.displayMetrics.density
         val arc=JSONObject(Native.colorUi(obj("type" to "proof_dial","size" to padNode.size.width/density,"recipe" to form().getJSONObject("rendition")).toString())).getJSONArray("arcs").getJSONObject(0).getJSONArray("path")
         fun arcPoint(i:Int)=arc.getJSONArray(i).let{androidx.compose.ui.geometry.Offset(it.getDouble(0).toFloat()*density,it.getDouble(1).toFloat()*density)}
@@ -319,6 +339,36 @@ class AndroidRasterTest {
         fun tone()=native{JSONObject(Native.toneStatus(it))}
         fun presented()=native{JSONObject(Native.displayStatus(it)).optDouble("presented_headroom",0.0)}
         fun mode(value:String){native{Native.proofControl(it,obj("type" to "mode","mode" to value).toString())};compose.runOnUiThread{host.documentChanged()};tick()}
+        fun surfacePixels(name:String):JSONObject {
+            fun find(view:android.view.View):CanvasSurfaceView? {
+                if(view is CanvasSurfaceView)return view
+                if(view is android.view.ViewGroup)for(i in 0 until view.childCount)find(view.getChildAt(i))?.let{return it}
+                return null
+            }
+            lateinit var surface:CanvasSurfaceView
+            compose.runOnUiThread{surface=requireNotNull(find(activity.window.decorView))}
+            val image=android.graphics.Bitmap.createBitmap(surface.width,surface.height,android.graphics.Bitmap.Config.RGBA_F16,false,
+                android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB))
+            val done=java.util.concurrent.CountDownLatch(1);var result=-1
+            compose.runOnUiThread{android.view.PixelCopy.request(surface,image,{result=it;done.countDown()},android.os.Handler(android.os.Looper.getMainLooper()))}
+            assertTrue(done.await(10,java.util.concurrent.TimeUnit.SECONDS));assertEquals(android.view.PixelCopy.SUCCESS,result)
+            fun range(left:Int,top:Int,right:Int,bottom:Int):JSONObject {
+                var low=Float.POSITIVE_INFINITY;var high=Float.NEGATIVE_INFINITY
+                var above=0;var count=0
+                var digest=1469598103934665603L
+                for(y in top.coerceAtLeast(0) until bottom.coerceAtMost(image.height) step 3)
+                    for(x in left.coerceAtLeast(0) until right.coerceAtMost(image.width) step 3){
+                        val p=image.getColor(x,y)
+                        for(v in listOf(p.red(),p.green(),p.blue())){low=minOf(low,v);high=maxOf(high,v);if(v>1.001f)above++;count++;digest=(digest xor v.toRawBits().toLong())*1099511628211L}
+                    }
+                return obj("min" to low,"max" to high,"above_sdr" to above,"samples" to count,"digest" to digest.toString())
+            }
+            val nav=compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot.translate(-host.surfaceOrigin)
+            val pixels=obj("format" to image.config.toString(),"color_space" to image.colorSpace.toString(),
+                "canvas" to range(image.width/3,image.height/3,image.width*2/3,image.height*2/3),
+                "navigator" to range(nav.left.toInt()+3,nav.top.toInt()+3,nav.right.toInt()-3,nav.bottom.toInt()-3))
+            File(output,"$name-pixels.json").writeText(pixels.toString(2));image.recycle();return pixels
+        }
         fun record(name:String){
             File(output,"$name.json").writeText(tone().put("surface",native{JSONObject(Native.displayStatus(it))}).toString(2))
             File(output,"$name-display.txt").writeBytes(shell("dumpsys display"))
@@ -327,22 +377,28 @@ class AndroidRasterTest {
         }
         open(input);mode("off")
         compose.waitUntil(30_000){tone().getBoolean("ready")}
+        compose.waitUntil(5_000){native{JSONObject(Native.displayStatus(it)).optInt("presented_tone_generation",-1)}==tone().getInt("generation")}
         // Record even if this device withholds headroom, so failure is diagnosable.
         val deadline=SystemClock.uptimeMillis()+15_000
-        while(SystemClock.uptimeMillis()<deadline&&tone().getDouble("display_headroom")<=1.0)SystemClock.sleep(200)
+        while(SystemClock.uptimeMillis()<deadline&&tone().getDouble("reported_headroom")<=1.0)SystemClock.sleep(200)
         record("hdr-off")
         val supports=tone().getBoolean("display_hdr")
+        val actualPixels=surfacePixels("actual-display")
         if(InstrumentationRegistry.getArguments().getString("requireHdr")=="true")assertTrue("Expected a negotiated HDR surface",supports)
         if(supports) {
-            assertTrue("Android granted HDR headroom: ${tone()}",tone().getDouble("display_headroom")>1.0)
-            compose.waitUntil(5_000){presented()>1.0}
+            val granted=tone().getDouble("reported_headroom").toFloat()
+            val usable=granted>=1.05f
+            compose.waitUntil(5_000){if(usable)presented()>1.0 else presented()==1.0}
             // An idle display-policy update must repaint without artwork input.
-            val granted=tone().getDouble("display_headroom").toFloat()
             val revision=native{state(it).getJSONObject("document_file").getLong("revision")}
             compose.runOnUiThread{host.displayInfo(true,1f)}
             compose.waitUntil(5_000){presented()==1.0}
+            compose.runOnUiThread{host.displayInfo(true,4f)}
+            compose.waitUntil(5_000){presented()==4.0}
+            val hdrPixels=surfacePixels("simulated-4x-buffer")
+            for(region in listOf("canvas","navigator"))assertTrue("HDR $region buffer retains above-white values: $hdrPixels",hdrPixels.getJSONObject(region).getDouble("max")>1.0)
             compose.runOnUiThread{host.displayInfo(true,granted)}
-            compose.waitUntil(5_000){presented()>1.0}
+            compose.waitUntil(5_000){if(usable)presented()>1.0 else presented()==1.0}
             assertEquals(revision,native{state(it).getJSONObject("document_file").getLong("revision")})
         }
         val info=compose.onNodeWithTag("hdr-status").fetchSemanticsNode().boundsInRoot
@@ -354,13 +410,16 @@ class AndroidRasterTest {
         record("display-details")
         compose.onNodeWithText("Close").performClick()
         mode("sdr");compose.waitUntil(5_000){tone().getDouble("display_headroom")==1.0&&presented()==1.0};record("sdr-proof")
+        val sdrPixels=surfacePixels("sdr-proof")
+        if(tone().getDouble("reported_headroom")<1.05)for(region in listOf("canvas","navigator"))
+            assertEquals("Limited HDR display keeps the authored SDR appearance in $region",actualPixels.getJSONObject(region).getString("digest"),sdrPixels.getJSONObject(region).getString("digest"))
         assertEquals(1.0,tone().getDouble("requested_headroom"),0.0)
         mode("print");compose.waitUntil(5_000){presented()==1.0};record("print-proof");assertEquals(1.0,tone().getDouble("display_headroom"),0.0)
         mode("off")
         compose.runOnUiThread{host.restartCanvas()}
         compose.waitUntil(60_000){host.failure!=null||host.snapshot?.optBoolean("brush_ready")==true}
         assertNull(host.failure)
-        compose.waitUntil(15_000){!supports||(tone().getDouble("display_headroom")>1.0&&presented()>1.0)}
+        compose.waitUntil(15_000){presented()==tone().getDouble("display_headroom")}
         record("hdr-recovered")
         assertEquals(supports,tone().getBoolean("display_hdr"))
     }
