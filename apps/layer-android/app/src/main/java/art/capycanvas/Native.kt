@@ -9,7 +9,7 @@ internal object Native {
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
     @JvmStatic external fun displayStatus(handle: Long): String
-    @JvmStatic external fun displayInfo(handle: Long, available: Boolean, headroom: Float)
+    @JvmStatic external fun displayInfo(handle: Long, available: Boolean)
     @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun resetGpu(handle: Long)
     external fun destroyGpuForTest(handle: Long)

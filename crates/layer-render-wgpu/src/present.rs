@@ -74,6 +74,7 @@ pub struct ViewportPresenter {
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
+    color: SdrSurfaceColor,
     overview_pipeline: Option<wgpu::RenderPipeline>,
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
@@ -160,6 +161,30 @@ impl ViewportPresenter {
         rendition: Option<layer_core::color::hdr::SdrRendition>,
         headroom: f32,
     ) -> Result<(), GpuRasterError> {
+        self.set_hdr_options(renderer, rendition, headroom, false)
+    }
+
+    /// Submit the artwork's absolute PQ brightness to the OS tone mapper.
+    /// This bypasses the display-headroom shoulder, not the PQ encoding limits
+    /// (BT.2020, 0–10,000 cd/m²). Explicit print/gamut proof still takes precedence.
+    pub fn set_compositor_hdr_view(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        rendition: layer_core::color::hdr::SdrRendition,
+    ) -> Result<(), GpuRasterError> {
+        if self.color != SdrSurfaceColor::Bt2100Pq {
+            return Err(GpuRasterError::Color("Compositor HDR requires a PQ surface".into()));
+        }
+        self.set_hdr_options(renderer, Some(rendition), 1., true)
+    }
+
+    fn set_hdr_options(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
+        headroom: f32,
+        compositor: bool,
+    ) -> Result<(), GpuRasterError> {
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) {
             return Err(GpuRasterError::Color("Invalid display HDR headroom".into()));
         }
@@ -169,7 +194,7 @@ impl ViewportPresenter {
         let options = rendition.map_or([0.; 8], |r| {
             let p = r.parameters();
             [
-                p[0], p[1], p[2], p[3], headroom, p[4], p[5], 0.,
+                p[0], p[1], p[2], p[3], headroom, p[4], p[5], u32::from(compositor) as f32,
             ]
         });
         if options != self.hdr_options {
@@ -618,6 +643,7 @@ impl ViewportPresenter {
             shader,
             pipeline_layout,
             format,
+            color,
             overview_pipeline: None,
             overview_buffer: None,
             overviews: Vec::new(),

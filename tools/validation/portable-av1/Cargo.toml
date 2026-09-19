@@ -1,0 +1,13 @@
+# Independent codec portability qualification, before application integration.
+[workspace]
+[package]
+name = "capy-portable-av1-check"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+[lib]
+crate-type = ["rlib", "cdylib"]
+[dependencies]
+rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+[patch.crates-io]
+rav1d = { path = "../../../vendor/rav1d" }
