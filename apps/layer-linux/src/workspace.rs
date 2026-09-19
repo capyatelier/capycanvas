@@ -866,6 +866,7 @@ impl Drop for Workspace {
     fn drop(&mut self) {
         // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
         // Join the GPU worker before any native window/surface fields drop.
+        self.local_tone.suspend();
         self.gpu.get_mut().take();
         self.customization.dispose();
         gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
@@ -2060,7 +2061,7 @@ impl Workspace {
         self.area.connect_map(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_| this.wake()
+            move |_| { this.local_tone.resume(); this.wake(); }
         ));
         self.area.connect_scale_factor_notify(glib::clone!(
             #[weak(rename_to = this)]
@@ -2071,6 +2072,7 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                this.local_tone.suspend();
                 area.set_paintable(None::<&gdk::Texture>);
                 if let Some(gpu) = this.gpu.borrow_mut().as_mut() {
                     gpu.session.renderer_mut().stop();

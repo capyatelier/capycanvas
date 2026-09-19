@@ -72,18 +72,13 @@ impl LocalToneView {
             layers: d.layers.iter().map(Layer::composite_snapshot).collect(),
         })
     }
+    pub fn suspend(&self) {
+        self.closed.set(true);
+        if let Some(control) = self.control.borrow().as_ref() { control.cancel(); }
+    }
+    pub fn resume(&self) { self.closed.set(false); }
     pub fn sync(self: &Rc<Self>, w: &Rc<Workspace>) {
         if self.timer.borrow().is_none() {
-            w.window.connect_destroy(glib::clone!(
-                #[weak(rename_to=state)]
-                self,
-                move |_| {
-                    state.closed.set(true);
-                    if let Some(c) = state.control.borrow().as_ref() {
-                        c.cancel();
-                    }
-                }
-            ));
             *self.timer.borrow_mut() = Some(glib::timeout_add_local(
                 Duration::from_millis(100),
                 glib::clone!(
@@ -166,12 +161,16 @@ impl LocalToneView {
         self.running.set(true);
         let control = CaptureControl::default();
         *self.control.borrow_mut() = Some(control.clone());
+        // Snapshot workers own live GPU objects. Keep the application/driver
+        // alive until cancellation has finished and those objects are dropped.
+        let hold = w.window.application().map(|app| app.hold());
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to=state)]
             self,
             #[weak]
             w,
             async move {
+                let _hold = hold;
                 let c = control.clone();
                 let background = key.background;
                 let result = gio::spawn_blocking(move || {
@@ -212,6 +211,10 @@ impl LocalToneView {
                 w.wake();
             }
         ));
+    }
+    #[cfg(test)]
+    pub fn worker_state(&self) -> (bool, Option<bool>) {
+        (self.running.get(), self.control.borrow().as_ref().map(CaptureControl::is_cancelled))
     }
     #[cfg(test)]
     pub fn ready_count(&self) -> Option<u64> {

@@ -1197,3 +1197,31 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     photo.window.destroy();w.window.destroy();pump(100);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_hdr_close_cancels_pending_local_analysis() {
+    let app = native_test_app("art.capycanvas.HdrCloseAnalysis");
+    for depth in [SampleDepth::F16, SampleDepth::F32] {
+        let mut project = new_drawing(4096, 4096).unwrap();
+        project.document.color.depth = depth;
+        let w = Workspace::with_project(&app, Some((project, None)));
+        w.window.present();
+        ready(&w);
+        // Startup may already have completed its first guide. Invalidate it
+        // through an ordinary document edit before observing the next job.
+        w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while w.local_tone.worker_state().1 != Some(false) {
+            pump(5);
+            assert!(Instant::now() < deadline, "local analysis never started");
+        }
+        w.window.destroy();
+        assert_eq!(w.local_tone.worker_state(), (true, Some(true)), "canvas unrealize must cancel before the future releases its window reference (visible={}, mapped={}, realized={})", w.window.is_visible(), w.window.is_mapped(), w.window.is_realized());
+        while w.local_tone.worker_state().0 {
+            pump(5);
+            assert!(Instant::now() < deadline, "cancelled local analysis did not finish");
+        }
+        pump(50);
+    }
+}

@@ -236,6 +236,13 @@ fn native_penup_and_following_strokes() {
     let path = std::env::var("LAYER_PACING_REPORT").unwrap();
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     w.window.destroy();
+    // This harness drives the main context directly, without Application::run
+    // observing the analysis worker's application hold during shutdown.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.local_tone.worker_state().0 {
+        pump(5);
+        assert!(Instant::now() < deadline, "cancelled local analysis did not stop");
+    }
     pump(100);
 }
 
