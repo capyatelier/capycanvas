@@ -24,7 +24,7 @@ impl SourceAccounting {
             .saturating_add(source.tiles.len().saturating_mul(96));
         for tile in source.tiles.values() {
             if self.tiles.insert(Arc::as_ptr(tile) as usize) {
-                bytes = bytes.saturating_add(tile.resident_bytes());
+                bytes = bytes.saturating_add(tile.compressed_len());
             }
         }
         if let ColorProfile::Icc(profile) = &source.interpretation.profile

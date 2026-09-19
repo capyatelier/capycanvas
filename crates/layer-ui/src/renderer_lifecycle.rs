@@ -2,6 +2,54 @@
 use super::*;
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// The host has no modal work and must wait for this boundary before normal
+    /// parking. Failed renderers remain navigable/saveable/closeable.
+    pub fn can_park_document(&self) -> bool {
+        (self.rendering_suspended || (self.require_workspace_idle().is_ok()
+            && self.require_document_idle().is_ok() && self.engine.can_park()))
+            && !self.workspace_transition && !self.state.customization.header_editing
+            && self.state.requests.is_empty() && !self.state.document_file.busy
+    }
+
+    pub fn release_idle_document_buffers(&mut self) {
+        self.engine.release_idle_buffers();
+        self.navigator_preview = Default::default();
+        self.filter_previews.renderer_replaced();
+    }
+
+    pub fn retained_document_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
+        let mut tiles = self.engine.retained_tiles();
+        // Include the fixed native input queue/session structures and retained
+        // non-tiled legacy assets. This is admission accounting, not process RSS.
+        tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(2 * 1024 * 1024);
+        for asset in self.files.assets.values() {
+            tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(asset.bytes.len());
+        }
+        tiles
+    }
+
+    /// A host with multiple drawings retains one workspace owner. Bring its
+    /// layout/history/settings forward without overwriting this drawing's view,
+    /// tools, history, dirty checkpoint or color interpretation.
+    pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
+        self.state.platform = previous.state.platform;
+        self.platform_prediction_available = previous.platform_prediction_available;
+        self.system_theme = previous.system_theme;
+        self.state.workspace = previous.state.workspace.clone();
+        self.workspace_history = previous.workspace_history.clone();
+        self.workspace_read_only = previous.workspace_read_only;
+        self.managed_workspace = previous.managed_workspace.clone();
+        self.state.fullscreen = previous.state.fullscreen;
+        self.state.customization = Default::default();
+        self.state.document_file.epoch = previous.state.document_file.epoch.checked_add(1)
+            .ok_or("Document activation generation exhausted")?;
+        self.state.revision = self.state.revision.max(previous.state.revision);
+        self.apply_settings(previous.state.settings.clone())?;
+        self.sync_work_area();
+        self.refresh_commands();
+        Ok(self.changed(regions::ALL, true))
+    }
+
     pub fn rendering_suspended(&self) -> bool {
         self.rendering_suspended
     }

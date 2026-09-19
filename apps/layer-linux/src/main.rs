@@ -1,5 +1,6 @@
 mod alert;
 mod canvas;
+mod documents;
 mod display_color;
 mod proof_view;
 mod hdr;
@@ -169,15 +170,12 @@ fn open_workspace(
         None => workspace::Workspace::new(app),
         Some(project) => workspace::Workspace::with_project(app, Some(project)),
     };
-    let windows = Rc::downgrade(active);
-    let application = app.downgrade();
+    let owner = Rc::downgrade(&workspace);
     *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location, recovered| {
-        if let (Some(app), Some(active)) = (application.upgrade(), windows.upgrade()) {
-            open_workspace(&app, &active, Some((project, location)), recovered);
-        }
+        if let Some(w) = owner.upgrade() { w.documents.enqueue(&w, (project, location, recovered)); }
     }));
-    workspace.recovery.recovered.set(recovered.is_some());
-    if let Err(error) = workspace.recovery.set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
+    workspace.recovery().recovered.set(recovered.is_some());
+    if let Err(error) = workspace.recovery().set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
     active.borrow_mut().push(workspace.clone());
     workspace.window.present();
     if let Some(settings) = settings {

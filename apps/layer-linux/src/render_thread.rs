@@ -447,6 +447,14 @@ impl RenderWorker {
         }
         // Unconsumed initialization replies also own a device handle.
         for reply in self.replies.try_iter() { drop(reply); }
+        self.readbacks.clear();
+        self.thumbnails.clear();
+        self.filter_previews.clear();
+        self.color_sample = None;
+        self.region = None;
+        self.selection = None;
+        self.outlines.clear();
+        self.startup_key = None;
     }
 }
 impl Drop for RenderWorker {

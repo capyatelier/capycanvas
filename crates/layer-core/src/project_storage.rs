@@ -117,7 +117,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     let records = blobs
         .iter()
         .map(|blob| {
-            let size = blob.compressed().len() as u64;
+            let size = blob.compressed_len() as u64;
             let record = BlobRecord {
                 offset,
                 size,
@@ -170,7 +170,7 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     output.write_all(&Sha256::digest(&json)).map_err(io_error)?;
     output.write_all(&json).map_err(io_error)?;
     for blob in blobs {
-        output.write_all(blob.compressed()).map_err(io_error)?;
+        output.write_all(&blob.compressed()?).map_err(io_error)?;
     }
     for profile in profiles {
         output.write_all(&profile).map_err(io_error)?;

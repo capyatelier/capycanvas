@@ -111,8 +111,8 @@ pub fn raster_worker_encode(metadata: &str, bytes: &[u8]) -> Result<Vec<u8>, JsV
             .ok_or_else(|| js("Incomplete raster worker chunk"))?;
         let tile = TileBlob::encode(descriptor, raw).map_err(js)?;
         result.extend_from_slice(&tile.digest);
-        result.extend_from_slice(&(tile.compressed().len() as u32).to_le_bytes());
-        result.extend_from_slice(tile.compressed());
+        result.extend_from_slice(&(tile.compressed_len() as u32).to_le_bytes());
+        result.extend_from_slice(&tile.compressed().map_err(js)?);
         offset += size;
     }
     if offset != bytes.len() {

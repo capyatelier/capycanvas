@@ -5,6 +5,8 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod document_tabs;
+pub use document_tabs::DocumentTabs;
 mod document_creation;
 pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod document_workflow;

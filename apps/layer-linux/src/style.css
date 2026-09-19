@@ -239,3 +239,13 @@ window, label, text { font-size: var(--ui-text-size); }
 
 /* Custom angular input and rendering share coordinates without CSS insets. */
 scale.hdr-color-scale, scale.parameter-arc-scale { padding: 0; margin: 0; min-width: 0; min-height: 0; }
+
+/* Drawing tabs consume the available title-bar interval equally. */
+.document-tabs { border-spacing: 2px; }
+.document-tab { border-radius: 7px; background: alpha(currentColor, 0.035); }
+.document-tab.selected { background: alpha(currentColor, 0.12); box-shadow: inset 0 -2px @accent_color; }
+.document-tab button { min-width: 0; min-height: 28px; padding: 2px 6px; }
+.document-tab-close { opacity: 0.65; }
+.document-tab-close:hover { opacity: 1; }
+.document-tab.drop-before { box-shadow: inset 2px 0 @accent_color; }
+.document-tab.drop-after { box-shadow: inset -2px 0 @accent_color; }

@@ -174,7 +174,7 @@ fn push_blob(blob: &Arc<TileBlob>, blobs: &mut Vec<Blob>, parts: &mut Vec<Part>,
     *dedup.entry(blob.digest).or_insert_with(|| {
         let index = blobs.len();
         blobs.push(Blob { descriptor: blob.descriptor, digest: blob.digest, data: parts.len() });
-        parts.push(Part { bytes: blob.compressed_owned(), range: 0..blob.compressed().len() });
+        parts.push(Part { bytes: blob.compressed_owned(), range: 0..blob.compressed_len() });
         index
     })
 }

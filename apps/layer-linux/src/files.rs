@@ -32,15 +32,36 @@ impl Workspace {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_| {
+                w.documents.closing_window.set(true);
+                if w.documents.changing.get() {
+                    w.documents.close_pending.set(true);
+                    w.documents.cancel_open.set(true);
+                    return glib::Propagation::Stop;
+                }
+                if w.documents.loading.get() {
+                    w.documents.cancel_open.set(true);
+                    if let Some(dialog) = w.window.visible_dialog() { dialog.force_close(); }
+                    return glib::Propagation::Stop;
+                }
+                if w.servicing.get() {
+                    w.documents.close_pending.set(true);
+                    w.documents.cancel_open.set(true);
+                    if let Some(dialog) = w.window.visible_dialog() { dialog.force_close(); }
+                    return glib::Propagation::Stop;
+                }
                 if w.gpu
                     .borrow()
                     .as_ref()
                     .is_some_and(|g| g.session.state().document_file.close_ready)
                 {
+                    if w.documents.len() > 1 {
+                        w.documents.close_completed(&w);
+                        return glib::Propagation::Stop;
+                    }
                     return if w.workspaces.request_close(&w) {
                         glib::Propagation::Stop
                     } else {
-                        w.recovery.discard();
+                        w.recovery().discard();
                         glib::Propagation::Proceed
                     };
                 }
@@ -168,13 +189,7 @@ impl Workspace {
                     }
                 }
                 w.servicing.set(false);
-                if w.gpu
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|g| g.session.state().document_file.close_ready)
-                {
-                    w.window.close();
-                }
+                w.documents.close_completed(&w);
             }
         ));
     }
@@ -208,7 +223,7 @@ async fn document_request(
         w.open_document
             .borrow()
             .as_ref()
-            .ok_or("New drawing window is unavailable")?(project, None, None);
+            .ok_or("Drawing tabs are unavailable")?(project, None, None);
         return Ok(true);
     }
     if let DocumentRequest::Export { name } = request {
@@ -239,7 +254,7 @@ async fn document_request(
             w.open_document
                 .borrow()
                 .as_ref()
-                .ok_or("New drawing window is unavailable")?(
+                .ok_or("Drawing tabs are unavailable")?(
                 project, location, None
             );
         }

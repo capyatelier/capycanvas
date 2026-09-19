@@ -29,6 +29,8 @@ mod place_source;
 mod photo_drop;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
+#[path = "document_tab_tests.rs"]
+mod document_tabs;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]
@@ -482,7 +484,7 @@ fn native_document_files() {
     assert!(state(&w).document_file.modified);
     // Autosave publishes a separate durable copy without acknowledging Save.
     let recovery_dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
-    w.recovery.capture(&w);
+    w.recovery().capture(&w);
     let deadline = Instant::now() + Duration::from_secs(10);
     let recovery_path = loop {
         pump(20);
@@ -516,7 +518,7 @@ fn native_document_files() {
         "{:?}",
         state(&w).host_error
     );
-    w.recovery.capture(&w);
+    w.recovery().capture(&w);
     let deadline = Instant::now() + Duration::from_secs(5);
     while recovery_path.exists() {
         pump(20);

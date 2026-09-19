@@ -77,6 +77,12 @@ impl LocalToneView {
         if let Some(control) = self.control.borrow().as_ref() { control.cancel(); }
     }
     pub fn resume(&self) { self.closed.set(false); }
+    pub async fn pause(&self) {
+        self.suspend();
+        while self.running.get() { glib::timeout_future(Duration::from_millis(5)).await; }
+        self.wanted.borrow_mut().take();
+        self.published.borrow_mut().take();
+    }
     pub fn sync(self: &Rc<Self>, w: &Rc<Workspace>) {
         if self.timer.borrow().is_none() {
             *self.timer.borrow_mut() = Some(glib::timeout_add_local(

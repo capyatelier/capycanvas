@@ -49,6 +49,11 @@ impl Drop for Inspector {
     }
 }
 impl Inspector {
+    pub async fn retire(&self) {
+        self.pause();
+        self.window.set_visible(false);
+        while self.running.get() { glib::timeout_future(Duration::from_millis(5)).await; }
+    }
     fn key(&self) -> Option<Key> {
         let w = self.workspace.upgrade()?;
         let gpu = w.gpu.borrow();

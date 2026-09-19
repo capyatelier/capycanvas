@@ -449,6 +449,42 @@ pub struct HeaderGeometry {
     pub hidden: [Vec<u32>; 3],
 }
 
+impl HeaderGeometry {
+    /// Pack neighboring items toward the edges and give the document the space
+    /// between them, including in custom side zones. Controls and drag gutters
+    /// stay outside this allocation; customization uses the original geometry.
+    pub fn expand_document(&mut self, id: u32, width: f32, insets: [f32; 2]) {
+        let mut slots: Vec<_> = self.items.iter().map(|i| (Some(i.id), None, i.bounds))
+            .chain(self.overflow.iter().enumerate().filter_map(|(i, b)| b.map(|b| (None, Some(i), b))))
+            .collect();
+        slots.sort_by(|a, b| a.2.x.total_cmp(&b.2.x));
+        let Some(index) = slots.iter().position(|s| s.0 == Some(id)) else { return; };
+        let mut left = insets[0] + 6.;
+        let mut right = width - insets[1] - 6.;
+        for slot in &mut slots[..index] {
+            slot.2.x = left;
+            left += slot.2.width + 6.;
+        }
+        for slot in slots[index + 1..].iter_mut().rev() {
+            right -= slot.2.width;
+            slot.2.x = right;
+            right -= 6.;
+        }
+        let left = left + if index == 0 { 12. } else { 6. };
+        let right = right - if index + 1 == slots.len() { 12. } else { 6. };
+        if right <= left { return; }
+        slots[index].2.x = left;
+        slots[index].2.width = right - left;
+        for (item, overflow, bounds) in slots {
+            if let Some(id) = item {
+                self.items.iter_mut().find(|i| i.id == id).unwrap().bounds = bounds;
+            } else if let Some(index) = overflow {
+                self.overflow[index] = Some(bounds);
+            }
+        }
+    }
+}
+
 /// Toolkit-independent title-bar content. Hosts supply text measurements and
 /// device status; component availability and tool semantics stay in the session.
 #[derive(Serialize)]

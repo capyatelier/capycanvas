@@ -23,6 +23,8 @@ pub(crate) struct Recovery {
     origin_lock: RefCell<Option<Arc<std::fs::File>>>,
     policy: RefCell<RecoveryState>,
     discarded: Arc<AtomicBool>,
+    snapshot: RefCell<Option<Project>>,
+    running: Cell<usize>,
 }
 fn directory() -> PathBuf {
     std::env::var_os("CAPY_RECOVERY_DIR")
@@ -56,6 +58,8 @@ impl Default for Recovery {
                 policy
             }),
             discarded: Arc::new(AtomicBool::new(false)),
+            snapshot: RefCell::new(None),
+            running: Cell::new(0),
         }
     }
 }
@@ -91,35 +95,43 @@ impl Recovery {
         Ok(())
     }
     pub fn discard(self: &Rc<Self>) {
+        self.snapshot.borrow_mut().take();
         self.discarded.store(true, Ordering::Release);
         let _ = self.adopt_origin();
         let work = self.policy.borrow_mut().event(RecoveryEvent::Retire { discard_origin: true }).unwrap().work;
         self.policy.borrow_mut().event(RecoveryEvent::Close).unwrap();
-        self.execute(None, work);
+        self.execute(work);
     }
     pub fn capture(self: &Rc<Self>, w: &Rc<Workspace>) {
         if self.discarded.load(Ordering::Acquire) { return; }
         if let Err(error) = self.adopt_origin() { eprintln!("Recovery origin unavailable: {error}"); return; }
-        let document = {
+        let (document, snapshot) = {
             let gpu = w.gpu.borrow();
             let Some(gpu) = gpu.as_ref() else { return; };
-            gpu.session.recovery_document()
+            (gpu.session.recovery_document(), gpu.session.capture_project_recovery())
         };
+        *self.snapshot.borrow_mut() = snapshot.ok();
         let work = self.policy.borrow_mut().event(RecoveryEvent::Observe { document, owned: true }).unwrap().work;
-        self.execute(Some(w.clone()), work);
+        self.execute(work);
     }
-    fn execute(self: &Rc<Self>, workspace: Option<Rc<Workspace>>, first: Option<RecoveryWork>) {
-        if first.is_none() { return; }
+    pub async fn drain(&self) {
+        while self.running.get() != 0 { glib::timeout_future(Duration::from_millis(5)).await; }
+    }
+    fn execute(self: &Rc<Self>, first: Option<RecoveryWork>) {
+        if first.is_none() {
+            if self.running.get() == 0 { self.snapshot.borrow_mut().take(); }
+            return;
+        }
+        self.running.set(self.running.get() + 1);
         let recovery = self.clone();
         glib::MainContext::default().spawn_local(async move {
             let mut next = first;
             while let Some(work) = next {
                 let result = match work.kind {
                     RecoveryWorkKind::Capture => {
-                        let project = workspace.as_ref().ok_or_else(|| "Canvas closed".to_string()).and_then(|w| {
-                            let gpu = w.gpu.borrow();
-                            gpu.as_ref().ok_or("Canvas unavailable").map_err(String::from)?.session.capture_project_recovery()
-                        });
+                        // Captured with this recovery owner before any await;
+                        // the window may now display an entirely different tab.
+                        let project = recovery.snapshot.borrow().clone().ok_or_else(|| "Recovery snapshot unavailable".to_string());
                         match project {
                             Ok(project) => {
                                 let path = recovery.path.clone();
@@ -135,13 +147,15 @@ impl Recovery {
                             Ok(()) => Ok(()), Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()), Err(e) => Err(e.to_string()),
                         }).await.map_err(|e| format!("Recovery cleanup failed: {e:?}")).and_then(|r| r)
                     }
-                    RecoveryWorkKind::Restore { .. } => Err("GTK restores into a separate drawing window".into()),
+                    RecoveryWorkKind::Restore { .. } => Err("GTK restores into a drawing tab".into()),
                 };
                 if let Err(error) = &result { eprintln!("Recovery operation failed; previous copy retained: {error}"); }
                 let update = recovery.policy.borrow_mut().event(RecoveryEvent::Complete { token: work.token, success: result.is_ok() }).unwrap();
                 if !update.release.is_empty() { recovery.origin_lock.borrow_mut().take(); }
                 next = update.work;
             }
+            recovery.running.set(recovery.running.get() - 1);
+            if recovery.running.get() == 0 { recovery.snapshot.borrow_mut().take(); }
         });
     }
 }
@@ -169,7 +183,7 @@ pub(crate) fn install(w: &Rc<Workspace>) {
         let Some(w) = weak.upgrade() else {
             return glib::ControlFlow::Break;
         };
-        w.recovery.capture(&w);
+        w.recovery().capture(&w);
         glib::ControlFlow::Continue
     });
 }
@@ -192,6 +206,12 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
         }).await.unwrap_or_default();
         for path in candidates {
             let Some(w) = weak.upgrade() else { break; };
+            // A recovery decision queues admission into this same window. Let
+            // it finish before offering another copy over its transition.
+            while w.documents.has_pending_open() || w.documents.changing.get() {
+                glib::timeout_future(Duration::from_millis(10)).await;
+            }
+            if !w.window.is_visible() || w.documents.closing_window.get() { break; }
             let claim_path = path.clone();
             let Ok(Ok(Some(_lease))) = gio::spawn_blocking(move || claim_origin(&claim_path, false)).await else { continue; };
             let mut policy = RecoveryState::default();
@@ -213,7 +233,7 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
                     match result {
                         Ok(Ok(project)) => {
                             if let Some(open) = w.open_document.borrow().as_ref() { open(project, None, Some(path.clone())); }
-                            // Ownership of durable replacement moves to that window.
+                            // Ownership of durable replacement moves to that tab.
                             policy.event(RecoveryEvent::Close).unwrap();
                             policy.event(RecoveryEvent::Complete { token: restore.token, success: true }).unwrap();
                             // Keep the original until the recovered document is

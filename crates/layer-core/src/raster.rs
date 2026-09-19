@@ -108,7 +108,7 @@ pub struct TileKey {
 pub struct TileBlob {
     pub digest: [u8; 32],
     pub descriptor: PixelDescriptor,
-    compressed: Arc<[u8]>,
+    pub(crate) compressed: crate::raster_storage::Bytes,
 }
 impl std::fmt::Debug for TileBlob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -174,9 +174,8 @@ impl TileBlob {
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
-            compressed: zstd::bulk::compress(shuffled.as_deref().unwrap_or(bytes), level)
-                .map_err(|e| e.to_string())?
-                .into(),
+            compressed: Arc::<[u8]>::from(zstd::bulk::compress(shuffled.as_deref().unwrap_or(bytes), level)
+                .map_err(|e| e.to_string())?).into(),
         })
     }
     fn digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
@@ -187,27 +186,26 @@ impl TileBlob {
         hash.update(bytes);
         hash.finalize().into()
     }
-    pub fn compressed(&self) -> &[u8] {
-        &self.compressed
-    }
+    pub fn compressed_len(&self) -> usize { self.compressed.len() }
+    pub fn compressed(&self) -> Result<Arc<[u8]>, String> { self.compressed.read() }
+    #[cfg(target_arch = "wasm32")]
     pub fn compressed_owned(&self) -> Arc<[u8]> {
-        self.compressed.clone()
+        self.compressed().expect("browser tiles have immutable memory backing")
     }
-    pub fn resident_bytes(&self) -> usize {
-        self.compressed.len()
-    }
+    pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     pub fn decode(&self) -> Result<Vec<u8>, String> {
         let size = self
             .descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
-        let frame_size = zstd::zstd_safe::find_frame_compressed_size(&self.compressed)
+        let compressed = self.compressed()?;
+        let frame_size = zstd::zstd_safe::find_frame_compressed_size(&compressed)
             .map_err(|_| "Invalid compressed raster frame")?;
         if frame_size != self.compressed.len() {
             return Err("Trailing compressed raster data".into());
         }
         let mut bytes =
-            zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
+            zstd::bulk::decompress(&compressed, size).map_err(|e| e.to_string())?;
         if bytes.len() == size && self.descriptor.bits_per_channel > 8 {
             bytes = unshuffle_samples(self.descriptor, &bytes);
         }
@@ -228,7 +226,7 @@ impl TileBlob {
         let result = Self {
             descriptor,
             digest,
-            compressed: bytes,
+            compressed: bytes.into(),
         };
         result.decode()?;
         Ok(result)
@@ -252,7 +250,7 @@ impl TileBlob {
         Ok(Self {
             descriptor,
             digest,
-            compressed: bytes,
+            compressed: bytes.into(),
         })
     }
 }
@@ -692,7 +690,7 @@ mod tests {
     fn independently_compressed_tiles_reject_corruption_and_expansion() {
         let blob = TileBlob::encode(PixelDescriptor::COVERAGE8, &vec![17; 65536]).unwrap();
         assert_eq!(blob.decode().unwrap(), vec![17; 65536]);
-        let mut compressed = blob.compressed().to_vec();
+        let mut compressed = blob.compressed().unwrap().to_vec();
         compressed[4] ^= 1;
         assert!(
             TileBlob::from_compressed(blob.descriptor, blob.digest, compressed.into()).is_err()
@@ -701,11 +699,11 @@ mod tests {
             TileBlob::from_compressed(
                 PixelDescriptor::SRGB8_PAINT,
                 blob.digest,
-                blob.compressed.clone()
+                blob.compressed().unwrap()
             )
             .is_err()
         );
-        let mut tail = blob.compressed().to_vec();
+        let mut tail = blob.compressed().unwrap().to_vec();
         tail.push(0);
         assert!(TileBlob::from_compressed(blob.descriptor, blob.digest, tail.into()).is_err());
     }
