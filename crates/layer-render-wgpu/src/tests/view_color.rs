@@ -421,11 +421,43 @@ fn proof_shadow_grid_matches_cpu_and_never_changes_artwork_or_export() {
     check_proof_view(&recipe);
 }
 
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "Requires a hardware D3D12 adapter; functional pixel comparison, not performance"]
+fn d3d12_proof_view_matches_cpu_without_changing_artwork_or_export() {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::DX12;
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    })).unwrap();
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    eprintln!("D3D12 proof adapter: {:?}", adapter.get_info());
+    let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features,
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    })).unwrap();
+    let recipe = layer_core::color::ProofRecipe::new("sRGB proof".into(), ColorProfile::Builtin(RgbSpace::Srgb));
+    check_proof_renderer(&recipe, |color| {
+        WgpuRasterizer::native_capture_on_gpu(adapter.clone(), device.clone().into(), queue.clone(), color).unwrap()
+    });
+}
+
 fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
+    check_proof_renderer(recipe, |color| WgpuRasterizer::new_native_headless(color).unwrap());
+}
+fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl Fn(DocumentColor) -> WgpuRasterizer) {
     for space in RgbSpace::ALL {
         let lut = Arc::new(layer_color::ProofLut::build(space, recipe, || false).unwrap());
         for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
+            let mut r = renderer(DocumentColor { space, depth });
             let format = wgpu::TextureFormat::Rgba8Unorm;
             let target = texture(&r, format);
             let target_view = target.create_view(&Default::default());

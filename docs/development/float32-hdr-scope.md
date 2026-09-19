@@ -1,6 +1,10 @@
 # Float32 HDR layers: parity scope
 
-Status: scoped follow-on work; not implemented by the SDR appearance update.
+Status: implemented in shared storage/editing/interchange and GTK/Linux; device
+qualification is limited to the recorded environment. See the
+[implementation contract and validation](float32-hdr-validation.md) for actual
+behavior, measurements and remaining release limits. The scope below records the
+product requirements, not a claim that every host has been qualified.
 
 The product reason is parity with image editors that support 32-bit floating
 point images. Users should be able to keep Float32 image data through ordinary

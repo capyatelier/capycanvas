@@ -11,6 +11,8 @@ mod documents;
 #[cfg(any(target_os = "windows", test))]
 mod document_workflows;
 #[cfg(any(target_os = "windows", test))]
+mod proof;
+#[cfg(any(target_os = "windows", test))]
 mod color_storage;
 #[cfg(any(target_os = "windows", test))]
 mod recovery;

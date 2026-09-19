@@ -296,7 +296,7 @@ fn failed_create_retries_the_same_item_and_keeps_the_outgoing_workspace() {
     f.ready();
     let outgoing = f.service.manager.active_id();
     open(&mut f, Command::New);
-    f.faults.fail.set(true);
+    f.faults.fail_create.set(true);
     input(
         &mut f,
         Input::Submit {
@@ -309,7 +309,7 @@ fn failed_create_retries_the_same_item_and_keeps_the_outgoing_workspace() {
     assert_eq!(view(&f)["can_retry"], true);
     assert_eq!(f.service.manager.active_id(), outgoing);
     assert!(f.service.manager.has_failed_operation());
-    f.faults.fail.set(false);
+    f.faults.fail_create.set(false);
     input(&mut f, Input::Retry);
     settle(&mut f);
     assert!(view(&f).is_null());

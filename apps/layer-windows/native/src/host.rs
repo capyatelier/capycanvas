@@ -133,6 +133,7 @@ impl CapyHost {
     fn poll_services(&mut self) -> Result<(), String> {
         if let Some(service) = self.documents.as_mut() {
             service.poll(&mut self.native)?;
+            service.proof.poll(&mut self.native)?;
         }
         if let Some(service) = self.recovery.as_mut() { service.poll(&mut self.native)?; }
         if let Some(service) = self.services.as_mut() {
@@ -255,11 +256,13 @@ impl CapyHost {
             .append_layer_overlay(&mut self.cursor.segments);
         let view = self.native.session.state().camera.view();
         let surround = self.native.session.state().palette.surround_linear;
+        let proof = self.documents.as_mut().and_then(|s| s.proof.view.lut(&self.native.session));
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         let presenter = self
             .presenter
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
+        presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
         presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
@@ -831,6 +834,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .and_then(|service| service.import_request()),
             windows_recovery: host.recovery.as_ref().map(|service| service.status()),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
+            windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),

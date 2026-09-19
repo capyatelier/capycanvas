@@ -41,6 +41,55 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
 }
 
 #[test]
+fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
+    let extent = [1027, 33];
+    let mut document = Document::new("Float32 shared capture", extent[0], extent[1]);
+    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::F32 };
+    document.layers[1].visible = false;
+    let target = SourceInterpretation {
+        channels: SourceChannels::Rgba,
+        depth: SampleDepth::F32,
+        profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
+        profile_assumed: false,
+    };
+    let mut source = SourceBuilder::new(extent, target.clone(), 1024 * 1024).unwrap();
+    let mut straight = Vec::new();
+    let mut expected = Vec::new();
+    for y in 0..extent[1] {
+        let mut row = Vec::new();
+        for x in 0..extent[0] {
+            let alpha = [1., 0.5, 1. / 65536.][x as usize % 3];
+            let pixel = [100000.125 + x as f32 / 32., -0.125 - y as f32 / 64., 1e-20, alpha];
+            row.extend(pixel.into_iter().flat_map(f32::to_le_bytes));
+            expected.push([pixel[0] * alpha, pixel[1] * alpha, pixel[2] * alpha, alpha]);
+        }
+        source.push_row(&row).unwrap();
+        straight.extend(row);
+    }
+    document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+    let project = Project { document, assets: Default::default() };
+    let (live, rendered) = frame(&project);
+    assert_eq!(rendered, expected);
+    let mut capture = live.snapshot_gpu().capture(
+        project, [0.; 4], 0., Default::default(), Default::default(),
+    ).unwrap();
+    let (rows, pixels) = capture.read_band(0).unwrap();
+    assert_eq!(rows, extent[1]);
+    assert_eq!(pixels, expected, "shared capture must retain signed, low-alpha and above-half-range samples");
+    let mut exr = Cursor::new(Vec::new());
+    capture.write_exr(&mut exr).unwrap();
+    let decoded = decode(exr.into_inner());
+    assert_eq!(decoded.interpretation, target);
+    assert_eq!(raw_rows(&decoded), straight);
+    let budget = capture.limits.planned_pixel_bytes;
+    capture.limits.planned_pixel_bytes = 1;
+    assert!(matches!(capture.read_band(0), Err(GpuRasterError::CaptureBudget { .. })));
+    capture.limits.planned_pixel_bytes = budget;
+    capture.control().cancel();
+    assert!(capture.read_band(0).is_err());
+}
+
+#[test]
 fn hdr_flattened_storage_ignores_sdr_rendition() {
     use layer_core::color::hdr;
     let mut document = Document::new("HDR flattened copy", 3, 1);

@@ -236,7 +236,13 @@ impl NativeHost {
         requests: impl IntoIterator<Item = (u64, u64)>,
     ) -> Result<(Vec<u64>, Vec<layer_render::ReadbackImage>), String> {
         let mut accepted = Vec::new();
-        if !self.dirty && !self.session.engine().has_pending_document_edits() {
+        // Background brush/filter warmup keeps the canvas dirty after document
+        // pixels settle. It must not starve visible thumbnails. Still yield to
+        // active input, pending edits and shared editor background operations.
+        if self.startup.canvas_ready
+            && !self.session.wants_continuous_frames()
+            && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.export_ready())
+        {
             for (request, target) in requests.into_iter().take(8) {
                 if self
                     .session
