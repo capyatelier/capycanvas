@@ -12,6 +12,25 @@ if (!GLib.getenv('WAYLAND_DISPLAY')?.startsWith('layer-bench-'))
     throw new Error('Requires an isolated layer-bench-* Wayland display');
 const output = GLib.getenv('LAYER_NATIVE_INPUT_DIR');
 if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary directory');
+// Optional lossless captures of the actual composited monitor, including GSK's
+// incremental window damage. WidgetPaintable.render_texture cannot test that.
+const captureDir = GLib.getenv('LAYER_NATIVE_CAPTURE_DIR');
+let capturePipeline, captureSink;
+const captureFrame = name => {
+    if (!captureDir || !/^[a-z0-9-]+$/.test(name)) throw Error('Invalid native capture request');
+    const sample = captureSink?.try_pull_sample(0);
+    if (!sample) return false;
+    const {Gst, GstVideo, GdkPixbuf} = imports.gi;
+    const info = GstVideo.VideoInfo.new_from_caps(sample.get_caps());
+    const buffer = sample.get_buffer();
+    const [ok, map] = buffer.map(Gst.MapFlags.READ);
+    if (!ok) throw Error('Cannot map compositor capture');
+    const pixels = new GLib.Bytes(map.data);
+    buffer.unmap(map);
+    GdkPixbuf.Pixbuf.new_from_bytes(pixels, GdkPixbuf.Colorspace.RGB, false, 8,
+        info.width, info.height, info.stride[0]).savev(`${captureDir}/${name}.png`, 'png', [], []);
+    return true;
+};
 const ready = Gio.File.new_for_path(`${output}/ready`);
 if (ready.query_exists(null)) throw new Error('Use a fresh output directory');
 const loop = new GLib.MainLoop(null, false);
@@ -78,6 +97,7 @@ let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
     passed = p.get_successful();
+    if (capturePipeline) capturePipeline.set_state(imports.gi.Gst.State.NULL);
     loop.quit();
 });
 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
@@ -99,7 +119,22 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         ).deep_unpack();
         const path = castCall('/org/gnome/Mutter/ScreenCast', cast, 'CreateSession', '(a{sv})',
             [{'remote-desktop-session-id': new GLib.Variant('s', id)}])[0];
-        touchStream = castCall(path, `${cast}.Session`, 'RecordMonitor', '(sa{sv})', ['', {}])[0];
+        touchStream = castCall(path, `${cast}.Session`, 'RecordMonitor', '(sa{sv})',
+            ['', captureDir ? {'cursor-mode': new GLib.Variant('u', 0)} : {}])[0];
+        if (captureDir) {
+            Gio.DBus.session.signal_subscribe(cast, `${cast}.Stream`, 'PipeWireStreamAdded', touchStream,
+                null, Gio.DBusSignalFlags.NONE, (_connection, _sender, _path, _iface, _signal, params) => {
+                    print(`Compositor capture stream: ${params.deep_unpack()[0]}`);
+                    const {Gst, GstApp, GstVideo, GdkPixbuf} = imports.gi;
+                    Gst.init(null);
+                    capturePipeline = Gst.parse_launch(`pipewiresrc path=${params.deep_unpack()[0]} ! videoconvert ! video/x-raw,format=RGB ! appsink name=frames max-buffers=1 drop=true sync=false`);
+                    captureSink = capturePipeline.get_by_name('frames');
+                    const bus = capturePipeline.get_bus();
+                    bus.add_signal_watch();
+                    bus.connect('message::error', (_bus, message) => { throw Error(message.parse_error().join(': ')); });
+                    capturePipeline.set_state(Gst.State.PLAYING);
+                });
+        }
     }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
@@ -124,6 +159,10 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, interval, () => {
             if (GLib.get_monotonic_time() < resumeAt) return GLib.SOURCE_CONTINUE;
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
+                if (capturePipeline) {
+                    capturePipeline.set_state(imports.gi.Gst.State.NULL);
+                    capturePipeline = null;
+                }
                 send('Stop', '()', []);
                 return GLib.SOURCE_REMOVE;
             }
@@ -142,6 +181,10 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             } else {
                 const event = events[index++];
                 if (tracing) trace.push({ns: GLib.get_monotonic_time() * 1000, event});
+                if (event.capture) {
+                    if (!captureFrame(event.capture)) index--;
+                    return GLib.SOURCE_CONTINUE;
+                }
                 if ('wait_ms' in event) {
                     if (!Number.isFinite(event.wait_ms) || event.wait_ms < 0 || event.wait_ms > 10000)
                         throw Error('Native event wait must be 0..10000 ms');

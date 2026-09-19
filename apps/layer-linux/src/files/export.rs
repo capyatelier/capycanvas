@@ -148,13 +148,12 @@ fn choice(title: &str, name: &str, values: &[&str]) -> adw::ComboRow {
 }
 
 struct Choice {
-    edit_appearance: bool,
     recipe: ExportRecipe,
     destination: usize,
     library: ExportPresets,
 }
 
-async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Option<&ExportRecipe>) -> Result<Option<Choice>, String> {
+async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
     let document = snapshot.project.document.color;
     let master_resolution = snapshot.project.document.resolution;
     let library = Rc::new(std::cell::RefCell::new(presets::load(document).await?));
@@ -174,18 +173,10 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     export.connect_clicked(glib::clone!(#[weak] dialog, #[strong] response, move |_| {
         response.set("export"); dialog.close();
     }));
-    let appearance = adw::ActionRow::builder().title("Proof")
-        .subtitle("SDR appearance").activatable(true).build();
-    appearance.set_widget_name("export-appearance");
-    appearance.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    appearance.connect_activated(glib::clone!(#[weak] dialog, #[strong] response, move |_| {
-        response.set("appearance"); dialog.close();
-    }));
     let links = adw::PreferencesGroup::new();
     let size_link = navigation::link(&links, &nav, "Size", "size");
     let color_link = navigation::link(&links, &nav, "Color & transparency", "color");
     let preset_link = navigation::link(&links, &nav, "Preset", "presets");
-    links.add(&appearance);
     dialog.set_widget_name("export-options");
     let group = adw::PreferencesGroup::new();
     let preset_group = adw::PreferencesGroup::new();
@@ -348,8 +339,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     let range = combo(&delivery_group, "Output", "export-output", if gainmaps { &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF"] } else { &["SDR", "HDR native · PNG"] });
     range.set_visible(document.depth.is_float());
     let format = combo(&delivery_group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
-    let output_hint=gtk::Label::builder().wrap(true).xalign(0.).build();
-    output_hint.add_css_class("dim-label");
     let flatten=adw::SwitchRow::builder().title("Flatten transparency").visible(false).build();
     flatten.set_widget_name("export-flatten");delivery_group.add(&flatten);
     let rendition_view=crate::panel_controls::segmented("export-rendition-view",&[("hdr","HDR"),("sdr","SDR")]);
@@ -402,7 +391,11 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     let clip_hdr = adw::SwitchRow::builder().title("Clip out-of-range colors").subtitle("May lose highlight or color detail in the exported copy.").visible(false).build();
     clip_hdr.set_widget_name("export-hdr-clip");
     let clipping_group = adw::PreferencesGroup::new();
+    clipping_group.set_widget_name("export-clipping-group");
     clipping_group.add(&clip_hdr);
+    // An empty boxed group still paints its list shadow. Hide the container
+    // whenever its only row is hidden, rather than leaving a dark bottom stripe.
+    clip_hdr.bind_property("visible", &clipping_group, "visible").sync_create().build();
     advanced.set_widget_name("export-advanced");
     advanced_group.add(&advanced);
     let intent = choice(
@@ -477,19 +470,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
         }
     ));
     let sync_range: Rc<dyn Fn()> = Rc::new(glib::clone!(
-        #[weak] range, #[weak] format, #[weak] output_hint, #[weak] flatten, #[weak] rendition_view, #[weak] space,
+        #[weak] range, #[weak] format, #[weak] flatten, #[weak] rendition_view, #[weak] space,
         #[weak] depth, #[weak] background, #[weak] quality, #[weak] jpeg_hint,
-        #[weak] intent, #[weak] dither, #[weak] appearance, #[weak] color_link, #[weak] advanced_group, #[weak] print_delivery,
+        #[weak] intent, #[weak] dither, #[weak] color_link, #[weak] advanced_group, #[weak] print_delivery,
         move || {
             let choice=range.selected();
             let hdr = choice != 0;
             advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && print_delivery.subtitle().is_some());
             for widget in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), depth.upcast_ref(), background.upcast_ref(), intent.upcast_ref()] { widget.set_visible(!hdr); }
-            output_hint.set_label(match choice {1=>"HDR pixels for HDR-aware software.",2=>"HDR on supported devices; SDR on older viewers.",3=>"Keeps HDR and transparency. Requires a compatible viewer.",_=>"Standard image for everyday use."});
-            output_hint.set_visible(document.depth.is_float());
             rendition_view.set_visible(choice>=2);
             flatten.set_visible(choice==2);
-            appearance.set_visible(document.depth.is_float() && choice!=1);
             color_link.set_visible(!hdr || choice==2);
             background.set_visible(!hdr || choice==2);
             depth.set_visible(!hdr && format.selected() != 2);
@@ -940,7 +930,6 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     // One draft survives Back navigation; only the main page delivers it.
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&delivery_group);
-    content.append(&output_hint);
     content.append(&comparison.widget);
     content.append(&rendition_view);
     content.append(&compression_note);
@@ -994,17 +983,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
     );
     // Loading the destination follows the same control and preview path as a click.
     preset.notify("selected");
-    if let Some(recipe) = initial { apply_recipe(recipe); updating.set(true); preset.set_selected(3); updating.set(false); }
-    else if document.depth.is_float() && preset.selected()==0 { range.set_selected(1); recommend.set(true); }
+    if document.depth.is_float() && preset.selected()==0 { range.set_selected(1); recommend.set(true); }
     refresh_preview();
     let response = navigation::choose(&dialog, &w.window, &response).await;
     comparison.close();
     comparison.finish().await;
-    if response != "export" && response != "appearance" {
+    if response != "export" {
         return Ok(None);
     }
     Ok(Some(Choice {
-        edit_appearance: response == "appearance",        recipe: read_recipe()?,
+        recipe: read_recipe()?,
         destination: destination.get(),
         library: library.borrow().clone(),
     }))
@@ -1013,21 +1001,14 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport, initial: Op
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
     w.proof_panel.finish_pending(w).await?;
     // The preview and final file share one immutable artwork revision and time.
-    let mut snapshot = w
+    let snapshot = w
         .gpu
         .borrow()
         .as_ref()
         .ok_or("Canvas unavailable")?
         .session
         .capture_project_export(id)?;
-    let mut initial = None;
-    let choice = loop {
-        let Some(choice) = choose_recipe(w, &snapshot, initial.as_ref()).await? else { return Ok(false); };
-        if !choice.edit_appearance { break choice; }
-        initial = Some(choice.recipe);
-        crate::hdr::configure(w).await?;
-        snapshot = w.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.capture_project_export(id)?;
-    };
+    let Some(choice) = choose_recipe(w, &snapshot).await? else { return Ok(false); };
     let recipe = choice.recipe;
     recipe.validate()?;
     let dialog = gtk::FileDialog::builder()

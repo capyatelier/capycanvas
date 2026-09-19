@@ -169,7 +169,7 @@ pub(super) fn response(w: &Rc<Workspace>, id: &str) {
     if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "export-options") {
         export_page(w, "main");
         let dialog = w.window.visible_dialog().unwrap();
-        let name = match id { "export" => "export-confirm", "appearance" => "export-appearance", "cancel" => "export-cancel", _ => panic!("unexpected export response: {id}") };
+        let name = match id { "export" => "export-confirm", "cancel" => "export-cancel", _ => panic!("unexpected export response: {id}") };
         let widget = find_named(dialog.upcast_ref(), name).unwrap();
         assert!(widget.is_sensitive());
         assert!(widget.is_visible());

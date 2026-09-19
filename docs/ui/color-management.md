@@ -266,8 +266,9 @@ arc** adjusts Color intensity: left lets bright highlights become white; right
 retains more color by lowering their brightness. Their ramps show dark-to-light
 and white-to-color respectively. Color intensity defaults to **30%**.
 Small icons identify each percentage; the side values are horizontal with their
-icons above, while the arc values follow their tracks. Hover or focus gives the
-control names. No labels or Auto button occupy the panel.
+icons above, while the arc values follow their tracks. Control names and keyboard
+guidance remain available to assistive technology. There are no tooltips, labels
+or Auto button in the dial.
 
 Drag, use arrow keys (Shift for larger steps), or double-click a control to reset
 it. Escape cancels an adjustment. The small refresh icon resets all appearance
@@ -287,9 +288,10 @@ Changes are live, saved document edits, with one undo step per slider gesture.
 These settings are shared by SDR viewing, delivery and mapped print proofing;
 they never change HDR artwork. **View → Proof** (Ctrl+Alt+P) toggles Off and the
 last selected SDR/Print mode, revealing the panel when enabling. On first use,
-HDR artwork selects SDR; SDR artwork opens Print setup. Document Properties and
-Export can also open the panel. **Back to Export** returns to the retained export draft. There
-is no Apply/Revert, Preview checkbox or overflow menu beside the selector.
+HDR artwork selects SDR; SDR artwork opens Print setup. Document Properties can
+also open the panel. Adjust the rendition before opening **Export image**, which
+uses the saved settings without a separate Proof section. There is no Apply/Revert,
+Preview checkbox or overflow menu beside the selector.
 
 **Proof → Print** has a compact **Profile** dropdown, **Simulate**, **Intent**,
 **Black point compensation** and **Gamut warning**. All five controls are visible

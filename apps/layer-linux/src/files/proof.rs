@@ -51,8 +51,6 @@ struct Model {
     cancelled: RefCell<Option<Arc<AtomicBool>>>,
     error: RefCell<String>,
     views: RefCell<Vec<Weak<ProofPanel>>>,
-    export_wait: Cell<bool>,
-    completed: Cell<u64>,
 }
 pub(crate) struct ProofPanel {
     pub root: gtk::Box,
@@ -63,7 +61,6 @@ struct Form {
     mode: adw::ToggleGroup,
     stack: gtk::Stack,
     dial: Rc<crate::proof_dial::ProofDial>,
-    back: gtk::Button,
     chooser: profile::ProfilePicker,
     intent: gtk::DropDown,
     bpc: gtk::CheckButton,
@@ -124,9 +121,6 @@ impl ProofPanel {
             || self.form.borrow().is_some()
         {
             self.ensure(w);
-            if state.workspace.layout.panel_group(Panel::Proof).is_none() {
-                self.finish_export();
-            }
             self.update(w);
         }
     }
@@ -143,7 +137,6 @@ impl ProofPanel {
         };
         if self.model.identity.get() != Some(identity) {
             self.cancel_job();
-            self.finish_export();
             self.model.identity.set(Some(identity));
             self.model.page.set(match mode {
                 ProofMode::Off => Page::Off,
@@ -305,13 +298,6 @@ impl ProofPanel {
         w.changed(result);
         self.update_all(w);
     }
-    fn finish_export(&self) {
-        if self.model.export_wait.replace(false) {
-            self.model
-                .completed
-                .set(self.model.completed.get().wrapping_add(1));
-        }
-    }
     /// Export must freeze the recipe the user just selected, including a profile
     /// whose validation is still finishing. One bounded worker owns that work.
     pub async fn finish_pending(&self, w: &Rc<Workspace>) -> Result<(), String> {
@@ -334,16 +320,6 @@ impl ProofPanel {
             return Err(self.model.error.borrow().clone());
         }
         Ok(())
-    }
-    pub async fn for_export(self: &Rc<Self>, w: &Rc<Workspace>) -> Result<(), String> {
-        self.open(w, Page::Sdr)?;
-        let generation = self.model.completed.get();
-        self.model.export_wait.set(true);
-        self.update_all(w);
-        while self.model.completed.get() == generation && w.window.is_visible() {
-            glib::timeout_future(std::time::Duration::from_millis(40)).await;
-        }
-        self.finish_pending(w).await
     }
     fn edit_print(self: &Rc<Self>, w: &Rc<Workspace>, form: &Form) {
         if form.updating.get() {
@@ -494,7 +470,6 @@ impl ProofPanel {
         f.mode.set_active_name(Some(page.name()));
         f.stack.set_visible_child_name(page.name());
         f.dial.set_recipe(recipe);
-        f.back.set_visible(self.model.export_wait.get());
         let p = self.model.print.borrow();
         if let Some(profile) = &p.profile {
             if (f.chooser.selected)().ok().as_ref() != Some(profile) {
@@ -583,12 +558,9 @@ impl Form {
         }
         stack.add_named(&crate::workspace::scroll(&print), Some("print"));
         let progress = gtk::Spinner::new();
-        progress.set_tooltip_text(Some("Preparing print proof"));
+        progress.update_property(&[gtk::accessible::Property::Label("Preparing print proof")]);
         progress.set_widget_name("proof-preparing");
         panel.root.append(&progress);
-        let back = gtk::Button::with_label("Back to Export");
-        back.set_widget_name("proof-return-export");
-        panel.root.append(&back);
         let error = gtk::Label::new(None);
         error.set_wrap(true);
         error.set_xalign(0.);
@@ -599,7 +571,6 @@ impl Form {
             mode,
             stack,
             dial,
-            back,
             chooser,
             intent,
             bpc,
@@ -637,16 +608,6 @@ impl Form {
             #[weak]
             f,
             move |phase, _| panel.edit_sdr(&w, &f, Some(phase))
-        ));
-        f.back.connect_clicked(glib::clone!(
-            #[weak]
-            panel,
-            #[weak]
-            w,
-            move |_| {
-                panel.finish_export();
-                panel.update_all(&w);
-            }
         ));
         f.chooser.connect_changed(glib::clone!(
             #[weak]

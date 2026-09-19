@@ -5,9 +5,6 @@ use std::rc::Rc;
 pub(crate) fn open(w: &Rc<Workspace>) -> Result<(), String> {
     w.proof_panel.open(w, crate::files::proof::Page::Sdr)
 }
-pub(crate) async fn configure(w: &Rc<Workspace>) -> Result<(), String> {
-    w.proof_panel.for_export(w).await
-}
 
 pub(crate) fn display_details(w: &Rc<Workspace>) {
     let text = {

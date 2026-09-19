@@ -2,6 +2,10 @@
 
 Follow-up to the [Proof control polish](color-management-proof-polish.md).
 
+The later [selector compositing fix](color-management-proof-selector.md) records
+the actual-window trail regression and the padded retained marker that replaces
+the tightly bounded borders described below.
+
 The glass field has pronounced spherical refraction, a small fluid twist and a
 narrow grazing rim. It has no surface glow or drop shadow. Connected liquid pools
 on the left become finer, more defined cells on the right; contrast follows the

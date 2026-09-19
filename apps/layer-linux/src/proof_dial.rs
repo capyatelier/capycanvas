@@ -310,6 +310,7 @@ pub(crate) struct ProofDial {
     changed: RefCell<Vec<Changed>>,
     icons: [gtk::Image; 4],
     readouts: RefCell<[Option<ReadoutCache>; 4]>,
+    marker: RefCell<Option<(f32, bool, gtk::gsk::RenderNode)>>,
     #[cfg(test)]
     readout_builds: Cell<[u64; 4]>,
 }
@@ -325,7 +326,6 @@ impl ProofDial {
         field.set_focusable(true);
         field.set_parent(&root);
         field.update_property(&[gtk::accessible::Property::Label("Contrast and scale"),gtk::accessible::Property::Description("Up increases contrast. Left favors broad structure; right favors fine texture. Center restores the automatic baseline. Arrow keys adjust; Escape cancels; double-click resets.")]);
-        field.set_tooltip_text(Some("Contrast ↑ · Macro ← → Micro\nGlass shows direction, not the image. Drag to adjust. Arrow keys fine-tune; Shift moves farther. Double-click resets."));
         let arcs = std::array::from_fn(|i| {
             let arc: ArcScale = glib::Object::builder()
                 .property("orientation", gtk::Orientation::Horizontal)
@@ -340,7 +340,6 @@ impl ProofDial {
             arc.set_increments(spec.numeric.step, spec.numeric.step * 10.);
             arc.set_widget_name(&format!("sdr-appearance-{}", spec.key));
             arc.update_property(&[gtk::accessible::Property::Label(spec.label)]);
-            arc.set_tooltip_text(Some(if i==0{"Brightness · Darker ← → Brighter\nBlack and white stay fixed. Double-click resets."}else{"Color intensity · White ← → Color\nRetain more highlight color by lowering brightness. Double-click resets."}));
             // GTK picks descendants before calling the parent's contains().
             // Keep GtkRange's keyboard/accessibility behavior, but exclude its
             // invisible linear trough/slider subtree from pointer targeting.
@@ -358,7 +357,6 @@ impl ProofDial {
         reset.add_css_class("color-utility");
         reset.add_css_class("color-swap");
         reset.set_widget_name("sdr-appearance-reset");
-        reset.set_tooltip_text(Some("Reset SDR appearance"));
         reset.update_property(&[gtk::accessible::Property::Label("Reset SDR appearance")]);
         reset.set_parent(&root);
         let icons = layer_ui::proof_panel::SDR_READOUT_ICONS.map(|name| {
@@ -385,6 +383,7 @@ impl ProofDial {
             changed: Default::default(),
             icons,
             readouts: Default::default(),
+            marker: Default::default(),
             #[cfg(test)]
             readout_builds: Cell::new([0; 4]),
         });
@@ -450,6 +449,10 @@ impl ProofDial {
     pub(crate) fn readout_cache_counts(&self) -> [u64; 4] {
         self.readout_builds.get()
     }
+    #[cfg(test)]
+    pub(crate) fn marker_node_identity(&self) -> Option<*mut gtk::gsk::ffi::GskRenderNode> {
+        self.marker.borrow().as_ref().map(|(_, _, node)| glib::translate::ToGlibPtr::to_glib_none(node).0)
+    }
     pub fn recipe(&self) -> SdrRendition {
         self.recipe.get()
     }
@@ -484,7 +487,6 @@ impl ProofDial {
         );
         self.field
             .update_property(&[gtk::accessible::Property::Description(&text)]);
-        self.field.queue_draw();
         self.root.queue_draw();
         self.updating.set(false);
     }
@@ -792,21 +794,27 @@ impl ProofDial {
         let fraction = layer_ui::proof_panel::sdr_tone_pad().fractions(self.pad.get());
         let point = g.disc_marker(fraction.map(|v| v as f32));
         let radius = geometry.arcs[0].marker_radius;
-        let ring = |r: f32, width: f32, color: gdk::RGBA| {
-            snapshot.append_border(
-                &gtk::gsk::RoundedRect::from_rect(
-                    gtk::graphene::Rect::new(point[0] - r, point[1] - r, 2. * r, 2. * r),
-                    r,
-                ),
-                &[width; 4],
-                &[color; 4],
-            );
-        };
-        ring(radius + 2., 4., gdk::RGBA::new(0., 0., 0., 0.65));
-        ring(radius + 1., 2., gdk::RGBA::WHITE);
-        if self.field.has_visible_focus() {
-            ring(radius + 3.5, 1., gdk::RGBA::new(1., 1., 1., 0.65));
+        let focus = self.field.has_visible_focus();
+        let mut cache = self.marker.borrow_mut();
+        if cache.as_ref().is_none_or(|(r, f, _)| *r != radius || *f != focus) {
+            // Keep the selector separate from the immutable guide, and include
+            // transparent padding in its damage bounds. Tight moving GSK borders
+            // left antialiased edge pixels behind at fractional panel positions.
+            // Only this small node is rasterized; movement reuses and translates it.
+            let extent = radius + 5.;
+            let local = gtk::Snapshot::new();
+            {
+                let cr = local.append_cairo(&gtk::graphene::Rect::new(
+                    -extent, -extent, extent * 2., extent * 2.,
+                ));
+                marker(&cr, [0., 0.], radius, focus);
+            }
+            *cache = Some((radius, focus, local.to_node().unwrap()));
         }
+        snapshot.save();
+        snapshot.translate(&gtk::graphene::Point::new(point[0], point[1]));
+        snapshot.append_node(&cache.as_ref().unwrap().2);
+        snapshot.restore();
     }
 }
 

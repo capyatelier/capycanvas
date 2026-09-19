@@ -413,17 +413,19 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     restored.window.present();
     ready(&restored);
     assert_eq!(pixels(&restored), painted);
-    invoke(&restored, CommandId::ExportDocument);
-    combo(&restored, "export-output").set_selected(0);
-    response(&restored, "appearance");
+    invoke(&restored, CommandId::SdrRendition);
     let window = appearance(&restored);
     appearance_exposure(&window, -0.75);
-    find_named(restored.proof_panel.root.upcast_ref(),"proof-return-export").unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
     recipe.exposure = -0.75;
     assert_eq!(project(&restored).document.sdr_rendition, recipe);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while restored.window.visible_dialog().is_none() { pump(20); assert!(Instant::now() < deadline); }
+    invoke(&restored, CommandId::ExportDocument);
+    let dialog=restored.window.visible_dialog().unwrap();
+    assert!(find_named(dialog.upcast_ref(),"export-appearance").is_none());
+    combo(&restored, "export-output").set_selected(0);
     assert_eq!(combo(&restored, "export-output").selected(), 0);
+    pump(500);
+    assert!(!find_named(dialog.upcast_ref(),"export-clipping-group").unwrap().is_visible(),"empty group must not leave a bottom shadow");
+    capture_ui(&restored, &directory, "sdr-export.png");
     combo(&restored, "export-output").set_selected(1);
     pump(500);
     capture_ui(&restored, &directory, "hdr-export.png");
@@ -495,6 +497,7 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     while !status.text().contains("exceed") { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
     assert!(!super::new_photo::export_enabled(&w));
     let clip = find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().downcast::<adw::SwitchRow>().unwrap();
+    assert!(find_named(dialog.upcast_ref(), "export-clipping-group").unwrap().is_mapped(),"range warning must still expose clipping choice");
     clip.set_active(true);
     let deadline = Instant::now() + Duration::from_secs(30);
     while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline, "{}", status.text()); }
@@ -582,7 +585,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !super::new_photo::export_enabled(&w) { pump(20); assert!(Instant::now() < deadline); }
     assert!(!find_named(dialog.upcast_ref(), "export-open-color").unwrap().is_visible());
-    assert!(!find_named(dialog.upcast_ref(), "export-appearance").unwrap().is_visible());
+    assert!(find_named(dialog.upcast_ref(), "export-appearance").is_none());
     assert!(!find_named(dialog.upcast_ref(), "export-hdr-clip").unwrap().is_visible());
     capture_ui(&w, &output, "export-hdr-main.png");
     response(&w, "cancel"); finish(&w);
@@ -911,14 +914,19 @@ fn native_hdr_large_proof_dial_responsiveness() {
     let before=rendition();
     let cached_pattern=crate::proof_dial::pattern_cache_metrics().2.expect("glass texture ready");
     let started=Instant::now();
+    let mut input_times=Vec::new();
     drag.emit_by_name::<()>("drag-begin",&[&(start[0] as f64),&(start[1] as f64)]);
     for i in 1..=60 {
-        drag.emit_by_name::<()>("drag-update",&[&((end[0]-start[0]) as f64*i as f64/60.),&((end[1]-start[1]) as f64*i as f64/60.)]);pump(16);
+        let input=Instant::now();
+        drag.emit_by_name::<()>("drag-update",&[&((end[0]-start[0]) as f64*i as f64/60.),&((end[1]-start[1]) as f64*i as f64/60.)]);
+        input_times.push(input.elapsed().as_secs_f64()*1000.);pump(16);
     }
     drag.emit_by_name::<()>("drag-end",&[&((end[0]-start[0]) as f64),&((end[1]-start[1]) as f64)]);pump(100);
     let elapsed=started.elapsed().as_secs_f64()*1000.;
     timer.remove();
     eprintln!("PROOF_DIAL_60MP updates=60 elapsed_ms={elapsed:.2} max_heartbeat_gap_ms={:.2}",heartbeat.borrow().1 as f64/1000.);
+    input_times.sort_by(f64::total_cmp);
+    eprintln!("PROOF_INPUT_CPU p50_ms={:.3} p95_ms={:.3} max_ms={:.3}",input_times[30],input_times[57],input_times[59]);
     assert!(heartbeat.borrow().1<500_000,"UI stalled during local proof adjustment");
     assert_eq!(w.local_tone.ready_count(),count,"drag must not rescan the 60 MP master");
     assert_eq!(crate::proof_dial::pattern_cache_metrics().2.as_ref(),Some(&cached_pattern));
@@ -937,6 +945,7 @@ fn native_proof_dial_hit_regions() {
     let mut shared_pattern = None;
     for size in [128, 160, 226, 320, 400] {
         let dial = crate::proof_dial::ProofDial::new();
+        assert!(!dial.field.has_tooltip() && !dial.reset.has_tooltip() && dial.arcs.iter().all(|arc| !arc.has_tooltip()));
         let window = gtk::Window::builder().default_width(size).default_height(size).child(&dial.root).build();
         window.present(); pump(150);
         let field = &dial.field;
@@ -968,6 +977,7 @@ fn native_proof_dial_hit_regions() {
         shared_pattern=Some(texture.clone());
         let arcs_before=dial.arc_snapshot_counts();
         let captions_before=dial.readout_cache_counts();
+        let marker_before=dial.marker_node_identity().expect("selector is rendered");
         let start=Instant::now();
         for i in 0..120 {
             dial.set_recipe(layer_ui::proof_panel::sdr_from_pad(SdrRendition::default(),[(i as f64*0.1).sin(),i as f64/60.-1.]));
@@ -976,6 +986,7 @@ fn native_proof_dial_hit_regions() {
         }
         pump(40);
         assert_eq!(dial.arc_snapshot_counts(),arcs_before,"circle movement must reuse both arc snapshots");
+        assert_eq!(dial.marker_node_identity(),Some(marker_before),"movement translates the retained selector node");
         let captions_after=dial.readout_cache_counts();
         assert_eq!(&captions_before[2..],&captions_after[2..],"circle movement must reuse unchanged arc readouts");
         assert!(captions_after[0]>captions_before[0] && captions_after[1]>captions_before[1],"changing side values must still repaint");
@@ -1004,6 +1015,86 @@ fn native_proof_dial_hit_regions() {
     }
 }
 
+
+#[test]
+#[ignore = "private Mutter input and LAYER_NATIVE_CAPTURE_DIR compositor captures"]
+fn native_proof_dial_composited_motion() {
+    let app = native_test_app("art.capycanvas.ProofDialComposited");
+    let mut project=new_drawing(64,64).unwrap();project.document.color.depth=SampleDepth::F16;
+    let w=Workspace::with_project(&app,Some((project,None)));
+    w.window.maximize();w.window.present();ready(&w);
+    invoke(&w,CommandId::SdrRendition);appearance(&w);pump(300);
+    let window=&w.window;
+    let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while crate::proof_dial::pattern_cache_metrics().2.is_none() {pump(5);assert!(Instant::now()<deadline);}
+    let cached = crate::proof_dial::pattern_cache_metrics().2.unwrap();
+    let g = layer_ui::parameter_pad::ParameterDialGeometry::new(field.width() as f32).unwrap();
+    let at = |p: [f32; 2]| {
+        let p = field.compute_point(window, &gtk::graphene::Point::new(p[0],p[1])).unwrap();
+        [p.x(),p.y()]
+    };
+    let dir = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let captures = std::path::PathBuf::from(std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").unwrap());
+    std::fs::create_dir_all(&captures).unwrap();
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut step=0;
+    let mut perform = |events: serde_json::Value| {
+        let path=dir.join(format!("step-{step}.json"));
+        std::fs::write(path.with_extension("tmp"),serde_json::to_vec(&events).unwrap()).unwrap();
+        std::fs::rename(path.with_extension("tmp"),path).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(15);
+        while !dir.join(format!("done-{step}")).exists() {pump(1);assert!(Instant::now()<deadline,"capture/input step {step}");}
+        step+=1;
+    };
+    let center=at(g.field.center);
+    perform(serde_json::json!([{"point":center,"down":true},{"wait_ms":250},{"capture":"before"}]));
+    let load = |name: &str| {
+        let texture=gtk::gdk::Texture::from_file(&gtk::gio::File::for_path(captures.join(format!("{name}.png")))).unwrap();
+        let stride=texture.width() as usize*4;
+        let mut bytes=vec![0;stride*texture.height() as usize];
+        texture.download(&mut bytes,stride);
+        (bytes,stride)
+    };
+    let (before,stride)=load("before");
+    let scale=window.scale_factor() as f32;
+    let radius=g.field.disc_radius();
+    let mut worst=0;
+    for i in 0..24 {
+        let angle=i as f32*std::f32::consts::TAU/24.;
+        let to=at([g.field.center[0]+radius*0.65*angle.cos(),g.field.center[1]+radius*0.65*angle.sin()]);
+        let name=format!("motion-{i:02}");
+        perform(serde_json::json!([{"point":to},{"wait_ms":24},{"capture":name}]));
+        let (after,next_stride)=load(&name);assert_eq!(stride,next_stride);
+        let recipe=w.gpu.borrow().as_ref().unwrap().session.engine().document().sdr_rendition;
+        let fraction=layer_ui::proof_panel::sdr_tone_pad().fractions(layer_ui::proof_panel::sdr_pad_values(recipe));
+        let marker=at(g.field.disc_marker(fraction.map(|f| f as f32)));
+        let mut changed=0;
+        let mut selector_pixels=0;
+        // The guide is immutable. Only the old and current marker footprints
+        // may differ; intermediate markers must have been cleared by damage.
+        for y in ((center[1]-radius)*scale) as usize..((center[1]+radius)*scale) as usize {
+            for x in ((center[0]-radius)*scale) as usize..((center[0]+radius)*scale) as usize {
+                let p=[(x as f32+0.5)/scale,(y as f32+0.5)/scale];
+                let distance=|q:[f32;2]| (p[0]-q[0]).hypot(p[1]-q[1]);
+                let at=y*stride+x*4;
+                let different=before[at..at+3].iter().zip(&after[at..at+3]).any(|(a,b)|a.abs_diff(*b)>2);
+                if distance(marker)<18. && different {selector_pixels+=1;}
+                if distance(center)>radius-2. || distance(center)<18. || distance(marker)<18. {continue;}
+                if different {changed+=1;}
+            }
+        }
+        worst=worst.max(changed);
+        assert_eq!(changed,0,"stale selector pixels in composited frame {i}");
+        assert!(selector_pixels>20,"capture {i} must include the new selector in front of the guide");
+    }
+    perform(serde_json::json!([{"down":false}]));
+    assert_eq!(crate::proof_dial::pattern_cache_metrics().2.as_ref(),Some(&cached));
+    assert_eq!(crate::proof_dial::pattern_cache_metrics().0,1);
+    std::fs::write(dir.join("finished"),"finished").unwrap();
+    eprintln!("PROOF_COMPOSITED frames=24 scale={scale} stale_pixels={worst} texture_builds=1");
+    window.destroy();pump(50);
+}
 
 #[test]
 #[ignore = "isolated Mutter native-input.js --native-test=native_proof_dial_pointer_input"]

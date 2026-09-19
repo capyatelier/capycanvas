@@ -38,8 +38,13 @@ env -u G_DEBUG mutter --headless --wayland --no-x11 \
 motion_compositor_pid=$!
 pipewire >"$motion_run_dir/pipewire.log" 2>&1 &
 motion_pipewire_pid=$!
+motion_capture_policy_pid=
+if [[ -n ${LAYER_NATIVE_CAPTURE_DIR:-} ]]; then
+    wireplumber --profile=video-only >"$motion_run_dir/wireplumber.log" 2>&1 &
+    motion_capture_policy_pid=$!
+fi
 motion_server_pid=
-trap 'kill ${motion_server_pid:+"$motion_server_pid"} "$motion_pipewire_pid" "$motion_compositor_pid" 2>/dev/null || true' EXIT
+trap 'kill ${motion_server_pid:+"$motion_server_pid"} ${motion_capture_policy_pid:+"$motion_capture_policy_pid"} "$motion_pipewire_pid" "$motion_compositor_pid" 2>/dev/null || true' EXIT
 for ((attempt=0; attempt<100; attempt++)); do
     [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] && break
     kill -0 "$motion_compositor_pid" 2>/dev/null || { cat "$motion_run_dir/mutter.log"; exit 1; }
