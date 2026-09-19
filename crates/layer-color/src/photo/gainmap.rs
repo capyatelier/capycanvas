@@ -160,7 +160,7 @@ mod tests {
             for highlight_color in [0., 1.] {
                 let recipe = SdrRendition {
                     highlight_color,
-                    ..SdrRendition::unified_default()
+                    ..SdrRendition::default()
                 };
                 let alpha = if format == GainMapFormat::Avif {
                     0.5
@@ -253,8 +253,8 @@ mod tests {
                 .unwrap();
                 assert_eq!(stats.clipped_channels, 0);
                 let guide=crate::build_local_tone_guide(extent,RgbSpace::Srgb,||false,read).unwrap();
-                let adjusted=guide.adjust([2.,2.,2.,1.],[0.5,0.5],RgbSpace::Srgb,rendition);
-                let expected = rendition.map_rgb([adjusted[0],adjusted[1],adjusted[2]], RgbSpace::Srgb);
+                let adjusted=rendition.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_local_premultiplied([2.,2.,2.,1.],[0.5,0.5],&guide);
+                let expected = [adjusted[0],adjusted[1],adjusted[2]];
                 for p in &hdr {
                     for c in 0..3 {
                         assert!((p[c] - 2.).abs() < 0.035, "{format:?}: {p:?}");
@@ -409,7 +409,7 @@ mod tests {
                 &mut encoded,
                 extent,
                 RgbSpace::Srgb,
-                SdrRendition::unified_default(),
+                SdrRendition::default(),
                 format,
                 100,
                 Some(layer_core::ImageResolution::ppi(300)),
@@ -488,13 +488,13 @@ mod tests {
             let read=|y:u32,row:&mut [[f32;4]]| {for (x,p) in row.iter_mut().enumerate(){let v=if x<32 {0.05}else{8.}*if (x/8+y as usize/8)%2==0 {0.8}else{1.2};*p=[v*alpha,v*0.7*alpha,v*0.4*alpha,alpha];}Ok(())};
             let guide=crate::build_local_tone_guide(extent,RgbSpace::Srgb,||false,read).unwrap();
             let mut bases=Vec::new();
-            for (tone,detail) in [(0.15,0.5),(0.75,1.7)] {
-                let recipe=SdrRendition{tone,detail,headroom:guide.peak.log2(),..Default::default()};
+            for (contrast,balance) in [(0.5,-1.),(2.,1.)] {
+                let recipe=SdrRendition{contrast,balance,headroom:guide.peak.log2(),..Default::default()};
                 let (_,hdr,base,stats)=preview_gainmap_rows_with_guide(extent,extent,RgbSpace::Srgb,recipe,Some(&guide),format,100,None,&cancel,read).unwrap();assert_eq!(stats.clipped_channels,0);
                 let mut max_error=0f32;
                 for (x,y) in [(12,12),(20,20),(44,12),(52,20)] {
                     let mut row=vec![[0.;4];64];read(y,&mut row).unwrap();let p=row[x];let i=y as usize*64+x;
-                    let expected=recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_premultiplied(guide.adjust(p,[x as f32+0.5,y as f32+0.5],RgbSpace::Srgb,recipe));
+                    let expected=recipe.mapper(RgbSpace::Srgb,RgbSpace::Srgb).map_local_premultiplied(p,[x as f32+0.5,y as f32+0.5],&guide);
                     for c in 0..3 {
                         let e=(hdr[i][c]-p[c]).abs()/alpha;max_error=max_error.max(e);
                         // Lossy 8-bit RGB JPEG gains amplify code error across the
@@ -504,9 +504,9 @@ mod tests {
                     }
                     assert!((hdr[i][3]-alpha).abs()<0.001);
                 }
-                eprintln!("LOCAL_GAINMAP {format:?} tone={tone} detail={detail} sampled_max_hdr_error={max_error}");bases.push(base);
+                eprintln!("LOCAL_GAINMAP {format:?} contrast={contrast} balance={balance} sampled_max_hdr_error={max_error}");bases.push(base);
             }
-            assert!(bases[0].iter().zip(&bases[1]).any(|(a,b)|(a[0]-b[0]).abs()/alpha>0.1),"Tone/Detail must change the encoded SDR base");
+            assert!(bases[0].iter().zip(&bases[1]).any(|(a,b)|(a[0]-b[0]).abs()/alpha>0.1),"Contrast/Balance must change the encoded SDR base");
         }
     }
 

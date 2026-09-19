@@ -113,8 +113,8 @@ impl WorkingEncoder {
     }
 
     pub fn with_sdr_gamut(mut self, rendition: Option<layer_core::color::hdr::SdrRendition>) -> Self {
-        self.photographic_gamut = rendition.is_some_and(|r| r.uses_gamut_mapping());
-        self.unified_color = rendition.filter(|r| r.method == layer_core::color::hdr::SdrMethod::Unified).map(|r| r.highlight_color);
+        self.photographic_gamut = rendition.is_some();
+        self.unified_color = rendition.map(|r| r.highlight_color);
         self
     }
     fn map_gamut(&self, rgb: [f32; 3], weights: [f32; 3]) -> [f32; 3] {

@@ -76,12 +76,11 @@ impl SnapshotRenderer {
         let matrix = self.color().space.linear_transform(space);
         let rendition = self.sdr_rendition;
         let sdr = rendition.map(|r| r.mapper(self.color().space, space));
-        let guide = if headroom <= 1. && rendition.is_some_and(|r| r.is_local()) {
+        let guide = if headroom <= 1. && rendition.is_some() {
             Some(self.local_tone_guide()?)
         } else {
             None
         };
-        let weights = layer_core::color::hdr::sdr_luminance_weights(self.color().space);
         let mut rows = Rows::new(self);
         let mut transparent = false;
         let mut image = reduce(extent, bounds, space, |y, target| {
@@ -100,7 +99,8 @@ impl SnapshotRenderer {
                 let position = std::array::from_fn(|c| {
                     position[c] * extent[c] as f32 / image.extent[c] as f32
                 });
-                *pixel = guide.adjust_with_weights(*pixel, position, weights, rendition.unwrap());
+                *pixel = sdr.unwrap().map_local_premultiplied(*pixel, position, guide);
+                continue;
             }
             if rendition.is_some() {
                 *pixel = if headroom > 1. {
@@ -141,11 +141,7 @@ impl SnapshotRenderer {
             .ok_or("Gain-map delivery requires HDR artwork")?;
         let control = self.control.clone();
         let mut result = None;
-        let guide = if rendition.is_local() {
-            Some(self.local_tone_guide()?)
-        } else {
-            None
-        };
+        let guide = Some(self.local_tone_guide()?);
         let stats = self.hdr_rows(|extent, working, read| {
             let (extent, hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows_with_guide(
                 extent,
@@ -172,16 +168,9 @@ impl SnapshotRenderer {
                         (i as u32 % extent[0]) as f32 + 0.5,
                         (i as u32 / extent[0]) as f32 + 0.5,
                     ];
-                    *p = guide.adjust(
-                        *p,
-                        std::array::from_fn(|c| {
-                            position[c] * guide.document_extent[c] as f32 / extent[c] as f32
-                        }),
-                        RgbSpace::Srgb,
-                        rendition,
-                    );
-                }
-                *p = mapper.map_premultiplied(*p);
+                    *p = mapper.map_local_premultiplied(*p,
+                        std::array::from_fn(|c| position[c] * guide.document_extent[c] as f32 / extent[c] as f32),guide);
+                } else { *p = mapper.map_premultiplied(*p); }
                 continue;
             }
             *p = layer_core::color::hdr::map_display_premultiplied(*p, headroom);
@@ -237,7 +226,7 @@ impl SnapshotRenderer {
             .sdr_rendition
             .unwrap_or_default()
             .mapper(working, space);
-        let guide = if headroom <= 1. && self.sdr_rendition.is_some_and(|r| r.is_local()) {
+        let guide = if headroom <= 1. && self.sdr_rendition.is_some() {
             Some(self.local_tone_guide()?)
         } else {
             None
@@ -253,14 +242,9 @@ impl SnapshotRenderer {
                     (i as u32 % image.extent[0]) as f32 + 0.5,
                     (i as u32 / image.extent[0]) as f32 + 0.5,
                 ];
-                *pixel = guide.adjust(
-                    *pixel,
-                    std::array::from_fn(|c| {
-                        position[c] * guide.document_extent[c] as f32 / image.extent[c] as f32
-                    }),
-                    working,
-                    self.sdr_rendition.unwrap(),
-                );
+                *pixel = rendition.map_local_premultiplied(*pixel,
+                    std::array::from_fn(|c| position[c] * guide.document_extent[c] as f32 / image.extent[c] as f32),guide);
+                continue;
             }
             *pixel = if headroom > 1. {
                 layer_core::color::hdr::map_display_premultiplied(*pixel, headroom)

@@ -59,12 +59,7 @@ impl PreviewSource {
                 (position[c] as f32 + 0.5) * self.guide.document_extent[c] as f32
                     / image.extent[c] as f32
             });
-            let pixel = if recipe.is_local() {
-                self.guide.adjust(pixel, position, image.space, recipe)
-            } else {
-                pixel
-            };
-            let pixel = mapper.map_premultiplied(pixel);
+            let pixel = mapper.map_local_premultiplied(pixel, position, &self.guide);
             let a = pixel[3].clamp(0., 1.);
             // Cairo's ARGB32 transport is a disposable SDR UI preview only.
             let rgb: [u8; 3] = std::array::from_fn(|c| {
@@ -171,15 +166,15 @@ mod layout {
             ));
             cr.translate((obj.width() as f64 - f64::from(size)) * 0.5, 0.);
             let v = p.pad.get();
-            let strength = v.map_or("—".into(), |v| format!("{:.0}%", v[1] * 100.));
-            let balance = v.map_or("—".into(), |v| format!("{:+.0}%", v[0] * 100.));
+            let contrast = format!("{:.0}%", v[1].exp2() * 100.);
+            let balance = format!("{:+.0}%", v[0] * 100.);
             // Side openings carry the inner control's readouts; the outer arcs
             // carry their own values above and below. All names are in tooltips.
-            let radius = f64::from(g.field.disc_radius()) + 7.;
+            let radius = f64::from(g.field.disc_radius() + g.arcs[0].marker_radius) + 5.;
             curved_text(
                 &cr,
                 obj.upcast_ref(),
-                &strength,
+                &contrast,
                 g.field.center,
                 radius,
                 180.,
@@ -313,8 +308,8 @@ pub(crate) struct ProofDial {
     pub arcs: [ArcScale; 2],
     pub reset: gtk::Button,
     recipe: Cell<SdrRendition>,
-    pad: Cell<Option<[f64; 2]>>,
-    before: Cell<(SdrRendition, Option<[f64; 2]>)>,
+    pad: Cell<[f64; 2]>,
+    before: Cell<(SdrRendition, [f64; 2])>,
     active: Cell<Option<usize>>,
     origin: Cell<[f64; 2]>,
     double: Cell<bool>,
@@ -338,8 +333,8 @@ impl ProofDial {
         field.set_widget_name("sdr-tone-pad-surface");
         field.set_focusable(true);
         field.set_parent(&root);
-        field.update_property(&[gtk::accessible::Property::Label("Strength and balance"),gtk::accessible::Property::Description("Up increases local tone-mapping strength. Right favors texture; left favors tone compression. Arrow keys adjust; Escape cancels; double-click resets.")]);
-        field.set_tooltip_text(Some("Strength ↑ · Texture →\nDrag to adjust. Arrow keys fine-tune; Shift moves farther. Double-click resets."));
+        field.update_property(&[gtk::accessible::Property::Label("Contrast and scale"),gtk::accessible::Property::Description("Up increases contrast. Left favors broad structure; right favors fine texture. Center restores the automatic baseline. Arrow keys adjust; Escape cancels; double-click resets.")]);
+        field.set_tooltip_text(Some("Contrast ↑ · Macro ← → Micro\nDrag to adjust. Arrow keys fine-tune; Shift moves farther. Double-click resets."));
         let arcs = std::array::from_fn(|i| {
             let arc: ArcScale = glib::Object::builder()
                 .property("orientation", gtk::Orientation::Horizontal)
@@ -503,15 +498,11 @@ impl ProofDial {
             })]);
             a.queue_draw();
         }
-        let text = self.pad.get().map_or(
-            "Saved custom appearance. Drag or reset to use Strength and Balance.".into(),
-            |v| {
-                format!(
-                    "Strength {:.0} percent, balance {:+.0} percent; positive favors texture.",
-                    v[1] * 100.,
-                    v[0] * 100.
-                )
-            },
+        let v = self.pad.get();
+        let text = format!(
+            "Contrast {:.0} percent, balance {:+.0} percent; left favors macro structure, right favors micro texture.",
+            v[1].exp2() * 100.,
+            v[0] * 100.
         );
         self.field
             .update_property(&[gtk::accessible::Property::Description(&text)]);
@@ -531,7 +522,7 @@ impl ProofDial {
             self.emit(ContactPhase::Down);
         }
     }
-    fn change(self: &Rc<Self>, recipe: SdrRendition, pad: Option<[f64; 2]>) {
+    fn change(self: &Rc<Self>, recipe: SdrRendition, pad: [f64; 2]) {
         self.recipe.set(recipe);
         self.pad.set(pad);
         self.refresh();
@@ -560,7 +551,7 @@ impl ProofDial {
             let g = ParameterDialGeometry::new(size).unwrap().field;
             let f = g.disc_components([x as f32, y as f32]);
             let v = layer_ui::proof_panel::sdr_tone_pad().values(f.map(f64::from));
-            self.change(sdr_from_pad(self.recipe.get(), v), Some(v));
+            self.change(sdr_from_pad(self.recipe.get(), v), v);
         } else {
             let arc = &self.arcs[part - 1];
             if let Some(g) = arc.geometry() {
@@ -632,7 +623,7 @@ impl ProofDial {
                 p.begin(part);
                 if part == 0 {
                     let v = layer_ui::proof_panel::sdr_tone_pad().defaults();
-                    p.change(sdr_from_pad(p.recipe.get(), v), Some(v));
+                    p.change(sdr_from_pad(p.recipe.get(), v), v);
                 } else {
                     p.arcs[part - 1].set_value(0.);
                 }
@@ -668,10 +659,10 @@ impl ProofDial {
                 };
                 if part == 0 {
                     let spec = layer_ui::proof_panel::sdr_tone_pad();
-                    let mut v = p.pad.get().unwrap_or(spec.defaults());
+                    let mut v = p.pad.get();
                     let a = &spec.axes[axis].numeric;
                     v[axis] = (v[axis] + sign * step * a.step).clamp(a.min, a.max);
-                    p.change(sdr_from_pad(p.recipe.get(), v), Some(v));
+                    p.change(sdr_from_pad(p.recipe.get(), v), v);
                 } else {
                     let a = &p.arcs[part - 1];
                     a.set_value(a.value() + sign * step * a.adjustment().step_increment());
@@ -733,7 +724,8 @@ impl ProofDial {
             let _ = cr.paint();
         }
         let _ = cr.restore();
-        if let Some(v) = self.pad.get() {
+        {
+            let v = self.pad.get();
             let f = layer_ui::proof_panel::sdr_tone_pad().fractions(v);
             let point = g.disc_marker(f.map(|v| v as f32));
             let size = self.root.width().min(self.root.height()) as f32;

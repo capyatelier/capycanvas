@@ -217,9 +217,8 @@ pub(super) fn write(
     )?;
     fs::write(stage.path("profile"), profile_bytes(&profile)?).map_err(err)?;
     let matrix = hdr::to_bt2020(space);
-    let mapper = rendition.mapper(space, space);
     let photographic = rendition.mapper(space, RgbSpace::Srgb);
-    let generated = if rendition.is_local() && guide.is_none() {
+    let generated = if guide.is_none() {
         Some(crate::build_local_tone_guide(
             extent,
             space,
@@ -230,7 +229,6 @@ pub(super) fn write(
         None
     };
     let guide = guide.or(generated.as_ref());
-    let weights = hdr::sdr_luminance_weights(space);
     let mut base = stage.create("base.raw")?;
     let mut master = stage.create("master")?;
     let mut row = vec![[0.; 4]; extent[0] as usize];
@@ -253,34 +251,15 @@ pub(super) fn write(
                 [0.; 3]
             };
             let mut hdr = rgb::apply(matrix, raw.map(f64::from)).map(|v| v as f32);
-            let sdr_raw = if let Some(guide) = guide {
-                let position = [
-                    (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
-                    (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
-                ];
-                let adjusted = if a > 0. {
-                    guide
-                        .adjust_with_weights(*p, position, weights, rendition)
-                        .map(|v| v / a)
-                } else {
-                    [0.; 4]
-                };
-                [adjusted[0], adjusted[1], adjusted[2]]
-            } else {
-                raw
-            };
-            // The photographic base uses the same bounded sRGB rendition as
-            // ordinary sharing. Encode those colors in the gain-map application
-            // space; RGB gains still reconstruct the original wide-color HDR.
-            let mut sdr = if rendition.uses_gamut_mapping() {
-                rgb::apply(
-                    hdr::srgb_to_bt2020(),
-                    photographic.map_rgb(sdr_raw).map(f64::from),
-                )
-                .map(|v| v as f32)
-            } else {
-                rgb::apply(matrix, mapper.tone_rgb(sdr_raw).map(f64::from)).map(|v| v as f32)
-            };
+            let position = [
+                (x as f32 + 0.5) * guide.unwrap().document_extent[0] as f32 / extent[0] as f32,
+                (y as f32 + 0.5) * guide.unwrap().document_extent[1] as f32 / extent[1] as f32,
+            ];
+            // Both ordinary SDR delivery and gain-map bases use this complete
+            // local rendition. RGB gains are regenerated from the delivered base.
+            let mapped=photographic.map_local_premultiplied(*p,position,guide.unwrap());
+            let mut sdr=rgb::apply(hdr::srgb_to_bt2020(),
+                std::array::from_fn(|c| if a>0. {f64::from(mapped[c]/a)} else {0.})).map(|v|v as f32);
             for c in 0..3 {
                 sdr[c] = sdr[c].clamp(0., 1.);
                 if let Some(background) = matte {

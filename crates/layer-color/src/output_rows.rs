@@ -18,7 +18,7 @@ pub fn encode_working_rows(
         &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>,
     ) -> Result<(), String>,
 ) -> Result<OutputStatistics, String> {
-    let guide = if rendition.is_some_and(|r| r.is_local()) {
+    let guide = if rendition.is_some() {
         Some(build_local_tone_guide(
             source_extent,
             working,
@@ -79,14 +79,13 @@ pub fn encode_working_rows_with_guide(
     if let Some(r) = rendition {
         r.validate().map_err(str::to_string)?;
     }
-    if rendition.is_some_and(|r| r.is_local()) && guide.is_none() {
+    if rendition.is_some() && guide.is_none() {
         return Err("Local SDR rendition requires image analysis".into());
     }
     let encoder = WorkingEncoder::new(working, target, options)?
         .with_hdr_proof_input(rendition.is_some())
-        .with_sdr_gamut(rendition.map(|r| r.point_recipe()));
+        .with_sdr_gamut(rendition);
     let mapper = rendition.map(|r| r.mapper(working, working));
-    let weights = layer_core::color::hdr::sdr_luminance_weights(working);
     let mut resampler = (source_extent != extent)
         .then(|| RowResampler::new(source_extent, extent))
         .transpose()?;
@@ -105,10 +104,8 @@ pub fn encode_working_rows_with_guide(
                         (x as f32 + 0.5) * source_extent[0] as f32 / extent[0] as f32,
                         (y as f32 + 0.5) * source_extent[1] as f32 / extent[1] as f32,
                     ];
-                    *pixel =
-                        guide.adjust_with_weights(*pixel, position, weights, rendition.unwrap());
-                }
-                *pixel = r.tone_premultiplied(*pixel);
+                    *pixel = r.tone_local_premultiplied(*pixel, position, guide);
+                } else { *pixel = r.tone_premultiplied(*pixel); }
             }
         }
         statistics.clipped_channels += encoder
@@ -185,7 +182,7 @@ mod tests {
             .collect()
     }
     #[test]
-    fn hdr_sdr_delivery_matches_browser_curve_and_preserves_coverage() {
+    fn hdr_sdr_delivery_preserves_extended_brightness_and_coverage() {
         let pixels = [
             [0., 0., 0., 1.],
             [0.18, 0.18, 0.18, 1.],
@@ -199,28 +196,22 @@ mod tests {
             RgbSpace::Srgb,
             ColorProfile::Builtin(RgbSpace::Srgb),
             &pixels,
-            Some(SdrRendition {
-                method: layer_core::color::hdr::SdrMethod::ToneMap,
-                ..Default::default()
-            }),
+            Some(SdrRendition::default()),
         );
-        // Independent Float64 analytic RWTMO landmarks.
-        for (i, linear) in [0., 0.09, 0.5, 0.9439630011687752, 1.]
-            .into_iter()
-            .enumerate()
-        {
-            let code = (RgbSpace::Srgb.encode(linear) * 65535.).round() as u16;
-            assert!(
-                output[i * 4].abs_diff(code) <= 1,
-                "{i}: {} vs {code}",
-                output[i * 4]
-            );
-        }
         assert!(
             output[12] - output[8] > 7000,
             "+2 stops must survive SDR delivery"
         );
-        assert_eq!(&output[20..23], &output[12..15]);
+        let guide=build_local_tone_guide([7,1],RgbSpace::Srgb,||false,|_,row|{row.copy_from_slice(&pixels);Ok(())}).unwrap();
+        let mapper=SdrRendition::default().mapper(RgbSpace::Srgb,RgbSpace::Srgb);
+        for (i,p) in pixels.iter().enumerate() {
+            let expected=mapper.map_local_premultiplied(*p,[i as f32+0.5,0.5],&guide);
+            for c in 0..3 {
+                let linear=if p[3]>0. {expected[c]/p[3]} else {0.};
+                let code=(RgbSpace::Srgb.encode(linear as f64)*65535.).round() as u16;
+                assert!(output[i*4+c].abs_diff(code)<=2);
+            }
+        }
         assert_eq!(output[23], 16384);
         assert_eq!(&output[24..28], &[0; 4]);
     }
@@ -292,8 +283,8 @@ mod tests {
     }
 
     #[test]
-    fn photographic_delivery_matches_viewing_and_icc_proof_input() {
-        use layer_core::color::hdr::{SdrMethod, compress_sdr_gamut, sdr_luminance_weights};
+    fn local_contrast_delivery_matches_viewing_and_icc_proof_input() {
+        use layer_core::color::hdr::sdr_luminance_weights;
         let physical = [[8., 0., 0.], [0., 0., 16.], [-0.1, 3., 0.5], [0.18; 3]];
         for working in RgbSpace::ALL {
             let matrix = RgbSpace::Srgb.linear_transform(working);
@@ -301,18 +292,9 @@ mod tests {
                 let p = layer_core::color::rgb::apply(matrix, p).map(|v| v as f32);
                 [p[0] * 0.25, p[1] * 0.25, p[2] * 0.25, 0.25]
             });
-            for (method, highlights, highlight_color) in [
-                (SdrMethod::Photographic, 0., 0.5),
-                (SdrMethod::Unified, -1., 0.),
-                (SdrMethod::Unified, 0., 0.5),
-                (SdrMethod::Unified, 1., 1.),
-            ] {
-                let recipe = SdrRendition {
-                    method,
-                    highlights,
-                    highlight_color,
-                    ..Default::default()
-                };
+            let guide=build_local_tone_guide([4,1],working,||false,|_,row|{row.copy_from_slice(&pixels);Ok(())}).unwrap();
+            for (contrast,balance,highlight_color) in [(0.5,-1.,0.),(1.,0.,0.5),(2.,1.,1.)] {
+                let recipe=SdrRendition {contrast,balance,highlight_color,..Default::default()};
                 for output in RgbSpace::ALL {
                     let actual = deliver(
                         working,
@@ -322,7 +304,7 @@ mod tests {
                     );
                     let mapper = recipe.mapper(working, output);
                     for (i, p) in pixels.iter().enumerate() {
-                        let expected = mapper.map_premultiplied(*p);
+                        let expected = mapper.map_local_premultiplied(*p,[i as f32+0.5,0.5],&guide);
                         for c in 0..3 {
                             let code = (output.encode(f64::from(expected[c] / expected[3]))
                                 * 65535.)
@@ -342,23 +324,12 @@ mod tests {
                 );
                 let actual = deliver(working, profile.clone(), &pixels, Some(recipe));
                 // Independent explicit proof preparation before ICC conversion.
-                let bounded = pixels.map(|p| {
-                    let tone = recipe.mapper(working, working).tone_rgb([
-                        p[0] / p[3],
-                        p[1] / p[3],
-                        p[2] / p[3],
-                    ]);
-                    let rgb = if method == SdrMethod::Unified {
-                        layer_core::color::hdr::unified_sdr_gamut(
-                            tone,
-                            sdr_luminance_weights(working),
-                            highlight_color,
-                        )
-                    } else {
-                        compress_sdr_gamut(tone, sdr_luminance_weights(working))
-                    };
-                    [rgb[0] * p[3], rgb[1] * p[3], rgb[2] * p[3], p[3]]
-                });
+                let bounded:Vec<_> = pixels.iter().enumerate().map(|(i,p)| {
+                    let tone=recipe.mapper(working,working).tone_local_premultiplied(*p,[i as f32+0.5,0.5],&guide);
+                    let rgb=layer_core::color::hdr::unified_sdr_gamut(
+                        [tone[0]/p[3],tone[1]/p[3],tone[2]/p[3]],sdr_luminance_weights(working),highlight_color);
+                    [rgb[0]*p[3],rgb[1]*p[3],rgb[2]*p[3],p[3]]
+                }).collect();
                 let expected = deliver(working, profile, &bounded, None);
                 assert_eq!(
                     actual, expected,

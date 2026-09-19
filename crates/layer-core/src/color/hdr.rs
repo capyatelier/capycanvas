@@ -5,7 +5,7 @@ mod local;
 mod sdr;
 pub use local::{LOCAL_GUIDE_EDGE, LocalToneBuilder, LocalToneGuide};
 pub use sdr::{
-    BT2020_LUMA, SdrMapper, SdrMethod, SdrRendition, compress_sdr_gamut, sdr_luminance_weights,
+    BT2020_LUMA, SdrMapper, SdrRendition, compress_sdr_gamut, sdr_luminance_weights,
     to_bt2020, unified_sdr_gamut,
 };
 

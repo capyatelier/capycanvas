@@ -40,11 +40,7 @@ impl SnapshotRenderer {
             .ok_or("Gain-map delivery requires an HDR document")?;
         let control = self.control.clone();
         let resolution = self.output_resolution;
-        let guide = if rendition.is_local() {
-            Some(self.local_tone_guide()?)
-        } else {
-            None
-        };
+        let guide = Some(self.local_tone_guide()?);
         self.hdr_rows(|extent, space, read| {
             layer_color::photo::write_gainmap_rows_with_guide(
                 output,
@@ -73,12 +69,10 @@ impl SnapshotRenderer {
         })
     }
 
-    /// Exact edited peak in the selected mapper's domain: D65 luminance for
-    /// Photographic, Rec.2020 max-RGB for legacy methods.
+    /// Exact edited D65 luminance peak for the saved SDR range.
     /// Traverse bounded bands; coverage is not brightness and hidden RGB is ignored.
     pub fn hdr_headroom(&mut self) -> Result<f32, String> {
         let mut peak = 1f32;
-        let photographic = self.sdr_rendition.is_some_and(|r| r.uses_gamut_mapping());
         self.hdr_rows(|extent, space, read| {
             let m = layer_core::color::hdr::to_bt2020(space);
             let mut row = vec![[0.; 4]; extent[0] as usize];
@@ -97,14 +91,9 @@ impl SnapshotRenderer {
                         if v.iter().any(|c| !c.is_finite()) {
                             return Err("Cannot measure non-finite HDR data".into());
                         }
-                        let measured = if photographic {
-                            v.into_iter()
-                                .zip(layer_core::color::hdr::BT2020_LUMA)
-                                .map(|(v, w)| v * f64::from(w))
-                                .sum()
-                        } else {
-                            v.into_iter().fold(0f64, f64::max)
-                        };
+                        let measured = v.into_iter()
+                            .zip(layer_core::color::hdr::BT2020_LUMA)
+                            .map(|(v,w)|v*f64::from(w)).sum::<f64>();
                         peak = peak.max(measured as f32);
                     }
                 }
@@ -252,7 +241,7 @@ impl SnapshotRenderer {
         } else {
             self.sdr_rendition
         };
-        let guide = if rendition.is_some_and(|r| r.is_local()) {
+        let guide = if rendition.is_some() {
             Some(self.local_tone_guide()?)
         } else {
             None

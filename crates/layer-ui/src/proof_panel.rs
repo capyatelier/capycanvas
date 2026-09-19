@@ -134,8 +134,8 @@ pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};
     let mut balance = NumericControl::number(-1., 1., 0.01, 0).unit("%");
     balance.scale = 100.;
-    let mut strength = NumericControl::number(0., 1., 0.01, 0).unit("%");
-    strength.scale = 100.;
+    let mut contrast = NumericControl::number(-1., 1., 0.01, 0).unit("%");
+    contrast.scale = 100.;
     ParameterPadSpec {
         axes: [
             ParameterPadAxis {
@@ -145,10 +145,10 @@ pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
                 default: 0.,
             },
             ParameterPadAxis {
-                key: "strength",
-                label: "Strength",
-                numeric: strength,
-                default: 0.75,
+                key: "contrast",
+                label: "Contrast",
+                numeric: contrast,
+                default: 0.,
             },
         ],
     }
@@ -202,46 +202,26 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 2] {
     )
 }
 
-/// Portable control mapping. At zero strength, local processing is neutral.
-/// Balance left favors illumination compression/softer texture; right favors
-/// texture while retaining useful illumination compression. No file migration:
-/// the existing physical tone/detail recipe remains the saved representation.
+/// Contrast is logarithmic: bottom 0.5x, center 1x, top 2x. Balance trades
+/// macro and micro gain reciprocally; the fixed baseline never changes here.
 pub fn sdr_from_pad(
     mut recipe: layer_core::color::hdr::SdrRendition,
-    [balance, strength]: [f64; 2],
+    [balance, contrast]: [f64; 2],
 ) -> layer_core::color::hdr::SdrRendition {
-    let balance = if balance.is_nan() { 0. } else { balance };
-    let strength = if strength.is_nan() { 0.75 } else { strength };
-    let balance = balance.clamp(-1., 1.) as f32;
-    let strength = strength.clamp(0., 1.) as f32;
-    recipe.tone = strength * (0.8 - balance * if balance < 0. { 0.05 } else { 0.35 });
-    recipe.detail = 1. + strength * balance * if balance < 0. { 0.5 } else { 1. };
-    recipe.method = layer_core::color::hdr::SdrMethod::LocalLaplacian;
-    recipe.contrast = 1.;
-    recipe.highlights = 0.;
-    recipe
-}
-
-/// Older recipes outside the new control envelope remain exact. Hosts show a
-/// custom position (no fabricated marker/value) until an explicit pad edit.
-pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> Option<[f64; 2]> {
-    if !recipe.is_local() {
-        return None;
-    }
-    let delta = f64::from(recipe.detail) - 1.;
-    let strength = (f64::from(recipe.tone) + delta * if delta < 0. { 0.1 } else { 0.35 }) / 0.8;
-    let balance = if strength.abs() < 1e-6 {
-        if delta.abs() > 1e-6 {
-            return None;
-        }
+    recipe.balance = if balance.is_nan() {
         0.
     } else {
-        delta / (strength * if delta < 0. { 0.5 } else { 1. })
+        balance.clamp(-1., 1.) as f32
     };
-    if !(-1e-6..=1.000001).contains(&strength) || !(-1.000001..=1.000001).contains(&balance) {
-        return None;
-    }
-    Some([balance.clamp(-1., 1.), strength.clamp(0., 1.)])
+    recipe.contrast = if contrast.is_nan() {
+        1.
+    } else {
+        (contrast.clamp(-1., 1.) as f32).exp2()
+    };
+    recipe
+}
+pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> [f64; 2] {
+    [f64::from(recipe.balance), f64::from(recipe.contrast.log2())]
 }
 
 #[cfg(test)]
@@ -258,8 +238,8 @@ mod tests {
             ..Default::default()
         };
         for b in -100..=100 {
-            for s in 0..=100 {
-                let values = [b as f64 / 100., s as f64 / 100.];
+            for c in -100..=100 {
+                let values = [b as f64 / 100., c as f64 / 100.];
                 let r = sdr_from_pad(original, values);
                 r.validate().unwrap();
                 assert_eq!(
@@ -270,35 +250,23 @@ mod tests {
                         original.highlight_color
                     )
                 );
-                if s == 0 {
-                    assert_eq!((r.tone, r.detail), (0., 1.));
-                }
-                let restored = sdr_pad_values(r).unwrap();
-                assert!((restored[1] - values[1]).abs() < 1e-5);
-                if s > 0 {
-                    assert!((restored[0] - values[0]).abs() < 2e-5);
-                }
-                let restored: SdrRendition =
-                    serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-                assert_eq!(r, restored);
+                let v = sdr_pad_values(r);
+                assert!((v[0] - values[0]).abs() < 1e-5 && (v[1] - values[1]).abs() < 1e-5);
+                let gains = r.gains();
+                assert!(((gains[0] * gains[1]).sqrt() - r.contrast).abs() < 1e-6);
+                assert_eq!(
+                    serde_json::from_str::<SdrRendition>(&serde_json::to_string(&r).unwrap())
+                        .unwrap(),
+                    r
+                );
             }
         }
-        let left = sdr_from_pad(original, [-1., 1.]);
-        let right = sdr_from_pad(original, [1., 1.]);
-        assert!(left.tone > right.tone && left.detail < right.detail && right.tone > 0.);
-        assert!(
-            sdr_pad_values(SdrRendition {
-                tone: 0.85,
-                detail: 2.,
-                ..original
-            })
-            .is_none()
-        );
-        assert!(
-            sdr_from_pad(original, [f64::NAN, f64::NAN])
-                .validate()
-                .is_ok()
-        );
+        assert_eq!(sdr_from_pad(original, [0., 0.]), original);
+        assert_eq!(sdr_from_pad(original, [0., -1.]).gains(), [0.5; 2]);
+        assert_eq!(sdr_from_pad(original, [0., 1.]).gains(), [2.; 2]);
+        assert!(sdr_from_pad(original, [-1., 0.]).gains()[0] > 1.);
+        assert!(sdr_from_pad(original, [1., 0.]).gains()[1] > 1.);
+        assert_eq!(sdr_from_pad(original, [f64::NAN; 2]), original);
     }
     #[test]
     fn print_options_round_trip_and_absolute_intent_disables_bpc() {

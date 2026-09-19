@@ -50,7 +50,7 @@ pub struct ViewportPresenter {
     proof_buffer: wgpu::Buffer,
     proof_uniform: wgpu::Buffer,
     hdr_uniform: wgpu::Buffer,
-    hdr_options: [f32; 12],
+    hdr_options: [f32; 8],
     local_buffer: wgpu::Buffer,
     local_guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
     proof_options: [u32; 4],
@@ -143,10 +143,10 @@ impl ViewportPresenter {
         if let Some(r) = rendition {
             r.validate().map_err(|e| GpuRasterError::Color(e.into()))?;
         }
-        let options = rendition.map_or([0.; 12], |r| {
+        let options = rendition.map_or([0.; 8], |r| {
             let p = r.parameters();
             [
-                p[0], p[1], p[2], p[3], headroom, p[4], p[5], 0., p[6], p[7], 0., 0.,
+                p[0], p[1], p[2], p[3], headroom, p[4], p[5], 0.,
             ]
         });
         if options != self.hdr_options {
@@ -430,7 +430,7 @@ impl ViewportPresenter {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(48),
+                        min_binding_size: std::num::NonZeroU64::new(32),
                     },
                     count: None,
                 },
@@ -555,11 +555,11 @@ impl ViewportPresenter {
             }),
             hdr_uniform: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("HDR viewing options"),
-                size: 48,
+                size: 32,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            hdr_options: [0.; 12],
+            hdr_options: [0.; 8],
             local_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("disabled local tone guide"),
                 size: 32,

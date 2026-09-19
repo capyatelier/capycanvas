@@ -99,31 +99,32 @@ fn main() -> Result<(), String> {
     };
     for (label, recipe) in [
         (
-            "global",
+            "low-contrast",
             SdrRendition {
                 headroom: document.sdr_rendition.headroom,
-                ..SdrRendition::unified_default()
+                contrast:0.5,
+                ..Default::default()
             },
         ),
         ("local", document.sdr_rendition),
         (
             "soft",
             SdrRendition {
-                detail: 0.5,
+                balance: -1.,
                 ..document.sdr_rendition
             },
         ),
         (
             "detail",
             SdrRendition {
-                detail: 2.,
+                balance: 1.,
                 ..document.sdr_rendition
             },
         ),
         (
             "open",
             SdrRendition {
-                tone: 0.85,
+                contrast: 2.,
                 ..document.sdr_rendition
             },
         ),
@@ -139,7 +140,7 @@ fn main() -> Result<(), String> {
             Default::default(),
             None,
             Some(recipe),
-            recipe.is_local().then_some(&guide),
+            Some(&guide),
             |y, row| {
                 let start = y as usize * extent[0] as usize;
                 row.copy_from_slice(&pixels[start..start + extent[0] as usize]);

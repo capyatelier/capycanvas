@@ -5,14 +5,12 @@
 //! stored guide samples are Float32. Analysis is fixed in document space; it
 //! never depends on the canvas zoom, viewport, export dimensions or monitor.
 //! The bounded guide is an explicit spatial approximation, not pixel storage.
-use super::{SdrRendition, sdr_luminance_weights};
+use super::sdr_luminance_weights;
 use crate::color::RgbSpace;
 
 pub const LOCAL_GUIDE_EDGE: u32 = 768;
 const FLOOR: f32 = -24.;
 const SIGMA: f32 = 1.5;
-/// Middle-gray anchor for local illumination compression (log2(0.18)).
-pub const LOCAL_TONE_PIVOT: f32 = -2.473931;
 
 #[derive(Clone, Debug)]
 pub struct LocalToneGuide {
@@ -218,37 +216,8 @@ impl LocalToneGuide {
         }
         if total > 1e-12 { value / total } else { log_y }
     }
-    pub fn adjust(
-        &self,
-        pixel: [f32; 4],
-        position: [f32; 2],
-        space: RgbSpace,
-        recipe: SdrRendition,
-    ) -> [f32; 4] {
-        self.adjust_with_weights(pixel, position, sdr_luminance_weights(space), recipe)
-    }
-    pub fn adjust_with_weights(
-        &self,
-        pixel: [f32; 4],
-        position: [f32; 2],
-        weights: [f32; 3],
-        recipe: SdrRendition,
-    ) -> [f32; 4] {
-        if !recipe.is_local() || pixel[3] <= 0. {
-            return pixel;
-        }
-        let y = (pixel[0] * weights[0] + pixel[1] * weights[1] + pixel[2] * weights[2]) / pixel[3];
-        if y <= 0. {
-            return pixel;
-        }
-        let log_y = y.max(2f32.powi(-24)).log2();
-        let base = self.illumination(position, log_y);
-        let stops =
-            -recipe.tone * (base - LOCAL_TONE_PIVOT) + (recipe.detail - 1.) * (log_y - base);
-        let gain = stops.clamp(-32., 32.).exp2();
-        [pixel[0] * gain, pixel[1] * gain, pixel[2] * gain, pixel[3]]
-    }
 }
+
 struct Plane {
     extent: [u32; 2],
     pixels: Vec<[f32; 2]>,
@@ -335,63 +304,6 @@ mod tests {
         b.finish(|| false).unwrap()
     }
     #[test]
-    fn uniform_illumination_has_exact_power_response_and_independent_coverage() {
-        for y in [0.00001f32, 0.18, 1., 8., 65504.] {
-            let g = guide([17, 9], &vec![[y, y, y, 1.]; 17 * 9]);
-            for alpha in [0.05, 0.5, 1.] {
-                for tone in [0., 0.6, 0.85] {
-                    let r = SdrRendition {
-                        tone,
-                        detail: 1.,
-                        ..Default::default()
-                    };
-                    let p = g.adjust(
-                        [y * alpha, y * alpha, y * alpha, alpha],
-                        [8.5, 4.5],
-                        RgbSpace::Srgb,
-                        r,
-                    );
-                    let expected = f64::from(y).powf(1. - f64::from(tone))
-                        * 2f64.powf(f64::from(tone) * f64::from(LOCAL_TONE_PIVOT));
-                    assert!(
-                        (f64::from(p[0] / alpha) - expected).abs() / expected < 0.00002,
-                        "{y} {tone} {p:?} {expected}"
-                    );
-                    assert_eq!(p[3], alpha);
-                }
-            }
-        }
-    }
-    #[test]
-    fn detail_changes_texture_and_tone_changes_broad_lighting() {
-        let extent = [96, 32];
-        let pixels: Vec<_> = (0..extent[0] * extent[1])
-            .map(|i| {
-                let x = i % extent[0];
-                let y = if x < 48 { 0.04 } else { 8. } * if x % 4 < 2 { 0.9 } else { 1.1 };
-                [y, y, y, 1.]
-            })
-            .collect();
-        let g = guide(extent, &pixels);
-        let sample = |x: u32, tone, detail| {
-            g.adjust(
-                pixels[x as usize],
-                [x as f32 + 0.5, 0.5],
-                RgbSpace::Srgb,
-                SdrRendition {
-                    tone,
-                    detail,
-                    ..Default::default()
-                },
-            )[0]
-        };
-        let broad = |tone| sample(76, tone, 1.) / sample(20, tone, 1.);
-        assert!(broad(0.8) < broad(0.2) * 0.5);
-        let texture = |detail| sample(22, 0.6, detail) / sample(20, 0.6, detail);
-        assert!(texture(2.) > texture(1.) && texture(1.) > texture(0.5));
-        assert!(g.samples.iter().all(|p| p.iter().all(|v| v.is_finite())));
-    }
-    #[test]
     fn hidden_rgb_does_not_contribute_and_analysis_is_cancellable() {
         let mut pixels = vec![[0.2, 0.2, 0.2, 1.]; 32 * 16];
         for p in &mut pixels[..256] {
@@ -410,27 +322,5 @@ mod tests {
         }
         assert!(builder.finish(|| true).unwrap_err().contains("cancelled"));
         assert!(LocalToneBuilder::new([0, 16], RgbSpace::Srgb).is_err());
-    }
-    #[test]
-    fn local_recipe_serializes_and_legacy_recipes_keep_global_behavior() {
-        let r = SdrRendition {
-            tone: 0.4,
-            detail: 1.8,
-            ..Default::default()
-        };
-        assert_eq!(SdrRendition::from_parameters(r.parameters()).unwrap(), r);
-        assert_eq!(
-            serde_json::from_str::<SdrRendition>(&serde_json::to_string(&r).unwrap()).unwrap(),
-            r
-        );
-        let old = serde_json::from_str::<SdrRendition>(
-            r#"{"exposure":0,"contrast":1,"headroom":3,"method":"unified"}"#,
-        )
-        .unwrap();
-        assert!(!old.is_local());
-        assert_eq!(old.point_recipe(), old);
-        for bad in [f32::NAN, -0.1, 0.9] {
-            assert!(SdrRendition { tone: bad, ..r }.validate().is_err());
-        }
     }
 }

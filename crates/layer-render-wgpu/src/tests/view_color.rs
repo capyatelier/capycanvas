@@ -485,7 +485,7 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
             for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
-            for recipe in [SdrRendition::default(),SdrRendition{highlights:-1.,..SdrRendition::unified_default()},SdrRendition{highlights:1.,exposure:1.3,contrast:0.7,highlight_color:0.8,..SdrRendition::unified_default()},SdrRendition{method:layer_core::color::hdr::SdrMethod::Photographic,..SdrRendition::unified_default()},SdrRendition::unified_default(),SdrRendition{highlight_color:0.45,..SdrRendition::unified_default()},SdrRendition{highlight_color:1.,..SdrRendition::unified_default()},SdrRendition::legacy_default(),SdrRendition{method:layer_core::color::hdr::SdrMethod::ToneMap,..SdrRendition::unified_default()},SdrRendition{exposure:-2.,contrast:1.5,headroom:4.,..SdrRendition::unified_default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Scale, headroom:3., ..SdrRendition::unified_default()}, SdrRendition{method:layer_core::color::hdr::SdrMethod::Clip, exposure:-1., ..SdrRendition::unified_default()}] {
+            for recipe in [SdrRendition::default(),SdrRendition{balance:-1.,contrast:0.5,..Default::default()},SdrRendition{balance:1.,contrast:2.,exposure:1.3,highlight_color:0.8,..Default::default()},SdrRendition{highlight_color:1.,headroom:4.,..Default::default()}] {
                 for headroom in [1.,4.] {
                     for proof in [false,true] {
                         presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
@@ -505,7 +505,7 @@ fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
                         // PQ encode/decode uses hardware Float32 powers. The independent
                         // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
                         // 203/80. Both tolerances remain well below one 8-bit code.
-                        let tolerance=if matches!(recipe.method,layer_core::color::hdr::SdrMethod::Bt2390 | layer_core::color::hdr::SdrMethod::Photographic | layer_core::color::hdr::SdrMethod::Unified | layer_core::color::hdr::SdrMethod::LocalLaplacian) && (headroom==1. || proof){if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else{0.00008}}else{0.};
+                        let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else{0.00008}}else{0.};
                         for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
                         assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
                     }
@@ -587,10 +587,10 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
             SdrSurfaceColor::WindowsScrgb,
         )
         .unwrap();
-        for (tone, detail) in [(0., 1.), (0.6, 1.), (0.85, 2.), (0.2, 0.5)] {
+        for (contrast, balance) in [(0.5, 0.), (1., 0.), (2., 0.), (1., -1.), (1., 1.), (0.5, -1.), (2., 1.)] {
             let recipe = SdrRendition {
-                tone,
-                detail,
+                contrast,
+                balance,
                 headroom: guide.peak.log2().max(0.),
                 highlight_color: 0.3,
                 ..Default::default()
@@ -607,11 +607,8 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
                     for (x, y) in [(30, 30), (126, 45), (129, 170), (203, 211)] {
                         let p = pixels[y * 256 + x];
                         let mut expected = if headroom == 1. || proof {
-                            let p =
-                                guide.adjust(p, [x as f32 + 0.5, y as f32 + 0.5], space, recipe);
-                            recipe
-                                .mapper(space, if proof { space } else { RgbSpace::Srgb })
-                                .map_premultiplied(p)
+                            recipe.mapper(space, if proof {space} else {RgbSpace::Srgb})
+                                .map_local_premultiplied(p,[x as f32+0.5,y as f32+0.5],&guide)
                         } else {
                             layer_core::color::hdr::map_display_premultiplied(p, headroom)
                         };
@@ -634,7 +631,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
                             let expected = (rgb[c] + checker * (1. - p[3] as f64)) * 2.5375;
                             assert!(
                                 (value - expected).abs() < 0.0005,
-                                "{space:?} {x},{y} tone={tone} detail={detail} proof={proof} headroom={headroom}: {value} vs {expected}"
+                                "{space:?} {x},{y} contrast={contrast} balance={balance} proof={proof} headroom={headroom}: {value} vs {expected}"
                             );
                         }
                     }

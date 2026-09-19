@@ -62,12 +62,7 @@ impl LocalToneView {
             return None;
         }
         let d = session.engine().document();
-        if !d.color.depth.is_float()
-            || (!session.effective_sdr_rendition().is_local()
-                && session.proof_panel_mode() != layer_ui::ProofMode::Sdr)
-        {
-            return None;
-        }
+        if !d.color.depth.is_float() { return None; }
         Some(Key {
             epoch: session.state().document_file.epoch,
             owner: session.engine().backend().proof_owner,

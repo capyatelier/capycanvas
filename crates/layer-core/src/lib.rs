@@ -1255,7 +1255,7 @@ pub struct Document {
     #[serde(skip)]
     pub proof: Option<color::ProofRecipe>,
     /// Authored delivery mapping. Display capability and preview toggles are view state.
-    #[serde(default = "color::hdr::SdrRendition::legacy_default")]
+    #[serde(default)]
     pub sdr_rendition: color::hdr::SdrRendition,
     /// Front-to-back display order.
     pub layers: Vec<Layer>,

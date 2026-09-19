@@ -1,5 +1,9 @@
 # Circular SDR Proof controls — GTK review
 
+**Historical record:** the current mapping and removal of prerelease recipe
+compatibility are documented in [Contrast × Scale](color-management-contrast-dial.md).
+
+
 September 2026. Replaces the rectangular Tone × Detail pad described in
 [local tone mapping](color-management-local-tone.md). The local-Laplacian
 algorithm, master storage, export transforms and gain-map representation are

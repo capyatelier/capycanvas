@@ -227,7 +227,7 @@ fn hdr_archive_and_history_preserve_samples_and_authored_rendition() {
     let key=TileKey{plane:RasterPlane::Color,coordinate:[0,0]};
     document.layers[0].raster=RasterRevision::backed(RasterData{tiles:BTreeMap::from([(key,RasterTile::backed(TileBlob::encode(color.paint_descriptor(),&samples).unwrap()))]),watercolor:None});
     let mut editor=Editor::new(document);
-    let rendition=crate::color::hdr::SdrRendition{exposure:-1.,contrast:0.8,headroom:4.,method:crate::color::hdr::SdrMethod::Photographic,highlight_color:0.35,..Default::default()};
+    let rendition=crate::color::hdr::SdrRendition{exposure:-1.,contrast:0.8,headroom:4.,balance:0.4,highlight_color:0.35,..Default::default()};
     editor.perform(Edit::SetSdrRendition(rendition)).unwrap();
     editor.undo().unwrap();assert_eq!(editor.document().sdr_rendition,Default::default());
     editor.redo().unwrap();assert_eq!(editor.document().sdr_rendition,rendition);

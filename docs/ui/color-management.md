@@ -251,10 +251,12 @@ starting layouts it shares Color's tab group. Drag its tab to float or relocate
 it using the normal workspace controls. SDR documents offer Off / Print.
 
 For HDR artwork, **Proof → SDR** uses a circular control with a small live SDR
-preview of the image. Move **up** to increase local tone-mapping **Strength**.
-Move **right** to favor texture, or **left** to favor smoother tone compression.
-The center balance preserves extracted detail at its original strength. Zero
-Strength uses the basic global HDR-to-SDR conversion.
+preview of the image. The **center is the automatic baseline**, at 100% contrast.
+Move **up** for more contrast (up to 200%), or **down** for less (down to 50%).
+Move **left** to favor broad shapes and lighting (**macro**), or **right** to favor
+fine texture (**micro**). At centered balance, both change together. Range fitting
+stays fixed while adjusting the circle, so more contrast does not turn back into
+more compression at the top.
 
 The **top arc** adjusts Brightness, keeping black and white fixed. The **bottom
 arc** adjusts Color intensity: left lets bright highlights become white; right
@@ -264,16 +266,15 @@ hover or focus identifies the controls. No labels or Auto button occupy the pane
 
 Drag, use arrow keys (Shift for larger steps), or double-click a control to reset
 it. Escape cancels an adjustment. The small refresh icon resets all appearance
-controls while preserving the stored HDR range. Existing saved recipes reopen
-unchanged; a recipe outside the new Strength/Balance range shows dashes and no
-circle marker until the user moves the circle or resets it. Brightness and Color
-intensity can still be adjusted without changing that saved tone/detail recipe.
+controls while preserving the stored HDR range. Reset returns the circle to its
+center. There are no older algorithm modes or custom-recipe placeholders.
 The small preview is a cached, reduced central crop; use the canvas and export
 preview to judge fine detail and the complete image. The
 [algorithm, fixtures and qualification notes](../history/color-management-local-tone.md)
 explain the bounded local-Laplacian approximation and its limits.
 The [circular-control review](../history/color-management-proof-dial.md) records
-its control mapping, compatibility and GTK validation.
+its original geometry. The [contrast update](../history/color-management-contrast-dial.md)
+records the current formulas, simplification and validation.
 
 Changes are live, saved document edits, with one undo step per slider gesture.
 **Off** restores normal viewing without discarding the saved SDR rendition.

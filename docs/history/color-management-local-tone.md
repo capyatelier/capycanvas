@@ -1,5 +1,9 @@
 # Local SDR rendition and Tone × Detail review
 
+**Historical record:** the current mapping and removal of prerelease recipe
+compatibility are documented in [Contrast × Scale](color-management-contrast-dial.md).
+
+
 September 2026. GTK review implementation; physical display qualification remains
 separate. Supersedes the four global controls described in
 [color-management-unified-sdr.md](color-management-unified-sdr.md).
