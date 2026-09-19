@@ -427,7 +427,7 @@ try {
     await checkPrediction({call, evaluate, settle});
     assert.deepEqual(errors, []);
   } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
-    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
+    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {
     await checkPreferences({ call, evaluate, settle });

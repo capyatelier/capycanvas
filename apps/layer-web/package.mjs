@@ -23,16 +23,22 @@ export function dependencyNotices(licenses) {
     // cargo-about cannot fetch its git clarification. Preserve the exact upstream
     // Zlib alternative, checked against the recorded publication revision.
     if (!license.source_path) {
-      const missing = crates.filter(crate => crate.name === "zune-core");
-      if (missing.length) {
-        if (missing.some(crate => crate.version !== "0.4.12" || crate.license !== "MIT OR Apache-2.0 OR Zlib"))
-          throw new Error("Revalidate the original zune-core notice for this release");
+      const pinned = [
+        ["zune-core", "0.4.12", "f8fbb123d5ed04441e8324a555bfcda0cb1bd28f"],
+        ["zune-inflate", "0.2.54", "69502ce83fdfecdd0beefd677e2abb3781b29d98"],
+      ];
+      for (const [name, version, revision] of pinned) {
+        const missing = crates.filter(crate => crate.name === name);
+        if (!missing.length) continue;
+        if (missing.some(crate => crate.version !== version || crate.license !== "MIT OR Apache-2.0 OR Zlib"))
+          throw new Error(`Revalidate the original ${name} notice for this release`);
         const notice = readFileSync(join(web, "licenses/zune-core-0.4.12-ZLIB.txt"));
+        // Both pinned publication revisions contain this identical original.
         if (digest(notice).digest("hex") !== "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352")
-          throw new Error("Original zune-core notice checksum differs");
-        const source = "https://github.com/etemesi254/zune-image/blob/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE-ZLIB";
-        original = `<section><h2>Zlib License</h2><p>zune-core 0.4.12 · <a href="${source}">Original notice</a></p><pre>${escape(notice.toString("utf8"))}</pre></section>`;
-        crates = crates.filter(crate => crate.name !== "zune-core");
+          throw new Error(`Original ${name} notice checksum differs`);
+        const source = `https://github.com/etemesi254/zune-image/blob/${revision}/LICENSE-ZLIB`;
+        original += `<section><h2>Zlib License</h2><p>${name} ${version} · <a href="${source}">Original notice</a></p><pre>${escape(notice.toString("utf8"))}</pre></section>`;
+        crates = crates.filter(crate => crate.name !== name);
       }
     }
     if (!crates.length) return original;

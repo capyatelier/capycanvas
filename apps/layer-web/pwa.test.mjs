@@ -152,7 +152,9 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
         const init={bubbles:true,cancelable:true,pointerId:id,pointerType:kind,clientX:px,clientY:py,button:0,buttons:end?0:1,pressure:end?0:.7};
         const event=new PointerEvent(type,init);
         if(coalesced)Object.defineProperty(event,'getCoalescedEvents',{value:()=>[new PointerEvent(type,{...init,clientX:px-20}),new PointerEvent(type,init)]});
-        expectedRoutes.push([String(id>>>0),type==='lostpointercapture'?'cancel':type.slice(7)]);
+        // Main's tablet fix finalizes painted ink on capture loss; other
+        // controls retain their own cancellation semantics.
+        expectedRoutes.push([String(id>>>0),end&&kind==='pen'?'up':type==='lostpointercapture'?'cancel':type.slice(7)]);
         canvas.dispatchEvent(event);
       };
       try {
@@ -161,7 +163,7 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
           emit('pointerdown',id,kind,x,y+i*12);
           emit('pointermove',id,kind,x+100,y+i*12,true);
           emit(end,id,kind,x+100,y+i*12);
-          expectedSamples.push(...[1,2,2,end==='pointerup'?3:4].map(phase=>[id>>>0,phase]));
+          expectedSamples.push(...[1,2,2,3].map(phase=>[id>>>0,phase]));
           await settle();
         }
         const zoom=app.state().camera.zoom;
@@ -187,7 +189,8 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
   console.log("Signed pointer IDs: Wasm routing, GPU ink, coalesced samples, cancel/capture loss and multitouch passed");
 }
 
-export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
+export async function checkPwa({ call, evaluate, settle, canvasPixels, host, storageOnly = false }) {
+  if (!storageOnly) {
   await checkPointerIds({ call, evaluate, settle, canvasPixels });
   await checkFullscreen({ call, evaluate, settle, canvasPixels });
   const point = (selector) => evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -260,6 +263,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     assert.equal(await evaluate("document.querySelector('.cursor-outline-front').getAttribute('d')"), "", `${pointerType} leaving the canvas clears the brush outline`);
   }
   console.log("Mouse/pen DOM cursor policy: hover, drawing, release and canvas exit passed (native tablet cursor not tested)");
+  }
   const ready = async (previous) => {
     const start = Date.now();
     while (Date.now() - start < 25000) {

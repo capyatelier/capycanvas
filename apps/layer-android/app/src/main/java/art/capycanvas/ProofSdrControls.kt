@@ -43,8 +43,8 @@ import kotlin.math.*
         val dial=remember(form.toString(),side){query()}
         fun JSONArray.point()=Offset(getDouble(0).toFloat()*density,getDouble(1).toFloat()*density)
         Canvas(Modifier.fillMaxSize().testTag("sdr-tone-pad").semantics {
-            contentDescription="SDR balance and contrast"
-            stateDescription="Balance ${round(current.getJSONObject("rendition").getDouble("balance")*100).toInt()}%, contrast ${round(current.getJSONObject("rendition").getDouble("contrast")*100).toInt()}%"
+            contentDescription="SDR appearance"
+            stateDescription=listOf("Contrast","Balance","Brightness","Color intensity").mapIndexed { index,label -> "$label ${round(dial.getJSONArray("percentages").getDouble(index)).toInt()}%" }.joinToString(", ")
             customActions=listOf(CustomAccessibilityAction("Reset SDR appearance"){reset(3);true},CustomAccessibilityAction("Increase brightness"){nudge(1,.04);true},CustomAccessibilityAction("Decrease brightness"){nudge(1,-.04);true},CustomAccessibilityAction("Increase color intensity"){nudge(2,.01);true},CustomAccessibilityAction("Decrease color intensity"){nudge(2,-.01);true})
         }.onKeyEvent {e->
             if(e.type!=KeyEventType.KeyDown)false else when(e.key){

@@ -135,7 +135,11 @@ internal class ProofController(private val host: CanvasHost) {
     }
     DisposableEffect(id){onDispose{if(!controller.committing)controller.close(id)}}
     fun action(value:JSONObject) { scope.launch { try { host.withNative{Native.proofControl(it,value.toString())};host.documentChanged();formGeneration++ } catch(e:Exception){localError=e.message} } }
-    LaunchedEffect(formGeneration,host.panelContent?.objectOrNull("state")?.optLong("revision")) {
+    LaunchedEffect(formGeneration,
+        host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("revision"),
+        host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch"),
+        host.snapshot?.objectOrNull("state")?.optBoolean("soft_proof"),
+        host.snapshot?.objectOrNull("state")?.optBoolean("preview_sdr")) {
         if(form!=null) { val updated=JSONObject(host.withNative{Native.proofForm(it)});form=updated;mode=updated.getString("mode") }
     }
     LaunchedEffect(mode,selection,intent,bpc,simulation,form!=null,retry) {

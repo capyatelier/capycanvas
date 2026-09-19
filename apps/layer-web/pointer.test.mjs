@@ -15,7 +15,7 @@ function harness() {
       focus() {}, setPointerCapture() {},
       addEventListener: (name, fn) => listeners.set(name, fn),
     },
-    lastPenEvent: null, pending: [], state: { camera: { revision: 1 } },
+    lastPenEvent: null, pending: [], state: { camera: { revision: 1 }, settings: { feedback: false, platform_prediction: false } },
     app: { pen(batch) { records.push(...batch); return batch.length / 11; } },
     input(event) {
       phases.push(event);

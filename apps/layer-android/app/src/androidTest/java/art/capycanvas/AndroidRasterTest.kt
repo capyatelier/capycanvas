@@ -3,6 +3,7 @@ package art.capycanvas
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.*
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -231,6 +232,8 @@ class AndroidRasterTest {
         compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(arcPoint(16));moveTo(arcPoint(48));up()}
         refresh();assertNotEquals(JSONObject(changed).getDouble("exposure"),form().getJSONObject("rendition").getDouble("exposure"),.01)
         action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        // External history must refresh the visible dial as well as its Rust recipe.
+        compose.waitUntil(10_000){compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode().config[SemanticsProperties.StateDescription].contains(", Brightness 0%,")}
         assertEquals(original,histogram())
         automation.takeScreenshot()?.let { screenshot->File(activity.getExternalFilesDir(null),"hdr-proof.png").outputStream().use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};screenshot.recycle() }
         compose.onNodeWithText("Close").performClick();refresh()

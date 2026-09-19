@@ -50,6 +50,9 @@ export async function checkHdr({call,evaluate,settle}) {
     const master0=await save();
     await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
     const beforeRecipe=await evaluate('layerApp.app.proof_form().rendition');
+    // A floating workspace panel must not steal contacts from the active Proof.
+    const occlusion=await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad'),r=c.getBoundingClientRect(),d=layerApp.app.color_ui({type:'proof_dial',size:256,recipe:layerApp.app.proof_form().rendition});return d.arcs.flatMap(a=>[16,48].map(i=>{const p=a.path[i];return document.elementFromPoint(r.x+p[0]*r.width/256,r.y+p[1]*r.height/256)===c}))})()`);
+    assert.ok(occlusion.every(Boolean),'Proof arcs remain reachable above floating workspace panels');
     const r=await evaluate(`(()=>{const r=document.querySelector('.proof-tone-pad').getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height}})()`);
     await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,x:r.x+r.w*.5,y:r.y+r.h*.5}]});
     await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:1,x:r.x+r.w*.7,y:r.y+r.h*.35}]});

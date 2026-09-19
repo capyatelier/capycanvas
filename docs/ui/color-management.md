@@ -236,7 +236,7 @@ monitor moves. **Display Details…** reports active management and capabilities
 show limitations truthfully. Do not offer a monitor profile as a working-space
 fix or ask users to configure technical display settings on every launch.
 
-**8. Edit HDR and provide an intentional SDR version — GTK review candidate**
+**8. Edit HDR and provide an intentional SDR version**
 
 **Open HDR → edit → preview SDR rendition → export SDR or supported HDR.**
 
@@ -401,3 +401,12 @@ ordinary tasks without visiting global settings or confusing Assign with Convert
 Check cancelled operations, reopen/editability, exported color/depth and work on
 multiple displays. Numerical/performance tests remain in the implementation plan;
 manual availability is evidence of expectations, not a substitute for these checks.
+
+
+Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
+records their supported HDR editing and delivery routes. Both reuse the GTK
+picker placement and shared Proof dial; displays currently show mapped SDR.
+Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
+open artwork. Neither host currently offers gain-map output or physical HDR
+presentation. The report distinguishes implemented controls from outstanding
+workspace projection and hardware qualification.

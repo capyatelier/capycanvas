@@ -284,3 +284,14 @@ The feature branch and runnable build are for review before merging. Existing
 JPEG numerical failures and missing physical-input/mixed-monitor evidence remain
 explicit; neither this entry nor software texture tests close whole phase 4.
 Float32 document storage remains outside scope.
+
+
+## Phase 4 Web/Android integration evidence — 2026-09-19
+
+[Web/Android report](../development/color-management-web-android-m4.md) records
+shared HDR editing, native persistence/recovery, GTK picker/dial controls, print
+proofing and EXR/PQ/SDR delivery in real desktop/tablet Chrome and native Android.
+Web has an explicit 12 MP HDR admission limit after larger documents exceeded
+memory budgets. Native Float16 measurements reach 60 MP. Physical HDR surfaces,
+gain-map delivery, full presentation/thermal qualification and Proof workspace
+projection remain explicit follow-up work; this entry is not global signoff.
