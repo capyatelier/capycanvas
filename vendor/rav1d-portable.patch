@@ -1,0 +1,267 @@
+--- a/vendor/rav1d/Cargo.toml
++++ b/vendor/rav1d/Cargo.toml
+@@ -39,7 +39,7 @@
+ repository = "https://github.com/memorysafety/rav1d"
+
+ [features]
+-asm = []
++asm = ["dep:cc", "dep:nasm-rs"]
+ asm_arm64_dotprod = ["asm"]
+ asm_arm64_i8mm = ["asm"]
+ asm_arm64_sve2 = ["asm"]
+@@ -75,7 +75,7 @@
+ [dependencies.cfg-if]
+ version = "1.0.0"
+
+-[dependencies.libc]
++[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies.libc]
+ version = "0.2"
+
+ [dependencies.parking_lot]
+@@ -99,9 +99,11 @@
+ features = ["derive"]
+
+ [build-dependencies.cc]
++optional = true
+ version = "1.0.79"
+
+ [build-dependencies.nasm-rs]
++optional = true
+ version = "0.3"
+ features = ["parallel"]
+
+--- a/vendor/rav1d/include/dav1d/common.rs
++++ b/vendor/rav1d/include/dav1d/common.rs
+@@ -35,7 +35,7 @@
+ pub struct Dav1dDataProps {
+     pub timestamp: i64,
+     pub duration: i64,
+-    pub offset: libc::off_t,
++    pub offset: crate::portable::off_t,
+     pub size: usize,
+     pub user_data: Dav1dUserData,
+ }
+@@ -45,7 +45,7 @@
+ pub(crate) struct Rav1dDataProps {
+     pub timestamp: i64,
+     pub duration: i64,
+-    pub offset: libc::off_t,
++    pub offset: crate::portable::off_t,
+     pub size: usize,
+     pub user_data: Rav1dUserData,
+ }
+--- a/vendor/rav1d/include/dav1d/picture.rs
++++ b/vendor/rav1d/include/dav1d/picture.rs
+@@ -30,8 +30,8 @@
+ use crate::src::send_sync_non_null::SendSyncNonNull;
+ use crate::src::strided::Strided;
+ use crate::src::with_offset::WithOffset;
+-use libc::ptrdiff_t;
+-use libc::uintptr_t;
++use crate::portable::ptrdiff_t;
++use crate::portable::uintptr_t;
+ use std::array;
+ use std::ffi::c_int;
+ use std::ffi::c_void;
+--- a/vendor/rav1d/lib.rs
++++ b/vendor/rav1d/lib.rs
+@@ -11,6 +11,8 @@
+
+ #[cfg(not(any(feature = "bitdepth_8", feature = "bitdepth_16")))]
+ compile_error!("No bitdepths enabled. Enable one or more of the following features: `bitdepth_8`, `bitdepth_16`");
++
++mod portable;
+
+ pub mod include {
+     pub mod common {
+--- /dev/null
++++ b/vendor/rav1d/portable.rs
+@@ -0,0 +1,22 @@
++//! ABI types shared with the C interface without requiring libc on WebAssembly.
++#![allow(non_camel_case_types)]
++pub type intptr_t = isize;
++pub type uintptr_t = usize;
++pub type ptrdiff_t = isize;
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++pub use libc::{off_t, ENOENT, EIO, EAGAIN, ENOMEM, EINVAL, ERANGE, ENOPROTOOPT};
++#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++pub use wasm::*;
++#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++mod wasm {
++    // No system errno on wasm-unknown; retain conventional Linux error numbers
++    // for the exported dav1d-compatible result values. These are not syscalls.
++    pub type off_t = i64;
++    pub const ENOENT: u8 = 2;
++    pub const EIO: u8 = 5;
++    pub const EAGAIN: u8 = 11;
++    pub const ENOMEM: u8 = 12;
++    pub const EINVAL: u8 = 22;
++    pub const ERANGE: u8 = 34;
++    pub const ENOPROTOOPT: u8 = 92;
++}
+--- a/vendor/rav1d/src/cdef.rs
++++ b/vendor/rav1d/src/cdef.rs
+@@ -17,7 +17,7 @@
+ use crate::src::with_offset::WithOffset;
+ use crate::src::wrap_fn_ptr::wrap_fn_ptr;
+ use bitflags::bitflags;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use std::ffi::c_uint;
+--- a/vendor/rav1d/src/cdef_apply.rs
++++ b/vendor/rav1d/src/cdef_apply.rs
+@@ -17,7 +17,7 @@
+ use crate::src::strided::WithStride;
+ use crate::src::with_offset::WithOffset;
+ use bitflags::bitflags;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use std::ffi::c_uint;
+--- a/vendor/rav1d/src/decode.rs
++++ b/vendor/rav1d/src/decode.rs
+@@ -166,7 +166,7 @@
+ use crate::src::warpmv::rav1d_find_affine_int;
+ use crate::src::warpmv::rav1d_get_shear_params;
+ use crate::src::warpmv::rav1d_set_affine_mv2d;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::array;
+ use std::cmp;
+ use std::ffi::c_int;
+--- a/vendor/rav1d/src/error.rs
++++ b/vendor/rav1d/src/error.rs
+@@ -17,13 +17,13 @@
+     /// which is more optimal since `0` is no error for [`Dav1dResult`].
+     EGeneric = 1,
+
+-    ENOENT = libc::ENOENT as u8,
+-    EIO = libc::EIO as u8,
+-    EAGAIN = libc::EAGAIN as u8,
+-    ENOMEM = libc::ENOMEM as u8,
+-    EINVAL = libc::EINVAL as u8,
+-    ERANGE = libc::ERANGE as u8,
+-    ENOPROTOOPT = libc::ENOPROTOOPT as u8,
++    ENOENT = crate::portable::ENOENT as u8,
++    EIO = crate::portable::EIO as u8,
++    EAGAIN = crate::portable::EAGAIN as u8,
++    ENOMEM = crate::portable::ENOMEM as u8,
++    EINVAL = crate::portable::EINVAL as u8,
++    ERANGE = crate::portable::ERANGE as u8,
++    ENOPROTOOPT = crate::portable::ENOPROTOOPT as u8,
+ }
+
+ pub type Rav1dResult<T = ()> = Result<T, Rav1dError>;
+--- a/vendor/rav1d/src/filmgrain.rs
++++ b/vendor/rav1d/src/filmgrain.rs
+@@ -21,8 +21,8 @@
+ use crate::src::strided::Strided as _;
+ use crate::src::tables::dav1d_gaussian_sequence;
+ use crate::src::wrap_fn_ptr::wrap_fn_ptr;
+-use libc::intptr_t;
+-use libc::ptrdiff_t;
++use crate::portable::intptr_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use std::ffi::c_uint;
+--- a/vendor/rav1d/src/internal.rs
++++ b/vendor/rav1d/src/internal.rs
+@@ -88,7 +88,7 @@
+ use crate::src::thread_task::Rav1dTasks;
+ use atomig::Atom;
+ use atomig::Atomic;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use parking_lot::Condvar;
+ use parking_lot::Mutex;
+ use parking_lot::RwLock;
+--- a/vendor/rav1d/src/ipred.rs
++++ b/vendor/rav1d/src/ipred.rs
+@@ -37,7 +37,7 @@
+ use crate::src::tables::filter_fn;
+ use crate::src::tables::FLT_INCR;
+ use crate::src::wrap_fn_ptr::wrap_fn_ptr;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use std::ffi::c_uint;
+--- a/vendor/rav1d/src/lf_mask.rs
++++ b/vendor/rav1d/src/lf_mask.rs
+@@ -14,7 +14,7 @@
+ use crate::src::levels::TxfmSize;
+ use crate::src::relaxed_atomic::RelaxedAtomic;
+ use crate::src::tables::dav1d_txfm_dimensions;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use parking_lot::RwLock;
+ use std::cmp;
+ use std::ffi::c_int;
+--- a/vendor/rav1d/src/loopfilter.rs
++++ b/vendor/rav1d/src/loopfilter.rs
+@@ -14,7 +14,7 @@
+ use crate::src::strided::Strided as _;
+ use crate::src::with_offset::WithOffset;
+ use crate::src::wrap_fn_ptr::wrap_fn_ptr;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use strum::FromRepr;
+--- a/vendor/rav1d/src/looprestoration.rs
++++ b/vendor/rav1d/src/looprestoration.rs
+@@ -17,7 +17,7 @@
+ use crate::src::tables::dav1d_sgr_x_by_x;
+ use crate::src::wrap_fn_ptr::wrap_fn_ptr;
+ use bitflags::bitflags;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+ use std::ffi::c_uint;
+@@ -963,7 +963,7 @@
+
+     use crate::include::common::bitdepth::bd_fn;
+     use crate::src::align::Align16;
+-    use libc::intptr_t;
++    use crate::portable::intptr_t;
+     use std::ptr;
+
+     wrap_fn_ptr!(unsafe extern "C" fn wiener_filter_h(
+--- a/vendor/rav1d/src/lr_apply.rs
++++ b/vendor/rav1d/src/lr_apply.rs
+@@ -15,7 +15,7 @@
+ use crate::src::tables::dav1d_sgr_params;
+ use assert_matches::assert_matches;
+ use bitflags::bitflags;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use std::cmp;
+ use std::ffi::c_int;
+
+--- a/vendor/rav1d/src/picture.rs
++++ b/vendor/rav1d/src/picture.rs
+@@ -27,7 +27,7 @@
+ use crate::src::mem::MemPool;
+ use crate::src::send_sync_non_null::SendSyncNonNull;
+ use bitflags::bitflags;
+-use libc::ptrdiff_t;
++use crate::portable::ptrdiff_t;
+ use parking_lot::Mutex;
+ use std::ffi::c_int;
+ use std::ffi::c_void;
+--- a/vendor/rav1d/src/recon.rs
++++ b/vendor/rav1d/src/recon.rs
+@@ -90,7 +90,7 @@
+ use crate::src::wedge::dav1d_wedge_masks;
+ use crate::src::with_offset::WithOffset;
+ use assert_matches::debug_assert_matches;
+-use libc::intptr_t;
++use crate::portable::intptr_t;
+ use std::array;
+ use std::cmp;
+ use std::ffi::c_int;
