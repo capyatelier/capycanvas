@@ -150,16 +150,20 @@ pub fn sdr_direction_texture(edge: u32) -> Vec<u8> {
             let x = (i as f32 + 0.5) / edge as f32 * 2. - 1.;
             let y = 1. - (j as f32 + 0.5) / edge as f32 * 2.;
             let right = (x + 1.) * 0.5;
-            let contrast = 0.08 + 1.6 * (y + 1.) * 0.5;
-            let phase =
-                3.8 * x + 2.2 * y + 1.2 * (2.6 * y - x).sin() + 0.4 * (3. * x + 2. * y).sin();
-            let broad = 0.65 * phase.sin() + 0.35 * (2.3 * y - 1.6 * x).cos();
-            let detail = 0.6 * (10. * phase + 1.2 * (5. * y).sin()).sin()
-                + 0.4 * (25. * x - 18. * y + 3. * (3. * y).sin()).cos();
-            let reflection = (phase + 0.6).cos().max(0.).powi(16);
-            let signal = 0.7 * broad + 0.35 * right.powf(1.7) * detail + 0.65 * reflection - 0.15;
-            let v = 0.5 + 0.48 * (contrast * 2. * signal).tanh();
-            let tint = contrast * 0.025 * (phase - 1.).sin();
+            let up = (y + 1.) * 0.5;
+            // One continuous glass fold family makes the axes legible at
+            // small panel sizes. Spacing tightens to the right, instead of
+            // adding unrelated high-frequency noise over the broad folds.
+            let flow = right + 0.14 * (2.8 * y - 0.2).sin() + 0.03 * (5. * y).sin();
+            let phase = std::f32::consts::TAU * (0.4 * flow + 4.2 * flow.powi(3)) + 0.7 * y;
+            let wave = 0.8 * phase.sin() + 0.25 * (2. * phase + 0.3).sin();
+            let reflection = (phase - 0.7).cos().max(0.).powf(4. + 12. * right);
+            // Bound the amplitude separately: the bottom visibly converges
+            // to gray even where a reflection would otherwise stay bright.
+            let contrast = 0.49 * up.powf(1.05);
+            let v =
+                0.5 + contrast * ((1.5 + 2. * up) * (0.9 * wave + 0.5 * reflection - 0.1)).tanh();
+            let tint = 0.018 * up * (phase - 1.).sin();
             let rgb = [v - 0.6 * tint, v + 0.1 * tint, v + tint]
                 .map(|c| (c.clamp(0., 1.) * 255.).round() as u32);
             bytes.extend_from_slice(

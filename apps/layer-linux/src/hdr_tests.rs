@@ -955,8 +955,9 @@ fn native_proof_dial_hit_regions() {
                 assert_eq!(hit,arc.clone().upcast::<gtk::Widget>(),"visible arc {i} at {n}%");
             }
         }
-        let output=std::path::Path::new("../../artifacts/color-m4/proof-polish/controls");
-        std::fs::create_dir_all(output).unwrap();
+        let output=std::env::var_os("LAYER_TEST_ARTIFACTS").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("../../artifacts/color-m4/proof-polish/controls"));
+        std::fs::create_dir_all(&output).unwrap();
         let snap=gtk::Snapshot::new();
         gtk::WidgetPaintable::new(Some(&dial.root)).snapshot(&snap,dial.root.width() as f64,dial.root.height() as f64);
         window.renderer().unwrap().render_texture(&snap.to_node().unwrap(),None).save_to_png(output.join(format!("dial-{size}.png"))).unwrap();

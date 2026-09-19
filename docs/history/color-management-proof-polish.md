@@ -89,3 +89,17 @@ hardware and other native hosts are unqualified. Previous browser workflow
 failures are not claimed fixed. No new full-60-MP export or device-recovery
 qualification is claimed; prior measurements remain in the preceding manifests.
 Broader phase-4 gates remain open.
+
+## Glass guide clarity follow-up
+
+The directional illustration now uses one continuous family of glass folds.
+Fold spacing tightens smoothly to the right, where the reflective creases also
+sharpen. The top has clear black/white separation; a separate amplitude envelope
+fades the bottom toward neutral gray. This replaces the superimposed fine waves
+that made the first version's directions harder to read at small sizes.
+
+Evidence: `artifacts/color-m4/proof-guide/`. GTK renders and hit-region checks pass
+at 128, 160, 226, 320 and 400 logical pixels (`native-controls.log`, `controls/`).
+The existing shared default/texture check and GTK release build pass. This is a
+cached UI illustration change; the previous tone-mapping, export, input and
+performance qualification remains recorded above, not claimed as newly rerun.
