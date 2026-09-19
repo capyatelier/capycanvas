@@ -3,7 +3,7 @@ use crate::android::{app, error, fail, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
-    sys::{jint, jlong, jstring},
+    sys::{jboolean, jint, jlong, jstring},
 };
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
 use layer_ui::proof_workflow::ToneKey;
@@ -14,9 +14,36 @@ pub(crate) struct ToneState {
     key: Option<ToneKey>,
     owner: u64,
     pub generation: u32,
-    pub guide: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+    pub published_generation: Option<u32>,
+    published: Option<ToneKey>,
+    ready: bool,
+    publications: u32,
+    pub pending: Option<CaptureControl>,
+    pub guide: Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>,
     error: Option<String>,
     analysed_time: f32,
+}
+impl ToneState {
+    pub fn clear_incompatible(
+        &mut self,
+        session: &layer_ui::UiSession<layer_host::Renderer>,
+        owner: u64,
+    ) {
+        if self.owner != owner
+            || self
+                .published
+                .as_ref()
+                .is_some_and(|key| !key.can_preview_current(session))
+        {
+            if let Some(control) = self.pending.take() {
+                control.cancel();
+            }
+            self.guide = None;
+            self.published = None;
+            self.published_generation = None;
+            self.ready = false;
+        }
+    }
 }
 struct Task {
     key: ToneKey,
@@ -26,7 +53,7 @@ struct Task {
     background: [f32; 4],
     time: f32,
     control: CaptureControl,
-    guide: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+    guide: Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>,
 }
 unsafe fn task<'a>(id: jlong) -> &'a mut Task {
     unsafe { &mut *(id as *mut Task) }
@@ -57,18 +84,33 @@ pub extern "system" fn Java_art_capycanvas_Native_toneStatus(
     let a = unsafe { app(handle) };
     let key = ToneKey::current(&a.host.session);
     if key != a.tone.key || a.tone.owner != a.gpu_generation {
+        let retain = a.tone.owner == a.gpu_generation
+            && a.tone
+                .published
+                .as_ref()
+                .zip(key.as_ref())
+                .is_some_and(|(old, next)| old.can_preview(next));
+        if let Some(control) = a.tone.pending.take() {
+            control.cancel();
+        }
+        if !retain {
+            a.tone.guide = None;
+            a.tone.published = None;
+            a.tone.published_generation = None;
+        }
+        a.tone.ready = false;
         a.tone.key = key;
         a.tone.owner = a.gpu_generation;
         a.tone.generation = a.tone.generation.wrapping_add(1);
-        a.tone.guide = None;
         a.tone.error = None;
         a.host.dirty = true;
     }
     let animated = a.host.session.engine().document().has_animated_effects()
         && (a.host.session.engine().animation_time() - a.tone.analysed_time).abs() >= 0.5;
-    string(&mut env,Ok(serde_json::json!({"generation":a.tone.generation,"hdr":a.tone.key.is_some(),"ready":a.tone.guide.is_some(),"error":a.tone.error,
+    string(&mut env,Ok(serde_json::json!({"generation":a.tone.generation,"hdr":a.tone.key.is_some(),"ready":a.tone.ready,"retained":a.tone.guide.is_some(),"publications":a.tone.publications,"idle":a.host.session.require_document_snapshot_idle().is_ok(),"error":a.tone.error,
         "display_hdr":a.hdr_capable(),"hdr_output":a.hdr_output(),"proof_mode":a.host.session.proof_panel_mode(),
-        "needed":a.tone.key.is_some()&&(a.tone.guide.is_none()||animated)&&a.tone.error.is_none()&&a.host.session.require_document_snapshot_idle().is_ok()}).to_string()))
+        "needed":a.tone.key.is_some()&&(!a.tone.ready||animated)&&a.tone.error.is_none()&&a.host.session.require_document_snapshot_idle().is_ok()}).to_string()))
+
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_toneTask(
@@ -81,6 +123,10 @@ pub extern "system" fn Java_art_capycanvas_Native_toneTask(
         let a = unsafe { app(handle) };
         let s = &a.host.session;
         s.require_document_snapshot_idle()?;
+        let control = crate::inspection::control(control);
+        if let Some(previous) = a.tone.pending.replace(control.clone()) {
+            previous.cancel();
+        }
         Ok(Box::into_raw(Box::new(Task {
             key: ToneKey::current(s).ok_or("HDR analysis requires HDR artwork")?,
             owner: a.gpu_generation,
@@ -94,7 +140,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneTask(
                 .snapshot_gpu(),
             background: s.engine().view().background_rgba_linear,
             time: s.engine().animation_time(),
-            control: crate::inspection::control(control),
+            control,
             guide: None,
         })) as jlong)
     })();
@@ -124,7 +170,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneWork(mut env: JNIEnv, _: J
                         t.control.clone(),
                     )
                     .map_err(error)?;
-                t.guide = Some(renderer.local_tone_guide()?);
+                t.guide = Some(renderer.gpu_local_tone_guide()?);
                 Ok(())
             })
             .map_err(error)?
@@ -133,27 +179,86 @@ pub extern "system" fn Java_art_capycanvas_Native_toneWork(mut env: JNIEnv, _: J
     });
     fail(&mut env, result)
 }
+/// Hardware conformance hook: bounded fixture only, invoked by instrumentation
+/// on its worker. Production guide preparation never executes the CPU oracle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_toneReferenceDifference(
+    mut env: JNIEnv,
+    _: JClass,
+    id: jlong,
+) -> jstring {
+    let t = unsafe { task(id) };
+    let result = (|| {
+        let project = t
+            .project
+            .as_ref()
+            .ok_or("Analysis already consumed")?
+            .clone();
+        let extent = [project.document.width, project.document.height];
+        if u64::from(extent[0]) * u64::from(extent[1]) > 1_000_000 {
+            return Err("Conformance fixture must be at most one megapixel".into());
+        }
+        let space = project.document.color.space;
+        let mut capture = t
+            .gpu
+            .capture(
+                project,
+                t.background,
+                t.time,
+                Default::default(),
+                t.control.clone(),
+            )
+            .map_err(error)?;
+        let gpu = capture.local_tone_guide()?;
+        let mut reference = layer_core::color::hdr::LocalToneBuilder::new(extent, space)?;
+        for y in (0..extent[1]).step_by(64) {
+            let pixels = capture
+                .read_region([0, y, extent[0], 64.min(extent[1] - y)])
+                .map_err(error)?;
+            for row in pixels.chunks_exact(extent[0] as usize) {
+                reference.push(row)?;
+            }
+        }
+        let reference = reference.finish(|| t.control.is_cancelled())?;
+        let mut difference = [0f32; 3];
+        for (a, b) in gpu.samples.iter().zip(&reference.samples) {
+            for c in 0..3 {
+                difference[c] = difference[c].max((a[c] - b[c]).abs());
+            }
+        }
+        Ok(serde_json::json!({"max_error":difference,"guide_extent":gpu.extent,"peak_error":(gpu.peak-reference.peak).abs()}).to_string())
+    })();
+    string(&mut env, result)
+}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_toneApply(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
     id: jlong,
-) {
+) -> jboolean {
     let a = unsafe { app(handle) };
     let t = unsafe { task(id) };
-    let result = if t.control.is_cancelled()
+    if t.control.is_cancelled()
         || t.owner != a.gpu_generation
+        || a.host.session.require_document_snapshot_idle().is_err()
         || ToneKey::current(&a.host.session).as_ref() != Some(&t.key)
     {
-        Err("HDR analysis changed or cancelled".into())
-    } else {
-        a.tone.guide = t.guide.clone();
-        a.tone.analysed_time = t.time;
-        a.host.dirty = true;
-        Ok(())
+        return 0;
+    }
+    let Some(guide) = &t.guide else {
+        fail(&mut env, Err("HDR analysis has no completed guide".into()));
+        return 0;
     };
-    fail(&mut env, result)
+    a.tone.guide = Some(guide.clone());
+    a.tone.published = Some(t.key.clone());
+    a.tone.published_generation = Some(a.tone.generation);
+    a.tone.ready = true;
+    a.tone.publications = a.tone.publications.wrapping_add(1);
+    a.tone.error = None;
+    a.tone.analysed_time = t.time;
+    a.host.dirty = true;
+    1
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_toneFailed(

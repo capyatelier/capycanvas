@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {checkProof} from './proof.test.mjs';
+import {checkHdr} from './hdr.test.mjs';
+import {measureHdr} from './hdr-performance.test.mjs';
 import {benchPhotoNavigation} from './photo-navigation-bench.test.mjs';
 
 const [tabId,mode='journey',directory='artifacts/color-m3-web-android']=process.argv.slice(2);
-assert.ok(tabId,'Usage: node proof-tablet.test.mjs TEST_TAB_ID [journey|performance|memory] [OUTPUT_DIRECTORY]');
+assert.ok(tabId,'Usage: node proof-tablet.test.mjs TEST_TAB_ID [journey|performance|memory|hdr|hdr-performance] [OUTPUT_DIRECTORY]');
 const endpoint=process.env.LAYER_CDP_URL||'http://127.0.0.1:9230';
 const tabs=await(await fetch(`${endpoint}/json/list`)).json(),tab=tabs.find(t=>t.id===tabId);
 assert.ok(tab?.webSocketDebuggerUrl,'Select an existing test tab');
@@ -27,7 +29,9 @@ try{
   await mkdir(directory,{recursive:true});await call('Runtime.enable');await call('Page.enable');await call('Page.bringToFront');
   await evaluate(`(async()=>{window.proofWake=await navigator.wakeLock.request('screen');window.proofRecoveryTimer=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click(),100)})()`);
   await wait('window.layerApp && layerApp.app.brush_ready()');
-  if(mode==='journey')await checkProof({call,evaluate,settle},{profileUrl:process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc',originalUrl:process.env.LAYER_PROOF_ORIGINAL_URL||'/pkg/proof-p3.icc'});
+  if(mode==='hdr')await checkHdr({call,evaluate,settle});
+  else if(mode==='hdr-performance')await measureHdr({call,evaluate,settle});
+  else if(mode==='journey')await checkProof({call,evaluate,settle},{profileUrl:process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc',originalUrl:process.env.LAYER_PROOF_ORIGINAL_URL||'/pkg/proof-p3.icc'});
   else if(['performance','memory'].includes(mode)){
     await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy && layerApp.state().commands.find(c=>c.id==="open_document")?.enabled && !document.querySelector("dialog[open]")');
     const photo=process.env.LAYER_PHOTO_URL||'/pkg/proof-photo61mp.jpg',profile=process.env.LAYER_PROOF_URL||'/pkg/proof-cmyk.icc';

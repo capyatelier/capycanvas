@@ -51,7 +51,7 @@ internal class HdrController(private val host:CanvasHost) {
                         !state.getBoolean("hdr")->""
                         hdr->"HDR"
                         !state.isNull("error")->"SDR preview unavailable"
-                        !state.getBoolean("ready")->"Preparing SDR…"
+                        !state.getBoolean("retained")->"Preparing SDR…"
                         state.optString("proof_mode")=="sdr"->"SDR preview"
                         state.optString("proof_mode")=="print"->"Print proof"
                         else->"Showing SDR"
@@ -64,6 +64,11 @@ internal class HdrController(private val host:CanvasHost) {
                         !state.optBoolean("display_hdr")->"Showing SDR on this display. The HDR artwork is preserved."
                         else->"Showing the saved SDR appearance."
                     }
+                    if(!state.getBoolean("idle")){
+                        if(flag!=0L)Native.captureCancel(flag)
+                        changed=android.os.SystemClock.elapsedRealtime()
+                    }
+
                     if(state.getBoolean("needed")&&running==null&&android.os.SystemClock.elapsedRealtime()-changed>=180)start(generation)
                 }catch(e:CancellationException){throw e}catch(e:Exception){status="Display status unavailable";details=e.message?:"Could not read the display status"}
                 delay(200)
@@ -82,9 +87,9 @@ internal class HdrController(private val host:CanvasHost) {
                     withContext(Dispatchers.Default){Native.toneWork(task)}
                 }
                 ensureActive()
-                if(!paused&&ticket==generation&&owner==lifecycle){host.withNative{Native.toneApply(it,task)};host.documentChanged()}
+                if(!paused&&ticket==generation&&owner==lifecycle){if(host.withNative{Native.toneApply(it,task)})host.documentChanged()}
             }catch(e:CancellationException){throw e}
-            catch(e:Exception){if(!paused&&ticket==generation&&owner==lifecycle)host.withNative{Native.toneFailed(it,ticket,e.message?:"HDR analysis failed")}}
+            catch(e:Exception){if(!paused&&ticket==generation&&owner==lifecycle&&!Native.captureCancelled(control))host.withNative{Native.toneFailed(it,ticket,e.message?:"HDR analysis failed")}}
             finally{
                 flag=0
                 withContext(NonCancellable+Dispatchers.Default){if(task!=0L)Native.toneRelease(task);Native.captureFree(control)}

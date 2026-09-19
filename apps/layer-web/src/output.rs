@@ -42,6 +42,14 @@ struct OutputMetadata {
     preview: bool,
     rendition: Option<layer_core::color::hdr::SdrRendition>,
     flatten: Option<layer_core::color::DocumentColor>,
+    guide: Option<GuideMetadata>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GuideMetadata {
+    extent: [u32; 2],
+    peak: f32,
+    buffer: u32,
 }
 
 #[wasm_bindgen]
@@ -140,6 +148,7 @@ pub(super) async fn render_output(
         preview,
         rendition: snapshot.project.document.color.depth.is_float().then_some(snapshot.project.document.sdr_rendition),
         flatten,
+        guide: None,
     };
     let mut capture = gpu
         .capture(
@@ -178,6 +187,18 @@ pub(super) async fn render_output(
     } else {
         js_sys::Array::new()
     };
+    // Codecs consume pixels on their file worker, but illumination analysis is
+    // always the shared GPU algorithm. Only its bounded guide crosses to CPU.
+    if metadata.rendition.is_some() && (preview ||
+        (!metadata.recipe.format.is_hdr() && !flatten.is_some_and(|c| c.depth.is_float()))) {
+        let guide = capture.local_tone_guide_async().await.map_err(js)?;
+        cancelled(&control)?;
+        metadata.guide = Some(GuideMetadata {
+            extent: guide.extent, peak: guide.peak, buffer: buffers.length(),
+        });
+        let samples = js_sys::Float32Array::from(guide.samples.as_flattened());
+        buffers.push(&js_sys::Uint8Array::new(&samples.buffer()));
+    }
     metadata.token = raster_worker::call_cancellable(
         "output-begin", "", &js_sys::Array::new(), control.clone(),
     ).await?
@@ -285,6 +306,22 @@ pub async fn raster_worker_output(
     write: js_sys::Function,
 ) -> Result<JsValue, JsValue> {
     let metadata: OutputMetadata = serde_json::from_str(metadata).map_err(js)?;
+    let guide = metadata.guide.as_ref().map(|wire| {
+        let bytes = js_sys::Uint8Array::new(&buffers.get(wire.buffer));
+        if wire.extent.contains(&0) || wire.extent.iter().any(|n| *n > layer_core::color::hdr::LOCAL_GUIDE_EDGE)
+            || bytes.length() as usize != wire.extent[0] as usize * wire.extent[1] as usize * 16 {
+            return Err(js("Invalid output illumination guide"));
+        }
+        let mut samples = vec![[0.; 4]; bytes.length() as usize / 16];
+        js_sys::Float32Array::new_with_byte_offset_and_length(&bytes.buffer(), bytes.byte_offset(), bytes.length()/4)
+            .copy_to(samples.as_flattened_mut());
+        if !wire.peak.is_finite() || samples.iter().flatten().any(|v| !v.is_finite()) {
+            return Err(js("Non-finite output illumination guide"));
+        }
+        Ok(layer_core::color::hdr::LocalToneGuide {
+            extent: wire.extent, document_extent: metadata.extent, samples, peak: wire.peak,
+        })
+    }).transpose()?;
     let recipe = &metadata.recipe;
     recipe.validate().map_err(js)?;
     let target = recipe.interpretation();
@@ -317,7 +354,7 @@ pub async fn raster_worker_output(
                 Ok(())
             };
     let before = if metadata.preview && metadata.rendition.is_some() {
-        Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, &mut read_row).map_err(js)?)
+        Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, guide.as_ref(), &mut read_row).map_err(js)?)
     } else { None };
     if recipe.format.is_hdr() {
         if !metadata.color.depth.is_float() { return Err(js("HDR output requires HDR artwork")); }
@@ -326,7 +363,7 @@ pub async fn raster_worker_output(
         let mut rows = |y,pixels: &mut [[f32;4]]| {if y==0 {resampler=layer_color::RowResampler::new(metadata.extent,extent)?;}resampler.read_row(y,pixels,&mut read_row)};
         if recipe.format == ExportFormat::Exr {
             let after=if metadata.preview {
-                Some(mapped_preview(extent,metadata.color.space,metadata.rendition,&mut rows).map_err(js)?)
+                Some(mapped_preview(extent,metadata.color.space,metadata.rendition,guide.as_ref(),&mut rows).map_err(js)?)
             } else {
                 layer_color::photo::write_exr_rows(output,extent,metadata.color.space,metadata.resolution,rows).map_err(js)?;None
             };
@@ -336,7 +373,7 @@ pub async fn raster_worker_output(
         }
         let (preview, stats) = if metadata.preview {
             let (size, mut pixels, stats) = layer_color::photo::preview_hdr_rows(extent,[512,384],metadata.color.space,&mut rows).map_err(js)?;
-            let guide = layer_color::build_local_tone_guide(metadata.extent,metadata.color.space,||false,&mut read_row).map_err(js)?;
+            let guide = guide.as_ref().ok_or_else(|| js("Missing output illumination guide"))?;
             let to_working = layer_core::color::RgbSpace::Srgb.linear_transform(metadata.color.space);
             let mapper = metadata.rendition.unwrap_or_default().mapper(metadata.color.space,layer_core::color::RgbSpace::Srgb);
             for (i,p) in pixels.iter_mut().enumerate() {
@@ -426,7 +463,7 @@ pub async fn raster_worker_output(
         write(extent, &target, &mut |y, row| rows.read(y, row)).map_err(js)?;
         0
     } else {
-        layer_color::encode_working_rows(
+        layer_color::encode_working_rows_with_guide(
             metadata.color.space,
             metadata.extent,
             extent,
@@ -434,6 +471,7 @@ pub async fn raster_worker_output(
             recipe.encoding,
             recipe.background.matte(),
             if metadata.flatten.is_some_and(|c|c.depth.is_float()) { None } else { metadata.rendition },
+            guide.as_ref(),
             &mut read_row,
             write,
         )
@@ -466,10 +504,10 @@ fn preview_value(
     Ok(value.into())
 }
 
-fn mapped_preview(extent:[u32;2],space:layer_core::color::RgbSpace,rendition:Option<layer_core::color::hdr::SdrRendition>,read:&mut impl FnMut(u32,&mut [[f32;4]])->Result<(),String>) -> Result<layer_render_wgpu::snapshot::SnapshotPreview,String> {
+fn mapped_preview(extent:[u32;2],space:layer_core::color::RgbSpace,rendition:Option<layer_core::color::hdr::SdrRendition>,guide:Option<&layer_core::color::hdr::LocalToneGuide>,read:&mut impl FnMut(u32,&mut [[f32;4]])->Result<(),String>) -> Result<layer_render_wgpu::snapshot::SnapshotPreview,String> {
     let target=layer_ui::ExportRecipe::web_share().interpretation();
     let mut preview=None;
-    layer_color::encode_working_rows(space,extent,extent,&target,Default::default(),None,rendition,read,|size,target,rows| {
+    layer_color::encode_working_rows_with_guide(space,extent,extent,&target,Default::default(),None,rendition,guide,read,|size,target,rows| {
         let (extent,pixels)=layer_color::preview_encoded_rows(size,[512,384],layer_core::color::RgbSpace::Srgb,target,rows)?;
         preview=Some(layer_render_wgpu::snapshot::SnapshotPreview{extent,pixels,space:layer_core::color::RgbSpace::Srgb});Ok(())
     })?;

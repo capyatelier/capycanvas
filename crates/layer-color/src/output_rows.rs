@@ -101,8 +101,8 @@ pub fn encode_working_rows_with_guide(
             for (x, pixel) in pixels.iter_mut().enumerate() {
                 if let Some(guide) = guide {
                     let position = [
-                        (x as f32 + 0.5) * source_extent[0] as f32 / extent[0] as f32,
-                        (y as f32 + 0.5) * source_extent[1] as f32 / extent[1] as f32,
+                        (x as f32 + 0.5) * guide.document_extent[0] as f32 / extent[0] as f32,
+                        (y as f32 + 0.5) * guide.document_extent[1] as f32 / extent[1] as f32,
                     ];
                     *pixel = r.tone_local_premultiplied(*pixel, position, guide);
                 } else { *pixel = r.tone_premultiplied(*pixel); }
@@ -180,6 +180,25 @@ mod tests {
             .chunks_exact(2)
             .map(|v| u16::from_le_bytes([v[0], v[1]]))
             .collect()
+    }
+    #[test]
+    fn resized_preview_uses_document_coordinates_of_supplied_guide() {
+        let pixels: Vec<_> = (0..32).map(|x| [2f32.powf(x as f32 / 4. - 4.); 4])
+            .map(|mut p| { p[3] = 1.; p }).collect();
+        let guide = build_local_tone_guide([32, 1], RgbSpace::Srgb, || false,
+            |_, row| { row.copy_from_slice(&pixels); Ok(()) }).unwrap();
+        let target = SourceInterpretation { channels: SourceChannels::Rgba, depth: SampleDepth::U16,
+            profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
+        let resized: Vec<_> = pixels.chunks_exact(4).map(|p| std::array::from_fn(|c| p.iter().map(|v| v[c]).sum::<f32>() / 4.)).collect();
+        let encode = |source: &[[f32; 4]]| {
+            let mut bytes = vec![0; 8 * 8];
+            encode_working_rows_with_guide(RgbSpace::Srgb, [source.len() as u32, 1], [8, 1],
+                &target, Default::default(), None, Some(SdrRendition::default()), Some(&guide),
+                |_, row| { row.copy_from_slice(source); Ok(()) },
+                |_, _, rows| rows(0, &mut bytes)).unwrap();
+            bytes
+        };
+        assert_eq!(encode(&pixels), encode(&resized));
     }
     #[test]
     fn hdr_sdr_delivery_preserves_extended_brightness_and_coverage() {

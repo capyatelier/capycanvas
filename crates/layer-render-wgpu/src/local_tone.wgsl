@@ -145,8 +145,7 @@ fn finish(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= p.size.xy) { return; }
     let i = id.y * p.size.x + id.x;
     let s = a.pixels[i];
-    // The first vec4 contains the present shader's integer geometry header.
-    if i == 0u { dst.pixels[0] = bitcast<vec4<f32>>(vec4<u32>(p.size.xy, p.aux.xy)); }
+    // The integer geometry header was copied separately, without float casts.
     dst.pixels[i + 1u] = vec4<f32>(s.x, s.x - b.pixels[i].x, s.y, 0.0);
 }
 

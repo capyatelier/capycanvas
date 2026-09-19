@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
 import {checkHdrDisplay} from './hdr-display.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -39,6 +40,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await open('hdr-pq.png');
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
+    await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
     const hdrDisplay=await evaluate('layerApp.app.tone_status().display_hdr');
     await wait(`document.querySelector("#hdr-status").textContent===${JSON.stringify(hdrDisplay?'HDR':'Showing SDR')}`);

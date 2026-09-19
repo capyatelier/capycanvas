@@ -1217,6 +1217,7 @@ dependencies = [
  "ash",
  "crc32fast",
  "futures-channel",
+ "futures-util",
  "layer-color",
  "layer-core",
  "layer-engine",
