@@ -45,20 +45,17 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     if(!app.gpu_ready())return;
     const status=app.tone_status();
     hdrLabel.hidden=!status.hdr;
-    hdrLabel.textContent=status.error?"SDR preview unavailable":status.ready?"Showing SDR":"Preparing SDR…";
+    hdrLabel.textContent=status.error?"SDR preview unavailable":status.retained?"Showing SDR":"Preparing SDR…";
     if(status.generation!==toneGeneration){toneGeneration=status.generation;toneChanged=performance.now();tone?.cancel();wake();}
-    if(document.hidden){tone?.cancel();return;}
+    if(document.hidden||!status.idle){tone?.cancel();toneChanged=performance.now();return;}
     if(!status.needed||tone||performance.now()-toneChanged<180)return;
-    const generation=status.generation,control=app.capture_control();let worker,rejectWorker;
-    const job={cancel(){control.cancel();worker?.terminate();rejectWorker?.(new DOMException("HDR analysis cancelled","AbortError"));}};tone=job;
-    app.tone_prepare(control,request=>new Promise((resolve,reject)=>{
-      rejectWorker=reject;worker=new Worker(new URL("./proof-worker.js",import.meta.url),{type:"module"});
-      worker.onmessage=({data})=>data.error?reject(new Error(data.error)):resolve(data.result);
-      worker.onerror=e=>{e.preventDefault();reject(new Error(e.message));};
-      worker.postMessage(request,[request.bytes.buffer]);
-    })).then(candidate=>{if(control.cancelled()||generation!==toneGeneration){candidate.free();return;}app.tone_apply(candidate);wake();})
-      .catch(error=>{if(!control.cancelled())app.tone_failed(Number(generation),String(error));})
-      .finally(()=>{worker?.terminate();control.free();if(tone===job)tone=null;});
+    const generation=status.generation,control=app.capture_control();
+    const job={cancel(){control.cancel();}};tone=job;
+    app.tone_prepare(control).then(candidate=>{
+      if(control.cancelled()||generation!==toneGeneration){candidate.free();return;}
+      if(app.tone_apply(candidate))wake();
+    }).catch(error=>{if(!control.cancelled())app.tone_failed(Number(generation),String(error));})
+      .finally(()=>{control.free();if(tone===job)tone=null;});
   }
   setInterval(syncTone,200);
   function cancel(){work?.cancel();}

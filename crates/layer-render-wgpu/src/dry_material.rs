@@ -130,7 +130,7 @@ impl WgpuRasterizer {
         if jobs.is_empty() {
             return;
         }
-        let operation = BrushPassPlan::for_style(&batch.style).material;
+        let operation = BrushPassPlan::for_device(&batch.style, &self.device).material;
         let texture_key = Self::texture_set_key(&batch.style);
         let textures = self
             .texture_sets

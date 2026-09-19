@@ -62,7 +62,7 @@ impl Requirements {
             self.render.push(r.layer_masks.brush[index].clone());
             return;
         }
-        let plan = BrushPassPlan::for_style(style);
+        let plan = BrushPassPlan::for_device(style, &r.device);
         if style.execution == BrushExecution::Dry && plan.direct.is_none()
             && let Some(dry) = &r.pipelines.dry_material {
             self.compute.push(dry.kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
@@ -237,6 +237,7 @@ impl WgpuRasterizer {
             required
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
+            if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {

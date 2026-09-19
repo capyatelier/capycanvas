@@ -35,9 +35,17 @@ export async function measureHdr({call,evaluate,settle}) {
   async function motion(device){
     const p=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]*.5)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]*.5)*r.height/c.viewport[1]}})()`);
     const pointer=(type,x,y)=>device==='touch'?call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:21,x,y}]}):call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],x,y,button:'left',buttons:type==='up'?0:1,pointerType:device,force:type==='up'?0:.65});
+    const toneBefore=await evaluate("JSON.parse(JSON.stringify(layerApp.app.tone_status(),(_,v)=>typeof v==='bigint'?Number(v):v))");
     await reset();await pointer('down',p.x,p.y);const start=performance.now(),pending=[];let failure;
     while(performance.now()-start<3000){const t=performance.now()-start;pending.push(pointer('move',p.x+40*Math.sin(t/250),p.y+20*Math.cos(t/310)).catch(e=>failure??=e));await new Promise(r=>setTimeout(r,8));}
-    await Promise.all(pending);if(failure)throw failure;await pointer('up',p.x,p.y);await settle();return{device,...await read()};
+    await Promise.all(pending);if(failure)throw failure;
+    const held=await evaluate("JSON.parse(JSON.stringify(layerApp.app.tone_status(),(_,v)=>typeof v==='bigint'?Number(v):v))");
+    if(toneBefore.hdr){assert.equal(held.retained,true);assert.equal(held.publications,toneBefore.publications);}
+    await pointer('up',p.x,p.y);const released=performance.now();await settle();const drawing=await read();
+    if(toneBefore.hdr)await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');
+    const toneAfter=await evaluate("JSON.parse(JSON.stringify(layerApp.app.tone_status(),(_,v)=>typeof v==='bigint'?Number(v):v))");
+    assert.equal(toneAfter.error??null,null);
+    return{device,...drawing,guide_before:toneBefore,guide_during:held,guide_after:toneAfter,pen_up_guide_ms:performance.now()-released};
   }
   try {
     for(const name of (process.env.LAYER_HDR_WORKLOADS||'sparse4k,hdr24.png,hdr45.png,hdr60.png').split(',')){

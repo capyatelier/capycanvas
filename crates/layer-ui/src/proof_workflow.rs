@@ -24,6 +24,13 @@ impl ToneKey {
     pub fn can_preview(&self, next: &Self) -> bool {
         self.epoch == next.epoch && self.color == next.color && self.extent == next.extent
     }
+    /// Cheap per-frame guard: never display an old document's guide while the
+    /// host's debounced content analysis catches up to a replacement or resize.
+    pub fn can_preview_current<R: CanvasRenderer>(&self, s: &UiSession<R>) -> bool {
+        let d = s.engine().document();
+        !s.rendering_suspended() && self.epoch == s.state().document_file.epoch
+            && self.color == d.color && self.extent == [d.width, d.height]
+    }
     pub fn background(&self) -> [f32;4] { self.background }
     pub fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Option<Self> {
         let d = s.engine().document();

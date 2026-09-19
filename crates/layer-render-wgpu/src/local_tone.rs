@@ -1,10 +1,7 @@
 //! Shared Float32 local-Laplacian compute engine. Hosts own idle scheduling and
 //! cancellation; the output is immutable and may be retained across edits.
-// The browser owner is migrated after GTK review. Keep its encoder compiling
-// on wasm now; only the native snapshot owner calls it in this milestone.
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+use crate::deferred::Deferred;
 use crate::{PipelineDevice, submission::CommandEncoder};
-#[cfg(not(target_arch = "wasm32"))]
 use layer_core::color::hdr::LocalToneGuide;
 use layer_core::color::{RgbSpace, hdr::LOCAL_GUIDE_EDGE};
 use std::sync::Arc;
@@ -29,7 +26,24 @@ impl GpuToneGuide {
     /// guide. Interactive presentation never calls this method.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn download(&self, queue: &wgpu::Queue) -> Result<LocalToneGuide, String> {
-        let bytes = read_buffer(&self.device, queue, &self.buffer)?;
+        pollster::block_on(self.download_async(queue))
+    }
+
+    pub async fn download_async(&self, queue: &wgpu::Queue) -> Result<LocalToneGuide, String> {
+        let bytes = read_buffer_async(&self.device, queue, &self.buffer).await?;
+        let dimensions: [u32; 4] = std::array::from_fn(|i| {
+            u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+        });
+        if dimensions
+            != [
+                self.extent[0],
+                self.extent[1],
+                self.document_extent[0],
+                self.document_extent[1],
+            ]
+        {
+            return Err("Invalid GPU illumination guide geometry".into());
+        }
         let samples = bytes[16..]
             .chunks_exact(16)
             .map(|p| {
@@ -58,7 +72,13 @@ const ENTRIES: [&str; 9] = [
 ];
 pub(crate) struct Pipelines {
     layout: wgpu::BindGroupLayout,
-    pipelines: Vec<wgpu::ComputePipeline>,
+    pipelines: Vec<Deferred<wgpu::ComputePipeline>>,
+    #[cfg(target_arch = "wasm32")]
+    ready: std::cell::OnceCell<
+        futures_util::future::Shared<
+            futures_util::future::LocalBoxFuture<'static, Result<(), String>>,
+        >,
+    >,
 }
 impl Pipelines {
     fn new(device: &PipelineDevice) -> Self {
@@ -112,17 +132,60 @@ impl Pipelines {
         let pipelines = ENTRIES
             .iter()
             .map(|entry| {
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(entry),
-                    layout: Some(&pipeline_layout),
-                    module: &module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    cache: None,
+                let device = device.clone();
+                let pipeline_layout = pipeline_layout.clone();
+                let module = module.clone();
+                Deferred::pipeline(move |mode| {
+                    mode.compute(
+                        &device,
+                        &wgpu::ComputePipelineDescriptor {
+                            label: Some(entry),
+                            layout: Some(&pipeline_layout),
+                            module: &module,
+                            entry_point: Some(entry),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        },
+                    )
                 })
             })
             .collect();
-        Self { layout, pipelines }
+        Self {
+            layout,
+            pipelines,
+            #[cfg(target_arch = "wasm32")]
+            ready: Default::default(),
+        }
+    }
+
+    /// Concurrent proof and export captures await the same compilation. Browser
+    /// drivers compile asynchronously; no synchronous shader build on input owner.
+    async fn prepare(&self) -> Result<(), String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use futures_util::FutureExt;
+            self.ready
+                .get_or_init(|| {
+                    let pipelines = self.pipelines.clone();
+                    async move {
+                        for pipeline in pipelines {
+                            pipeline.compile_async().await?;
+                        }
+                        Ok(())
+                    }
+                    .boxed_local()
+                    .shared()
+                })
+                .clone()
+                .await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            for pipeline in &self.pipelines {
+                pipeline.compile();
+            }
+            Ok(())
+        }
     }
 }
 
@@ -146,7 +209,9 @@ fn buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
 }
@@ -190,6 +255,13 @@ impl Builder {
             current = current.map(|n| n.div_ceil(2));
         }
         Ok(cells * 16 + 64 * 1024)
+    }
+    pub(crate) async fn prepare_pipelines(device: &PipelineDevice) -> Result<(), String> {
+        device
+            .tone_pipelines
+            .get_or_init(|| Arc::new(Pipelines::new(device)))
+            .prepare()
+            .await
     }
     pub(crate) fn new(
         device: &PipelineDevice,
@@ -492,8 +564,20 @@ impl Builder {
             16 + u64::from(extent[0]) * u64::from(extent[1]) * 16,
             "GPU local tone guide",
         );
-        let mut p = dims(extent);
-        p.aux = [self.document[0], self.document[1], 0, 0];
+        // Geometry is integer data. Bitcasting small dimensions through shader
+        // floats permits denormal flushing on mobile/WebGPU implementations.
+        use wgpu::util::DeviceExt;
+        let dimensions = [extent[0], extent[1], self.document[0], self.document[1]];
+        let bytes: Vec<u8> = dimensions.into_iter().flat_map(u32::to_le_bytes).collect();
+        let header = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("local tone geometry"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        encoder.copy_buffer_to_buffer(&header, 0, &output, 0, 16);
+        let p = dims(extent);
         self.encode(
             encoder,
             7,
@@ -542,8 +626,7 @@ pub(crate) fn wait(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), Str
     });
     crate::raster::wait_mapping(device, &rx)
 }
-#[cfg(not(target_arch = "wasm32"))]
-fn read_buffer(
+async fn read_buffer_async(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,
@@ -557,11 +640,17 @@ fn read_buffer(
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_buffer_to_buffer(source, 0, &output, 0, source.size());
     queue.submit([encoder.finish()]);
+    #[cfg(not(target_arch = "wasm32"))]
     let (tx, rx) = std::sync::mpsc::channel();
+    #[cfg(target_arch = "wasm32")]
+    let (tx, rx) = futures_channel::oneshot::channel();
     output.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r.map_err(|e| e.to_string()));
     });
+    #[cfg(not(target_arch = "wasm32"))]
     crate::raster::wait_mapping(device, &rx)?;
+    #[cfg(target_arch = "wasm32")]
+    rx.await.map_err(|e| e.to_string())??;
     let bytes = output
         .slice(..)
         .get_mapped_range()
@@ -570,13 +659,12 @@ fn read_buffer(
     output.unmap();
     Ok(bytes)
 }
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn range(
+pub(crate) async fn range_async(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,
 ) -> Result<(f32, f32, u32, f32), String> {
-    let bytes = read_buffer(device, queue, source)?;
+    let bytes = read_buffer_async(device, queue, source).await?;
     let values: [f32; 4] =
         std::array::from_fn(|i| f32::from_ne_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap()));
     if values[3] != 0. {
@@ -599,6 +687,29 @@ pub(crate) fn range(
     ))
 }
 
+pub(crate) async fn wait_async(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        wait(device, queue)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = device;
+        let (tx, rx) = futures_channel::oneshot::channel();
+        queue.on_submitted_work_done(move || {
+            let _ = tx.send(());
+        });
+        rx.await.map_err(|e| e.to_string())
+    }
+}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+fn range(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    source: &wgpu::Buffer,
+) -> Result<(f32, f32, u32, f32), String> {
+    pollster::block_on(range_async(device, queue, source))
+}
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;

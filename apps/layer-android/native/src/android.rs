@@ -361,6 +361,7 @@ impl App {
                 })
             })
             .collect();
+        self.tone.clear_incompatible(&self.host.session, self.gpu_generation);
         let rendition=self.host.session.engine().document().color.depth.is_float().then(||self.host.session.effective_sdr_rendition());
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
@@ -369,7 +370,7 @@ impl App {
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
         surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
-        surface.presenter.set_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
+        surface.presenter.set_gpu_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
             surface.config.width = extent[0];
@@ -411,7 +412,7 @@ impl App {
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         surface.presented_headroom = Some(headroom);
-        surface.presented_tone_generation = self.tone.guide.as_ref().map(|_| self.tone.generation);
+        surface.presented_tone_generation = self.tone.published_generation;
         if surface.first_frame_complete.is_none() {
             let complete = Arc::new(AtomicBool::new(false));
             surface.first_frame_complete = Some(complete.clone());
@@ -645,7 +646,13 @@ pub extern "system" fn Java_art_capycanvas_Native_input(
 ) -> jstring {
     let result = read(&mut env, &input)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|input| unsafe { app(handle) }.host.input(input))
+        .and_then(|input| {
+            let a = unsafe { app(handle) };
+            if matches!(&input, layer_ui::UiInput::Pointer { phase: layer_ui::ContactPhase::Down, .. }) {
+                if let Some(control) = a.tone.pending.take() { control.cancel(); }
+            }
+            a.host.input(input)
+        })
         .and_then(|reply| serde_json::to_string(&reply).map_err(error));
     string(&mut env, result)
 }
@@ -687,6 +694,9 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
+                if predicted == 0 && data.chunks_exact(9).any(|sample| sample[8] == 1.) {
+                    if let Some(control) = app.tone.pending.take() { control.cancel(); }
+                }
                 app.host.pointer(
                     id.max(0) as u64,
                     tool as u8,

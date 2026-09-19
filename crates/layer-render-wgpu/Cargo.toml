@@ -34,6 +34,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDev
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.78"
 futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [lib]
 path = "src/lib.rs"

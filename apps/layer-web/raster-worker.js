@@ -9,7 +9,6 @@ async function execute({id,request}) {
     instance=await ready;
     let result;
     switch(request.operation) {
-      case "tone": result=wasm.tone_worker_build({...JSON.parse(request.metadata),bytes:request.buffers[0]});break;
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
       case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
