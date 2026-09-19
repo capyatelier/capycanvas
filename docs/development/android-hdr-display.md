@@ -1,5 +1,9 @@
 # Android HDR display and footer follow-up — 2026-09-19
 
+**Current policy:** the [Android-managed PQ follow-up](#android-managed-pq-follow-up)
+supersedes the extended-linear headroom policy below. Earlier measurements are
+retained as investigation history.
+
 The Wacom MovinkPad Pro 14 (DTHA140, Android 15) advertises HDR10/HLG,
 wide color and a desired maximum luminance of 1000 cd/m². The old Android
 canvas nevertheless selected an 8-bit sRGB Vulkan surface and passed `1.0`
@@ -154,3 +158,59 @@ p99 was 0.040 / 0.050 / 0.061 ms and render-owner queue p99 was 9.37 / 0.57 /
 samples were unavailable in this run. This successful limited-headroom run
 does not establish why the earlier injection attempts failed or qualify
 sustained physical HDR/thermal behavior.
+
+
+## Android-managed PQ follow-up
+
+At the user's request, HDR Off now sends the artwork to Android's tone mapper
+without the app's headroom shoulder or automatic SDR fallback. The shared Rust
+presenter explicitly selects compositor-managed HDR only on a PQ surface. The
+existing linear/scRGB shoulder and Web/GTK SDR and print algorithms are unchanged.
+The shared PQ encoder converts working primaries to BT.2020 with artwork RGB 1
+at 203 cd/m². Output is bounded to PQ's 0–10,000 cd/m² signal range and BT.2020
+channels; this display derivative never changes the editable HDR master.
+
+Android 15+, HDR10/HDR10+ display support and an exact float/PQ Vulkan pair are
+required. `SurfaceView.setDesiredHdrHeadroom(0)` restores Android's automatic
+brightness policy. Missing ratio feedback is no longer an HDR capability veto.
+Proof SDR, Print, gamut warnings, temporary appearance drafts and SDR documents
+select an sRGB surface and the existing SDR mapper, with headroom request 1.
+A display capability loss also returns to SDR. Canvas and Navigator use the
+same presenter and surface. Float-format capability is retained across display
+changes; document adoption and GPU recovery retain the chosen encoding.
+
+The footer reads **HDR · Android managed** and explains possible brightness
+changes, reference white, output bounds and the remaining SDR Color controls /
+layer thumbnails. The reported ratio is diagnostic, not the app's pixel limit.
+We do not send separate mastering/MaxCLL metadata; Android uses PQ's absolute
+encoding and its platform tone-mapping defaults. This route intentionally allows
+OS brightness/tone changes, rather than promising GTK's exact physical appearance.
+
+The Wacom display regression passes with real `BT2020_PQ` / `RGBA16161616F_UBWC`
+confirmed by SurfaceFlinger. The automatic request is 0 and reported headroom
+remains 1.004×. Android's float PixelCopy captures contain above-white samples
+in both canvas (maximum 1.2783) and Navigator (1.53125), with identical digests
+under simulated 1× and 4× feedback. PixelCopy itself converts the PQ signal;
+these samples are not a luminance measurement. SDR proof switches to `V0_SRGB`
+and both captures are bounded to 1.0. GPU recovery returns to PQ.
+
+In this capture SurfaceFlinger reports a 400-nit white point and dimmingRatio 1
+for both layers; additional SDR UI dimming was not reported. This is not a
+promise that Android will dim, nor proof of emitted brightness. The user is
+reviewing physical appearance on the deployed tablet before this presentation
+policy is considered visually qualified.
+
+The hardware GPU oracle checks full-range PQ against independent Float64 math
+for F16/F32, sRGB/ProPhoto, alpha, negative/bright samples, different SDR recipes,
+retained viewing captures, normal HDR shoulders and explicit proof. Local review
+APKs, raw captures and workflow logs are under `artifacts/android-hdr-compositor/review/`.
+
+References: [SurfaceView automatic headroom](https://developer.android.com/reference/android/view/SurfaceView#setDesiredHdrHeadroom(float)),
+[Android mixed SDR/HDR composition](https://source.android.com/docs/core/display/mixed-sdr-hdr),
+[Android tone mapping](https://source.android.com/docs/core/display/tone-mapping).
+
+The existing Android HDR editing/delivery/recovery and SDR/Print portability
+workflows also pass, including pen painting, touch/pen cancellation, exact undo,
+native save/reopen, EXR/PQ/SDR delivery and Activity/GPU recovery. The headed Chrome
+HDR workflow passes after the shared shader change. This review does not rerun
+the 24 MP sustained workload or establish a new thermal/colorimetry qualification.

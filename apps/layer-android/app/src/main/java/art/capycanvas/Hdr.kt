@@ -25,10 +25,12 @@ internal class HdrController(private val host:CanvasHost) {
     private fun updateDisplay(requested:Float) {
         val view=surface?:return
         val display=view.display
-        val available=android.os.Build.VERSION.SDK_INT>=35&&display?.isHdr==true&&display.isHdrSdrRatioAvailable
+        val available=android.os.Build.VERSION.SDK_INT>=35&&display?.hdrCapabilities?.supportedHdrTypes?.any {
+            it==android.view.Display.HdrCapabilities.HDR_TYPE_HDR10||it==android.view.Display.HdrCapabilities.HDR_TYPE_HDR10_PLUS
+        }==true
         val desired=if(available)requested else 1f
         if(android.os.Build.VERSION.SDK_INT>=35&&requestedHeadroom!=desired){view.setDesiredHdrHeadroom(desired);requestedHeadroom=desired}
-        val ratio=if(available)display!!.hdrSdrRatio.takeIf{it.isFinite()&&it>=1f}?:1f else 1f
+        val ratio=if(available&&display!!.isHdrSdrRatioAvailable)display.hdrSdrRatio.takeIf{it.isFinite()&&it>=1f}?:1f else 1f
         val info=available to ratio
         if(info!=displayInfo){displayInfo=info;host.displayInfo(available,ratio)}
     }
@@ -45,28 +47,27 @@ internal class HdrController(private val host:CanvasHost) {
                         if(flag!=0L)Native.captureCancel(flag)
                         host.documentChanged()
                     }
-                    val headroom=state.number("display_headroom",1.0)
+                    val compositor=state.optBoolean("compositor_hdr")
                     val reported=state.number("reported_headroom",1.0)
                     status=when {
                         !state.getBoolean("hdr")->""
-                        headroom>1f->"HDR"
+                        compositor->"HDR · Android managed"
                         !state.isNull("error")->"SDR preview unavailable"
                         !state.getBoolean("ready")->"Preparing SDR…"
                         state.optString("proof_mode")=="sdr"->"SDR preview"
                         state.optString("proof_mode")=="print"->"Print proof"
                         else->"Showing SDR"
                     }
-                    val route=if(state.optBoolean("display_hdr"))"Linear extended-range HDR surface."
-                        else "Android has not offered a supported HDR surface and brightness-control path for this window."
+                    val route=if(state.optBoolean("display_hdr"))"HDR output is available. Android controls screen brightness and maps highlights to this display."
+                        else "Android has not offered a supported HDR output path for this window."
                     val viewing=when {
-                        headroom>1f->"HDR presentation · ${String.format(java.util.Locale.ROOT,"%.3f",headroom)}× Android headroom."
+                        compositor->"Showing HDR with Android's display mapping. The canvas and Navigator are not limited to the reported ${String.format(java.util.Locale.ROOT,"%.3f",reported)}× headroom. Screen and interface brightness may change."
                         !state.isNull("error")->"SDR preview unavailable: ${state.getString("error")}"
                         state.optString("proof_mode")=="sdr"->"Showing the saved SDR appearance. Turn Proof Off to view HDR when available."
                         state.optString("proof_mode")=="print"->"Showing the SDR print preview."
-                        reported>1f->"Showing the saved SDR appearance. Android currently grants only ${String.format(java.util.Locale.ROOT,"%.3f",reported)}× headroom; at least 1.05× is needed to switch this canvas to HDR."
-                        else->"Showing the saved SDR appearance. Android has not reported HDR headroom for this window."
+                        else->"Showing the saved SDR appearance."
                     }
-                    details="$viewing\n\n$route\n\nArtwork reference white: 203 cd/m². Display limits come from Android, not a brightness measurement. The HDR master is preserved."
+                    details="$viewing\n\n$route\n\nArtwork reference white: 203 cd/m². HDR output uses BT.2020 PQ, up to 10,000 cd/m²; actual brightness depends on the display. Color controls and layer thumbnails remain SDR previews. The HDR master is preserved."
                     if(state.getBoolean("needed")&&running==null&&android.os.SystemClock.elapsedRealtime()-changed>=180)start(generation)
                 }catch(e:CancellationException){throw e}catch(e:Exception){status="Display status unavailable";details=e.message?:"Could not read the display status"}
                 delay(200)

@@ -330,3 +330,14 @@ native photo-thumbnail preparation uses GTK's bounded batches. Painted/photo
 pixel oracles and visible thumbnail edit/undo/redo checks cover the fix. The
 Android Compose picker still needs a qualified HDR presentation route on a
 display with useful headroom; global phase-4 signoff remains open.
+
+
+## Android compositor-managed HDR review — 2026-09-19
+
+The [PQ follow-up](../development/android-hdr-display.md#android-managed-pq-follow-up)
+supersedes Android's 1.05× SDR-fallback threshold. HDR Off now submits PQ to
+Android with automatic brightness policy, independently of reported headroom;
+SDR/Print retain explicit mapped output. The shared GPU numerical oracle and
+actual tablet display switching/recovery tests validate the signal route. The
+user's physical display review remains pending; Color controls and layer
+thumbnails remain SDR previews. This is not whole phase-4 signoff.

@@ -28,6 +28,8 @@ pub(crate) struct Surface {
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
     color: SdrSurfaceColor,
+    hdr_capable: bool,
+    presented_compositor_hdr: Option<bool>,
     presented_headroom: Option<f32>,
     presented_tone_generation: Option<u32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
@@ -51,7 +53,9 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
             serde_json::json!({
                 "format": format!("{:?}", surface.config.format),
                 "color_space": format!("{:?}", surface.config.color_space),
-                "hdr_capable": surface.color == SdrSurfaceColor::ExtendedLinearSrgb,
+                "hdr_capable": a.hdr_capable(),
+                "compositor_hdr": a.compositor_hdr(),
+                "presented_compositor_hdr": surface.presented_compositor_hdr,
                 "headroom": a.hdr_headroom(),
                 "reported_headroom": a.display_headroom,
                 "presented_headroom": surface.presented_headroom,
@@ -92,22 +96,24 @@ pub(crate) struct OverviewSlot {
 
 impl App {
     fn sync_hdr_display(&mut self) {
-        self.host.session.set_hdr_display_available(self.hdr_capable()
-            && crate::display::presentation_headroom(self.display_headroom, 100.) > 1.);
+        self.host.session.set_hdr_display_available(self.hdr_capable());
     }
     pub(crate) fn hdr_capable(&self) -> bool {
-        self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.color==SdrSurfaceColor::ExtendedLinearSrgb)
+        self.display_hdr_available && self.surface.as_ref().is_some_and(|s|s.hdr_capable)
     }
-    pub(crate) fn requested_headroom(&self) -> f32 {
-        if self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
+    pub(crate) fn compositor_hdr(&self) -> bool {
+        self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
             && self.host.session.proof_panel_mode()==layer_ui::ProofMode::Off
             && !self.host.session.state().gamut_warning
-            && self.host.session.state().sdr_appearance_preview.is_none() {
-            crate::display::requested_headroom(self.host.session.effective_sdr_rendition().headroom)
-        } else {1.}
+            && self.host.session.state().sdr_appearance_preview.is_none()
+    }
+    pub(crate) fn requested_headroom(&self) -> f32 {
+        // Zero restores Android's automatic HDR policy. It is not zero headroom.
+        if self.compositor_hdr() {0.} else {1.}
     }
     pub(crate) fn hdr_headroom(&self) -> f32 {
-        crate::display::presentation_headroom(self.display_headroom, self.requested_headroom())
+        // Diagnostic feedback only: PQ presentation never clamps to this ratio.
+        if self.compositor_hdr() {self.display_headroom} else {1.}
     }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
         let samples = match (&mut self.surface, &self.host.session.engine().backend().0) {
@@ -245,11 +251,13 @@ impl App {
         {
             config.format = format;
         }
-        let color=if crate::display::hdr_surface(self.display_hdr_available,&caps) {
+        let hdr_capable=crate::display::hdr_surface(true,&caps);
+        if hdr_capable {
             config.format=wgpu::TextureFormat::Rgba16Float;
-            config.color_space=wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
-            SdrSurfaceColor::ExtendedLinearSrgb
-        } else { SdrSurfaceColor::Srgb };
+        }
+        // Start with SDR; the first document frame selects PQ for HDR artwork with Proof Off.
+        let color=SdrSurfaceColor::Srgb;
+        config.color_space=color.surface_color_space();
         surface.configure(gpu.device(), &config);
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
         self.surface = Some(Surface {
@@ -257,6 +265,8 @@ impl App {
             config,
             presenter,
             color,
+            hdr_capable,
+            presented_compositor_hdr: None,
             presented_headroom: None,
             presented_tone_generation: None,
             first_frame_complete: None,
@@ -365,10 +375,23 @@ impl App {
         let proof = self.proof.lut(&self.host.session);
         let (proof_enabled, gamut) = (self.host.session.state().soft_proof, self.host.session.state().gamut_warning);
         let headroom=self.hdr_headroom();
+        let compositor_hdr=self.compositor_hdr();
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
+        let color=if compositor_hdr {SdrSurfaceColor::Bt2100Pq} else {SdrSurfaceColor::Srgb};
+        if surface.color!=color {
+            let presenter=ViewportPresenter::for_surface(gpu,surface.config.format,color).map_err(error)?;
+            surface.config.color_space=color.surface_color_space();
+            surface.surface.configure(gpu.device(),&surface.config);
+            surface.presenter=presenter;
+            surface.color=color;
+        }
         surface.presenter.set_proof(gpu, proof, proof_enabled, gamut).map_err(error)?;
-        surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
+        if compositor_hdr {
+            surface.presenter.set_compositor_hdr_view(gpu,rendition.expect("HDR document rendition")).map_err(error)?;
+        } else {
+            surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
+        }
         surface.presenter.set_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
@@ -411,6 +434,7 @@ impl App {
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         surface.presented_headroom = Some(headroom);
+        surface.presented_compositor_hdr = Some(compositor_hdr);
         surface.presented_tone_generation = self.tone.guide.as_ref().map(|_| self.tone.generation);
         if surface.first_frame_complete.is_none() {
             let complete = Arc::new(AtomicBool::new(false));

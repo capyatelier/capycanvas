@@ -406,14 +406,18 @@ manual availability is evidence of expectations, not a substitute for these chec
 Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
 records their supported HDR editing and delivery routes. Both reuse the GTK
 picker placement and shared Proof dial. Web displays mapped SDR. Android 15+
-negotiates a floating-point HDR canvas when the display and Vulkan surface both
-support it, respecting Android's current headroom; older/unsupported hosts retain
-mapped SDR. The left footer button matches zoom/rotation styling and opens
-Display Details. Below 1.05× reported headroom, Android retains the saved SDR appearance and
-reports **Showing SDR**; Display Details explains the current limit.
-The [tablet display investigation](../development/android-hdr-display.md) records
-the Wacom firmware's observed 1.004× limit, float-pixel validation and the
-remaining SDR picker limitation on a display with useful HDR headroom.
+uses a floating-point BT.2100 PQ surface for HDR artwork with Proof Off when
+both the HDR10 display and the Vulkan format/encoding support it. Android chooses
+brightness and tone mapping; reported headroom does not precompress the artwork
+or force an SDR preview. SDR, Print, gamut warning and appearance drafts use the
+shared SDR mapping on an sRGB surface. Older/unsupported hosts retain mapped SDR.
+The left footer button matches zoom/rotation styling and opens Display Details;
+**HDR · Android managed** describes the active output route, not measured screen
+brightness. PQ output is bounded to BT.2020 and 0–10,000 cd/m² at the fixed 203
+cd/m² artwork reference white. The HDR master remains unchanged.
+The [tablet display investigation](../development/android-hdr-display.md#android-managed-pq-follow-up)
+records this route and supersedes the earlier 1.05× switching threshold. Color
+controls and layer thumbnails remain SDR previews, as Display Details explains.
 Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
 open artwork. Neither host currently offers gain-map output. Physical HDR brightness remains
 unqualified on the attached tablet. Proof shares Color's Paint/Photo tab group and supports the normal

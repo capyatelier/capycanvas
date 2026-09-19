@@ -385,20 +385,30 @@ class AndroidRasterTest {
         val supports=tone().getBoolean("display_hdr")
         val actualPixels=surfacePixels("actual-display")
         if(InstrumentationRegistry.getArguments().getString("requireHdr")=="true")assertTrue("Expected a negotiated HDR surface",supports)
+        fun awaitSurface(hdr:Boolean) {
+            compose.waitUntil(10_000){native{JSONObject(Native.displayStatus(it)).let{s->
+                s.optBoolean("presented_compositor_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else "Srgb"
+            }}}
+        }
         if(supports) {
+            awaitSurface(true)
+            assertEquals(0.0,tone().getDouble("requested_headroom"),0.0)
+            for(region in listOf("canvas","navigator"))assertTrue("PQ $region contains HDR: $actualPixels",actualPixels.getJSONObject(region).getDouble("max")>1.0)
             val granted=tone().getDouble("reported_headroom").toFloat()
-            val usable=granted>=1.05f
-            compose.waitUntil(5_000){if(usable)presented()>1.0 else presented()==1.0}
-            // An idle display-policy update must repaint without artwork input.
             val revision=native{state(it).getJSONObject("document_file").getLong("revision")}
-            compose.runOnUiThread{host.displayInfo(true,1f)}
-            compose.waitUntil(5_000){presented()==1.0}
-            compose.runOnUiThread{host.displayInfo(true,4f)}
-            compose.waitUntil(5_000){presented()==4.0}
-            val hdrPixels=surfacePixels("simulated-4x-buffer")
-            for(region in listOf("canvas","navigator"))assertTrue("HDR $region buffer retains above-white values: $hdrPixels",hdrPixels.getJSONObject(region).getDouble("max")>1.0)
+            // Headroom feedback is diagnostic; it must not precompress PQ pixels.
+            for(ratio in listOf(1f,4f)) {
+                compose.runOnUiThread{host.displayInfo(true,ratio)}
+                compose.waitUntil(5_000){presented()==ratio.toDouble()}
+                awaitSurface(true)
+                val pixels=surfacePixels("feedback-${ratio.toInt()}x")
+                for(region in listOf("canvas","navigator"))assertEquals("Feedback must not change PQ $region",actualPixels.getJSONObject(region).getString("digest"),pixels.getJSONObject(region).getString("digest"))
+            }
+            // A display move/lost HDR capability must still restore safe SDR.
+            compose.runOnUiThread{host.displayInfo(false,1f)}
+            awaitSurface(false)
             compose.runOnUiThread{host.displayInfo(true,granted)}
-            compose.waitUntil(5_000){if(usable)presented()>1.0 else presented()==1.0}
+            awaitSurface(true)
             assertEquals(revision,native{state(it).getJSONObject("document_file").getLong("revision")})
         }
         val info=compose.onNodeWithTag("hdr-status").fetchSemanticsNode().boundsInRoot
@@ -411,15 +421,19 @@ class AndroidRasterTest {
         compose.onNodeWithText("Close").performClick()
         mode("sdr");compose.waitUntil(5_000){tone().getDouble("display_headroom")==1.0&&presented()==1.0};record("sdr-proof")
         val sdrPixels=surfacePixels("sdr-proof")
-        if(tone().getDouble("reported_headroom")<1.05)for(region in listOf("canvas","navigator"))
-            assertEquals("Limited HDR display keeps the authored SDR appearance in $region",actualPixels.getJSONObject(region).getString("digest"),sdrPixels.getJSONObject(region).getString("digest"))
+        awaitSurface(false)
+        for(region in listOf("canvas","navigator")) {
+            assertTrue("SDR proof is bounded: $sdrPixels",sdrPixels.getJSONObject(region).getDouble("max")<=1.001)
+            if(supports)assertNotEquals("Proof changes $region",actualPixels.getJSONObject(region).getString("digest"),sdrPixels.getJSONObject(region).getString("digest"))
+        }
         assertEquals(1.0,tone().getDouble("requested_headroom"),0.0)
         mode("print");compose.waitUntil(5_000){presented()==1.0};record("print-proof");assertEquals(1.0,tone().getDouble("display_headroom"),0.0)
-        mode("off")
+        mode("off");awaitSurface(supports)
         compose.runOnUiThread{host.restartCanvas()}
         compose.waitUntil(60_000){host.failure!=null||host.snapshot?.optBoolean("brush_ready")==true}
         assertNull(host.failure)
         compose.waitUntil(15_000){presented()==tone().getDouble("display_headroom")}
+        awaitSurface(supports)
         record("hdr-recovered")
         assertEquals(supports,tone().getBoolean("display_hdr"))
     }
