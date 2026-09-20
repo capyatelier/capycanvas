@@ -10,11 +10,63 @@ Commit and push significant milestones to `origin/main`.
 
 - Qualify larger JPEG/AVIF images and device latency alongside the remaining
   host work. Both formats now import/export and preview through shared Rust.
-- Finish Android host integration: remove its old gain-map export restriction
-  and connect encoded previews to the shared codecs. Verify imports, exports,
-  memory admission and cancellation in real device flows.
+- Remove obsolete runtime-availability checks now that the codecs are built in.
 - Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
   JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+
+## Android host milestone — 2026-09-19
+
+Android offers JPEG and transparent AVIF gain-map delivery through the same Rust
+codecs and GPU capture as GTK and Web. The old export/preset rejection is removed.
+MIME types, suggested filenames and filename validation share one format mapping.
+Quality, explicit clipping, JPEG background, size, density and saved presets use
+the existing shared export recipe. Delivery leaves the editable master unchanged.
+
+Output comparison encodes once, then retains the HDR reconstruction and actual
+SDR base for instant switching. Both comparisons use a visible fixed image area,
+including for small inputs. The existing cancellation handle governs capture,
+codec boundaries and publication; cancelled exports do not publish partial files.
+
+Every APK packages original Rust dependency and toolchain notices under
+`assets/licenses`, using the shared renderer and the selected Android ABI graphs.
+Missing Android binding notices are retrieved at their crates' published Git
+revisions with pinned checksums. The old CESU-8 crate's complete original notice
+and source-header attribution are retained directly from its registry archive.
+No additional source code is vendored.
+
+Device verification uses the separate `art.capycanvas.portablephoto` application
+ID, keeping the normal application and its storage intact:
+
+- `portablePhotoGainmapDelivery` passes on Wacom MovinkPad 14 and Huion Kamvas
+  Pad 12: real Open of
+  8/10-bit HEIC, 12-bit P3 AVIF and JPEG/AVIF gain maps; both export choices,
+  encoded preview switching, OS file type/name, save, HDR reopen, unchanged
+  master, JPEG flattening and AVIF transparency. Saved AVIF presets and
+  in-flight cancellation/retry pass; cancellation drained in 343 ms on Wacom
+  and 1,229 ms on Huion in these runs. The final APK's larger preview images
+  were visually checked on Huion.
+  The test supplies only the system chooser result; app capture, codec and
+  provider publication execute normally.
+- Existing device regressions pass for exact v6 project save/reopen, GPU
+  replacement/recovery, export presets, 16-bit wide color, placement Apply/Cancel,
+  clipboard, one-step history and malformed/cancelled/stale import rejection.
+  Huion repeats the placement/retention journey with HEIC, 12-bit AVIF and HDR
+  JPEG inputs rather than only the existing PNG fixtures.
+- The independently encoded PQ PNG journey passes, including HDR painting and
+  authored SDR, strict clipping rejection, PQ PNG/EXR/SDR delivery and reopen,
+  recovery and Activity recreation.
+- Android Rust/Kotlin builds and lint pass. The APK has only the application
+  Rust library and AndroidX's platform graphics library; no photo-codec bundle.
+  Android production color/storage graphs, with all features, contain no C codec,
+  codec build or dynamic loader dependency. Original-notice generation for both
+  arm64 and x86_64 passes, along with the 14 shared packaging tests and the
+  repository license/source audit.
+
+Local evidence: `artifacts/portable-photo/android-{wacom,huion}/files/`,
+`/tmp/capy-portable-huion-{test,placement}.log`, and
+`/tmp/capy-portable-android-{regressions,hdr-regression,placement,package}.log`.
+These are functional device checks; larger-photo latency and peak memory remain
+to be qualified separately.
 
 ## Web host milestone — 2026-09-19
 

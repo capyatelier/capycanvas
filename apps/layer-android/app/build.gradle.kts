@@ -88,8 +88,24 @@ val generateBrand by tasks.registering {
 }
 tasks.named("preBuild") { dependsOn(generateBrand) }
 
-// Development APKs retain the repository's licensing and branding notices.
+val generateRustNotices by tasks.registering(Exec::class) {
+    val out = layout.buildDirectory.dir("generated/capy/rustNotices").get().asFile
+    workingDir = rootDir.resolve("../..")
+    commandLine(listOf("node", rootDir.resolve("package-notices.mjs").absolutePath, out.absolutePath) + capyAbis)
+    inputs.file(rootDir.resolve("package-notices.mjs"))
+    inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"), rootDir.resolve("native/Cargo.toml"))
+    inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/Cargo.toml") })
+    inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/Cargo.toml", "**/LICENSE*", "**/COPYING*") })
+    inputs.files(fileTree(rootDir.resolve("../../tools/build")) { include("dependency-notices.mjs", "about.toml", "licenses/**") })
+    inputs.property("abi", capyAbis)
+    inputs.property("rustVersion", providers.exec { commandLine("rustc", "--version") }.standardOutput.asText)
+    outputs.dir(out)
+}
+
+// Every APK retains the original Rust dependency, toolchain and project notices.
 val copyNotices by tasks.registering(Sync::class) {
+    dependsOn(generateRustNotices)
+    from(layout.buildDirectory.dir("generated/capy/rustNotices"))
     from(rootDir.resolve("../..")) {
         include("LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md")
     }

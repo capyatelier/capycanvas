@@ -133,3 +133,27 @@ override-git-commit = "82040194cd05affb060bf94d6f19f82a771d07fb"
 path = "LICENSE"
 license = "MIT"
 checksum = "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e"
+
+# Android's binding subcrates omit their repository-root license files.
+[jni-sys-macros.clarify]
+license = "MIT OR Apache-2.0"
+[[jni-sys-macros.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"
+
+[ndk-sys.clarify]
+license = "MIT OR Apache-2.0"
+[[ndk-sys.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+
+# This crate's complete original Rust/third-party notice contains its MIT terms.
+# The renderer also retains the additional author attribution in src/lib.rs.
+[cesu8.clarify]
+license = "MIT OR Apache-2.0"
+[[cesu8.clarify.files]]
+path = "COPYRIGHT-RUST.txt"
+license = "MIT"
+checksum = "5ca77347e58205d3b543c04a9c5bdd11d20a9f3108a7b246640edffa999b5f35"
