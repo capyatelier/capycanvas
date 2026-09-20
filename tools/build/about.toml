@@ -13,14 +13,7 @@ path = "LICENSE"
 license = "Apache-2.0"
 checksum = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 
-# Original notices for the patched Rust HEIC decoder and container adapter.
-[heif-oxide.clarify]
-license = "MIT OR Apache-2.0"
-[[heif-oxide.clarify.files]]
-path = "LICENSE-MIT"
-license = "MIT"
-checksum = "8257c25436304c14c39df1a9ac57a5b3fbcbd32378523200fe94ee7f3fae0a7a"
-
+# Original notice for the patched Rust HEVC decoder.
 [rust_h265.clarify]
 license = "MIT OR Apache-2.0"
 [[rust_h265.clarify.files]]

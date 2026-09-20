@@ -70,10 +70,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Rust HEIF/HEVC decoding — MIT OR Apache-2.0
 
-`heif-oxide` 0.1.0 and `rust_h265` 0.1.0 supply portable HEIC import.
-Their local admission, cancellation and source-metadata changes are recorded in
-`vendor/heif-portable.patch`. Both original license options are retained in
-the vendored directories. Their MIT notices follow.
+`rust_h265` 0.1.0 supplies portable HEIC import directly. Its local admission,
+cancellation and source-metadata changes are recorded in `vendor/heif-portable.patch`.
+Only heif-oxide 0.1.0's independent test box writer and four synthetic streams
+remain under `vendor/heif-test-support/`, with provenance and the writer's patch;
+there is no heif-oxide application dependency. Both original license options
+are retained with these sources. Their MIT notices follow.
 
 ### heif-oxide 0.1.0
 

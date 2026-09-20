@@ -1,5 +1,12 @@
 # rav1d
 
+This Capy Canvas snapshot builds only the portable Rust decoder. Assembly source
+files and C/assembly build dependencies are omitted; enabling `asm` or an
+`asm_arm64_*` alias fails explicitly. Defaults enable both bit-depth features.
+See [local provenance and changes](../README.md#av1-decoder-portability).
+The original upstream build instructions below describe the complete upstream
+package, including assembly configurations not supported by this snapshot.
+
 **rav1d** is an AV1 cross-platform decoder, open-source, and focused on speed
 and correctness. It is a Rust port of
 [dav1d](https://code.videolan.org/videolan/dav1d).

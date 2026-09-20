@@ -2,14 +2,14 @@
 
 ## Portable HEIF/HEVC decoding
 
-`heif-oxide` 0.1.0 and `rust_h265` 0.1.0 are the published MIT OR Apache-2.0
-crates. Their sources, test fixtures, original licenses and registry provenance
-are retained. Unused examples (including the minifb development dependency),
+`rust_h265` 0.1.0 is the published MIT OR Apache-2.0 crate. Its decoder sources,
+test fixtures, original licenses and registry provenance are retained. The
+application calls it directly; no heif-oxide runtime crate remains. Unused
+examples (including the minifb development dependency),
 package lockfiles and registry cache markers are omitted.
 
 | Crate | Upstream revision | Registry archive SHA-256 |
 | --- | --- | --- |
-| [heif-oxide](https://github.com/dan335/heif-oxide) | `86d722e46da3292cc5d777aaa99198fdc516f0c5` | `e12acb6edcb3bb9227dc6a06dd375a221eafe397ae2de72a876d79313831e365` |
 | [rust_h265](https://github.com/roticv/rust_h265) | `e51348807a685b00343212a77e13d32692954321` | `dde60f5842f27ed06f1d84844cacd93d1a159f606365b30a5594c771e6b4eb17` |
 
 `heif-portable.patch` exposes a bounded still-picture decoder that returns source
@@ -18,17 +18,22 @@ picture working memory before allocation, bounds parameter-set syntax, rejects
 truncated header reads, and borrows cancellation callbacks at NAL, coding-tree
 and filter boundaries. Independently coded stills cannot consume external
 reference pictures or silently return an incomplete frame. The HEVC prediction,
-transform and filtering algorithms are unchanged. The test-only container writer
-adds the picture handler required by independent libheif enumeration.
+transform and filtering algorithms are unchanged.
 
 The application uses its shared BMFF, grid, ICC, geometry and source-storage
-pipeline around this API. It does not call the convenience `decode_bytes` path,
-which converts source color to sRGB and uses scoped threads for grids. Application
-grids decode one tile at a time, also on Wasm. Memory estimates are conservative
+pipeline around this API. Its HEVC adapter borrows hvcC parameter sets and builds
+Annex B only after memory admission. Grids decode one tile at a time, also on
+Wasm. Memory estimates are conservative
 admission checks, not a hard allocator quota. Individual in-loop filters remain
 synchronous between cancellation checks.
 
-Verification includes the upstream suites (128 HEVC and 35 HEIF tests), exact
+The independent HEIC box writer and four synthetic streams from heif-oxide 0.1.0
+remain as a small [test-only extract](heif-test-support/README.md), retaining
+both licenses, revision/archive provenance and its picture-handler patch. They
+are not a Cargo dependency and are not part of application decoding.
+
+Original migration verification included the upstream suites (128 HEVC and 35
+HEIF tests), exact
 libde265 YUV comparison of a photographic still, shared source/ICC/grid/alpha
 tests, Chrome execution and GTK Open/Import/Paste with an empty codec directory.
 Initial HEIC variant limits and outstanding host work are recorded in the
@@ -38,8 +43,7 @@ Run the isolated vendor tests with:
 
 ```sh
 cargo test --offline --release --manifest-path vendor/rust_h265/Cargo.toml --lib
-cargo test --offline --release --manifest-path vendor/heif-oxide/Cargo.toml \
-  --config 'patch.crates-io.rust_h265.path="vendor/rust_h265"' --lib
+cargo test --locked --offline --release -p layer-color --lib photo::avif_io::hevc_tests
 ```
 
 ## AV1 decoder portability
@@ -48,12 +52,17 @@ cargo test --offline --release --manifest-path vendor/heif-oxide/Cargo.toml \
 <https://github.com/memorysafety/rav1d>, revision
 `782dab2135ea64a057c097088a13eb8ed3cc3320`, registry archive SHA-256
 `1932f060d5e7bd49dc9f8b272c1dc5e9ce0ffe141c28be900265d3989b36c9ed`.
-The library sources, manifest, build script, license, release notes and registry
-provenance are retained; development CI/configuration files and package lockfiles
-are omitted.
+The Rust library sources, manifest, license, release notes and registry provenance
+are retained. Unused `.asm`/`.S` sources (7.94 MiB), their build implementation,
+development CI/configuration files and package lockfiles are omitted.
 
-`rav1d-portable.patch` makes `cc`/`nasm-rs` optional dependencies of the existing
-`asm` feature. Pointer-sized C integer aliases use the matching Rust primitives.
+`rav1d-portable.patch` removes `cc`/`nasm-rs`, defaults to the two Rust bit-depth
+features, and makes assembly opt-in fail explicitly in the small build guard.
+The `asm` feature name and its aliases remain only to diagnose accidental feature
+unification; this snapshot cannot build assembly. The patch records source and
+manifest edits; omission of the 91 upstream `.asm`/`.S` files is intentional and
+is not repeated as megabytes of deletion text in the patch.
+Pointer-sized C integer aliases use the matching Rust primitives.
 The native `off_t` and errno values remain from libc; `wasm32-unknown-unknown`
 uses an i64 offset and conventional Linux result codes without a libc dependency
 or syscalls. The public error enum lets callers match target-correct EAGAIN
@@ -130,6 +139,12 @@ query instead of a macOS-only condition. This agrees with Apple's
 the `supports32BitFloatFiltering` qualification for older iPad GPU families.
 Devices without that capability still report it unavailable. No texture
 precision, publication, rendering or presentation algorithm is changed.
+
+`wgpu-metal-srgb.patch` records the separate existing Metal surface fix: explicit
+sRGB configuration tags the CAMetalLayer with the sRGB color space, rather than
+nil (which disables color matching). The Apple application currently requests
+Display P3; retain this delta until alternate callers and surface tests are
+qualified for removal or upstream supplies the fix.
 
 `wgpu-android-command-memory.patch` frees completed Android Vulkan command
 buffers at wgpu's existing all-completed boundary and allocates replacements

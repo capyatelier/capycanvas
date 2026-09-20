@@ -208,9 +208,9 @@ test("dependency notices require original text and exclude private metadata", ()
   assert.throws(() => dependencyNotices([{ ...license, source_path: null }]), /Missing original/);
   assert.throws(() => dependencyNotices([{ ...license, text: "Copyright <year> <copyright holders>" }]), /Missing original/);
   assert.equal(dependencyNotices([{ ...license, source_path: null, used_by: [{ crate: { source: null } }] }]), "");
-  const vendored = { ...license, used_by: [{ crate: { name: "heif-oxide", version: "0.1.0", source: null,
-    manifest_path: fileURLToPath(new URL("../../vendor/heif-oxide/Cargo.toml", import.meta.url)) } }] };
-  assert.ok(dependencyNotices([vendored]).includes("heif-oxide"));
+  const vendored = { ...license, used_by: [{ crate: { name: "rust_h265", version: "0.1.0", source: null,
+    manifest_path: fileURLToPath(new URL("../../vendor/rust_h265/Cargo.toml", import.meta.url)) } }] };
+  assert.ok(dependencyNotices([vendored]).includes("rust_h265"));
   assert.throws(() => dependencyNotices([{ ...vendored, source_path: null }]), /Missing original/);
 });
 

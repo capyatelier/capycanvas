@@ -1,0 +1,17 @@
+--- a/src/test_builder.rs
++++ b/src/test_builder.rs
+@@ -261,7 +261,13 @@
+     }
+     let iref = full_box(b"iref", 0, 0, &iref_children);
+
+-    let mut meta_body = pitm;
++    // A picture handler is required for libheif to enumerate the primary item.
++    let mut handler = vec![0; 4];
++    handler.extend_from_slice(b"pict");
++    handler.extend_from_slice(&[0; 12]);
++    handler.push(0);
++    let mut meta_body = full_box(b"hdlr", 0, 0, &handler);
++    meta_body.extend_from_slice(&pitm);
+     meta_body.extend_from_slice(&iinf);
+     meta_body.extend_from_slice(&iloc);
+     meta_body.extend_from_slice(&iprp);
