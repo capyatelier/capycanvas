@@ -1,5 +1,8 @@
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 
+// A single package-rewritten URL for the illustration and print LUT workers.
+const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
+
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
 export function createProof({app,element,button,icon,applyChange,wake}) {
@@ -11,7 +14,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   function ensurePattern(){
     if(pattern)return;
     pattern=new Promise((resolve,reject)=>{
-      const worker=new Worker(new URL('./proof-worker.js',import.meta.url),{type:'module'});
+      const worker=new Worker(proofWorkerUrl,{type:'module'});
       worker.onmessage=({data})=>{worker.terminate();if(data.error)reject(Error(data.error));else{patternPixels=new ImageData(new Uint8ClampedArray(data.result.bytes),512,512);restoreTexture();resolve();}};
       worker.onerror=e=>{e.preventDefault();worker.terminate();reject(Error(e.message));};worker.postMessage({type:'texture'});
     });
@@ -83,7 +86,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   function prepare(candidate,generation){
     cancel();
     return new Promise((resolve,reject)=>{
-      const worker=new Worker(new URL("./proof-worker.js",import.meta.url),{type:"module"});
+      const worker=new Worker(proofWorkerUrl,{type:"module"});
       let timer;
       const job={generation,cancel:()=>finish(new DOMException("Proof preparation cancelled","AbortError"))};
       work=job;

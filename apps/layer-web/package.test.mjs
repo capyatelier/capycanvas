@@ -138,7 +138,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
   assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
 });
 
-test("production runtime module imports resolve to packaged files", (t) => {
+test("production module imports and worker URLs resolve to packaged files", (t) => {
   const modules = readdirSync(new URL("./", import.meta.url)).filter(path => path.endsWith(".js") && path !== "sw.js");
   const dir = runtimeFixture(t, Object.fromEntries(modules.map(path =>
     [path, readFileSync(new URL(path, import.meta.url), "utf8")])));
@@ -147,6 +147,8 @@ test("production runtime module imports resolve to packaged files", (t) => {
     const source = readFileSync(join(dir, name), "utf8");
     for (const [, dependency] of source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/g))
       assert.ok(files.has(posix.join(posix.dirname(name), dependency)), `${name} imports missing ${dependency}`);
+    for (const [, dependency] of source.matchAll(/new URL\(["']([^"']+)["'],\s*import\.meta\.url\)/g))
+      assert.ok(files.has(posix.join(posix.dirname(name), dependency)), `${name} references missing ${dependency}`);
   }
 });
 
