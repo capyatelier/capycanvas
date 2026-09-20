@@ -9,23 +9,27 @@ mod jpeg_codec;
 mod jpeg_io;
 mod jpeg_markers;
 mod jpeg_mpf;
+mod avif_io;
 mod memory;
 pub use memory::PhotoMemoryBudget;
 mod gainmap;
 mod hdr_png;
+mod exr_io;
+pub use exr_io::{read_exr, write_exr_rows};
 mod metadata;
 #[cfg(test)]
 mod metadata_tests;
 mod orientation;
 mod png_io;
 pub use gainmap::{
-    GainMapFormat, GainMapMetadata, gainmap_available, preview_gainmap_rows, write_gainmap_rows,
+    GainMapEncodeOptions, GainMapFormat, GainMapMetadata, preview_gainmap_rows, write_gainmap_rows,
 };
 pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide};
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
 mod bmp_io;
 mod gif_io;
-#[cfg(all(feature = "heif", target_os = "linux"))]
+// Native HEIF is retained only as an independent interoperability oracle.
+#[cfg(all(test, feature = "native-codec-reference", target_os = "linux"))]
 mod heif_io;
 mod raster_io;
 mod tiff_io;
@@ -48,6 +52,7 @@ pub struct PhotoFormat {
     pub mime_types: &'static [&'static str],
 }
 pub const PHOTO_FORMATS: &[PhotoFormat] = &[
+    PhotoFormat { name: "OpenEXR", extensions: &["exr"], mime_types: &["image/x-exr"] },
     PhotoFormat {
         name: "TIFF",
         extensions: &["tif", "tiff"],
@@ -78,13 +83,11 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
         extensions: &["gif"],
         mime_types: &["image/gif"],
     },
-    #[cfg(all(feature = "heif", target_os = "linux"))]
     PhotoFormat {
         name: "HEIF",
         extensions: &["heif", "heic", "hif"],
         mime_types: &["image/heif", "image/heic"],
     },
-    #[cfg(all(feature = "heif", target_os = "linux"))]
     PhotoFormat {
         name: "AVIF",
         extensions: &["avif"],
@@ -92,13 +95,7 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
     },
 ];
 pub fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
-    PHOTO_FORMATS.iter().filter(|_format| {
-        #[cfg(all(feature = "heif", target_os = "linux"))]
-        if matches!(_format.name, "HEIF" | "AVIF") {
-            return heif_io::available();
-        }
-        true
-    })
+    PHOTO_FORMATS.iter()
 }
 pub fn extensions() -> impl Iterator<Item = &'static str> {
     formats().flat_map(|f| f.extensions.iter().copied())
@@ -172,7 +169,7 @@ pub fn read_photo_detailed(
     read_photo_detailed_with_cancel(input, limits, &std::sync::atomic::AtomicBool::new(false))
 }
 
-/// Native codec callbacks and row packing can acknowledge cancellation even
+/// Codec callbacks and row packing can acknowledge cancellation even
 /// after the encoded file has been read. Hosts still wait for worker completion.
 pub fn read_photo_detailed_with_cancel(
     input: impl BufRead + Seek,
@@ -202,6 +199,8 @@ fn read_photo_impl(
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
     let source = if signature == *b"\x89PNG\r\n\x1a\n" {
         png_io::read_with_cancel(input, limits, _cancelled)
+    } else if signature[..4] == [0x76, 0x2f, 0x31, 0x01] {
+        read_exr(input, limits, _cancelled)
     } else if signature[..2] == [0xff, 0xd8] {
         jpeg_io::read_jpeg_with_cancel(input, limits, _cancelled)
     } else if matches!(
@@ -216,10 +215,10 @@ fn read_photo_impl(
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
         bmp_io::read(input, limits)
     } else if &signature[4..8] == b"ftyp" {
-        #[cfg(all(feature = "heif", target_os = "linux"))]
-        return heif_io::read(input, limits, _cancelled);
-        #[cfg(not(all(feature = "heif", target_os = "linux")))]
-        return Err("HEIF/AVIF decoding is not available on this host".into());
+        if avif_io::is_avif(&mut input, _cancelled)? {
+            return avif_io::read(input, limits, _cancelled);
+        }
+        return avif_io::read_heif(input, limits, _cancelled);
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;

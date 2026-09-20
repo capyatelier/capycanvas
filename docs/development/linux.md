@@ -274,43 +274,49 @@ with the `tools/performance/gtk-raster.sh` runner after building the GTK tests.
 
 ## Stage a native bundle
 
-In addition to the application build prerequisites, install Node.js, `strip`
-and `desktop-file-validate`. The native photo bundle also needs Python 3,
-C/C++ compilers, CMake, Ninja, Meson, `pkg-config`, `patch`, and NASM on x86.
-Build its pinned sources explicitly, then stage the app:
+In addition to the application build prerequisites, install Node.js, `strip`,
+`desktop-file-validate` and `cargo-about` (the same notice generator used for Web).
+Photo codecs are built into the shared Rust core; there is no separate photo
+codec build or runtime bundle:
 
 ```bash
-python3 tools/build/photo-codecs.py --fetch
+cargo install cargo-about --version 0.9.2 --features cli --locked
 node apps/layer-linux/package.mjs
 dist/capycanvas-linux/bin/capycanvas
 ```
 
-The codec recipe verifies source hashes and builds libheif 1.23.4 with
-libde265 1.1.3 for HEIF, and libavif 1.4.2 with dav1d 1.5.3 for AVIF. Bridge ABI 2
-supports AVIF sequences and applies clean aperture/rotation/mirroring while
-packing source rows. It enables HEVC and AV1 decoding without dynamic plugin
-discovery. Rebuild the app with its matching bundle after a bridge ABI change.
-Omit `--fetch` to rebuild from the cached archives;
-ordinary Cargo builds do not download or build these native dependencies.
-The default bundle is `target/photo-codecs/prefix`. Set
-`CAPY_PHOTO_CODEC_PREFIX` when packaging a bundle built at a different prefix.
-Package validation rejects stale recipe/bridge/patch hashes, missing source
-archives, incompatible libraries and absent decoding backends.
+Normal packaging builds pinned GTK 4.22.4 with the null-surface tablet-pad
+startup fix. Meson, Ninja, GTK development dependencies and `glslc` are required.
+The cache defaults to `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it).
+The package launcher selects `lib/capycanvas/gtk/libgtk-4.so.1` before executing
+`bin/capycanvas-bin`; use `bin/capycanvas` for both ordinary and file launches.
+No system GTK is replaced. Corresponding source, patch, LGPL license, a standalone
+rebuild recipe and checksums travel in `share/doc/capycanvas-gtk`. Rebuild from a
+relocated package with the command in that manifest. The build uses system GTK
+dependencies, so this remains a native bundle for compatible distributions.
 
-The staging directory includes the executable, desktop launcher, `.capy` MIME
-definition, icon, runtime filters, codec libraries and project notices. Shared
-photo libraries live in `lib/capycanvas/photo`, with licenses, pinned source
-archives and the rebuild recipe under `share/doc/capycanvas-photo-codecs`.
-The app discovers them relative to its executable, so the staged directory can
-be moved as a unit. Development executables also look under
-`target/photo-codecs/prefix`; `CAPY_PHOTO_CODEC_DIR` explicitly selects a trusted
-library directory for developer qualification.
+Staging replaces only a directory bearing the generated `.capy-package` marker,
+clearing obsolete codec payloads left by older releases. The output includes the
+executable, desktop launcher, `.capy` MIME definition, icon, runtime filters,
+GTK runtime and notices. Validation rejects native photo-codec libraries/helpers.
+JPEG/AVIF gain maps, HEIC and ordinary raster imports use the same compiled Rust
+paths as `cargo run`; moving the package needs no codec search path or environment
+variable. Accepted HEIC variant limits are recorded in the
+[shared-core migration](portable-photo-core.md).
+
+Original Rust dependency and toolchain notices are included under
+`share/doc/capycanvas/`. `LAYER_CARGO_ABOUT` can select the notice-generator binary.
+The GTK and Web packagers share `tools/build/about.toml` and require original
+license texts, including vendored dependencies. License harvesting can fetch
+missing notices from pinned upstream revisions. The independent native
+[codec reference tools](../../tools/validation/photo-codecs/README.md) are used
+only for optional interoperability tests and are not shipped in application packages.
 
 The launcher accepts local
 file lists (`%F`) and declares the currently decoded image formats. An installer
 must register the staged desktop entry and refresh its desktop/MIME databases;
 staging does not change a user's default file associations.
-GTK/libadwaita remain system dependencies. The script
+Libadwaita and GTK's dependencies remain system dependencies. The script
 does not install the application into the desktop. Distribution requirements are
 covered in the [publication guide](publication.md).
 
@@ -328,7 +334,7 @@ python3 tools/validation/gtk_package_photo.py \
 
 This uses a private compositor, isolated settings and the existing
 `LAYER_UI_CAPTURE` diagnostic, which now also captures documents opened by file
-launch. It verifies loaded codec paths and records captures/build hashes. Its
+launch. It verifies loaded GTK/codec paths and records captures/build hashes. Its
 four-second capture delay is not a decode-performance measurement.
 
 ## Validate

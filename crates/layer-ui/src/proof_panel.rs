@@ -4,6 +4,78 @@ use crate::{ExportProfile, NumericControl, NumericKind};
 use layer_core::color::{ProofRecipe, RenderingIntent};
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProofAction {
+    Reveal,
+    Mode { mode: crate::ProofMode },
+    Rendition { phase: crate::ContactPhase, recipe: layer_core::color::hdr::SdrRendition },
+    Pad { phase: crate::ContactPhase, values: [f64;2] },
+}
+
+/// Value policy shared with GTK; the host owns key repeat, capture and history phases.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SdrControlEdit {
+    Reset,
+    Step { axis: usize, steps: f64 },
+}
+pub fn sdr_control(mut recipe: layer_core::color::hdr::SdrRendition, part: u8, edit: SdrControlEdit) -> Result<layer_core::color::hdr::SdrRendition,String> {
+    use layer_core::color::hdr::SdrRendition;
+    if part>3 {return Err("Invalid Proof control".into())}
+    match edit {
+        SdrControlEdit::Reset => match part {
+            0=>{recipe.balance=0.;recipe.contrast=1.;},
+            1=>recipe.exposure=0.,
+            2=>recipe.highlight_color=SdrRendition::default().highlight_color,
+            _=>recipe=SdrRendition{headroom:recipe.headroom,..Default::default()},
+        },
+        SdrControlEdit::Step {axis,steps} => {
+            if axis>1||!steps.is_finite(){return Err("Invalid Proof adjustment".into())}
+            if part==0 {
+                let mut values=sdr_pad_values(recipe);let control=sdr_tone_pad().axes[axis].numeric.clone();
+                values[axis]=(values[axis]+steps*control.step).clamp(control.min,control.max);
+                recipe=sdr_from_pad(recipe,values);
+            } else if part<3 {
+                let control=sdr_number_controls()[part as usize-1].numeric.clone();
+                let value=if part==1 {&mut recipe.exposure}else{&mut recipe.highlight_color};
+                *value=(f64::from(*value)+steps*control.step).clamp(control.min,control.max) as f32;
+            }
+        }
+    }
+    Ok(recipe)
+}
+pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
+    match action {
+        ProofAction::Reveal => reveal(session),
+        ProofAction::Mode { mode } => session.select_proof_mode(mode),
+        ProofAction::Rendition { phase, recipe } => session.edit_sdr_rendition(phase, recipe),
+        ProofAction::Pad { phase, values } => {
+            let recipe=sdr_from_pad(session.effective_sdr_rendition(),values);
+            session.edit_sdr_rendition(phase,recipe)
+        }
+    }
+}
+
+/// The reviewed GTK reveal behavior, shared by the other retained workspaces.
+/// Showing a panel preserves its placement and opens its collapsed-column view.
+pub fn reveal<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>) -> Result<crate::UiChange,String> {
+    use crate::{CustomizationAction as Edit, DrawerAnchor, Panel, UiAction};
+    let panel=Panel::Proof;
+    let mut change=session.dispatch(UiAction::Customize {action:Edit::SetPanelVisible {panel,visible:true}})?;
+    let state=session.state();
+    let layout=&state.workspace.layout;
+    let group=layout.panel_group(panel).ok_or("Proof panel has no workspace group")?;
+    let action=if let Some(column)=layout.collapsed_column_for_group(group) {
+        let settings=layout.column_stack(column);
+        let open=if settings.drawers {state.customization.column_drawers.iter().any(|d| matches!(d.anchor,DrawerAnchor::Column {group:g,origin,..} if g==group&&origin==panel))}
+            else {settings.open_column==Some(column)&&layout.active_panel(panel)==Some(panel)};
+        (!open).then_some(UiAction::Customize {action:Edit::ToggleColumnDrawer {group,panel}})
+    } else {(layout.active_panel(panel)!=Some(panel)).then_some(UiAction::SelectPanelTab {group,panel})};
+    if let Some(action)=action {let next=session.dispatch(action)?;change.revision=next.revision;change.regions|=next.regions;change.canvas_wake|=next.canvas_wake;}
+    Ok(change)
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ProofChoice<T> {
     pub value: T,
@@ -109,6 +181,18 @@ impl Default for PrintProofSettings {
     }
 }
 impl PrintProofSettings {
+    pub fn from_recipe(recipe: &ProofRecipe) -> Result<Self, String> {
+        Ok(Self {
+            profile: Some(ExportProfile {
+                name: recipe.name.clone(),
+                channels: layer_color::profile_channels(&recipe.profile)?,
+                profile: recipe.profile.clone(),
+            }),
+            intent: recipe.conversion.intent,
+            bpc: recipe.conversion.black_point_compensation,
+            simulation: ProofSimulation::from_recipe(recipe),
+        })
+    }
     pub fn bpc_available(&self) -> bool {
         self.intent != RenderingIntent::AbsoluteColorimetric
     }
@@ -137,6 +221,43 @@ pub const SDR_READOUT_ICONS: [&str; 4] = [
     "layer-brightness_contrast-symbolic",
     "layer-hue_saturation-symbolic",
 ];
+
+/// GTK's dial geometry and square/disc mapping, transported to Web/Compose.
+/// Part 0 is the field, 1/2 the arcs and 3 reset. A captured part stays fixed
+/// while its pointer moves outside the original hit area.
+pub fn sdr_dial(size: f32, mut recipe: layer_core::color::hdr::SdrRendition,
+    point: Option<[f32;2]>, part: Option<u8>) -> Result<serde_json::Value,String> {
+    use crate::parameter_pad::ParameterDialGeometry;
+    let g=ParameterDialGeometry::new(size).ok_or("Invalid Proof dial size")?;
+    let pad=sdr_tone_pad();
+    let hit=point.and_then(|p| {
+        let [x,y,w,h]=g.reset;
+        if p[0]>=x&&p[0]<=x+w&&p[1]>=y&&p[1]<=y+h {Some(3)}
+        else if let Some(i)=g.arcs.iter().position(|a|a.contains(p)){Some(i as u8+1)}
+        else if (p[0]-g.field.center[0]).hypot(p[1]-g.field.center[1])<=g.field.disc_radius(){Some(0)}else{None}
+    });
+    if let (Some(p),Some(part))=(point,part.or(hit)) {
+        match part {
+            0=>recipe=sdr_from_pad(recipe,pad.values(g.field.disc_components(p).map(f64::from))),
+            1|2=>{
+                let control=&sdr_number_controls()[part as usize-1].numeric;
+                let value=control.min+(control.max-control.min)*f64::from(g.arcs[part as usize-1].fraction(p));
+                let value=((value/control.step).round()*control.step).clamp(control.min,control.max) as f32;
+                if part==1 {recipe.exposure=value}else{recipe.highlight_color=value}
+            },
+            3=>recipe=layer_core::color::hdr::SdrRendition{headroom:recipe.headroom,..Default::default()},
+            _=>return Err("Invalid Proof dial control".into()),
+        }
+    }
+    let values=sdr_pad_values(recipe);
+    let fractions=[(recipe.exposure+2.)/4.,recipe.highlight_color];
+    Ok(serde_json::json!({"center":g.field.center,"radius":g.field.disc_radius(),
+        "marker_radius":g.field.marker_radius(),"marker":g.field.disc_marker(pad.fractions(values).map(|v|v as f32)),
+        "reset":g.reset,"readouts":g.readouts(size),"icons":SDR_READOUT_ICONS,"text_size":ParameterDialGeometry::text_size(size),
+        "percentages":[recipe.contrast*100.,recipe.balance*100.,recipe.exposure*25.,recipe.highlight_color*100.],
+        "arcs":g.arcs.iter().zip(fractions).map(|(a,f)|serde_json::json!({"geometry":a,"point":a.point(f),"path":(0..=64).map(|i|a.point(i as f32/64.)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "hit":hit,"recipe":recipe,"pad_values":values}))
+}
 
 /// Fixed directional illustration, never a sampled/modified document preview.
 /// Broad flowing pools on the left become fine, defined cells to the right; the top
@@ -290,8 +411,10 @@ pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};
     let mut balance = NumericControl::number(-1., 1., 0.01, 0).unit("%");
     balance.scale = 100.;
+    balance.resolution = 0.01;
     let mut contrast = NumericControl::number(-1., 1., 0.01, 0).unit("%");
     contrast.scale = 100.;
+    contrast.resolution = 0.01;
     ParameterPadSpec {
         axes: [
             ParameterPadAxis {
@@ -341,6 +464,7 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 2] {
             let mut numeric = NumericControl::number(min, max, step, digits).unit(unit);
             numeric.kind = NumericKind::Slider;
             numeric.scale = scale;
+            numeric.resolution = step;
             numeric.soft_min = soft_min;
             numeric.soft_max = soft_max;
             if key == "highlight_color" {
@@ -384,6 +508,68 @@ pub fn sdr_pad_values(recipe: layer_core::color::hdr::SdrRendition) -> [f64; 2] 
 mod tests {
     use super::*;
     use layer_core::color::RgbSpace;
+    #[test]
+    fn keyboard_steps_and_resets_match_native_controls() {
+        use layer_core::color::hdr::SdrRendition;
+        let initial=SdrRendition{headroom:12.,balance:0.2,contrast:1.2,exposure:-1.,highlight_color:0.7};
+        let step=|part,axis,steps|sdr_control(initial,part,SdrControlEdit::Step{axis,steps}).unwrap();
+        assert!((step(0,0,1.).balance-0.21).abs()<1e-6);
+        assert!((step(0,1,1.).contrast-initial.contrast*2f32.powf(0.01)).abs()<1e-6);
+        assert!((step(1,0,10.).exposure+0.6).abs()<1e-6);
+        assert!((step(2,1,-1.).highlight_color-0.69).abs()<1e-6);
+        assert_eq!(step(1,1,1000.).exposure,2.);
+        for part in 0..=3 {
+            let reset=sdr_control(initial,part,SdrControlEdit::Reset).unwrap();
+            assert_eq!(reset.headroom,12.);
+            if part==0 {assert_eq!((reset.balance,reset.contrast),(0.,1.));assert_eq!(reset.exposure,initial.exposure);}
+            if part==1 {assert_eq!(reset.exposure,0.);assert_eq!(reset.balance,initial.balance);}
+            if part==2 {assert_eq!(reset.highlight_color,SdrRendition::default().highlight_color);}
+            if part==3 {assert_eq!(reset,SdrRendition{headroom:12.,..Default::default()});}
+        }
+        assert!(sdr_control(initial,4,SdrControlEdit::Reset).is_err());
+        assert!(sdr_control(initial,0,SdrControlEdit::Step{axis:2,steps:1.}).is_err());
+        assert!(sdr_control(initial,0,SdrControlEdit::Step{axis:0,steps:f64::NAN}).is_err());
+    }
+    #[test]
+    fn dial_transport_reuses_gtk_hits_mapping_and_preserves_headroom() {
+        let recipe=layer_core::color::hdr::SdrRendition{headroom:12.,..Default::default()};
+        for size in [128.,256.,400.] {
+            let g=crate::parameter_pad::ParameterDialGeometry::new(size).unwrap();
+            for (part,arc) in g.arcs.iter().enumerate() {
+                let p=arc.point(0.75);
+                let v=sdr_dial(size,recipe,Some(p),None).unwrap();
+                assert_eq!(v["hit"],part+1);
+                let r:layer_core::color::hdr::SdrRendition=serde_json::from_value(v["recipe"].clone()).unwrap();
+                assert_eq!(r.headroom,12.);
+                assert!((if part==0 {r.exposure-1.}else{r.highlight_color-0.75}).abs()<1e-5);
+            }
+            let p=g.field.disc_marker([1.,1.]);
+            let v=sdr_dial(size,recipe,Some(p),Some(0)).unwrap();
+            assert_eq!(v["pad_values"],serde_json::json!([1.,1.]));
+            let v=sdr_dial(size,recipe,Some(g.field.center),Some(3)).unwrap();
+            assert_eq!(v["recipe"],serde_json::to_value(recipe).unwrap());
+        }
+    }
+    #[test]
+    fn scaled_numeric_edits_preserve_single_percentage_steps() {
+        use crate::numeric::NumericOperation;
+        let numbers = sdr_number_controls();
+        for (spec, text, expected, stepped) in [
+            (&numbers[0].numeric, "-10", -0.4, -0.36),
+            (&numbers[1].numeric, "42", 0.42, 0.43),
+        ] {
+            let value = spec.resolve(0., NumericOperation::Expression { text: text.into() }).unwrap();
+            assert!((value.value - expected).abs() < 1e-6);
+            let next = spec.resolve(value.value, NumericOperation::Step { steps: 1. }).unwrap();
+            assert!((next.value - stepped).abs() < 1e-6);
+        }
+        for axis in sdr_tone_pad().axes {
+            let value = axis.numeric.resolve(0., NumericOperation::Expression { text: "25".into() }).unwrap();
+            assert!((value.value - 0.25).abs() < 1e-6);
+            let next = axis.numeric.resolve(value.value, NumericOperation::Step { steps: -1. }).unwrap();
+            assert!((next.value - 0.24).abs() < 1e-6);
+        }
+    }
     #[test]
     fn circular_controls_are_bounded_invertible_and_preserve_delivery_settings() {
         use layer_core::color::hdr::SdrRendition;

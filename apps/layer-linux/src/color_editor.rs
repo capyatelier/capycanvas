@@ -55,24 +55,14 @@ impl Form {
             if self.hdr {
                 let stops = self.intensity.text().trim().parse::<f32>().map_err(|_| "Enter a finite EV value".to_string())?;
                 if !stops.is_finite() || editor.intensity() != Some(stops) {
-                    return Err("Enter an EV value within the color’s half-float range".into());
+                    return Err("Enter an EV value within the document’s color range".into());
                 }
             }
             Ok((editor.color()?, editor.base_color()?))
         })();
         match color {
             Ok((color, base)) => {
-                let mut text = format!("Defined in {}", color.space.name());
-                if !if self.hdr { color.in_hdr_gamut(self.space) } else { color.in_gamut(self.space) }.unwrap() {
-                    text.push_str(" · Outside document gamut");
-                }
-                if !if self.hdr { color.in_hdr_gamut(view.space()) } else { color.in_gamut(view.space()) }.unwrap() {
-                    text.push_str(&format!(
-                        " · Outside {} preview gamut",
-                        view.space().name()
-                    ));
-                }
-                if self.hdr && color.brightness_ev(self.space).unwrap().is_some_and(|v| v > 0.00001) { text.push_str(" · Above SDR white"); }
+                let text = layer_ui::color_validation(color, self.space, view.space(), self.hdr).unwrap();
                 self.validation.remove_css_class("error");
                 self.validation.set_text(&text);
                 self.dialog.set_response_enabled("apply", true);
@@ -139,11 +129,11 @@ fn choose_with_intensity(
     intensity: Option<f32>,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor, Option<f32>) + 'static,
 ) {
-    let Some((space, epoch, hdr)) = workspace.gpu.borrow().as_ref().map(|g| {
+    let Some((space, epoch, depth)) = workspace.gpu.borrow().as_ref().map(|g| {
         (
             g.session.state().colors.rgb_space(),
             g.session.state().document_file.epoch,
-            g.session.engine().document().color.depth.is_float(),
+            g.session.engine().document().color.depth,
         )
     }) else {
         return;
@@ -155,6 +145,8 @@ fn choose_with_intensity(
             return;
         }
     };
+    let hdr = depth.is_float();
+    editor.set_document_depth(depth);
     if hdr {
         editor.set_model(ColorInputModel::LinearRgb).unwrap();
         let stops = intensity.unwrap_or_else(|| definition.brightness_ev(space).ok().flatten().unwrap_or(0.).max(0.));

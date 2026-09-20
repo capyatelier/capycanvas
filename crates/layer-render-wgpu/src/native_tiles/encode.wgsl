@@ -45,6 +45,14 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
     let pixel=invocation.xy+settings.region.xy;
     let value=load_working(invocation.z,vec2<i32>(pixel));
     if settings.maximum==0u {
+        if settings.scale==32u {
+            let error=float32_color_error(value);
+            if error!=0u {atomicOr(&status.invalid,error);return;}
+            if value.a==0. {store_outputs(invocation.z,pixel,vec4(0u),vec4(0.));return;}
+            let straight=vec4(value.rgb/value.a,value.a);
+            store_outputs(invocation.z,pixel,bitcast<vec4<u32>>(straight),vec4(straight.rgb*straight.a,straight.a));
+            return;
+        }
         let error=hdr_color_error(value);
         if error!=0u {atomicOr(&status.invalid,error);return;}
         let alpha_bits=half_bits(value.a);

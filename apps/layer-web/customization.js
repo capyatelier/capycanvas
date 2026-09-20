@@ -37,6 +37,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   // The same recursive Rust menu drives both the header and contextual menus.
   // Submenus replace their parent page, as in GTK's sliding popover menus.
   function renderMenu(container, model, close, parents = []) {
+    container.menuPath=[...parents.map(p=>p.title),model.title].slice(1);
+    container.menuModelKey=JSON.stringify(parents[0]||model);
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
     container.replaceChildren();
@@ -67,6 +69,16 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       }
     });
     if (container === context && context.matches(":popover-open")) positionPopup(context);
+  }
+  function refreshMenu(container,model,close) {
+    if(container.menuModelKey===JSON.stringify(model))return;
+    const parents=[];
+    for(const title of container.menuPath||[]) {
+      const item=model.sections.flat().find(i=>i.label===title&&i.sections?.some(s=>s.length));
+      if(!item)break;
+      parents.push(model);model={title:item.label,sections:item.sections};
+    }
+    renderMenu(container,model,close,parents);
   }
   function showContext(node, point) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
@@ -512,7 +524,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, dismissContext, field, discardFields, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, dismissContext, field, discardFields, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

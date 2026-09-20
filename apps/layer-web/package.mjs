@@ -6,6 +6,9 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { dependencyNotices } from "../../tools/build/dependency-notices.mjs";
+export { dependencyNotices };
+
 const web = dirname(fileURLToPath(import.meta.url));
 const root = resolve(web, "../..");
 const digest = (data) => createHash("sha256").update(data);
@@ -13,35 +16,6 @@ const read = (path) => readFileSync(path, "utf8");
 const escape = (text) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const page = (title, body) => `<!doctype html><html lang="en"><meta charset="utf-8"><title>${title}</title>
 <style>body{max-width:70rem;margin:2rem auto;padding:0 1rem;font:16px system-ui}pre{white-space:pre-wrap}</style><h1>${title}</h1>${body}</html>`;
-
-export function dependencyNotices(licenses) {
-  return licenses.map((license) => {
-    // Workspace licensing is included separately with the branding exception.
-    let crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source);
-    let original = "";
-    // This published archive has neither notices nor repository metadata, so
-    // cargo-about cannot fetch its git clarification. Preserve the exact upstream
-    // Zlib alternative, checked against the recorded publication revision.
-    if (!license.source_path) {
-      const missing = crates.filter(crate => crate.name === "zune-core");
-      if (missing.length) {
-        if (missing.some(crate => crate.version !== "0.4.12" || crate.license !== "MIT OR Apache-2.0 OR Zlib"))
-          throw new Error("Revalidate the original zune-core notice for this release");
-        const notice = readFileSync(join(web, "licenses/zune-core-0.4.12-ZLIB.txt"));
-        if (digest(notice).digest("hex") !== "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352")
-          throw new Error("Original zune-core notice checksum differs");
-        const source = "https://github.com/etemesi254/zune-image/blob/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE-ZLIB";
-        original = `<section><h2>Zlib License</h2><p>zune-core 0.4.12 · <a href="${source}">Original notice</a></p><pre>${escape(notice.toString("utf8"))}</pre></section>`;
-        crates = crates.filter(crate => crate.name !== "zune-core");
-      }
-    }
-    if (!crates.length) return original;
-    if (!license.source_path || /<year>|<copyright holders>/i.test(license.text))
-      throw new Error(`Missing original license notice: ${crates.map((crate) => crate.name).join(", ")}`);
-    return original + `<section><h2>${escape(license.name)}</h2><ul>${crates.map((crate) => `<li>${escape(crate.name)} ${escape(crate.version)}</li>`).join("")}</ul><pre>${escape(license.text)}</pre></section>`;
-  }).join("\n");
-}
-
 export function filesIn(directory, prefix = "") {
   return readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, "en")).flatMap((entry) => {
     const path = prefix + entry.name;
@@ -75,7 +49,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
+  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js" && path !== "proof-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -88,6 +62,9 @@ export function fingerprintAssets(directory) {
     return `url(${JSON.stringify(name)})`;
   });
   publish("style.css", css);
+  publish("drawing-tabs.js");
+  publish("document-recovery.js");
+  publish("document-storage.js");
   publish("workspace-store.js");
   publish("workspace-switcher.js");
   publish("workspace-manager.js", replaceRequired(read(join(directory, "workspace-manager.js")), 'from "./workspace-switcher.js"', `from "./${names["workspace-switcher.js"]}"`));
@@ -105,7 +82,7 @@ export function fingerprintAssets(directory) {
   publish("workspace-chrome.js");
   publish("image-import.js");
   let documents = read(join(directory, "documents.js"));
-  for (const path of ["export-controls.js", "histogram.js","document-color.js","proof.js","image-import.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
+  for (const path of ["drawing-tabs.js", "document-recovery.js", "export-controls.js", "histogram.js","document-color.js","proof.js","image-import.js"]) documents = replaceRequired(documents, `from './${path}'`, `from "./${names[path]}"`);
   publish("documents.js", documents);
   publish("preferences.js", replaceRequired(read(join(directory, "preferences.js")), "from './export-controls.js'", `from "./${names["export-controls.js"]}"`));
   publish("gpu.js");
@@ -127,7 +104,7 @@ export function fingerprintAssets(directory) {
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
   publish("workspace-worker.js", worker);
   let app = read(join(directory, "app.js"));
-  for (const path of modules.slice(0, -1).filter(path => path !== "filter-previews.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
+  for (const path of modules.slice(0, -1).filter(path => path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
   const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path) || path === "workspace-worker.js"));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
@@ -193,7 +170,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "raster-worker-client.js", "raster-worker.js", "proof-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "style.css"])
+    for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "app.js", "raster-worker-client.js", "raster-worker.js", "proof-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));
@@ -229,7 +206,7 @@ export function packageWeb() {
     const notices = ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"];
     for (const path of notices) cpSync(join(root, path), join(site, path));
     const licensing = JSON.parse(run(about, ["generate", "--locked", "--fail", "--manifest-path", join(web, "Cargo.toml"),
-      "--config", join(web, "about.toml"), "--format", "json"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] }));
+      "--config", join(root, "tools/build/about.toml"), "--target", "wasm32-unknown-unknown", "--format", "json"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] }));
     writeFileSync(join(site, "dependency-licenses.html"), page("Dependency licenses",
       '<p>Wasm dependencies, including build-time crates. <a href="./licenses.html">Application and toolchain notices</a></p>' + dependencyNotices(licensing.licenses)));
     // Preserve the exact installed toolchain's notices, rather than guessing
@@ -241,6 +218,7 @@ export function packageWeb() {
     writeFileSync(join(site, "manifest.webmanifest"), JSON.stringify({
       id: "./", name: "Capy Canvas", short_name: "Capy Canvas",
       description: "A GPU-powered drawing workspace.", start_url: "./", scope: "./",
+      file_handlers: [{action: "./", accept: {"application/octet-stream": [".capy"], "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"], "image/tiff": [".tif", ".tiff"], "image/avif": [".avif"], "image/x-exr": [".exr"]}}],
       display: "standalone", background_color: "#333333", theme_color: "#333333",
       icons: [192, 512].map((size) => ({ src: asset(`icon-${size}.png`), sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
     }, null, 2) + "\n");

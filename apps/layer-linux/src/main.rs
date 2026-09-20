@@ -1,5 +1,6 @@
 mod alert;
 mod canvas;
+mod documents;
 mod display_color;
 mod proof_view;
 mod hdr;
@@ -46,6 +47,22 @@ fn stylesheet() -> String {
     )
 }
 
+fn stylesheet_provider() -> gtk::CssProvider {
+    let css = gtk::CssProvider::new();
+    css.load_from_string(&stylesheet());
+    // GTK media queries use the provider's preference, not the theme's.
+    adw::StyleManager::for_display(&gtk::gdk::Display::default().unwrap())
+        .bind_property("high-contrast", &css, "prefers-contrast")
+        .transform_to(|_, contrast: bool| Some(if contrast {
+            gtk::InterfaceContrast::More
+        } else {
+            gtk::InterfaceContrast::NoPreference
+        }))
+        .sync_create()
+        .build();
+    css
+}
+
 fn main() -> gtk::glib::ExitCode {
     // SAFETY: first operation, before GTK initialization or worker creation.
     unsafe { display_color::enable_gtk_color_management() };
@@ -70,8 +87,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {
-        let css = gtk::CssProvider::new();
-        css.load_from_string(&stylesheet());
+        let css = stylesheet_provider();
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
             &css,
@@ -169,15 +185,12 @@ fn open_workspace(
         None => workspace::Workspace::new(app),
         Some(project) => workspace::Workspace::with_project(app, Some(project)),
     };
-    let windows = Rc::downgrade(active);
-    let application = app.downgrade();
+    let owner = Rc::downgrade(&workspace);
     *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location, recovered| {
-        if let (Some(app), Some(active)) = (application.upgrade(), windows.upgrade()) {
-            open_workspace(&app, &active, Some((project, location)), recovered);
-        }
+        if let Some(w) = owner.upgrade() { w.documents.enqueue(&w, (project, location, recovered)); }
     }));
-    workspace.recovery.recovered.set(recovered.is_some());
-    if let Err(error) = workspace.recovery.set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
+    workspace.recovery().recovered.set(recovered.is_some());
+    if let Err(error) = workspace.recovery().set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
     active.borrow_mut().push(workspace.clone());
     workspace.window.present();
     if let Some(settings) = settings {

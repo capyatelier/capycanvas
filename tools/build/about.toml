@@ -1,0 +1,159 @@
+# Shared binary-distribution notices. Each packager supplies its actual target.
+# The repository-wide license policy lives in /deny.toml.
+# OpenEXR's exr/lebe dependencies use BSD-3-Clause; the packager includes their
+# complete upstream notices, also recorded in THIRD_PARTY_NOTICES.md.
+accepted = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "CC0-1.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+ignore-dev-dependencies = true
+
+# The SPIR-V leaf archive omits its repository-root Apache license.
+[spirv.clarify]
+license = "Apache-2.0"
+[[spirv.clarify.git]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+
+# Original notices for the patched Rust HEIC decoder and container adapter.
+[heif-oxide.clarify]
+license = "MIT OR Apache-2.0"
+[[heif-oxide.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "8257c25436304c14c39df1a9ac57a5b3fbcbd32378523200fe94ee7f3fae0a7a"
+
+[rust_h265.clarify]
+license = "MIT OR Apache-2.0"
+[[rust_h265.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "d587ec46ffb8dc009e7d278335f44c97b5b8eb8c064e8bedbd8699773fdb00cd"
+
+# exr ships both its own and the format project's original BSD notices in one
+# file. Pin that complete file instead of substituting a generic license text.
+[exr.clarify]
+license = "BSD-3-Clause"
+[[exr.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "97e4d3aa7a9e8ac31979c16ca8bb2b628a9cb72c3362185ad2bf4ad77f43551f"
+
+# profiling's crate archive omits the notice; retrieve it from that crate's
+# recorded upstream Git revision and verify the original file's checksum.
+[profiling.clarify]
+license = "MIT OR Apache-2.0"
+[[profiling.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+
+# libm declares the complete library MIT at the start of LICENSE.txt. Its long
+# contributor Apache section confuses automatic detection; retain the entire
+# original file, including the math-library copyright notices at the end.
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+
+# TIFF's pinned JPEG decoder declares Zlib as an alternative. Its old archives
+# omit the files; retrieve the original complete notice at the recorded commits.
+# zune-core 0.4.12 and zune-inflate 0.2.54 also omit their repository field.
+# dependency-notices.mjs supplies their checksum-pinned original notice from
+# licenses/ for those exact versions only.
+[zune-jpeg.clarify]
+license = "Zlib"
+[[zune-jpeg.clarify.git]]
+path = "LICENSE-ZLIB"
+license = "Zlib"
+checksum = "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352"
+
+# Retain the exact upstream notice for the Rust AV1 dependency graph.
+[rav1d.clarify]
+license = "BSD-2-Clause"
+[[rav1d.clarify.files]]
+path = "COPYING"
+license = "BSD-2-Clause"
+checksum = "6477f5c0674c89dc9251708a442343449bcb9c14b969b09286eb61d0640b284a"
+
+# Retain the exact upstream notice for the Rust AV1 dependency graph.
+[to_method.clarify]
+license = "CC0-1.0"
+[[to_method.clarify.files]]
+path = "LICENSE"
+license = "CC0-1.0"
+checksum = "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+
+# Preserve the encoder dependency's original attribution.
+[rav1e.clarify]
+license = "BSD-2-Clause"
+[[rav1e.clarify.files]]
+path = "LICENSE"
+license = "BSD-2-Clause"
+checksum = "2dd0a109751e939dec3f80ddcfbc1ba91553f18c574399e85c159632182a2c0a"
+
+# Preserve the encoder dependency's original attribution.
+[oxideav-av1.clarify]
+license = "MIT"
+[[oxideav-av1.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2"
+
+# Preserve the encoder dependency's original attribution.
+[oxideav-core.clarify]
+license = "MIT"
+[[oxideav-core.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2"
+
+# The proc-macro archive omits its repository-root license.
+[atomig-macro.clarify]
+license = "MIT"
+[[atomig-macro.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "6f54826bbf67526f2d41937c1904ae2de63ef5707b80c68deadbf073b5669c40"
+
+# The proc-macro archive omits its repository-root license.
+[profiling-procmacros.clarify]
+license = "MIT"
+[[profiling-procmacros.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+
+# This release declares MIT but predates its LICENSE file. The author's next
+# commit adds only that original notice; the released source is unchanged.
+[simd_helpers.clarify]
+license = "MIT"
+override-git-commit = "82040194cd05affb060bf94d6f19f82a771d07fb"
+[[simd_helpers.clarify.git]]
+path = "LICENSE"
+license = "MIT"
+checksum = "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e"
+
+# Android's binding subcrates omit their repository-root license files.
+[jni-sys-macros.clarify]
+license = "MIT OR Apache-2.0"
+[[jni-sys-macros.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"
+
+[ndk-sys.clarify]
+license = "MIT OR Apache-2.0"
+[[ndk-sys.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+
+# This crate's complete original Rust/third-party notice contains its MIT terms.
+# The renderer also retains the additional author attribution in src/lib.rs.
+[cesu8.clarify]
+license = "MIT OR Apache-2.0"
+[[cesu8.clarify.files]]
+path = "COPYRIGHT-RUST.txt"
+license = "MIT"
+checksum = "5ca77347e58205d3b543c04a9c5bdd11d20a9f3108a7b246640edffa999b5f35"

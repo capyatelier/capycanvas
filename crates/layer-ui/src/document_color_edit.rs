@@ -106,13 +106,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             recipe.validate().map_err(str::to_string)?;
         }
         self.state.sdr_appearance_preview = recipe;
+        self.refresh_document();
         self.refresh_commands();
-        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
     pub fn set_hdr_display_available(&mut self, available: bool) -> bool {
         if self.state.hdr_display_available == available { return false; }
         self.state.hdr_display_available = available;
         self.refresh_commands();
+        self.changed(regions::COMMANDS, true);
         true
     }
 
@@ -130,8 +132,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.proof_setup_pending = false;
             self.last_proof_mode = Some(ProofMode::Sdr);
         }
+        self.refresh_document();
         self.refresh_commands();
-        Ok(self.changed(regions::COMMANDS | regions::BRUSH, true))
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
 
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,String> {
@@ -199,7 +202,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let mut colors = self.state.colors.clone();
         colors.set_rgb_space(prepared.document().color.space)?;
-        colors.set_hdr_enabled(prepared.document().color.depth.is_float())?;
+        colors.set_document_depth(prepared.document().color.depth)?;
         self.engine
             .commit_color_transition(prepared)
             .map_err(error)?;

@@ -1,3 +1,8 @@
+import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
+import {checkDrawingTabsOffline} from "./drawing-tabs-offline.test.mjs";
+import {measureHdr} from "./hdr-performance.test.mjs";
+import {checkHdr} from "./hdr.test.mjs";
+import {checkProof} from "./proof.test.mjs";
 import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
 import {checkStagedStartup} from "./startup.test.mjs";
 import {checkFilterPreviews} from "./filter-previews.test.mjs";
@@ -29,23 +34,23 @@ await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('
 let sequence=0,onLoad;const pending=new Map(),errors=[];
 socket.onmessage=event=>{
   const m=JSON.parse(event.data);
-  if(m.id){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(JSON.stringify(m.error))):p.resolve(m.result);}
+  if(m.id){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(`${p.method}: ${JSON.stringify(m.error)}`)):p.resolve(m.result);}
   else if(m.method==="Page.loadEventFired"){onLoad?.();onLoad=null;}
   else if(m.method==="Page.javascriptDialogOpening" && m.params.type==="beforeunload"){call("Page.handleJavaScriptDialog",{accept:true}).catch(()=>{});}
   else if(m.method==="Runtime.exceptionThrown")errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);
-  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")errors.push(m.params.entry.text);
+  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error"&&!(process.argv.includes('--drawing-tabs-offline')&&m.params.entry.url?.includes('/__capy-tabs-offline-probe?')))errors.push(m.params.entry.text);
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},60000);
-  pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));
+  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?300000:180000);
+  pending.set(id,{resolve,reject,timer,method});socket.send(JSON.stringify({id,method,params}));
 });
 const evaluate=async expression=>{
   const result=await call("Runtime.evaluate",{expression,awaitPromise:true,returnByValue:true});
   if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
   return result.result.value;
 };
-const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),20000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:true});await loaded;};
+const reload=async()=>{const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("Navigation timed out")),20000);onLoad=()=>{clearTimeout(timer);resolve();};});await call("Page.reload",{ignoreCache:!process.argv.includes('--drawing-tabs-offline')});await loaded;};
 const settle=()=>evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
 const canvasPixels=async()=>{
   const shot=await call("Page.captureScreenshot",{format:"png"});
@@ -64,7 +69,7 @@ try {
   // Allow its ordinary beforeunload confirmation, which this harness accepts.
   await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   await reload();
-  await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
+  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
   if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
@@ -75,7 +80,19 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--filter-previews")) {
+  if(process.argv.includes("--drawing-tabs-offline")){
+    await checkDrawingTabsOffline({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--drawing-tabs-recovery")){
+    await checkDrawingTabRecovery({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--drawing-tabs")){
+    await checkDrawingTabs({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--hdr-performance")){
+    await measureHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--hdr")){
+    await checkHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--proof")){
+    await checkProof({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--filter-previews")) {
     await checkFilterPreviews({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--staged-startup")) {

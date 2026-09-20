@@ -75,6 +75,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         if (width <= 0 || height <= 0) return
         val density = resources.displayMetrics.density
         if (!attached) {
+            host.hdr.bindSurface(this)
             val requested = display?.supportedModes?.maxOfOrNull { it.refreshRate }?.coerceAtMost(120f) ?: 60f
             if (Build.VERSION.SDK_INT >= 30) holder.surface.setFrameRate(requested, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
             host.attach(holder.surface, width, height, density, display?.refreshRate ?: requested)
@@ -82,6 +83,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         } else host.resize(width, height, density)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        host.hdr.unbindSurface(this)
         predictor = null; predictionDevice = null
         if (attached) { host.detach(); attached = false }
     }

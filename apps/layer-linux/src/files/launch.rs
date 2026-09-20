@@ -1,5 +1,4 @@
-//! Application Open transport. Decode before creating a canvas, serializing
-//! file-list delivery (including secondary-process launches) on one worker.
+//! Serial application file activation, pinned to the receiving drawing window.
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -7,151 +6,269 @@ use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
     rc::{Rc, Weak},
+    time::Duration,
 };
 
+struct Batch {
+    files: Vec<gio::File>,
+    target: Option<Weak<Workspace>>,
+}
 struct Launcher {
-    files: RefCell<VecDeque<gio::File>>,
+    batches: RefCell<VecDeque<Batch>>,
     running: Cell<bool>,
     windows: Weak<RefCell<Vec<Rc<Workspace>>>>,
 }
-
+fn active(app: &adw::Application, windows: &[Rc<Workspace>]) -> Option<Rc<Workspace>> {
+    app.active_window()
+        .and_then(|native| {
+            windows
+                .iter()
+                .find(|w| w.window.upcast_ref::<gtk::Window>() == &native)
+                .cloned()
+        })
+        .or_else(|| {
+            windows
+                .iter()
+                .rev()
+                .find(|w| w.window.is_visible())
+                .cloned()
+        })
+}
 pub(crate) fn install(app: &adw::Application, windows: &Rc<RefCell<Vec<Rc<Workspace>>>>) {
     let launcher = Rc::new(Launcher {
-        files: RefCell::new(VecDeque::new()),
+        batches: Default::default(),
         running: Cell::new(false),
         windows: Rc::downgrade(windows),
     });
-    app.connect_open(move |app, files, _| {
-        launcher.files.borrow_mut().extend(files.iter().cloned());
-        launcher.start(app);
-    });
+    app.connect_open(glib::clone!(
+        #[strong]
+        launcher,
+        move |app, files, _| {
+            let target = launcher
+                .windows
+                .upgrade()
+                .and_then(|v| active(app, &v.borrow()))
+                .map(|w| Rc::downgrade(&w));
+            launcher.batches.borrow_mut().push_back(Batch {
+                files: files.to_vec(),
+                target,
+            });
+            launcher.start(app);
+        }
+    ));
+    let action = gio::SimpleAction::new(
+        "open-in-window",
+        Some(<(String, Vec<String>)>::static_variant_type().as_ref()),
+    );
+    action.connect_activate(glib::clone!(
+        #[weak]
+        app,
+        #[strong]
+        launcher,
+        move |_, value| {
+            let Some((name, uris)) = value.and_then(|v| v.get::<(String, Vec<String>)>()) else {
+                return;
+            };
+            let target = launcher.windows.upgrade().and_then(|v| {
+                v.borrow()
+                    .iter()
+                    .find(|w| w.window.widget_name() == name)
+                    .cloned()
+            });
+            if let Some(target) = target {
+                launcher.batches.borrow_mut().push_back(Batch {
+                    files: uris.iter().map(|uri| gio::File::for_uri(uri)).collect(),
+                    target: Some(Rc::downgrade(&target)),
+                });
+                launcher.start(&app);
+            }
+        }
+    ));
+    app.add_action(&action);
 }
-
+pub(crate) fn open_in(w: &Rc<Workspace>, files: Vec<gio::File>) {
+    if let Some(app) = w.window.application() {
+        let value = (
+            w.window.widget_name().to_string(),
+            files
+                .iter()
+                .map(|f| f.uri().to_string())
+                .collect::<Vec<_>>(),
+        )
+            .to_variant();
+        app.activate_action("open-in-window", Some(&value));
+    }
+}
 impl Launcher {
     fn start(self: &Rc<Self>, app: &adw::Application) {
-        if self.files.borrow().is_empty() || self.running.replace(true) {
+        if self.running.replace(true) {
             return;
         }
-        let window = adw::ApplicationWindow::builder()
-            .application(app)
-            .title("Open — Capy Canvas")
-            .default_width(480)
-            .default_height(300)
-            .build();
-        window.set_widget_name("file-launch-window");
-        let content = adw::ToolbarView::new();
-        content.add_top_bar(&adw::HeaderBar::new());
-        let page = adw::StatusPage::builder()
-            .title("Opening files")
-            .icon_name("image-x-generic-symbolic")
-            .build();
-        content.set_content(Some(&page));
-        window.set_content(Some(&content));
-        let closed = Rc::new(Cell::new(false));
-        window.connect_close_request(glib::clone!(
-            #[weak(rename_to = launcher)]
+        let hold = app.hold();
+        glib::spawn_future_local(glib::clone!(
+            #[strong(rename_to=launcher)]
             self,
-            #[strong]
-            closed,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |window| {
-                closed.set(true);
-                launcher.files.borrow_mut().clear();
-                if let Some(dialog) = window.visible_dialog() {
-                    dialog.force_close();
+            #[weak]
+            app,
+            async move {
+                let _hold = hold;
+                loop {
+                    let batch = launcher.batches.borrow_mut().pop_front();
+                    let Some(batch) = batch else {
+                        break;
+                    };
+                    launcher.run(&app, batch).await;
                 }
-                window.set_visible(false);
-                // Keep the application and parent alive until the reader has
-                // acknowledged cancellation. No late result may create a canvas.
-                glib::Propagation::Stop
+                launcher.running.set(false);
             }
         ));
-        window.present();
-        let hold = app.hold();
-        let app = app.clone();
-        let launcher = self.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let _hold = hold;
-            loop {
-                if closed.get() {
+    }
+    async fn run(&self, app: &adw::Application, batch: Batch) {
+        let mut target = match batch.target {
+            Some(target) => match target.upgrade().filter(|w| w.window.is_visible()) {
+                Some(w) => Some(w),
+                None => return,
+            },
+            None => self
+                .windows
+                .upgrade()
+                .and_then(|v| active(app, &v.borrow())),
+        };
+        let closed = Rc::new(Cell::new(false));
+        let placeholder = if target.is_none() {
+            let window = adw::ApplicationWindow::builder()
+                .application(app)
+                .title("Open — Capy Canvas")
+                .default_width(480)
+                .default_height(300)
+                .build();
+            window.set_widget_name("file-launch-window");
+            let view = adw::ToolbarView::new();
+            view.add_top_bar(&adw::HeaderBar::new());
+            view.set_content(Some(
+                &adw::StatusPage::builder()
+                    .title("Opening files")
+                    .icon_name("image-x-generic-symbolic")
+                    .build(),
+            ));
+            window.set_content(Some(&view));
+            window.connect_close_request(glib::clone!(
+                #[strong]
+                closed,
+                move |window| {
+                    closed.set(true);
+                    if let Some(dialog) = window.visible_dialog() {
+                        dialog.force_close();
+                    }
+                    window.set_visible(false);
+                    glib::Propagation::Stop
+                }
+            ));
+            window.present();
+            Some(window)
+        } else {
+            None
+        };
+        for file in batch.files {
+            if closed.get() {
+                break;
+            }
+            if let Some(w) = &target {
+                while w.window.is_visible()
+                    && (w.servicing.get()
+                        || w.documents.changing.get()
+                        || w.window.visible_dialog().is_some())
+                {
+                    glib::timeout_future(Duration::from_millis(20)).await;
+                }
+                if !w.window.is_visible() || w.documents.closing_window.get() {
                     break;
                 }
-                let Some(file) = launcher.files.borrow_mut().pop_front() else {
-                    break;
-                };
-                let name = file
-                    .basename()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| file.uri().into());
-                page.set_description(Some(&name));
-                window.present();
-                let settings = launcher.windows.upgrade().and_then(|windows| {
-                    windows.borrow().last().and_then(|w| {
-                        w.gpu
-                            .borrow()
-                            .as_ref()
-                            .map(|g| g.session.state().settings.clone())
-                    })
+                w.documents.loading.set(true);
+                w.documents.cancel_open.set(false);
+            }
+            let parent = target
+                .as_ref()
+                .map(|w| &w.window)
+                .or(placeholder.as_ref())
+                .unwrap();
+            parent.present();
+            let settings = target
+                .as_ref()
+                .and_then(|w| {
+                    w.gpu
+                        .borrow()
+                        .as_ref()
+                        .map(|g| g.session.state().settings.clone())
+                })
+                .unwrap_or_else(|| {
+                    crate::preferences::load()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
                 });
-                let settings = match settings {
-                    Some(settings) => settings,
-                    None => gio::spawn_blocking(crate::preferences::load)
-                        .await
-                        .unwrap_or_else(|_| Err("Preferences reader failed".into()))
-                        .unwrap_or_else(|error| {
-                            eprintln!("{error}; using default preferences");
-                            None
-                        })
-                        .unwrap_or_default(),
-                };
-                if closed.get() {
-                    break;
-                }
-                let result = super::open::prepare(
-                    &window,
-                    file,
-                    settings.photo_open,
-                    settings.new_document.defaults.color.space,
-                )
-                .await;
-                if closed.get() {
-                    break;
-                }
-                match result {
-                    Ok(Some(project)) => {
-                        if let Some(windows) = launcher.windows.upgrade() {
-                            let first = windows.borrow().is_empty();
-                            crate::open_workspace(&app, &windows, Some(project), None);
-                            if first {
-                                let workspace = windows.borrow().last().cloned();
-                                if let Some(workspace) = workspace {
-                                    crate::recovery::offer_stale(&workspace);
-                                }
-                            }
+            let name = file
+                .basename()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| file.uri().into());
+            let result = super::open::prepare(
+                parent,
+                file,
+                settings.photo_open,
+                settings.new_document.defaults.color.space,
+            )
+            .await;
+            if let Some(w) = &target {
+                w.documents.loading.set(false);
+            }
+            if closed.get()
+                || !parent.is_visible()
+                || target
+                    .as_ref()
+                    .is_some_and(|w| w.documents.cancel_open.get())
+            {
+                break;
+            }
+            match result {
+                Ok(Some(project)) => {
+                    if let Some(w) = &target {
+                        if let Err(error) = w.documents.open(w, (project.0, project.1, None)).await
+                        {
+                            w.changed(Err(error));
+                            break;
+                        }
+                    } else if let Some(windows) = self.windows.upgrade() {
+                        crate::open_workspace(app, &windows, Some(project), None);
+                        target = windows.borrow().last().cloned();
+                        if let Some(window) = &placeholder {
+                            window.destroy();
+                        }
+                        if let Some(w) = &target {
+                            crate::recovery::offer_stale(w);
                         }
                     }
-                    Ok(None) => {
-                        launcher.files.borrow_mut().clear();
-                        break;
-                    }
-                    Err(error) => {
-                        let dialog = adw::AlertDialog::builder()
-                            .heading("Cannot open file")
-                            .body(format!("{name}\n\n{error}"))
-                            .build();
-                        dialog.set_widget_name("file-launch-error");
-                        dialog.add_response("ok", "OK");
-                        dialog.set_close_response("ok");
-                        crate::alert::choose(dialog, &window).await;
-                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Cannot open file")
+                        .body(format!("{name}\n\n{error}"))
+                        .build();
+                    dialog.set_widget_name("file-launch-error");
+                    dialog.add_response("ok", "OK");
+                    dialog.set_close_response("ok");
+                    crate::alert::choose(dialog, parent).await;
                 }
             }
+        }
+        if let Some(window) = placeholder {
             window.destroy();
-            launcher.running.set(false);
-            // A new application Open received while the previous worker was
-            // acknowledging window-close cancellation starts its own batch.
-            launcher.start(&app);
-        });
+        }
+        if let Some(w) = target {
+            w.documents.loading.set(false);
+            if w.documents.cancel_open.get() {
+                w.window.close();
+            }
+        }
     }
 }

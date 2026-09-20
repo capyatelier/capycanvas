@@ -74,6 +74,7 @@ impl Task {
         let mut output = std::io::BufWriter::new(stream);
         let target = recipe.interpretation();
         let statistics = match recipe.format {
+            ExportFormat::Exr => renderer.write_exr(&mut output),
             ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut output, recipe.format.maps_hdr_range()),
             ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => renderer.write_gainmap(&mut output, recipe.format.gainmap().unwrap(),recipe.jpeg_quality,recipe.background.matte(),recipe.format.maps_hdr_range()),
             ExportFormat::Png => renderer.write_png(&mut output, &target, recipe.encoding, recipe.background.matte()),

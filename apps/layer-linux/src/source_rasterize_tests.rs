@@ -214,7 +214,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
             .0;
     assert_eq!(image.as_ref(), &expected);
     let saved = snapshot(&w);
-    assert_eq!(&saved[..12], b"CAPYRASTER\x04\0");
+    assert_eq!(&saved[..12], b"CAPYRASTER\x06\0");
     let project =
         layer_core::Project::read(std::io::Cursor::new(saved.clone()), Default::default()).unwrap();
     let restored = Workspace::with_project(&app, Some((project, None)));

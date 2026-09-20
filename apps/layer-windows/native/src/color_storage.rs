@@ -127,14 +127,17 @@ pub(crate) fn profile(id: &str, cancel: &AtomicBool) -> Result<ColorProfile, Str
 }
 pub(crate) fn import(path: &Path, cancel: &AtomicBool) -> Result<(), String> {
     let bytes = read(path, policy::PROFILE_READ_LIMIT)?;
+    preserve(&bytes, cancel)
+}
+pub(crate) fn preserve(bytes: &[u8], cancel: &AtomicBool) -> Result<(), String> {
     locked(cancel, |directory| {
-        let entry = policy::prepare_profile_import(inventory(directory)?, &bytes)?;
+        let entry = policy::prepare_profile_import(inventory(directory)?, bytes)?;
         atomic_write(
             &directory.join(format!("{}.icc", entry.id)),
             cancel,
             |stream| {
                 stream
-                    .write_all(&bytes)
+                    .write_all(bytes)
                     .map_err(|e| io_error("save profile", e))
             },
         )

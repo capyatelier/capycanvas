@@ -3,6 +3,9 @@ package art.capycanvas
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.*
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -33,6 +36,10 @@ class AndroidRasterTest {
         compose.waitUntil(60_000) {host.workspaceManager?.optBoolean("ready")==true || host.workspaceManager?.isNull("error")==false}
         assertTrue("Workspace startup: ${host.workspaceManager}",host.workspaceManager?.optBoolean("ready")==true)
         compose.waitUntil(60_000) {host.workspaceManager?.optBoolean("busy")==false}
+        // Slower devices can finish the selected brush before document commands
+        // are enabled. Wait for the same admission state as the visible Open UI.
+        compose.waitUntil(120_000) {host.failure!=null || native{state(it).array("commands").objects().any{c->c.optString("id")=="open_document"&&c.optBoolean("enabled")}}}
+        assertNull(host.failure)
     }
     @Before fun isolatedWindow() {
         DocumentController.nativeFileJobsForTest = true
@@ -66,6 +73,22 @@ class AndroidRasterTest {
     private fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
+    @Test fun displaySurfaceCapabilities() {
+        val report=native{JSONObject(Native.displayStatus(it))}
+        compose.runOnIdle {
+            val display=activity.display!!
+            report.put("display_hdr",display.isHdr)
+            val capabilities=display.hdrCapabilities
+            val types=if(android.os.Build.VERSION.SDK_INT>=34)display.mode.supportedHdrTypes else capabilities?.supportedHdrTypes?:intArrayOf()
+            report.put("android_hdr_types",org.json.JSONArray(types.toList()))
+            report.put("desired_max_luminance",capabilities?.desiredMaxLuminance)
+            if(android.os.Build.VERSION.SDK_INT>=34)report.put("hdr_sdr_ratio",display.hdrSdrRatio)
+            report.put("wide_color_gamut",display.isWideColorGamut)
+        }
+        File(activity.filesDir,"display-capabilities.json").writeText(report.toString(2))
+        assertFalse(report.has("error"))
+        assertTrue(report.getJSONArray("formats").length()>0)
+    }
     @Test fun diagnosticsSampleInOpenColumns() {
         fun action(value: JSONObject) {
             val done = java.util.concurrent.CountDownLatch(1)
@@ -144,6 +167,7 @@ class AndroidRasterTest {
             try {
                 Native.projectWork(job.first,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
                 if(corrupt)fail("Corrupt file was accepted")
+                compose.waitUntil(120_000){tick();native{Native.projectParkReady(it,job.first)}}
                 native {Native.projectAdopt(it,job.first,"null")}
             } catch(e: Exception) {
                 if(!corrupt)throw e
@@ -167,15 +191,632 @@ class AndroidRasterTest {
             Native.projectWork(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
             native {Native.documentComplete(it,id,true,"null")}
             return file.readBytes()
-        } finally {Native.projectFree(task)}
+        } catch(e:Exception){native{Native.documentComplete(it,id,false,"null")};throw e} finally {Native.projectFree(task)}
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() in 4..5 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 6 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+
+    @Test fun portablePhotoGainmapDelivery() {
+        val root=requireNotNull(InstrumentationRegistry.getArguments().getString("photoDirectory")){"Supply -e photoDirectory with the portable photo fixtures"}
+        require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val automation=instrumentation.uiAutomation
+        fun fixture(name:String)=File(files,name).apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $root/$name")).use{it.readBytes()})
+            assertTrue("Fixture $name",length()>0)
+        }
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
+        fun histogram():JSONObject {val c=Native.captureControl();try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}finally{Native.captureFree(c)}}
+        fun choice(label:String,text:String){
+            compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-$label") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("color-choice-$label").performScrollTo().performClick()
+            compose.onNodeWithText(text).performClick();compose.waitForIdle()
+        }
+        val report=obj("model" to android.os.Build.MODEL,"imports" to org.json.JSONArray(),"exports" to org.json.JSONArray())
+        for((name,depth) in listOf("p3-grid-8bit.heic" to "U8","p3-gray-10bit.heic" to "U16","p3-12bit.avif" to "U16","web-hdr.jpg" to "F16","web-hdr.avif" to "F16")) {
+            open(fixture(name));refresh()
+            assertEquals(name,depth,native{JSONObject(Native.query(it,obj("type" to "document_color").toString())).getString("depth")})
+            report.getJSONArray("imports").put(name)
+        }
+        val original=fixture("web-hdr.avif")
+        for((format,label,extension,mime) in listOf(
+            listOf("JpegHdr","HDR JPEG · gain map","jpg","image/jpeg"),
+            listOf("AvifHdr","HDR AVIF · gain map with transparency","avif","image/avif")
+        )) {
+            open(original);refresh()
+            val master=save("portable-master.capy");val before=histogram()
+            assertTrue(before.getJSONArray("channels").objects().any{it.getLong("above")>0})
+            val savedName="capy-portable-${System.nanoTime()}.$extension"
+            val uri=activity.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,savedName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE,mime)
+            })!!
+            val picked=java.util.concurrent.atomic.AtomicReference<android.content.Intent>()
+            // Supply only the OS chooser's result; the real dialog, controller,
+            // JNI capture/encoder and temporary-file publication all execute.
+            val monitor=object:android.app.Instrumentation.ActivityMonitor() {
+                override fun onStartActivity(intent:android.content.Intent):android.app.Instrumentation.ActivityResult? {
+                    if(intent.action!=android.content.Intent.ACTION_CREATE_DOCUMENT)return null
+                    picked.set(android.content.Intent(intent))
+                    return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,android.content.Intent().setData(uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+                }
+            }
+            instrumentation.addMonitor(monitor)
+            try {
+                DocumentController.nativeFileJobsForTest=false
+                compose.runOnUiThread{host.invoke("export_document")}
+                choice("Dynamic range",label)
+                if(format=="JpegHdr")choice("Transparency","White background")
+                compose.onNodeWithText("Preview Output").performScrollTo().performClick()
+                compose.waitUntil(120_000){compose.onAllNodesWithContentDescription("Output preview").fetchSemanticsNodes().isNotEmpty()}
+                choice("Preview rendition","Encoded SDR base")
+                val sdr=compose.onNodeWithContentDescription("Output preview").performScrollTo().captureToImage()
+                assertTrue(sdr.width>0&&sdr.height>0)
+                choice("Preview rendition","HDR reconstruction · SDR preview")
+                choice("Preview rendition","Encoded SDR base")
+                compose.onNodeWithContentDescription("Output preview").performScrollTo()
+                val output=File(activity.getExternalFilesDir(null),"portable-$extension.png")
+                automation.takeScreenshot()?.let{shot->output.outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+                compose.onNodeWithTag("export-choose-file").performClick()
+                compose.waitUntil(120_000){picked.get()!=null&&!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+                assertEquals(mime,picked.get().type)
+                assertTrue(picked.get().getStringExtra(android.content.Intent.EXTRA_TITLE)!!.endsWith(".$extension"))
+                assertEquals(mime,host.documents.exportMime())
+                assertNull(native{state(it)}.opt("host_error").takeUnless{it==JSONObject.NULL})
+                assertNull(host.actionError)
+                DocumentController.nativeFileJobsForTest=true
+                assertEquals(before.toString(),histogram().toString())
+                assertArrayEquals(master,save("portable-unchanged.capy"))
+                val bytes=activity.contentResolver.openInputStream(uri)!!.use{it.readBytes()}
+                assertTrue(bytes.size>100)
+                val delivery=File(activity.getExternalFilesDir(null),"portable-hdr.$extension").apply{writeBytes(bytes)}
+                open(delivery);refresh()
+                val restored=histogram()
+                assertEquals("F16",restored.getJSONObject("color").getString("depth"))
+                assertTrue(restored.getJSONArray("channels").objects().any{it.getLong("above")>0})
+                if(format=="JpegHdr")assertEquals(0L,restored.getLong("transparent"))
+                else assertTrue(restored.getLong("transparent")>0)
+                report.getJSONArray("exports").put(obj("format" to format,"bytes" to bytes.size,"mime" to mime))
+            } finally {
+                instrumentation.removeMonitor(monitor)
+                activity.contentResolver.delete(uri,null,null)
+                DocumentController.nativeFileJobsForTest=true
+            }
+        }
+        open(original);refresh()
+        val initial=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)}
+        val recipe=native{JSONObject(Native.query(it,obj("type" to "export_draft","recipe" to initial,"action" to obj("type" to "format","value" to "AvifHdrMapped")).toString())).getJSONObject("recipe")}
+        val color=native{JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+        val preset=runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Portable HDR","recipe" to recipe))}
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread{host.invoke("export_document")}
+        choice("Destination","Portable HDR")
+        compose.onNodeWithTag("color-choice-Dynamic range").assertTextContains("HDR AVIF · gain map with transparency")
+        compose.onNodeWithText("Cancel").performClick();idle();DocumentController.nativeFileJobsForTest=true
+        assertEquals("AvifHdrMapped",runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "get","index" to preset.getInt("index")))}.getJSONObject("recipe").getString("format"))
+        // Cancel an admitted export while its independent worker is active.
+        recipe.put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(1024,1024)),"enlarge" to true)))
+        val c=Native.captureControl();val id=native{request(it,"export_document").first}
+        val task=native{Native.projectExportTask(it,id,System.nanoTime(),c)}
+        assertNotEquals(0L,task);Native.projectExportOptions(task,recipe.toString())
+        val output=File(files,"portable-cancelled.avif")
+        val pool=java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val entered=java.util.concurrent.CountDownLatch(1)
+            val result=pool.submit<String> {
+                entered.countDown()
+                try {Native.projectWork(task,ParcelFileDescriptor.open(output,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0);"completed"}
+                catch(e:Exception){e.message.orEmpty()}
+            }
+            assertTrue(entered.await(10,java.util.concurrent.TimeUnit.SECONDS));SystemClock.sleep(50)
+            val started=SystemClock.uptimeMillis();Native.captureCancel(c)
+            assertTrue(result.get(10,java.util.concurrent.TimeUnit.SECONDS).contains("cancel",ignoreCase=true))
+            report.put("cancel_ms",SystemClock.uptimeMillis()-started)
+            assertEquals(0L,output.length())
+            native{Native.documentComplete(it,id,false,"null")}
+        } finally {pool.shutdown();check(pool.awaitTermination(30,java.util.concurrent.TimeUnit.SECONDS)){"Export worker failed to drain"};Native.projectFree(task);Native.captureFree(c)}
+        recipe.put("size","Original")
+        val flag=Native.captureControl()
+        try {val preview=Native.inspectionOutput(native{Native.inspectionTask(it,flag)},recipe.toString());assertEquals(4,preview.size);assertFalse((preview[2] as ByteArray).contentEquals(preview[3] as ByteArray))}
+        finally{Native.captureFree(flag)}
+        assertTrue(files.listFiles().orEmpty().none{it.name.startsWith("capy-save-")})
+        File(activity.getExternalFilesDir(null),"portable-photo-report.json").writeText(report.toString(2))
+        assertNull(host.failure)
+    }
+
+    @Test fun portablePhotoLargeDelivery() {
+        val arguments=InstrumentationRegistry.getArguments()
+        val path=requireNotNull(arguments.getString("photoFile")){"Supply -e photoFile with an HDR photo"}
+        require(Regex("/data/local/tmp/[A-Za-z0-9_./-]+").matches(path))
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"large-photo.avif").apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $path")).use{it.readBytes()})
+        }
+        val quality=arguments.getString("photoQuality")?.toInt()?:90
+        val report=obj("model" to android.os.Build.MODEL,"input" to path,"quality" to quality,"exports" to org.json.JSONArray())
+        val output=File(activity.getExternalFilesDir(null),"portable-large-report.json")
+        val watching=java.util.concurrent.atomic.AtomicBoolean(true)
+        val peak=java.util.concurrent.atomic.AtomicLong()
+        val sampler=Thread{while(watching.get()){peak.accumulateAndGet(android.os.Debug.getPss().toLong()*1024,::maxOf);SystemClock.sleep(250)}}.apply{start()}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun histogram():JSONObject {
+            val c=Native.captureControl()
+            try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}
+            finally{Native.captureFree(c)}
+        }
+        try {
+            val started=SystemClock.uptimeMillis();open(input);refresh()
+            report.put("open_ms",SystemClock.uptimeMillis()-started)
+            val master=save("large-master.capy")
+            val document=manifest(master).getJSONObject("document")
+            val extent=listOf(document.getInt("width"),document.getInt("height"))
+            report.put("extent",org.json.JSONArray(extent))
+            val original=histogram()
+            assertEquals("F16",original.getJSONObject("color").getString("depth"))
+            assertTrue(original.getJSONArray("channels").objects().any{it.getLong("above")>0})
+            for((format,extension) in listOf("JpegHdrMapped" to "jpg","AvifHdrMapped" to "avif")) {
+                open(File(files,"large-master.capy"));refresh()
+                val recipe=native{h->
+                    val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)
+                    JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to format)).toString())).getJSONObject("recipe")
+                }.put("jpeg_quality",quality).put("background",if(extension=="jpg")"White" else "Preserve")
+                val entry=obj("format" to format);report.getJSONArray("exports").put(entry)
+                val c=Native.captureControl();val previewStart=SystemClock.uptimeMillis()
+                try {
+                    val preview=Native.inspectionOutput(native{Native.inspectionTask(it,c)},recipe.toString())
+                    entry.put("preview_ms",SystemClock.uptimeMillis()-previewStart)
+                    assertEquals(4,preview.size)
+                    assertEquals(extent,JSONObject(preview[0] as String).getJSONArray("extent").values())
+                }finally{Native.captureFree(c)}
+                val encodeStart=SystemClock.uptimeMillis()
+                val bytes=png("large-delivery.$extension",recipe)
+                entry.put("export_ms",SystemClock.uptimeMillis()-encodeStart).put("bytes",bytes.size)
+                assertArrayEquals(master,save("large-unchanged.capy"))
+                assertEquals(original.toString(),histogram().toString())
+                val reopened=SystemClock.uptimeMillis();open(File(files,"large-delivery.$extension"));refresh()
+                entry.put("reopen_ms",SystemClock.uptimeMillis()-reopened)
+                val color=histogram()
+                assertEquals("F16",color.getJSONObject("color").getString("depth"))
+                assertTrue(color.getJSONArray("channels").objects().any{it.getLong("above")>0})
+                val restored=manifest(save("large-reopened.capy")).getJSONObject("document")
+                assertEquals(extent,listOf(restored.getInt("width"),restored.getInt("height")))
+                output.writeText(report.toString(2))
+            }
+            assertNull(host.failure)
+        }catch(e:Throwable){report.put("error",e.toString());throw e}
+        finally{watching.set(false);sampler.join(2000);report.put("peak_process_pss_bytes",peak.get());output.writeText(report.toString(2))}
+    }
+
+    @Test fun hdrBlackIntensityMarkerVisible() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
+        requireNotNull(sourcePath){"Supply -e hdrFile"}
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"hdr-marker.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
+        open(input)
+        native { Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot_intensity","slot" to "foreground","color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"stops" to 2)).toString()) }
+        tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"black-ev-marker.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        val image=compose.onNodeWithTag("color-hdr-intensity").captureToImage().toPixelMap()
+        val density=activity.resources.displayMetrics.density
+        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to image.width/density,"fraction" to .5).toString()))
+        val point=arc.getJSONArray("point");val x=point.getDouble(0)*density;val y=point.getDouble(1)*density;val radius=arc.getJSONObject("geometry").getDouble("marker_radius")*density
+        assertTrue("EV handle fits within the panel: ${image.width} x ${image.height}, center=($x,$y), radius=$radius",x-radius>=0&&x+radius<image.width&&y-radius>=0&&y+radius<image.height)
+        val center=image[x.toInt(),y.toInt()]
+        assertTrue("Exposure preserves black",center.red<.02f&&center.green<.02f&&center.blue<.02f)
+        for(i in 0 until 16){
+            val angle=i*Math.PI/8
+            val pixel=image[kotlin.math.round(x+radius*kotlin.math.cos(angle)).toInt(),kotlin.math.round(y+radius*kotlin.math.sin(angle)).toInt()]
+            assertTrue("Black EV handle has a visible white ring at $i: $pixel",pixel.red>.85f&&pixel.green>.85f&&pixel.blue>.85f)
+        }
+        fun point(fraction:Double):androidx.compose.ui.geometry.Offset {
+            val p=JSONObject(Native.colorUi(obj("type" to "arc","size" to image.width/density,"fraction" to fraction).toString())).getJSONArray("point")
+            return androidx.compose.ui.geometry.Offset(p.getDouble(0).toFloat()*density,p.getDouble(1).toFloat()*density)
+        }
+        compose.onNodeWithTag("color-hdr-intensity").performTouchInput { swipe(point(.3),point(.7),300) }
+        compose.waitForIdle()
+        assertEquals("EV drag follows the visible arc",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+        compose.onNodeWithTag("color-hdr-intensity").performTouchInput { down(point(.7));moveTo(point(.4));cancel() }
+        compose.waitForIdle()
+        assertEquals("Cancelled EV drag restores its value",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+    }
+
+    @Test fun hdrEditingProofDeliveryAndRecovery() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
+        Assume.assumeTrue("Supply an independently encoded PQ PNG with -e hdrFile",sourcePath!=null)
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"hdr-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};refresh()}
+        fun histogram():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        fun form()=native{JSONObject(Native.proofForm(it))}
+        fun ready(){compose.waitUntil(120_000){native{JSONObject(Native.toneStatus(it)).getBoolean("ready")}};assertNull(host.failure)}
+        open(input);refresh();ready()
+        var original=histogram()
+        assertEquals("F16",JSONObject(original).getJSONObject("color").getString("depth"))
+        assertTrue(JSONObject(original).getJSONArray("channels").objects().any{it.getLong("above")>0})
+        fun captureColor(name:String){automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),name).outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}}
+        captureColor("color-panel.png")
+        compose.onNodeWithTag("color-edit-button").performClick()
+        compose.waitForIdle();SystemClock.sleep(300);captureColor("edit-color.png")
+        for(text in listOf("","-",".","17","1e999")) {
+            compose.onNodeWithTag("color-intensity-value").performTextReplacement(text)
+            compose.onNodeWithText("Use Color").assertIsNotEnabled()
+        }
+        compose.onNodeWithTag("color-intensity-value").performTextReplacement("-0.5")
+        compose.onNodeWithText("Use Color").assertIsEnabled()
+        compose.onNodeWithTag("color-intensity-value").performTextReplacement("3")
+        compose.onNodeWithText("Use Color").performClick();refresh()
+        assertEquals(3.0,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.001)
+        compose.onAllNodesWithText("Palettes…").assertCountEquals(0)
+        native {h->
+            val color=JSONObject(Native.colorUi(obj("type" to "form","request" to obj("color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"document_space" to "Srgb","document_depth" to "F16","model" to "linear_rgb","intensity" to 0,"fields" to org.json.JSONArray(listOf("-4","4","1","100")))).toString())).getJSONObject("value")
+            Native.dispatch(h,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(h,obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground","color" to color)).toString())
+        };refresh()
+        motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,30,256.0 to 192.0);refresh()
+        val painted=histogram();assertTrue(JSONObject(painted).getJSONArray("channels").objects().any{it.getLong("below")>0});assertNotEquals(original,painted)
+        action("undo");assertEquals(original,histogram());action("redo");assertEquals(painted,histogram());original=painted
+        val first=manifest(save("hdr-original.capy"))
+        action("sdr_rendition")
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
+        val before=form().getJSONObject("rendition").toString()
+        compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "layers","visible" to true))};refresh()
+        val layerGroup=host.snapshot!!.getJSONObject("layout").array("groups").objects().first{ "layers" in it.array("panels").values() }.getInt("id")
+        compose.runOnUiThread{host.dispatch(obj("type" to "select_panel_tab","group" to layerGroup,"panel" to "layers"))};refresh()
+        val thumbnailId=host.panelContent!!.getJSONObject("state").array("layers").objects().first{!it.optBoolean("group")&&it.isNull("content_icon")}.getLong("id")
+        val thumbnailTag="layer-thumbnail-$thumbnailId-false"
+        try{compose.waitUntil(10_000){compose.onAllNodesWithTag(thumbnailTag,useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}}
+        catch(e:AssertionError){File(activity.getExternalFilesDir(null),"thumbnail-failure-tree.txt").writeText(compose.onRoot(useUnmergedTree=true).printToString());File(activity.getExternalFilesDir(null),"thumbnail-failure-state.json").writeText(host.snapshot.toString());throw e}
+        fun thumbnail():List<Byte> {
+            val image=compose.onNodeWithTag(thumbnailTag,useUnmergedTree=true).captureToImage().toPixelMap()
+            val bytes=ByteArray(image.width*image.height*3)
+            for(y in 0 until image.height)for(x in 0 until image.width){val color=image[x,y];val i=(y*image.width+x)*3
+                bytes[i]=(color.red*255).toInt().toByte();bytes[i+1]=(color.green*255).toInt().toByte();bytes[i+2]=(color.blue*255).toInt().toByte()}
+            return hash(bytes)
+        }
+        SystemClock.sleep(400)
+        val originalThumbnail=thumbnail()
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(50f,-30f));cancel()}
+        refresh();assertEquals(before,form().getJSONObject("rendition").toString())
+        // Inject through Android InputDispatcher with a stylus tool, not a mouse.
+        val padNode=compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode()
+        val padCenter=padNode.layoutInfo.coordinates.localToScreen(androidx.compose.ui.geometry.Offset(padNode.size.width/2f,padNode.size.height/2f))
+        val start=SystemClock.uptimeMillis()
+        for((index,phase)in listOf(android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_MOVE,android.view.MotionEvent.ACTION_UP).withIndex()){
+            val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply{id=7;toolType=android.view.MotionEvent.TOOL_TYPE_STYLUS})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply{x=padCenter.x+(if(index==0)0f else 45f);y=padCenter.y-(if(index==0)0f else 30f);pressure=if(index==2)0f else .7f})
+            val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_STYLUS,0)
+            try{assertTrue(automation.injectInputEvent(event,true))}finally{event.recycle()}
+            SystemClock.sleep(30)
+        }
+        refresh();val changed=form().getJSONObject("rendition").toString();assertNotEquals(before,changed)
+        compose.waitUntil(10_000){thumbnail()!=originalThumbnail}
+        val changedThumbnail=thumbnail()
+        action("undo");assertEquals(before,form().getJSONObject("rendition").toString())
+        compose.waitUntil(10_000){thumbnail()==originalThumbnail}
+        action("redo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        compose.waitUntil(10_000){thumbnail()==changedThumbnail}
+        val density=activity.resources.displayMetrics.density
+        val arc=JSONObject(Native.colorUi(obj("type" to "proof_dial","size" to padNode.size.width/density,"recipe" to form().getJSONObject("rendition")).toString())).getJSONArray("arcs").getJSONObject(0).getJSONArray("path")
+        fun arcPoint(i:Int)=arc.getJSONArray(i).let{androidx.compose.ui.geometry.Offset(it.getDouble(0).toFloat()*density,it.getDouble(1).toFloat()*density)}
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(arcPoint(16));moveTo(arcPoint(48));cancel()}
+        refresh();assertEquals(changed,form().getJSONObject("rendition").toString())
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput {down(arcPoint(16));moveTo(arcPoint(48));up()}
+        refresh();assertNotEquals(JSONObject(changed).getDouble("exposure"),form().getJSONObject("rendition").getDouble("exposure"),.01)
+        action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        // External history must refresh the visible dial as well as its Rust recipe.
+        compose.waitUntil(10_000){compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode().config[SemanticsProperties.StateDescription].contains(", Brightness 0%,")}
+        val keys=compose.onNodeWithTag("sdr-tone-pad")
+        keys.performSemanticsAction(SemanticsActions.RequestFocus)
+        keys.performKeyInput {keyDown(Key.DirectionRight);keyUp(Key.DirectionRight)}
+        refresh();assertEquals((JSONObject(changed).getDouble("balance")+.01).coerceAtMost(1.0),form().getJSONObject("rendition").getDouble("balance"),1e-6)
+        action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        keys.performKeyInput{keyDown(Key.DirectionUp);keyDown(Key.Escape);keyUp(Key.Escape);keyUp(Key.DirectionUp)}
+        refresh();assertEquals(changed,form().getJSONObject("rendition").toString())
+        for((part,key,step)in listOf(Triple(1,"exposure",.04),Triple(2,"highlight_color",.01))) {
+            val arcKeys=compose.onNodeWithTag("sdr-arc-$part")
+            arcKeys.performSemanticsAction(SemanticsActions.RequestFocus)
+            arcKeys.performKeyInput{keyDown(Key.DirectionUp);keyUp(Key.DirectionUp)}
+            refresh();assertEquals(JSONObject(changed).getDouble(key)+step,form().getJSONObject("rendition").getDouble(key),1e-6)
+            action("undo");assertEquals(changed,form().getJSONObject("rendition").toString())
+        }
+        compose.waitUntil(10_000){compose.onNodeWithTag("sdr-tone-pad").fetchSemanticsNode().config[SemanticsProperties.StateDescription].endsWith("Color intensity 30%") }
+        assertEquals(original,histogram())
+        automation.takeScreenshot()?.let { screenshot->File(activity.getExternalFilesDir(null),"hdr-proof.png").outputStream().use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};screenshot.recycle() }
+        compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};refresh()
+        val saved=save("hdr-master.capy");val manifest=manifest(saved)
+        assertEquals(first.getJSONArray("blobs").toString(),manifest.getJSONArray("blobs").toString())
+        assertEquals(first.getJSONObject("document").getJSONArray("layers").toString(),manifest.getJSONObject("document").getJSONArray("layers").toString())
+        open(File(files,"hdr-master.capy"));refresh();ready();assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString())
+        val cancel=Native.captureControl();var task=0L
+        try{task=native{Native.toneTask(it,cancel)};Native.captureCancel(cancel);assertTrue(runCatching{Native.toneWork(task)}.isFailure);assertFalse(native{Native.toneApply(it,task)})}finally{Native.toneRelease(task);Native.captureFree(cancel)}
+        File(activity.getExternalFilesDir(null),"hdr-sdr-rendition.json").writeText(form().getJSONObject("rendition").toString())
+        val sdr=png("hdr-sdr.png")
+        val recipe=native{h->val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1);JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to "PngHdr")).toString())).getJSONObject("recipe")}
+        assertTrue("Strict PQ delivery rejects out-of-range paint",runCatching{png("hdr-strict-rejected.png",recipe)}.isFailure)
+        val clipped=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "PngHdrMapped")).toString())).getJSONObject("recipe")}
+        png("hdr-pq.png",clipped)
+        val exr=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "Exr")).toString())).getJSONObject("recipe")}
+        val exrBytes=png("hdr-exact.exr",exr);assertArrayEquals(byteArrayOf(0x76,0x2f,0x31,0x01),exrBytes.copyOfRange(0,4))
+        val recovery=File(files,"hdr-recovery.capy");val capture=native{Native.projectRecoveryTask(it,false)}
+        try{Native.projectPublish(capture,recovery.absolutePath)}finally{Native.projectFree(capture)}
+        native{Native.destroyGpuForTest(it)};compose.runOnUiThread{host.documentChanged()};compose.waitUntil(10_000){host.failure!=null}
+        compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.surfaceReady&&host.snapshot?.optBoolean("brush_ready")==true};ready()
+        assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString());assertEquals(hash(sdr),hash(png("hdr-recovered-sdr.png")))
+        save("hdr-after-gpu-recovery.capy")
+        val restore=native{Native.projectRecoveryTask(it,true)}
+        try{Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0);native{Native.projectAdopt(it,restore,"null")}}finally{Native.projectFree(restore)}
+        refresh();ready();assertEquals(original,histogram());assertTrue(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        scenario.recreate();scenario.onActivity{activity=it};compose.waitUntil(60_000){host.surfaceReady};refresh();ready();assertEquals(original,histogram())
+        open(File(files,"hdr-exact.exr"));refresh();ready();val exact=JSONObject(histogram());assertEquals("F32",exact.getJSONObject("color").getString("depth"));assertTrue(exact.getJSONArray("channels").objects().any{it.getLong("below")>0})
+        open(File(files,"hdr-pq.png"));refresh();ready();assertEquals("F16",JSONObject(histogram()).getJSONObject("color").getString("depth"))
+        open(File(files,"hdr-sdr.png"));refresh();assertEquals("U8",JSONObject(histogram()).getJSONObject("color").getString("depth"))
+        println("HDR PQ open; GTK picker; touch cancel/stylus SDR appearance; exact master/rendition save/reopen; cancelled analysis; HDR/SDR delivery; GPU, recovery and Activity recreation passed")
+    }
+
+    @Test fun gpuToneRetainsPreviewAndRejectsLatePublication() {
+        val source=InstrumentationRegistry.getArguments().getString("hdrFile")
+        Assume.assumeTrue("Supply -e hdrFile",source!=null)
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"gpu-tone-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
+        fun status()=native{JSONObject(Native.toneStatus(it))}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun ready(){compose.waitUntil(120_000){val s=status();s.getBoolean("ready")||!s.isNull("error")};assertTrue(status().isNull("error"))}
+        open(input)
+        native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())};refresh();ready()
+        assertFalse("Exercise the mapped SDR presenter on HDR-capable devices too",status().getBoolean("hdr_output"))
+        native{Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString());Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString())};refresh()
+        val first=status().getInt("publications")
+        val control=Native.captureControl();val task=native{Native.toneTask(it,control)}
+        try {
+            val oracle=JSONObject(Native.toneReferenceDifference(task))
+            for (i in 0..2) assertTrue("GPU/CPU guide agreement: $oracle",oracle.getJSONArray("max_error").getDouble(i)<0.0003)
+            Native.toneWork(task)
+            val extent=native{state(it).getJSONArray("tabs").getJSONObject(0)}
+            val motion=motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,60,extent.getDouble("width")/2 to extent.getDouble("height")/2) {
+                val held=status()
+                assertFalse("Stroke must own the document",held.getBoolean("idle"))
+                assertTrue("Previous GPU guide stays bound",held.getBoolean("retained"))
+                assertEquals(first,held.getInt("publications"))
+                assertTrue("Pen down cancels immediately",Native.captureCancelled(control))
+                assertFalse("Late candidate cannot publish",native{Native.toneApply(it,task)})
+            }
+            val released=SystemClock.uptimeMillis();ready()
+            assertTrue(status().getInt("publications")>first)
+            val report=obj("pen_up_wait_ms" to (SystemClock.uptimeMillis()-released),"status" to status(),"oracle" to oracle,"motion" to motion)
+            File(activity.getExternalFilesDir(null),"gpu-tone-retention.json").writeText(report.toString(2))
+            println("GPU_TONE "+report)
+            val second=status().getInt("publications")
+            native{Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};refresh();ready()
+            assertTrue(status().getInt("publications")>second)
+        } finally {Native.toneRelease(task);Native.captureFree(control)}
+        assertNull(host.failure)
+    }
+
+    @Test fun hdrDisplayNegotiation() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
+        requireNotNull(sourcePath){"Supply -e hdrFile for the display regression"}
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command:String)=ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use{it.readBytes()}
+        val output=File(activity.getExternalFilesDir(null),"display").apply{mkdirs()}
+        val input=File(files,"display-hdr.png").apply{writeBytes(shell("cat $sourcePath"))}
+        fun tone()=native{JSONObject(Native.toneStatus(it))}
+        fun mode(value:String){native{Native.proofControl(it,obj("type" to "mode","mode" to value).toString())};compose.runOnUiThread{host.documentChanged()};tick()}
+        fun surfacePixels(name:String):JSONObject {
+            fun find(view:android.view.View):CanvasSurfaceView? {
+                if(view is CanvasSurfaceView)return view
+                if(view is android.view.ViewGroup)for(i in 0 until view.childCount)find(view.getChildAt(i))?.let{return it}
+                return null
+            }
+            lateinit var surface:CanvasSurfaceView
+            compose.runOnUiThread{surface=requireNotNull(find(activity.window.decorView))}
+            val image=android.graphics.Bitmap.createBitmap(surface.width,surface.height,android.graphics.Bitmap.Config.RGBA_F16,false,
+                android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB))
+            val done=java.util.concurrent.CountDownLatch(1);var result=-1
+            compose.runOnUiThread{android.view.PixelCopy.request(surface,image,{result=it;done.countDown()},android.os.Handler(android.os.Looper.getMainLooper()))}
+            assertTrue(done.await(10,java.util.concurrent.TimeUnit.SECONDS));assertEquals(android.view.PixelCopy.SUCCESS,result)
+            fun range(left:Int,top:Int,right:Int,bottom:Int):JSONObject {
+                var low=Float.POSITIVE_INFINITY;var high=Float.NEGATIVE_INFINITY
+                var above=0;var count=0
+                var digest=1469598103934665603L
+                for(y in top.coerceAtLeast(0) until bottom.coerceAtMost(image.height) step 3)
+                    for(x in left.coerceAtLeast(0) until right.coerceAtMost(image.width) step 3){
+                        val p=image.getColor(x,y)
+                        for(v in listOf(p.red(),p.green(),p.blue())){low=minOf(low,v);high=maxOf(high,v);if(v>1.001f)above++;count++;digest=(digest xor v.toRawBits().toLong())*1099511628211L}
+                    }
+                return obj("min" to low,"max" to high,"above_sdr" to above,"samples" to count,"digest" to digest.toString())
+            }
+            val nav=compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot.translate(-host.surfaceOrigin)
+            val pixels=obj("format" to image.config.toString(),"color_space" to image.colorSpace.toString(),
+                "canvas" to range(image.width/3,image.height/3,image.width*2/3,image.height*2/3),
+                "navigator" to range(nav.left.toInt()+3,nav.top.toInt()+3,nav.right.toInt()-3,nav.bottom.toInt()-3))
+            File(output,"$name-pixels.json").writeText(pixels.toString(2));image.recycle();return pixels
+        }
+        fun record(name:String){
+            File(output,"$name.json").writeText(tone().put("surface",native{JSONObject(Native.displayStatus(it))}).toString(2))
+            File(output,"$name-display.txt").writeBytes(shell("dumpsys display"))
+            File(output,"$name-surfaceflinger.txt").writeBytes(shell("dumpsys SurfaceFlinger"))
+            automation.takeScreenshot()?.let{shot->File(output,"$name.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        }
+        open(input);mode("off")
+        compose.waitUntil(30_000){tone().getBoolean("ready")}
+        compose.waitUntil(5_000){native{JSONObject(Native.displayStatus(it)).optInt("presented_tone_generation",-1)}==tone().getInt("generation")}
+        val supports=tone().getBoolean("display_hdr")
+        fun awaitSurface(hdr:Boolean) {
+            compose.waitUntil(10_000){native{JSONObject(Native.displayStatus(it)).let{s->
+                s.opt("presented_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else "Srgb"
+            }}}
+        }
+        awaitSurface(supports)
+        record("hdr-off")
+        val actualPixels=surfacePixels("actual-display")
+        if(InstrumentationRegistry.getArguments().getString("requireHdr")=="true")assertTrue("Expected a negotiated HDR surface",supports)
+        if(supports) {
+            for(region in listOf("canvas","navigator"))assertTrue("PQ $region contains HDR: $actualPixels",actualPixels.getJSONObject(region).getDouble("max")>1.0)
+            val revision=native{state(it).getJSONObject("document_file").getLong("revision")}
+            // A display move/lost HDR capability must restore SDR, then the same HDR pixels.
+            compose.runOnUiThread{host.displayInfo(false)}
+            awaitSurface(false)
+            val fallback=surfacePixels("sdr-display-fallback")
+            for(region in listOf("canvas","navigator"))assertTrue(fallback.getJSONObject(region).getDouble("max")<=1.001)
+            compose.runOnUiThread{host.displayInfo(true)}
+            awaitSurface(true)
+            val restored=surfacePixels("hdr-display-restored")
+            for(region in listOf("canvas","navigator"))assertEquals("Display restore preserves $region",actualPixels.getJSONObject(region).getString("digest"),restored.getJSONObject(region).getString("digest"))
+            assertEquals(revision,native{state(it).getJSONObject("document_file").getLong("revision")})
+            compose.waitUntil(5_000){host.hdr.status=="HDR"}
+            compose.onNodeWithTag("hdr-status").assertTextEquals("HDR")
+        }
+        val info=compose.onNodeWithTag("hdr-status").fetchSemanticsNode().boundsInRoot
+        val zoom=compose.onNodeWithTag("camera-readout").fetchSemanticsNode().boundsInRoot
+        assertTrue("Display status belongs on the left",info.right<zoom.left)
+        assertEquals("Matching footer bubble height",zoom.height,info.height,1f)
+        compose.onNodeWithTag("hdr-status").performClick()
+        compose.onNodeWithText("Display Details").assertExists()
+        record("display-details")
+        compose.onNodeWithText("Close").performClick()
+        mode("sdr");awaitSurface(false);record("sdr-proof")
+        val sdrPixels=surfacePixels("sdr-proof")
+        awaitSurface(false)
+        for(region in listOf("canvas","navigator")) {
+            assertTrue("SDR proof is bounded: $sdrPixels",sdrPixels.getJSONObject(region).getDouble("max")<=1.001)
+            if(supports)assertNotEquals("Proof changes $region",actualPixels.getJSONObject(region).getString("digest"),sdrPixels.getJSONObject(region).getString("digest"))
+        }
+        mode("print");awaitSurface(false);record("print-proof")
+        mode("off");awaitSurface(supports)
+        compose.runOnUiThread{host.restartCanvas()}
+        compose.waitUntil(60_000){host.failure!=null||host.snapshot?.optBoolean("brush_ready")==true}
+        assertNull(host.failure)
+        awaitSurface(supports)
+        record("hdr-recovered")
+        assertEquals(supports,tone().getBoolean("display_hdr"))
+    }
+
+    @Test fun hdrLargeDocumentMeasurements() {
+        val names=InstrumentationRegistry.getArguments().getString("hdrWorkloads")?.split(',') ?: listOf("sparse4k","hdr24.png","hdr45.png","hdr60.png")
+        val report=obj("device" to android.os.Build.MODEL,"sdk" to android.os.Build.VERSION.SDK_INT,"runs" to org.json.JSONArray())
+        val destination=File(activity.getExternalFilesDir(null),"hdr-performance.json")
+        fun persist(){destination.writeText(report.toString(2))}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun invoke(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};refresh()}
+        fun ready(){compose.waitUntil(150_000){native{val s=JSONObject(Native.toneStatus(it));s.getBoolean("ready")||!s.isNull("error")}};assertTrue(native{JSONObject(Native.toneStatus(it)).isNull("error")})}
+        for(name in names) {
+            val entry=obj("name" to name,"runs" to org.json.JSONArray());report.getJSONArray("runs").put(entry)
+            val peaks=java.util.concurrent.atomic.AtomicLong()
+            val heartbeat=java.util.concurrent.CopyOnWriteArrayList<Double>()
+            val watching=java.util.concurrent.atomic.AtomicBoolean(true)
+            val handler=android.os.Handler(android.os.Looper.getMainLooper())
+            var last=SystemClock.uptimeMillis()
+            val pulse=object:Runnable{override fun run(){val now=SystemClock.uptimeMillis();heartbeat.add((now-last).toDouble());last=now;if(watching.get())handler.postDelayed(this,16)}}
+            handler.post(pulse)
+            val sampler=Thread{while(watching.get()){peaks.accumulateAndGet(android.os.Debug.getPss().toLong()*1024,::maxOf);SystemClock.sleep(500)}}.apply{start()}
+            try {
+                val started=SystemClock.uptimeMillis()
+                if(name=="sparse4k") {
+                    val job=native{h->val(id,f)=request(h,"new_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision"))}
+                    try{Native.projectOptions(job,obj("extent" to org.json.JSONArray(listOf(3840,2160)),"color" to obj("space" to "Srgb","depth" to "F16"),"background" to "White").toString());Native.projectWork(job,-1,3840,2160);native{Native.projectAdopt(it,job,"null")}}finally{Native.projectFree(job)}
+                }else open(File(activity.filesDir,name))
+                native{Native.proofControl(it,obj("type" to "mode","mode" to "sdr").toString())}
+                refresh();entry.put("open_ms",SystemClock.uptimeMillis()-started);ready();entry.put("ready_ms",SystemClock.uptimeMillis()-started)
+                entry.put("cold_heartbeat_ms",summary(org.json.JSONArray(heartbeat.toList())));heartbeat.clear()
+                if(InstrumentationRegistry.getArguments().getString("hdrDiagnostics")=="true") {
+                    native{Native.dispatch(it,obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "stats","visible" to true)).toString())};refresh()
+                    val viewport=host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("viewport")
+                    native{Native.dispatch(it,obj("type" to "move_panel","panel" to "stats","viewport" to viewport,"target" to obj("kind" to "float","position" to org.json.JSONArray(listOf(80,80)))).toString())};refresh()
+                }
+                invoke("fit_canvas");invoke("pen");native{Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground","color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(1.8,.3,.1,1.0))))).toString())};refresh()
+                val center=if(name=="sparse4k")1920.0 to 1080.0 else when(name){"hdr24.png"->3000.0 to 2000.0;"hdr45.png"->4128.0 to 2752.0;else->4752.0 to 3168.0}
+                repeat(3){i->
+                    val previous=native{JSONObject(Native.toneStatus(it))}.getInt("publications")
+                    val run=motion(if(i==1)android.view.MotionEvent.TOOL_TYPE_FINGER else android.view.MotionEvent.TOOL_TYPE_STYLUS,180,center) {
+                        val held=native{JSONObject(Native.toneStatus(it))}
+                        assertTrue(held.getBoolean("retained"));assertEquals(previous,held.getInt("publications"))
+                    }
+                    val released=SystemClock.uptimeMillis();ready()
+                    run.put("pen_up_wait_ms",SystemClock.uptimeMillis()-released)
+                    run.put("guide",native{JSONObject(Native.toneStatus(it))})
+                    entry.getJSONArray("runs").put(run);persist()
+                }
+                ready()
+                val flag=Native.captureControl();val inspection=native{Native.inspectionTask(it,flag)}
+                var inspectionError:String?=null
+                val worker=Thread{try{Native.inspectionHistogram(inspection)}catch(e:Exception){inspectionError=e.message}}
+                worker.start();SystemClock.sleep(40);val cancelled=SystemClock.uptimeMillis();Native.captureCancel(flag);worker.join(10_000)
+                try{assertFalse("Inspection cancellation must finish",worker.isAlive);entry.put("histogram_cancel_ms",SystemClock.uptimeMillis()-cancelled);entry.put("histogram_cancel_result",inspectionError)}finally{if(!worker.isAlive)Native.captureFree(flag)}
+                val concurrentFlag=Native.captureControl();val concurrent=native{Native.inspectionTask(it,concurrentFlag)};var concurrentError:String?=null
+                val background=Thread{try{Native.inspectionHistogram(concurrent)}catch(e:Exception){concurrentError=e.message}};background.start()
+                val saveStart=SystemClock.uptimeMillis();val saved=save("hdr-performance.capy");entry.put("save_ms",SystemClock.uptimeMillis()-saveStart);entry.put("saved_bytes",saved.size);background.join(150_000)
+                try{assertFalse(background.isAlive);assertNull(concurrentError)}finally{if(!background.isAlive)Native.captureFree(concurrentFlag)}
+                // Output uses the same atomic cancellation contract as the UI.
+                val exportFlag=Native.captureControl();val exportId=native{request(it,"export_document").first}
+                var exportTask=0L
+                val deadline=SystemClock.uptimeMillis()+60_000
+                while(exportTask==0L&&SystemClock.uptimeMillis()<deadline){exportTask=native{Native.projectExportTask(it,exportId,System.nanoTime(),exportFlag)};if(exportTask==0L){tick();SystemClock.sleep(10)}}
+                assertNotEquals(0L,exportTask)
+                val temporary=File(files,"cancelled-output.png");var exportFailure:Exception?=null
+                val exporting=Thread{try{Native.projectWork(exportTask,ParcelFileDescriptor.open(temporary,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)}catch(e:Exception){exportFailure=e}}
+                exporting.start();SystemClock.sleep(40);val cancelStart=SystemClock.uptimeMillis();Native.captureCancel(exportFlag);exporting.join(10_000)
+                try{assertFalse(exporting.isAlive);assertNotNull(exportFailure);entry.put("export_cancel_ms",SystemClock.uptimeMillis()-cancelStart);native{Native.documentComplete(it,exportId,false,"null")}}
+                finally{if(!exporting.isAlive){Native.projectFree(exportTask);Native.captureFree(exportFlag);temporary.delete()}}
+                // Cancel a real file decode using an independent atomic handle.
+                if(name!="sparse4k") {
+                    val control=Native.captureControl();val job=native{h->val(id,f)=request(h,"open_document");Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) to id}
+                    Native.projectOpenControl(job.first,control);var failure:Exception?=null
+                    val opening=Thread{try{Native.projectWork(job.first,ParcelFileDescriptor.open(File(activity.filesDir,name),ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)}catch(e:Exception){failure=e}}
+                    opening.start();SystemClock.sleep(40);val start=SystemClock.uptimeMillis();Native.captureCancel(control);opening.join(10_000)
+                    try{assertFalse(opening.isAlive);assertNotNull(failure);assertTrue(runCatching{native{Native.projectAdopt(it,job.first,"null")}}.isFailure);entry.put("open_cancel_ms",SystemClock.uptimeMillis()-start);native{Native.documentComplete(it,job.second,false,"null")}}
+                    finally{if(!opening.isAlive){Native.projectFree(job.first);Native.captureFree(control)}}
+                }
+                entry.put("heartbeat_ms",summary(org.json.JSONArray(heartbeat.toList())))
+                assertNull(host.failure)
+            }catch(e:Throwable){entry.put("error",e.toString());throw e}
+            finally{watching.set(false);handler.removeCallbacks(pulse);sampler.join(2000);entry.put("peak_process_pss_bytes",peaks.get());persist();println("HDR_PERFORMANCE "+entry)}
+        }
+    }
+
+    @Test fun proofWorkspaceDragCancelAndDrawer() {
+        val source=InstrumentationRegistry.getArguments().getString("hdrFile")
+        Assume.assumeTrue("Supply -e hdrFile",source!=null)
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val file=File(files,"workspace-hdr.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $source")).use{it.readBytes()})}
+        open(file);tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun edit(value:JSONObject){compose.runOnUiThread{host.customize(value)};compose.waitForIdle()}
+        fun group()=host.snapshot!!.getJSONObject("layout").getJSONArray("groups").objects().first{it.getJSONArray("panels").values().contains("proof")}
+        fun recipe()=native{JSONObject(Native.proofForm(it)).getJSONObject("rendition").toString()}
+        action("sdr_rendition")
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
+        val original=group().getInt("id");val appearance=recipe()
+        // A workspace tab starts moving after slop, without a touch hold.
+        compose.onNodeWithTag("tab-proof").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(24f,-24f),16);moveTo(center+androidx.compose.ui.geometry.Offset(550f,-320f),64);up()}
+        compose.waitUntil(10_000){group().optBoolean("floating")}
+        action("undo_workspace");compose.waitUntil(10_000){group().getInt("id")==original&&!group().getBoolean("floating")}
+        action("redo_workspace");compose.waitUntil(10_000){group().getBoolean("floating")}
+        val before=native{state(it).getJSONObject("workspace").getJSONObject("layout").toString()}
+        compose.onNodeWithTag("tab-proof").performTouchInput {down(center);moveTo(center+androidx.compose.ui.geometry.Offset(80f,60f),64);cancel()}
+        compose.waitForIdle();assertEquals(before,native{state(it).getJSONObject("workspace").getJSONObject("layout").toString()})
+        action("undo_workspace");compose.waitUntil(10_000){group().getInt("id")==original&&!group().getBoolean("floating")}
+        edit(obj("type" to "set_column_collapsed","group" to original,"collapsed" to true))
+        compose.waitUntil(10_000){host.snapshot!!.getJSONObject("layout").getJSONArray("collapsed").objects().any{it.getJSONArray("groups").objects().any{g->g.getInt("group")==original}}}
+        val column=host.snapshot!!.getJSONObject("layout").getJSONArray("collapsed").objects().first{it.getJSONArray("groups").objects().any{g->g.getInt("group")==original}}.getInt("id")
+        edit(obj("type" to "set_column_drawers","column" to column,"drawers" to true))
+        action("sdr_rendition")
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("sdr-tone-pad").fetchSemanticsNodes().isNotEmpty()}
+        fun drawers()=native{state(it).getJSONObject("customization").getJSONArray("column_drawers").length()}
+        compose.waitUntil(10_000){drawers()==1};action("sdr_rendition");assertEquals(1,drawers())
+        compose.onNodeWithTag("sdr-tone-pad").performTouchInput{down(center);moveTo(center+androidx.compose.ui.geometry.Offset(30f,-20f));cancel()}
+        compose.waitForIdle();assertEquals(appearance,recipe())
+        automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"hdr-proof-drawer.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        edit(obj("type" to "set_column_collapsed","group" to original,"collapsed" to false))
+        compose.waitUntil(10_000){compose.onAllNodesWithTag("tab-proof").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(appearance,recipe());assertNull(host.actionError)
+        println("Proof workspace touch tab drag, one-step layout history, cancellation and collapsed drawer passed")
+    }
 
     @Test fun proofSetupCompareEditPortabilityExportAndRecovery() {
         val profilePath=InstrumentationRegistry.getArguments().getString("proofProfile")
@@ -183,24 +824,35 @@ class AndroidRasterTest {
         val targetBytes=ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $profilePath")).use{it.readBytes()}
         val target=runBlocking{ProfileStore.import(activity,targetBytes)}
         fun action(command:String){compose.runOnUiThread{host.invoke(command)};compose.waitForIdle()}
+        fun hide(){compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};compose.waitForIdle()}
+        fun cancel(){compose.onNodeWithTag("proof-mode-off").performScrollTo().performClick();hide()}
+        var selectedName=""
         fun setup(command:String="soft_proof_setup") {
-            action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isNotEmpty()}
+            action(command);compose.waitUntil(10_000){compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isNotEmpty()}
+            compose.waitUntil(10_000){compose.onAllNodes(hasTestTag("proof-mode-print") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("proof-mode-print").performScrollTo().performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile").fetchSemanticsNodes().isNotEmpty()}
         }
         fun pick(name:String){
-            compose.onNodeWithTag("proof-profile").performClick()
+            selectedName=name
+            compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
+            compose.waitUntil(10_000){compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).fetchSemanticsNodes().isNotEmpty()}
             compose.onAllNodes(hasText(name) and hasAnyAncestor(hasTestTag("proof-profile-picker"))).onFirst().performScrollTo().performClick()
             compose.waitUntil(10_000){compose.onAllNodesWithTag("proof-profile-picker").fetchSemanticsNodes().isEmpty()}
             compose.onNodeWithTag("proof-profile").assertTextContains(name)
         }
-        fun apply(){compose.onNodeWithText("Apply").performClick();compose.waitUntil(120_000){!host.proof.busy&&compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty()};assertNull(host.proof.error)}
+        fun apply(){
+            if(host.proof.error!=null)pick(selectedName)
+            compose.waitUntil(120_000){!host.proof.busy&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getString("name")}==selectedName&&native{JSONObject(Native.proofForm(it)).getJSONObject("recipe").getJSONObject("profile").has("Icc")}}
+            assertNull(host.proof.error);hide()
+        }
         fun current()=native{JSONObject(Native.proofForm(it)).getJSONObject("recipe")}
         fun status()=native{JSONObject(Native.proofStatus(it))}
         fun hist():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
-        compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        compose.onNodeWithText("Choose Profile…").assertExists();SystemClock.sleep(400);cancel()
         assertTrue(native{JSONObject(Native.proofForm(it)).isNull("document_profile")})
         // Obtain a portable RGB ICC through the real profiled file pipeline.
         val wide=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(1).getJSONObject(1)}
@@ -211,26 +863,38 @@ class AndroidRasterTest {
         val originalBytes=ByteArray(array.length()){array.getInt(it).toByte()}
         val embedded=runBlocking{ProfileStore.import(activity,originalBytes)}
         compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
-        setup();pick(embedded.getString("name"));apply()
+        setup();pick(embedded.getString("name"))
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread{host.invoke("export_document")}
+        compose.waitUntil(120_000){compose.onAllNodesWithTag("export-choose-file").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(embedded.getString("name"),current().getString("name"))
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000){!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+        DocumentController.nativeFileJobsForTest=true
+        compose.waitForIdle();SystemClock.sleep(300)
+        InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"proof-print.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        apply()
         assertTrue("The saved ICC, not the same-named builtin, must be selected",current().getJSONObject("profile").has("Icc"))
         val originalEntry=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
         runBlocking{ProfileStore.remove(activity,originalEntry.getString("id"))}
         val baseline=manifest(save("proof-original.capy"))
-        setup();pick(target.getString("name"));compose.onNodeWithTag("proof-profile").performClick()
+        setup();compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
         compose.onNodeWithText("Document Profile").assertExists()
         compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
-        compose.onNodeWithText("Done").performClick();compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+        compose.onNodeWithText("Done").performClick();pick(target.getString("name"));cancel()
         assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
         assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
         // An unwritable library path fails before document/history publication.
-        setup();pick(target.getString("name"))
-        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
-        println("Preparing replacement with blocked local profile storage")
         val oldDirectory=ColorPreferencesStore.directoryForTest
         val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
         ColorPreferencesStore.directoryForTest=blocked
-        compose.onNodeWithText("Apply").performClick()
-        compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof Setup").fetchSemanticsNodes().isEmpty())}
+        setup()
+        // Select through the standard/profile callback with the already loaded ICC;
+        // changing the library path prevents the picker from resolving its entry.
+        compose.runOnUiThread{host.proof.edit("profile",target)}
+        compose.onNodeWithTag("proof-profile").assertTextContains(target.getString("name"))
+        println("Preparing replacement with blocked local profile storage")
+        compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isEmpty())}
         assertNotNull("Preservation must fail before replacing ${current().getString("name")}",host.proof.error)
         assertEquals(embedded.getString("name"),current().getString("name"))
         ColorPreferencesStore.directoryForTest=oldDirectory
@@ -249,7 +913,7 @@ class AndroidRasterTest {
         action("gamut_warning");action("soft_proof");tick()
         assertFalse(native{state(it).getJSONObject("document_file").getBoolean("modified")})
         assertEquals(painted,hist());assertEquals(hash(on),hash(png("proof-warning.png")))
-        action("gamut_warning");tick();assertEquals("",status().getString("text"));assertEquals(hash(on),hash(png("proof-off.png")))
+        assertFalse(native{state(it).getBoolean("gamut_warning")});tick();assertEquals("",status().getString("text"));assertEquals(hash(on),hash(png("proof-off.png")))
         // Removing both local entries models moving the file to another machine.
         runBlocking{ProfileStore.list(activity).forEach{ProfileStore.remove(activity,it.getString("id"))}}
         open(File(files,"proof-painted.capy"));compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
@@ -270,7 +934,7 @@ class AndroidRasterTest {
         repeat(2){case->
             setup()
             val flag=Native.captureControl()
-            val task=native{h->val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
+            val task=native{h->Native.dispatch(h,obj("type" to "invoke","command" to "soft_proof_setup").toString());val request=state(h).getJSONArray("requests").objects().first{it.getJSONObject("kind").getString("type")=="soft_proof_setup"}.getInt("id");Native.proofTask(h,request,retained,flag)}
             try{
                 if(case==0){
                     val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
@@ -281,7 +945,7 @@ class AndroidRasterTest {
                     assertFalse("Cancelled proof worker must stop",worker.isAlive)
                     assertNotNull("Cancellation must reject preparation",failure.get())
                 }else Native.proofWork(task)
-                compose.onNodeWithText("Cancel").performClick();compose.waitForIdle()
+                hide()
                 assertTrue("Dismissed request must reject prepared results",runCatching{native{Native.proofCheck(it,task)}}.isFailure)
                 assertEquals(retained,current().toString())
                 assertTrue(runBlocking{ProfileStore.list(activity).isEmpty()})
@@ -308,9 +972,9 @@ class AndroidRasterTest {
     private fun summary(values: org.json.JSONArray): JSONObject? {
         if(values.length()==0)return null
         val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()
-        return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"max" to sorted.last())
+        return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"p99" to sorted[((sorted.size-1)*.99).toInt()],"max" to sorted.last())
     }
-    private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0): JSONObject {
+    private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0, wideBrush: Boolean = false, during: (() -> Unit)? = null): JSONObject {
         fun measurements(reset: Boolean): JSONObject {
             val done = java.util.concurrent.CountDownLatch(1)
             var result: JSONObject? = null
@@ -328,28 +992,52 @@ class AndroidRasterTest {
         var origin=androidx.compose.ui.geometry.Offset.Zero
         scenario.onActivity { origin=host.surfaceOrigin }
         val cx=(center.first*zoom+translation.getDouble(0)+origin.x).toFloat();val cy=(center.second*zoom+translation.getDouble(1)+origin.y).toFloat()
+        if(steps>=180) {
+            val output=File(activity.getExternalFilesDir(null),"motion-start-$tool")
+            output.resolveSibling(output.name+".json").writeText(obj("camera" to camera,"x" to cx,"y" to cy).toString(2))
+            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let{shot->output.resolveSibling(output.name+".png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        }
         val start=SystemClock.uptimeMillis();val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_FINGER->android.view.InputDevice.SOURCE_TOUCHSCREEN;else->android.view.InputDevice.SOURCE_STYLUS}
         measurements(true)
         val duration = if (steps >= 180) InstrumentationRegistry.getArguments()
             .getString("motionDurationMs")?.toLong()?.coerceIn(5_000L, 30_000L) ?: 5_000L else 1_000L
+        val options = InstrumentationRegistry.getArguments()
+        val diameter = host.snapshot!!.getJSONObject("state").getJSONObject("brush").getDouble("diameter")
+        val contactPressure = if (wideBrush) options.getString("wideBrushPressure", "1")!!.toFloat() else .65f
+        val turns = options.getString("wideBrushTurns", "2")!!.toDouble()
+        val radiusX = (.42 * (9504 - diameter) * zoom).toFloat()
+        val radiusY = (.42 * (6336 - diameter) * zoom).toFloat()
         var i = 0
         while (true) {
             val elapsed = SystemClock.uptimeMillis() - start
             val phase=when {i==0->android.view.MotionEvent.ACTION_DOWN;elapsed>=duration->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
             val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply {id=7;toolType=tool})
-            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {
+                val angle = elapsed / 1000.0 * turns * 2 * Math.PI
+                x=cx+if(wideBrush)radiusX*kotlin.math.cos(angle).toFloat() else 40*kotlin.math.sin(elapsed/250.0).toFloat()
+                y=cy+if(wideBrush)radiusY*kotlin.math.sin(angle).toFloat() else 20*kotlin.math.cos(elapsed/310.0).toFloat()
+                pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else contactPressure
+            })
             val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
-            try {assertTrue(InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
+            try {assertTrue("Injected tool=$tool phase=$phase at (${coords[0].x}, ${coords[0].y})",InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
             if (phase == android.view.MotionEvent.ACTION_UP) break
+            if (i == 10) during?.invoke()
             i++; SystemClock.sleep(4)
+        }
+        if(tool==android.view.MotionEvent.TOOL_TYPE_STYLUS) {
+            // Finish virtual pen proximity before the next independent touch run.
+            val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply{id=7;toolType=tool})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply{x=cx;y=cy;pressure=0f})
+            val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),android.view.MotionEvent.ACTION_HOVER_EXIT,1,properties,coords,0,0,1f,1f,0,0,source,0)
+            try{InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,true)}finally{event.recycle()}
         }
         // The host's Choreographer is the only frame producer during
         // motion. Capture its timeline independently of GPU timings.
         SystemClock.sleep(100)
         native { Unit } // Drain delivered input, without creating a frame.
         val timeline = measurements(false)
-        assertNull(host.failure)
+        if (!wideBrush) assertNull(host.failure)
         if (timeline.getJSONArray("inputs").length() == 0) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
                 try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
@@ -367,7 +1055,7 @@ class AndroidRasterTest {
 
         return obj("tool" to tool,"cpu_ms" to summary(stats.getJSONArray("samples")),"gpu_ms" to summary(stats.getJSONArray("gpu_samples")),
             "camera" to camera, "input_origin" to org.json.JSONArray(listOf(cx,cy)),
-            "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency,
+            "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency, "renderer_stats" to stats, "failure" to host.failure,
             "tracked_canvas_bytes" to stats.getLong("resident_bytes"),"process_pss_bytes" to android.os.Debug.getPss().toLong()*1024,
             "process_mappings" to File("/proc/self/maps").useLines { it.count() })
     }
@@ -920,6 +1608,62 @@ class AndroidRasterTest {
         }
         assertNull(host.failure)
         save("large-photo-sustained.capy")
+    }
+
+    @Test fun largePhotoWideBrushAttribution() {
+        val options = InstrumentationRegistry.getArguments()
+        Assume.assumeTrue(options.getString("wideBrush") == "true")
+        val photo = File(activity.filesDir, "photo-benchmark.jpg")
+        assertTrue("Copy the 61 MP test image into the isolated test app", photo.isFile)
+        open(photo)
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle(); assertNull(host.actionError)
+        }
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+        val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_brush_size", "value" to options.getString("wideBrushSize", "2000")!!.toDouble()))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, 1.0))))
+        // Injected stylus input has no hardware prediction capability. Keep
+        // the saved platform toggle and exercise the ordinary fallback.
+        for ((id, value) in listOf("feedback" to (options.getString("wideBrushPrediction", "true") == "true"), "prediction_horizon" to options.getString("wideBrushPredictionMs", "16")!!.toInt())) {
+            action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+            assertTrue(host.snapshot!!.getJSONObject("state").getJSONObject("preferences").isNull("error"))
+        }
+        fun shellOutput(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ).use { it.readBytes().decodeToString() }
+        fun resources(): JSONObject = obj(
+            "boot_ns" to System.nanoTime(),
+            "meminfo" to File("/proc/meminfo").readText(),
+            "vmstat" to shellOutput("cat /proc/vmstat"),
+            "gpu" to shellOutput("dumpsys gpu"),
+            "process_stat" to File("/proc/self/stat").readText(),
+            "process_status" to File("/proc/self/status").readText(),
+            "process_mappings" to File("/proc/self/maps").useLines { it.count() })
+        val report = obj("state" to host.snapshot!!.getJSONObject("state"), "device" to android.os.Build.MODEL,
+            "uid" to android.os.Process.myUid(),
+            "pressure" to options.getString("wideBrushPressure", "1"), "turns_per_second" to options.getString("wideBrushTurns", "2"))
+        val runs=org.json.JSONArray()
+        report.put("runs", runs)
+        val output=File(activity.getExternalFilesDir(null), "wide-brush-attribution.json")
+        repeat(options.getString("wideBrushRuns", "2")!!.toInt()) { index ->
+            val before = resources()
+            android.util.Log.i("CapyWidePen", "BEGIN stroke=$index")
+            val run = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0, wideBrush = true)
+            android.util.Log.i("CapyWidePen", "END stroke=$index")
+            run.put("resources_before", before).put("resources_after", resources())
+            runs.put(run)
+            output.writeText(report.toString(2))
+            println("WIDE_PEN stroke=$index cpu=${run.get("cpu_ms")} gpu=${run.get("gpu_ms")} storage=${run.get("tracked_canvas_bytes")}")
+            assertNull(host.failure)
+        }
+        assertNull(host.failure)
     }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {
@@ -1527,4 +2271,207 @@ class AndroidRasterTest {
         assertEquals(1,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
         activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS: exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, atomic recovery, Activity recreation, recovery offer/adoption\n")
     }
+    @Test fun drawingTabsKeepHistorySpillAndLifecycle() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
+        fun closeDecision(label:String)=native { handle ->
+            val state=state(handle)
+            state.array("requests").objects().firstOrNull{r->r.getJSONObject("kind").optString("type")=="document"}?.getInt("id")
+                ?: error("Missing $label: file=${state.getJSONObject("document_file")}; requests=${state.array("requests")}")
+        }
+        // Parking readiness does not mean the restored brush is ready for a
+        // new contact: the host deliberately defers contacts during warmup.
+        fun ready() {compose.waitUntil(120_000){tick();native {
+            val parked=JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")
+            Native.dispatch(it,obj("type" to "close_settings").toString())
+            parked && JSONObject(Native.snapshot(it)!!).getBoolean("brush_ready")
+        }}}
+        fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
+        fun fresh():Long {
+            val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+            try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}
+            finally{Native.projectFree(task)}
+            tick();ready();return tabs().getLong("selected")
+        }
+        fun select(id:Long,close:Boolean=false) {
+            ready();val task=native{Native.documentSwitch(it,id,close)}
+            if(task!=0L)try{Native.documentResumeWork(task);native{Native.documentResume(it,task)}}finally{Native.documentResumeFree(task)}
+            tick();if(ids().isNotEmpty())ready()
+        }
+        fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
+        fun trim(){while(true){val task=native{Native.documentSpillTask(it)};if(task==0L)break;Native.documentSpillWork(task)}}
+        val first=tabs().getLong("selected");val generation=tabs().getLong("gpu_generation")
+        stroke(0.0);val exact=manifest(save("tabs-exact.capy")).getJSONArray("blobs").toString()
+        action("undo") // Its only ink is now retained exclusively by redo history.
+        val second=fresh();assertEquals(listOf(first,second),ids())
+        order(obj("op" to "budget","bytes" to 0));trim()
+        assertEquals(0,tabs().getLong("resident_bytes"));assertEquals(0,tabs().getInt("parked_renderers"))
+        action("add_layer");val secondLayers=native{state(it).array("layers").length()}
+        select(first);action("redo")
+        assertEquals(exact,manifest(save("tabs-redo.capy")).getJSONArray("blobs").toString())
+        assertEquals(generation,tabs().getLong("gpu_generation"))
+        select(second);assertEquals(secondLayers,native{state(it).array("layers").length()})
+        action("undo");assertEquals(secondLayers-1,native{state(it).array("layers").length()})
+        val third=fresh()
+        order(obj("op" to "reorder","id" to third,"before" to first));assertEquals(listOf(third,first,second),ids())
+        select(first);order(obj("op" to "history","redo" to false));assertEquals(listOf(first,second,third),ids());assertEquals(first,tabs().getLong("selected"))
+        order(obj("op" to "history","redo" to true));assertEquals(listOf(third,first,second),ids())
+        val retained=host;scenario.recreate();scenario.onActivity{activity=it};assertSame(retained,host)
+        compose.waitUntil(60_000){host.surfaceReady};assertEquals(listOf(third,first,second),ids())
+        assertEquals(exact,manifest(save("tabs-recreated.capy")).getJSONArray("blobs").toString())
+        val bad=File(files,"tabs-invalid.capy").apply{writeText("invalid")};open(bad,true);assertEquals(3,ids().size)
+        native{Native.documentTabs(it,obj("op" to "storage","error" to "Disk full test").toString())}
+        val refused=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision")) to id}
+        try{assertTrue(runCatching{Native.projectWork(refused.first,-1,64,64)}.isFailure);assertEquals(3,ids().size)}finally{Native.projectFree(refused.first);native{Native.documentComplete(it,refused.second,false,"null")}}
+        native{Native.documentTabs(it,obj("op" to "storage","error" to null).toString())}
+        select(second);stroke(80.0);ready()
+        assertTrue("The close fixture must contain committed ink",native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        action("close_document")
+        val close=closeDecision("cancel decision")
+        native{Native.documentClose(it,close,"\"cancel\"")};assertEquals(3,ids().size)
+        action("close_document")
+        val discard=closeDecision("discard decision")
+        native{Native.documentClose(it,discard,"\"discard\"")};select(second,true)
+        assertEquals(first,tabs().getLong("selected"));assertEquals(listOf(third,first),ids())
+        assertFalse(tabs().getBoolean("can_undo"))
+        while(ids().isNotEmpty()) {
+            action("close_document")
+            val file=native{state(it).getJSONObject("document_file")}
+            if(!file.getBoolean("close_ready")) {
+                val request=closeDecision("final decision")
+                native{Native.documentClose(it,request,"\"discard\"")}
+            }
+            select(tabs().getLong("selected"),true)
+        }
+        assertEquals(0,tabs().getLong("selected"));assertEquals(0,tabs().getInt("parked_renderers"))
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-native.txt").writeText("PASS independent history, exact redo-only disk backing, device reuse, order undo, Activity recreation, admission failure, corrupt open, close cancellation/neighbour/final ownership")
+    }
+
+    @Test fun drawingTabsRecoverMultipleInactiveDrawings() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
+        action("add_layer")
+        val firstLayers=native{state(it).array("layers").length()}
+        val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+        try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
+        tick();compose.waitUntil(120_000){native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}
+        action("add_layer");action("add_layer")
+        val secondLayers=native{state(it).array("layers").length()}
+        var write:Job?=null
+        compose.runOnUiThread{host.documentChanged();write=host.recovery.capture()};runBlocking{write?.join()}
+        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        assertEquals(listOf(true,true),tabs().array("tabs").objects().map{it.getBoolean("modified")})
+        scenario.close();launch()
+        repeat(2) {
+            compose.waitUntil(30_000){host.recovery.candidate!=null&&!host.recovery.working}
+            compose.onNodeWithTag("recover-drawing").performClick()
+            compose.waitUntil(120_000){!host.recovery.working&&tabs().array("tabs").length()==it+2}
+            assertNull(host.failure);assertNull(host.actionError)
+        }
+        assertEquals(3,tabs().array("tabs").length());assertNull(host.recovery.candidate)
+        val counts=tabs().array("tabs").objects().drop(1).map { tab ->
+            assertTrue(tab.getBoolean("modified"));assertTrue(tab.isNull("uri"))
+            val capture=native{Native.projectRecoveryFor(it,tab.getLong("id"))};val file=File(files,"recovered-tab-${tab.getLong("id")}.capy")
+            try{Native.projectPublish(capture,file.absolutePath)}finally{Native.projectFree(capture)}
+            manifest(file.readBytes()).getJSONObject("document").getJSONArray("layers").length()
+        }
+        assertEquals(setOf(firstLayers,secondLayers),counts.toSet())
+        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS two independently owned inactive/active recovery snapshots; sequential offers append unsaved independent drawings; durable origins retired only after publication")
+    }
+
+    @Test fun drawingTabsNativePointerAndCloseUi() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
+        fun settled(){compose.waitUntil(60_000){!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}};compose.runOnUiThread{host.documentChanged()};compose.waitForIdle();assertNull(host.failure);assertNull(host.actionError)}
+        val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+        try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
+        val order=ids();val selected=tabs().getLong("selected")
+        val workspace=native{state(it).getJSONObject("workspace")}
+        workspace.getJSONObject("layout").put("header",obj("size" to "large","next_id" to 2,"zones" to org.json.JSONArray(listOf(org.json.JSONArray(),org.json.JSONArray(listOf(obj("id" to 1,"item" to obj("kind" to "document_title")))),org.json.JSONArray()))))
+        native{Native.dispatch(it,obj("type" to "restore_workspace","workspace" to workspace).toString())};settled()
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        fun roots(view:android.view.View):List<androidx.compose.ui.platform.ViewRootForTest> = when(view) {
+            is androidx.compose.ui.platform.ViewRootForTest -> listOf(view)
+            is android.view.ViewGroup -> (0 until view.childCount).flatMap{roots(view.getChildAt(it))}
+            else -> emptyList()
+        }
+        fun find(node:androidx.compose.ui.semantics.SemanticsNode,tag:String):androidx.compose.ui.semantics.SemanticsNode? {
+            if(node.config.contains(SemanticsProperties.TestTag)&&node.config[SemanticsProperties.TestTag]==tag)return node
+            return node.children.firstNotNullOfOrNull{find(it,tag)}
+        }
+        fun locate(tag:String,within:android.view.View?=null):Pair<android.view.View,androidx.compose.ui.geometry.Rect> {
+            var found:Pair<android.view.View,androidx.compose.ui.geometry.Rect>?=null
+            instrumentation.runOnMainSync{found=android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(::roots).filter{within==null||it.view===within}.firstNotNullOfOrNull{root->find(root.semanticsOwner.unmergedRootSemanticsNode,tag)?.let{root.view to it.boundsInRoot}}}
+            return checkNotNull(found){"Missing $tag"}
+        }
+        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0) {
+            val (view,anchor)=locate(if(vertical)"drawing-handle-${order.first()}"else"drawing-tab-${order.first()}")
+            val start=if(vertical&&!handle)locate("drawing-tab-${order.first()}",view).second else anchor
+            val end=locate("drawing-tab-${order.last()}",view).second
+            val from=androidx.compose.ui.geometry.Offset(start.left+start.width*.30f,start.center.y)
+            val to=if(vertical)androidx.compose.ui.geometry.Offset(end.center.x,end.bottom-8f)else androidx.compose.ui.geometry.Offset(end.right-8f,end.center.y)
+            val down=SystemClock.uptimeMillis()
+            fun event(action:Int,point:androidx.compose.ui.geometry.Offset) {
+                val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_STYLUS->android.view.InputDevice.SOURCE_STYLUS;else->android.view.InputDevice.SOURCE_TOUCHSCREEN}
+                val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&action!=android.view.MotionEvent.ACTION_UP&&action!=android.view.MotionEvent.ACTION_CANCEL)android.view.MotionEvent.BUTTON_PRIMARY else 0
+                val event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,1,arrayOf(android.view.MotionEvent.PointerProperties().apply{id=0;toolType=tool}),arrayOf(android.view.MotionEvent.PointerCoords().apply{x=point.x;y=point.y;pressure=.7f}),0,buttons,1f,1f,0,0,source,0)
+                try{instrumentation.runOnMainSync{view.dispatchTouchEvent(event)}}finally{event.recycle()}
+                SystemClock.sleep(40)
+            }
+            event(android.view.MotionEvent.ACTION_DOWN,from)
+            if(hold>0){SystemClock.sleep(hold);compose.mainClock.advanceTimeBy(hold);instrumentation.runOnMainSync {}}
+            event(android.view.MotionEvent.ACTION_MOVE,to)
+            event(if(cancel)android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP,to)
+        }
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
+            native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order,ids())
+            drag(tool,cancel=true);settled();assertEquals(order,ids())
+        }
+        compose.runOnUiThread{host.drawingTabs.selector=true};compose.onNodeWithTag("drawing-selector").assertIsDisplayed()
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool,handle=true);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
+            compose.onNodeWithTag("drawing-order-undo").performClick();compose.waitUntil(10_000){ids()==order};settled()
+        }
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool,vertical=true);settled();assertEquals("Row bodies preserve pre-hold scrolling",order,ids());assertEquals(selected,tabs().getLong("selected"))
+            drag(tool,vertical=true,hold=android.view.ViewConfiguration.getLongPressTimeout().toLong()+120)
+            compose.waitUntil(10_000){ids()==order.reversed()}
+            compose.onNodeWithTag("drawing-order-undo").performClick();compose.waitUntil(10_000){ids()==order};settled()
+        }
+        compose.runOnUiThread{host.drawingTabs.selector=false;DocumentController.nativeFileJobsForTest=false}
+        // Close a background drawing through the actual controller/UI. Selection
+        // precedes the prompt, cancellation retains it, clean close removes only it.
+        compose.runOnUiThread{host.drawingTabs.select(order.first())};settled()
+        native{Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick();settled()
+        compose.runOnUiThread{host.drawingTabs.select(order.last())};settled()
+        compose.onNodeWithTag("drawing-close-${order.first()}").performClick()
+        compose.waitUntil(30_000){compose.onAllNodesWithTag("document-close-cancel").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(order.first(),tabs().getLong("selected"));compose.onNodeWithTag("document-close-cancel").performClick();settled();assertEquals(order,ids())
+        compose.runOnUiThread{host.drawingTabs.closeSelected()}
+        compose.onNodeWithTag("document-close-discard").performClick()
+        compose.waitUntil(30_000){ids()==listOf(order.last())&&!host.drawingTabs.switching}
+        compose.runOnUiThread{host.drawingTabs.closeSelected()}
+        compose.waitUntil(30_000){activity.isFinishing||activity.isDestroyed}
+    }
+
+    @Test fun drawingTabsFileBatchKeepsDuplicateOwnersAndContinuesFailures() {
+        stroke(0.0);save("tab-batch-source.capy")
+        val good=android.net.Uri.fromFile(File(files,"tab-batch-source.capy"))
+        val bad=android.net.Uri.fromFile(File(files,"tab-batch-bad.capy").apply{writeText("corrupt")})
+        val before=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}.getLong("selected")
+        compose.runOnUiThread{DocumentController.nativeFileJobsForTest=false;assertTrue(host.documents.openUris(listOf(good,bad,good)))}
+        compose.waitUntil(120_000){!host.documents.working&&!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString())).array("tabs").length()==3}}
+        val tabs=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        val rows=tabs.array("tabs").objects();assertEquals(before,rows.first().getLong("id"))
+        assertEquals(listOf(good.toString(),good.toString()),rows.drop(1).map{it.getString("uri")})
+        assertNotEquals(rows[1].getLong("id"),rows[2].getLong("id"));assertEquals(rows[2].getLong("id"),tabs.getLong("selected"))
+        assertFalse(rows[1].getBoolean("modified"));assertFalse(rows[2].getBoolean("modified"))
+        // The corrupt middle entry reports its error without redirecting a later
+        // result or replacing the initiating editor.
+        assertNull(host.failure)
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-files.txt").writeText("PASS serial URI batch; corrupt middle file reported and skipped; repeated URI creates independent clean owners; last successful drawing selected")
+    }
+
 }

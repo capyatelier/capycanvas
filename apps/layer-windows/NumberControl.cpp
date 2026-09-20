@@ -6,12 +6,14 @@ namespace CapyUi {
 namespace {
 struct NumberState {
     double value=0;bool editing=false,dragging=false,formatting=false;
+    hstring identity;
     hstring measuredText;double measuredWidth=-1;
 };
 }
 StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation){
     auto local=std::make_shared<NumberState>();local->value=get();
+    if(presentation.identity)local->identity=presentation.identity();
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
     double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
@@ -123,8 +125,11 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         slider.Resources().Insert(box_value(key),preference?fill({255,53,132,228}):data->brush(L"thumb"));
     for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed",L"SliderTrackFillDisabled"})
         slider.Resources().Insert(box_value(key),data->brush(L"input"));
-    auto commit=[data,local,spec,set,setText,weak=make_weak(entry)](bool cancel){
+    auto commit=[data,local,spec,get,set,setText,identity=presentation.identity,weak=make_weak(entry)](bool cancel){
         auto entry=weak.get();if(!entry||!local->editing)return;
+        if(identity && local->identity!=identity()){
+            local->identity=identity();local->value=get();cancel=true;
+        }
         try{
             auto next=numeric(spec,local->value,cancel?O({{L"type",S(L"format")}}):
                 O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
@@ -182,7 +187,11 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,local,spec,get,entry,slider,setText]{
+    bindings.emplace_back([data,local,spec,get,entry,slider,setText,identity=presentation.identity]{
+        if(identity && local->identity!=identity()){
+            local->identity=identity();local->editing=false;local->dragging=false;
+            entry.BorderThickness({0});ToolTipService::SetToolTip(entry,nullptr);
+        }
         if(local->editing||local->dragging)return;
         local->value=get();auto shown=numeric(spec,local->value,O({{L"type",S(L"format")}}));
         setText(str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));

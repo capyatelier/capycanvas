@@ -235,6 +235,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
     }
 
+    /// A prepared, unpublished session receives its destination before joining
+    /// a window's drawing collection. This is not a Save and cannot clear edits.
+    pub fn initialize_document_location(&mut self, location: Option<DocumentLocation>) -> Result<(), String> {
+        if self.state.document_file.busy || self.engine.checkpoint() != self.files.saved_checkpoint {
+            return Err("Only an unedited prepared drawing can receive its initial location".into());
+        }
+        if let Some(location) = &location { location.validate()?; }
+        if location.is_some() {
+            self.files.unpublished = false;
+            self.state.document_file.unsaved_name = None;
+        }
+        self.state.document_file.location = location;
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(())
+    }
+
     pub(super) fn refresh_file_state(&mut self) {
         self.state.document_file.revision = self.engine.document().revision;
         self.state.document_file.modified = self.files.unpublished

@@ -3,7 +3,8 @@
 
 Requires dbus-run-session, Mutter and hardware Vulkan. Uses the application's
 existing LAYER_UI_CAPTURE diagnostic, never the user's display or settings.
-Records actual loaded codec paths and the packaged executable's digest.
+Checks that no application photo-codec bundle is shipped or loaded, and records
+the packaged executable's digest. GTK and its platform dependencies are separate.
 """
 import argparse
 import hashlib
@@ -26,25 +27,35 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--photo", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--renderer", choices=["auto", "vulkan"], default="auto")
     args = parser.parse_args()
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("Use an empty evidence directory")
-    library = binary.parent.parent / "lib/capycanvas/photo"
-    expected = [library / name for name in
-                ["libcapy_photo.so.1", "libheif.so.1", "libde265.so.0", "libdav1d.so.7", "libavif.so.16"]]
-    expected = {str(path.resolve(strict=True)) for path in expected}
+    package = binary.parent.parent
+    for relative in ["lib/capycanvas/photo", "share/doc/capycanvas-photo-codecs"]:
+        if (package / relative).exists():
+            parser.error(f"Obsolete native photo-codec payload: {relative}")
+    if any(package.rglob("capy-hdr-codec")):
+        parser.error("Native HDR helper is still shipped in this package")
+    expected_gtk = str((binary.parent.parent / "lib/capycanvas/gtk/libgtk-4.so.1").resolve(strict=True))
     records = []
     with tempfile.TemporaryDirectory(prefix="capy-package-photo-") as temporary:
         root = Path(temporary)
         runtime = root / "runtime"
         runtime.mkdir(mode=0o700)
+        empty_codecs = root / "empty-codecs"
+        empty_codecs.mkdir()
         env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WAYLAND_DISPLAY="layer-bench-package",
-                   GDK_BACKEND="wayland", GSK_RENDERER="vulkan", GTK_A11Y="none",
+                   GDK_BACKEND="wayland", GTK_A11Y="none",
                    GDK_DEBUG="no-portals:color-mgmt")
         for name in ["DISPLAY", "CAPY_PHOTO_CODEC_DIR", "CAPY_PHOTO_CODEC_PREFIX", "LD_LIBRARY_PATH"]:
             env.pop(name, None)
+        env["CAPY_PHOTO_CODEC_DIR"] = str(empty_codecs)
+        env.pop("GSK_RENDERER", None)
+        if args.renderer != "auto":
+            env["GSK_RENDERER"] = args.renderer
         with (output / "mutter.log").open("w") as log:
             compositor = subprocess.Popen(["mutter", "--headless", "--wayland", "--no-x11",
                 "--virtual-monitor=1600x1000@120", "--wayland-display=layer-bench-package"],
@@ -64,7 +75,7 @@ def main():
                         LAYER_SETTINGS_FILE=str(settings / "settings.json"),
                         CAPY_WORKSPACE_DIR=str(settings / "workspaces"),
                         CAPY_RECOVERY_DIR=str(settings / "recovery"))
-                    loaded, high_water_kib = set(), 0
+                    loaded, loaded_gtk, high_water_kib = set(), set(), 0
                     started = time.monotonic()
                     with (output / f"{index}-{photo.stem}.log").open("w") as app_log:
                         process = subprocess.Popen([str(binary), str(photo)], cwd=root,
@@ -75,9 +86,10 @@ def main():
                                     raise RuntimeError(f"{photo.name}: package photo capture timed out")
                                 try:
                                     maps = Path(f"/proc/{process.pid}/maps").read_text()
-                                    loaded.update(line.split()[-1] for line in maps.splitlines()
+                                    loaded.update(line.split(maxsplit=5)[-1] for line in maps.splitlines()
                                                   if any(name in line for name in
-                                                      ["libcapy_photo", "libheif", "libde265", "libdav1d", "libavif"]))
+                                                      ["libcapy_photo", "libheif", "libde265", "libdav1d", "libavif", "libuhdr", "libaom"]))
+                                    loaded_gtk.update(line.split(maxsplit=5)[-1] for line in maps.splitlines() if "libgtk-4.so" in line)
                                     status = Path(f"/proc/{process.pid}/status").read_text()
                                     for line in status.splitlines():
                                         if line.startswith("VmHWM:"):
@@ -95,19 +107,16 @@ def main():
                                 except subprocess.TimeoutExpired:
                                     process.kill()
                                     process.wait()
-                    # The optional native libraries load only for HEIF/AVIF.
-                    # JPEG/PNG/TIFF and the Rust raster readers do not need them.
-                    with photo.open("rb") as encoded:
-                        requires_native_codecs = encoded.read(12)[4:8] == b"ftyp"
-                    if (requires_native_codecs or loaded) and loaded != expected:
+                    if loaded:
                         raise RuntimeError(f"{photo.name}: unexpected codec libraries: {sorted(loaded)}")
+                    if loaded_gtk != {expected_gtk}:
+                        raise RuntimeError(f"{photo.name}: packaged GTK not used: {sorted(loaded_gtk)}")
                     record = {"photo": str(photo), "photo_sha256": hashlib.sha256(photo.read_bytes()).hexdigest(),
-                        "capture": capture.name, "loaded_codecs": sorted(loaded), "sampled_vm_hwm_kib": high_water_kib,
-                        "requires_native_codecs": requires_native_codecs,
+                        "capture": capture.name, "loaded_codecs": sorted(loaded), "loaded_gtk": sorted(loaded_gtk), "sampled_vm_hwm_kib": high_water_kib,
+                        "requires_native_codecs": False,
                         "workflow_seconds": time.monotonic() - started, "exit_code": process.returncode}
                     records.append(record)
-                    print(f"{photo.name}: relocated package opened and captured; "
-                          f"{'bundled codecs confirmed' if requires_native_codecs else 'native codecs not required'}", flush=True)
+                    print(f"{photo.name}: relocated package opened and captured without native photo codecs", flush=True)
             finally:
                 compositor.terminate()
                 try:
@@ -117,6 +126,8 @@ def main():
                     compositor.wait()
     (output / "report.json").write_text(json.dumps({"binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": records,
+        "renderer": args.renderer,
+        "executable_sha256": hashlib.sha256((binary.parent / "capycanvas-bin").read_bytes()).hexdigest(),
         "scope": "Photo application launch and capture; 4-second capture delay is not decode latency."}, indent=2) + "\n")
 
 

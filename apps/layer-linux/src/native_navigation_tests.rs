@@ -5,8 +5,8 @@ use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, sour
 use std::sync::Arc;
 
 fn photo(extent: [u32; 2]) -> layer_core::Project {
-    let hdr = std::env::var("LAYER_NAVIGATION_HDR").as_deref() == Ok("1");
-    let depth = if hdr { SampleDepth::F16 } else { SampleDepth::U16 };
+    let depth = match std::env::var("LAYER_NAVIGATION_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 };
+    let hdr = depth.is_float();
     let mut project = new_drawing(1, 1).unwrap();
     // Imported photographs may exceed the New Drawing dialog's size ceiling.
     project.document.width = extent[0];
@@ -23,11 +23,11 @@ fn photo(extent: [u32; 2]) -> layer_core::Project {
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
             profile_assumed: false,
         },
-        512 * 1024 * 1024,
+        if depth == SampleDepth::F32 { 1024 * 1024 * 1024 } else { 512 * 1024 * 1024 },
     )
     .unwrap();
     let mut random = 0x1357abcdu32;
-    let mut row = Vec::with_capacity(extent[0] as usize * 8);
+    let mut row = Vec::with_capacity(extent[0] as usize * 4 * depth.bytes());
     for y in 0..extent[1] {
         row.clear();
         for x in 0..extent[0] {
@@ -41,6 +41,11 @@ fn photo(extent: [u32; 2]) -> layer_core::Project {
                 ((u64::from(x) + u64::from(y)) * 13 % 60000) as u16 + noise,
                 65535,
             ].into_iter().enumerate() {
+                if depth == SampleDepth::F32 {
+                    let value = if channel == 3 { 1. } else { (RgbSpace::ProPhoto.decode(f64::from(code) / 65535.) * 8. - 0.125) as f32 };
+                    row.extend_from_slice(&value.to_le_bytes());
+                    continue;
+                }
                 let bits = if hdr {
                     layer_core::color::f16::from_f32(if channel == 3 { 1. }
                         else { (RgbSpace::ProPhoto.decode(f64::from(code) / 65535.) * 8. - 0.125) as f32 }).to_bits()
@@ -161,7 +166,7 @@ fn native_large_photo_navigation() {
             let reopened = layer_core::Project::read(std::fs::File::open(&project).unwrap(), Default::default()).unwrap();
             assert_eq!(reopened.document.proof, snapshot.project.document.proof);
             let recipe = ExportRecipe::further_editing(snapshot.project.document.color);
-            let delivery = prefix.with_extension("tif");
+            let delivery = prefix.with_extension(recipe.format.extension());
             crate::files::export::write_snapshot(gpu, snapshot, recipe, &delivery, &Default::default()).unwrap();
             serde_json::json!({"save_ms": saved_ms, "save_export_ms": start.elapsed().as_secs_f64()*1000.,
                 "master_bytes": std::fs::metadata(project).unwrap().len(),
@@ -313,7 +318,7 @@ fn native_large_photo_navigation() {
             .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:")).collect::<Vec<_>>(),
         "renderer_resident_bytes": telemetry.resident_bytes,
         "proof": proof,
-        "extent": extent, "space": "ProPhoto", "depth": 16, "viewport": viewport,
+        "extent": extent, "space": "ProPhoto", "depth": original.color.depth.bits(), "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "requests": requests, "camera_views": stats.camera_views,
         "camera_work": stats.camera_work,

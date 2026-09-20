@@ -53,6 +53,7 @@ pub struct ViewportPresenter {
     hdr_options: [f32; 8],
     local_buffer: wgpu::Buffer,
     local_guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
+    gpu_local_guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
     bind_group: Option<wgpu::BindGroup>,
@@ -73,6 +74,7 @@ pub struct ViewportPresenter {
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
+    color: SdrSurfaceColor,
     overview_pipeline: Option<wgpu::RenderPipeline>,
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
@@ -81,13 +83,34 @@ pub struct ViewportPresenter {
 }
 
 impl ViewportPresenter {
+    /// Bind an immutable guide built on this device without staging any image
+    /// pixels through the host. The previous buffer remains valid until here.
+    pub fn set_gpu_local_tone_guide(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
+    ) -> Result<(), GpuRasterError> {
+        if let Some(g) = &guide {
+            if g.device != *renderer.device || g.space != renderer.document_color.space {
+                return Err(GpuRasterError::Color("Local tone guide belongs to a different device or color space".into()));
+            }
+            if self.gpu_local_guide.as_ref().is_some_and(|old| std::sync::Arc::ptr_eq(old,g)) { return Ok(()); }
+            self.local_buffer = g.buffer.clone();
+            self.local_guide = None;
+            self.gpu_local_guide = guide;
+            self.bind_group = None;
+            Ok(())
+        } else {
+            self.set_local_tone_guide(renderer, None)
+        }
+    }
     pub fn set_local_tone_guide(
         &mut self,
         renderer: &WgpuRasterizer,
         guide: Option<std::sync::Arc<layer_core::color::hdr::LocalToneGuide>>,
     ) -> Result<(), GpuRasterError> {
         if match (&self.local_guide, &guide) {
-            (None, None) => true,
+            (None, None) => self.gpu_local_guide.is_none(),
             (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         } {
@@ -128,6 +151,7 @@ impl ViewportPresenter {
         buffer.unmap();
         self.local_buffer = buffer;
         self.local_guide = guide;
+        self.gpu_local_guide = None;
         self.bind_group = None;
         Ok(())
     }
@@ -136,6 +160,30 @@ impl ViewportPresenter {
         renderer: &WgpuRasterizer,
         rendition: Option<layer_core::color::hdr::SdrRendition>,
         headroom: f32,
+    ) -> Result<(), GpuRasterError> {
+        self.set_hdr_options(renderer, rendition, headroom, false)
+    }
+
+    /// Submit HDR to the host's tone mapper without the display-headroom shoulder.
+    /// PQ is absolute and bounded to BT.2020 / 10,000 cd/m²; WebGPU extended sRGB
+    /// is SDR-relative. Explicit print/gamut proof still takes precedence.
+    pub fn set_compositor_hdr_view(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        rendition: layer_core::color::hdr::SdrRendition,
+    ) -> Result<(), GpuRasterError> {
+        if !matches!(self.color, SdrSurfaceColor::Bt2100Pq | SdrSurfaceColor::ExtendedSrgb) {
+            return Err(GpuRasterError::Color("Compositor HDR requires a PQ or extended sRGB surface".into()));
+        }
+        self.set_hdr_options(renderer, Some(rendition), 1., true)
+    }
+
+    fn set_hdr_options(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
+        headroom: f32,
+        compositor: bool,
     ) -> Result<(), GpuRasterError> {
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom) {
             return Err(GpuRasterError::Color("Invalid display HDR headroom".into()));
@@ -146,7 +194,7 @@ impl ViewportPresenter {
         let options = rendition.map_or([0.; 8], |r| {
             let p = r.parameters();
             [
-                p[0], p[1], p[2], p[3], headroom, p[4], p[5], 0.,
+                p[0], p[1], p[2], p[3], headroom, p[4], p[5], u32::from(compositor) as f32,
             ]
         });
         if options != self.hdr_options {
@@ -183,9 +231,7 @@ impl ViewportPresenter {
     }
 
     pub fn proof_storage_bytes(&self) -> u64 {
-        self.local_guide
-            .as_ref()
-            .map_or(0, |_| self.local_buffer.size())
+        (if self.local_guide.is_some() || self.gpu_local_guide.is_some() { self.local_buffer.size() } else { 0 })
             + if self.proof_lut.is_some() {
                 self.proof_buffer.size()
             } else {
@@ -199,6 +245,7 @@ impl ViewportPresenter {
         if self.local_buffer != source.local_buffer {
             self.local_buffer = source.local_buffer.clone();
             self.local_guide = source.local_guide.clone();
+            self.gpu_local_guide = source.gpu_local_guide.clone();
             self.bind_group = None;
         }
         if self.hdr_options != source.hdr_options {
@@ -330,6 +377,15 @@ impl ViewportPresenter {
         }
     }
 
+    /// Standalone Navigator with the same explicit encoding as its main canvas.
+    pub fn for_overview_surface(
+        renderer: &WgpuRasterizer,
+        format: wgpu::TextureFormat,
+        color: SdrSurfaceColor,
+    ) -> Result<Self, GpuRasterError> {
+        Ok(Self { standalone_overview: true, ..Self::for_surface(renderer, format, color)? })
+    }
+
     fn with_device(
         device: &crate::PipelineDevice,
         format: wgpu::TextureFormat,
@@ -455,10 +511,11 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
+                    color == SdrSurfaceColor::ExtendedSrgb,
                     crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),
@@ -567,6 +624,7 @@ impl ViewportPresenter {
                 mapped_at_creation: false,
             }),
             local_guide: None,
+            gpu_local_guide: None,
             proof_options: [0; 4],
             timing: None,
             proof_lut: None,
@@ -595,6 +653,7 @@ impl ViewportPresenter {
             shader,
             pipeline_layout,
             format,
+            color,
             overview_pipeline: None,
             overview_buffer: None,
             overviews: Vec::new(),

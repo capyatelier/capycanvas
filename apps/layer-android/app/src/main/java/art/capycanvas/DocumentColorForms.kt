@@ -14,15 +14,15 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-@Composable internal fun ColorChoice(label: String, choices: List<Pair<String, String>>, value: String, onChange: (String) -> Unit) {
+@Composable internal fun ColorChoice(label: String, choices: List<Pair<String, String>>, value: String, enabled: Boolean = true, onChange: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Column {
         Text(label, style = MaterialTheme.typography.labelMedium)
         Box {
-            OutlinedButton({ open = true }, modifier = Modifier.fillMaxWidth().testTag("color-choice-$label")) {
+            OutlinedButton({ open = true }, enabled = enabled, modifier = Modifier.fillMaxWidth().testTag("color-choice-$label")) {
                 Text(choices.firstOrNull { it.first == value }?.second ?: value)
             }
-            DropdownMenu(open, { open = false }) {
+            DropdownMenu(open && enabled, { open = false }) {
                 for ((id, title) in choices) DropdownMenuItem(text = { Text(title) }, onClick = { open = false; onChange(id) })
             }
         }
@@ -75,7 +75,7 @@ import org.json.JSONObject
                 }
                 val spaces = model.getJSONArray("spaces")
                 ColorChoice("Color space", (0 until spaces.length()).map { spaces.getJSONArray(it).let { a -> a.getString(0) to a.getString(1) } }, options.getJSONObject("color").getString("space")) { color("space", it) }
-                ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR"), options.getJSONObject("color").getString("depth")) { color("depth", it) }
+                ColorChoice("Bit depth", listOf("U8" to "8-bit SDR", "U16" to "16-bit SDR", "F16" to "16-bit float HDR", "F32" to "32-bit float HDR"), options.getJSONObject("color").getString("depth")) { color("depth", it) }
                 ColorChoice("Background", listOf("White" to "White", "Transparent" to "Transparent"), options.getString("background")) { options = JSONObject(options.toString()).put("background", it) }
                 OutlinedTextField(name, { name = it }, label = { Text("Save as preset (optional)") }, singleLine = true)
                 Row { Checkbox(defaults, { defaults = it }); Text("Use as defaults", Modifier.padding(top = 12.dp)) }

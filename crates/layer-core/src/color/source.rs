@@ -24,7 +24,7 @@ impl SourceAccounting {
             .saturating_add(source.tiles.len().saturating_mul(96));
         for tile in source.tiles.values() {
             if self.tiles.insert(Arc::as_ptr(tile) as usize) {
-                bytes = bytes.saturating_add(tile.resident_bytes());
+                bytes = bytes.saturating_add(tile.compressed_len());
             }
         }
         if let ColorProfile::Icc(profile) = &source.interpretation.profile
@@ -266,7 +266,7 @@ impl SourceBuilder {
                 let start = row * TILE_SIZE as usize * bpp;
                 tile[start..start + width].copy_from_slice(&source[offset..offset + width]);
             }
-            let blob = TileBlob::encode_source(descriptor, &tile)?;
+            let blob = TileBlob::encode(descriptor, &tile)?;
             self.retained_bytes += blob.resident_bytes();
             if self.retained_bytes > self.max_bytes {
                 return Err("Decoded source exceeds the memory budget".into());
@@ -311,7 +311,7 @@ mod tests {
         let mut separate = (*source).clone();
         for tile in separate.tiles.values_mut() {
             *tile = Arc::new(
-                TileBlob::encode_source(tile.descriptor, &tile.decode().unwrap()).unwrap(),
+                TileBlob::encode(tile.descriptor, &tile.decode().unwrap()).unwrap(),
             );
         }
         assert_eq!(

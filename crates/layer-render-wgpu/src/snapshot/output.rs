@@ -3,30 +3,6 @@ use super::*;
 use layer_core::color::RgbSpace;
 
 impl SnapshotRenderer {
-    /// Immutable full-document analysis, shared by preview and every delivery
-    /// size. The row reader and Laplacian worker both observe cancellation.
-    pub fn local_tone_guide(
-        &mut self,
-    ) -> Result<Arc<layer_core::color::hdr::LocalToneGuide>, String> {
-        if let Some(guide) = &self.local_tone {
-            return Ok(guide.clone());
-        }
-        let extent = self.extent;
-        let space = self.color().space;
-        let control = self.control.clone();
-        let mut rows = Rows::new(self);
-        let guide = Arc::new(layer_color::build_local_tone_guide(
-            extent,
-            space,
-            || control.is_cancelled(),
-            |y, row| {
-                row.copy_from_slice(rows.read(y)?);
-                Ok(())
-            },
-        )?);
-        self.local_tone = Some(guide.clone());
-        Ok(guide)
-    }
     pub fn write_gainmap(
         &mut self,
         output: impl std::io::Write,
@@ -57,6 +33,11 @@ impl SnapshotRenderer {
                 read,
             )
         })
+    }
+    pub fn write_exr(&mut self, output: impl std::io::Write + std::io::Seek) -> Result<layer_color::OutputStatistics, String> {
+        let resolution = self.output_resolution;
+        self.hdr_rows(|extent, space, read| layer_color::photo::write_exr_rows(output, extent, space, resolution, read).map(|_| Default::default()))?;
+        Ok(Default::default())
     }
     pub fn write_hdr_png(
         &mut self,
@@ -125,7 +106,7 @@ impl SnapshotRenderer {
     ) -> Result<layer_color::OutputStatistics, String> {
         self.check_cancelled().map_err(|e| e.to_string())?;
         if !self.color().depth.is_float() {
-            return Err("PQ delivery requires an HDR document".into());
+            return Err("HDR delivery requires an HDR document".into());
         }
         let extent = self.output_extent;
         let source_extent = self.extent;

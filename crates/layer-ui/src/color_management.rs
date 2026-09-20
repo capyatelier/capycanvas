@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub fn enabled(platform: Platform) -> bool {
-    matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
+    matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows | Platform::Mac | Platform::Ios)
 }
 
 pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {

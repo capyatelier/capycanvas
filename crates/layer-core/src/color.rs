@@ -77,7 +77,7 @@ impl SampleType { pub fn is_unsigned(&self) -> bool { *self == Self::Unsigned } 
 
 impl PixelDescriptor {
     pub fn depth(self) -> SampleDepth {
-        if self.sample == SampleType::Float { SampleDepth::F16 } else if self.bits_per_channel == 16 { SampleDepth::U16 } else { SampleDepth::U8 }
+        if self.sample == SampleType::Float { if self.bits_per_channel == 32 { SampleDepth::F32 } else { SampleDepth::F16 } } else if self.bits_per_channel == 16 { SampleDepth::U16 } else { SampleDepth::U8 }
     }
     pub const SRGB8_STRAIGHT: Self = Self {
         sample: SampleType::Unsigned,
@@ -103,17 +103,15 @@ impl PixelDescriptor {
     pub fn validate_samples(self, bytes: &[u8]) -> Result<(), String> {
         if self.sample != SampleType::Float { return Ok(()); }
         let bpp = self.bytes_per_pixel().ok_or("Invalid float descriptor")?;
-        if bytes.len() % bpp != 0 { return Err("Incomplete half-float samples".into()); }
+        if bytes.len() % bpp != 0 { return Err("Incomplete float samples".into()); }
         for input in bytes.chunks_exact(bpp) {
-            let mut pixel = [0., 0., 0., 1.];
-            for (c, bits) in input.chunks_exact(2).enumerate() { pixel[c] = f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])).to_f32(); }
-            hdr::encode_pixel(pixel).map_err(str::to_string)?;
+            hdr::decode_samples(self.depth(), input).map_err(str::to_string)?;
         }
         Ok(())
     }
     pub fn bytes_per_pixel(self) -> Option<usize> {
-        if self.sample == SampleType::Float && (self.bits_per_channel != 16 || self.encoding != TransferEncoding::Linear || !matches!((self.channels, self.alpha), (3, AlphaAssociation::None) | (4, AlphaAssociation::Straight))) { return None; }
-        if !matches!(self.bits_per_channel, 8 | 16) {
+        if self.sample == SampleType::Float && (!matches!(self.bits_per_channel, 16 | 32) || self.encoding != TransferEncoding::Linear || !matches!((self.channels, self.alpha), (3, AlphaAssociation::None) | (4, AlphaAssociation::Straight))) { return None; }
+        if self.sample == SampleType::Unsigned && !matches!(self.bits_per_channel, 8 | 16) {
             return None;
         }
         let valid_channels = match self.alpha {

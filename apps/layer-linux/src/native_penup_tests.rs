@@ -9,7 +9,7 @@ fn native_penup_and_following_strokes() {
     let mut project = new_drawing(4096, 4096).unwrap();
     project.document.color = DocumentColor {
         space: RgbSpace::ProPhoto,
-        depth: if std::env::var("LAYER_DRAWING_HDR").as_deref() == Ok("1") { SampleDepth::F16 } else { SampleDepth::U16 },
+        depth: match std::env::var("LAYER_DRAWING_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 },
     };
     for _ in 0..31 {
         let id = project.document.allocate_layer_id();
@@ -19,8 +19,11 @@ fn native_penup_and_following_strokes() {
             .layers
             .insert(position, layer_core::Layer::paint(id, "pacing layer"));
     }
+    let depth = project.document.color.depth;
     project.validate(Default::default()).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
+    let sdr = std::env::var_os("LAYER_DRAWING_SDR").is_some();
+    if sdr { w.window.maximize(); }
     w.window.present();
     w.dispatch(UiAction::SelectBrush {
         id: layer_core::DefaultBrushPreset::PaletteKnife as u32,
@@ -52,6 +55,15 @@ fn native_penup_and_following_strokes() {
         std::fs::write(format!("{}.proof.json", std::env::var("LAYER_PACING_REPORT").unwrap()),
             serde_json::to_vec_pretty(&proof).unwrap()).unwrap();
     }
+    if sdr {
+        let change = w.gpu.borrow_mut().as_mut().unwrap().session.set_proof_mode(layer_ui::ProofMode::Sdr).unwrap();
+        w.changed(Ok(change));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while w.local_tone.ready_count().is_none() {
+            pump(5);
+            assert!(Instant::now() < deadline, "initial GPU guide: {}", w.local_tone.label.text());
+        }
+    }
     let stats = w
         .gpu
         .borrow()
@@ -80,6 +92,7 @@ fn native_penup_and_following_strokes() {
     let mut pending = Vec::<(usize, layer_core::raster::RasterRevision)>::new();
     let mut backed = Vec::<[u64; 2]>::new();
     let mut ups = Vec::new();
+    let mut guides = Vec::new();
     let observe = |pending: &mut Vec<(usize, layer_core::raster::RasterRevision)>,
                    backed: &mut Vec<[u64; 2]>| {
         pending.retain(|(stroke, root)| {
@@ -108,6 +121,8 @@ fn native_penup_and_following_strokes() {
         let start = Instant::now();
         let mut first = true;
         let mut last = None;
+        let guide = w.local_tone.preview_count();
+        if sdr { assert!(guide.is_some(), "retain completed guide before contact"); }
         while start.elapsed() < Duration::from_millis(800) {
             let t = (start.elapsed().as_secs_f32() / 0.8).min(1.);
             let m = camera.document_to_surface();
@@ -143,6 +158,7 @@ fn native_penup_and_following_strokes() {
                 context.iteration(true);
             }
             observe(&mut pending, &mut backed);
+            if sdr { assert_eq!(w.local_tone.preview_count(), guide, "illumination must not change during contact"); }
         }
         let up = PenEvent {
             sequence,
@@ -151,6 +167,7 @@ fn native_penup_and_following_strokes() {
             ..last.unwrap()
         };
         sequence += 1;
+        guides.push(guide);
         w.input.send(&w, up);
         expected += 1;
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -222,8 +239,9 @@ fn native_penup_and_following_strokes() {
     assert_eq!(backed.len(), count);
     assert!(stats.presented.iter().filter(|p| p[3] == 1).count() > 100);
     let report = serde_json::json!({
-        "document": {"extent": [4096,4096], "space": "ProPhoto", "depth": 16, "paint_layers": 32},
+        "document": {"extent": [4096,4096], "space": "ProPhoto", "depth": depth.bits(), "paint_layers": 32},
         "brush": "PaletteKnife", "brush_size": 720, "contact_ms": 800, "contacts": count,
+        "sdr_proof": sdr, "retained_guide_generations": guides,
         "viewport": camera.viewport, "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "path": "app-owned Wayland Vulkan subsurface", "backing_observation": "first observed host-backed at 2ms event-loop sampling",
         "penups": ups, "host_backed": backed, "raster_commits": stats.raster_commits,
@@ -235,6 +253,13 @@ fn native_penup_and_following_strokes() {
     let path = std::env::var("LAYER_PACING_REPORT").unwrap();
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     w.window.destroy();
+    // This harness drives the main context directly, without Application::run
+    // observing the analysis worker's application hold during shutdown.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while w.local_tone.worker_state().0 {
+        pump(5);
+        assert!(Instant::now() < deadline, "cancelled local analysis did not stop");
+    }
     pump(100);
 }
 

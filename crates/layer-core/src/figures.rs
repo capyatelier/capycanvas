@@ -53,9 +53,7 @@ impl Figure {
             },
         }
     }
-    #[cfg(test)]
-    pub(crate) fn valid(&self) -> bool { self.valid_color(false) }
-    pub(crate) fn valid_color(&self, hdr: bool) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         let dx = (self.end.x - self.start.x).abs();
         let dy = (self.end.y - self.start.y).abs();
         [
@@ -72,7 +70,7 @@ impl Figure {
             && self
                 .colors
                 .iter()
-                .all(|c| crate::layers::operation_color_valid(c, hdr))
+                .all(|c| c.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&c[3]))
             && if self.shape == FigureShape::Line {
                 self.paint == FigurePaint::Outline && dx.hypot(dy) >= 0.001
             } else {

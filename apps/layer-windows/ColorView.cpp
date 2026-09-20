@@ -154,7 +154,7 @@ struct WheelImage {
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
     hstring ringShape,fieldKey;
-    void draw(Image const& image,J const& model,double size,double scale,bool reset=false){
+    void draw(Image const& image,J const& model,J const& state,double size,double scale,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
         if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
@@ -192,10 +192,11 @@ struct WheelImage {
             }
             Paint white{1,1,1,1};
             uint32_t fieldPixels=uint32_t(pixels);float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
-            auto wanted=ringKey+L"/"+to_hstring(hueValue);
+            auto wanted=ringKey+L"/"+to_hstring(hueValue);if(flag(model,L"hdr"))wanted=wanted+state.Stringify()+object(model,L"rendition").Stringify();
             if(!field||fieldKey!=wanted){
                 std::vector<uint8_t> bytes(size_t(fieldPixels)*fieldPixels*4);
-                if(!capy_color_raster(fieldPixels,hueValue,projection,rgbSpace,false,bytes.data(),bytes.size()))throw hresult_invalid_argument(L"Invalid shared color field");
+                auto mapped=to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify());
+                if(!(flag(model,L"hdr")?capy_color_mapped_field(fieldPixels,mapped.c_str(),bytes.data(),bytes.size()):capy_color_raster(fieldPixels,hueValue,projection,rgbSpace,false,bytes.data(),bytes.size())))throw hresult_invalid_argument(L"Invalid shared color field");
                 field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(fieldPixels,fieldPixels),bytes.data(),fieldPixels*4,
                     D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
                 fieldKey=wanted;
@@ -528,11 +529,11 @@ struct View:std::enable_shared_from_this<View>{
         auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale);
         if(nextKey!=key){
             try{
-                try{drawing.draw(image,view,side,scale);}
+                try{drawing.draw(image,view,object(data->state,L"colors"),side,scale);}
                 catch(hresult_error const& exception){
                     auto code=exception.code();
                     if(code!=DXGI_ERROR_DEVICE_REMOVED&&code!=DXGI_ERROR_DEVICE_RESET&&code!=D2DERR_RECREATE_TARGET&&code!=E_SURFACE_CONTENTS_LOST)throw;
-                    drawing.draw(image,view,side,scale,true);
+                    drawing.draw(image,view,object(data->state,L"colors"),side,scale,true);
                 }
                 key=nextKey;drawError.Visibility(Visibility::Collapsed);AutomationProperties::SetItemStatus(image,L"Ready");
             }catch(hresult_error const&){drawError.Visibility(Visibility::Visible);AutomationProperties::SetItemStatus(image,L"Color wheel could not be drawn");}

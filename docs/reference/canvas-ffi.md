@@ -35,7 +35,13 @@ shape. Settings are validated and take effect at the next pen-down.
 The current C ABI constructs a headless wgpu renderer for tests and benchmarks.
 `LayerCanvasConfig.color_space` selects sRGB (0), Display P3 (1), Adobe RGB (2)
 or ProPhoto RGB (3); `integer_depth` accepts 8 or 16. Defaults are sRGB8.
-All configurations use native encoded integer backing and Float32 working tiles,
+`layer_canvas_create_float(config, float_bits, output)` instead selects linear
+Float16 or Float32 backing with `float_bits` 16 or 32, ignoring `integer_depth`.
+The C struct layout and existing entry point are unchanged. RGB 1 is 203 cd/m²;
+RGB must be finite and alpha in [0,1]. Masks retain integer16 precision.
+Unsupported GPU capabilities return an error without narrowing the document.
+The existing RGBA8 diagnostic export remains an SDR derivative.
+All configurations use backing at the selected precision and Float32 working tiles,
 matching the GTK editing path. Brush RGB coordinates are linear in that document
 space. Invalid mode values fail before GPU allocation.
 Creation fails when no hardware GPU adapter is available. Surface creation is a

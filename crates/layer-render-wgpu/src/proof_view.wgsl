@@ -12,7 +12,7 @@ fn proof_at(p: vec3<u32>) -> ProofPoint {
 fn proof_artwork(source: vec4<f32>, position: vec2<f32>) -> vec4<f32> {
     let proof=proof_options.x>=2u && (proof_options.z!=0u || proof_options.w!=0u);
     var paint=source;
-    if hdr_view.rendition.w!=0. && (hdr_view.headroom.x<=1. || proof) {
+    if hdr_view.rendition.w!=0. && ((hdr_view.headroom.x<=1. && !compositor_hdr()) || proof) {
         let toned=local_tone_artwork(source,position);
         if proof {paint=hdr_gamut_proof(toned,hdr_view.headroom.y);}
         else {paint=hdr_gamut_sdr(toned,hdr_view.headroom.y);}

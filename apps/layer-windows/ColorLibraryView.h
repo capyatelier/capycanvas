@@ -20,7 +20,7 @@ struct ColorLibraryView : std::enable_shared_from_this<ColorLibraryView> {
     void showSwatches(){
         updating=true;swatches.Items().Clear();int selected=-1;auto colors=array(selectedPalette(),L"swatches");
         for(uint32_t i=0;i<colors.Size();++i){auto color=colors.GetObjectAt(i);StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(8);
-            A list;list.Append(object(color,L"color"));auto preview=colorUi(O({{L"type",S(L"preview")},{L"colors",list}})).GetArray().GetObjectAt(0);
+            A list;list.Append(object(color,L"color"));auto preview=colorUi(O({{L"type",S(L"preview")},{L"colors",list},{L"document_space",S(str(panel(),L"rgb_space",L"Srgb"))},{L"rendition",panel().GetNamedValue(L"rendition",JsonValue::CreateNullValue())}})).GetArray().GetObjectAt(0);
             Shapes::Rectangle chip;chip.Width(20);chip.Height(20);chip.Fill(SolidColorBrush(displayColor(preview)));row.Children().Append(chip);row.Children().Append(label(data,str(color,L"name")));
             swatches.Items().Append(row);if(num(color,L"id")==swatchId)selected=i;
         }
@@ -28,13 +28,14 @@ struct ColorLibraryView : std::enable_shared_from_this<ColorLibraryView> {
     }
     void refresh(){
         auto next=array(object(object(data->state,L"colors"),L"library"),L"palettes");
-        if(next.Stringify()!=previous){previous=next.Stringify();library=next;updating=true;palettes.Items().Clear();int selected=-1;
+        auto nextKey=next.Stringify()+str(panel(),L"rgb_space")+panel().GetNamedValue(L"rendition",JsonValue::CreateNullValue()).Stringify();
+        if(nextKey!=previous){previous=nextKey;library=next;updating=true;palettes.Items().Clear();int selected=-1;
             for(uint32_t i=0;i<library.Size();++i){auto palette=library.GetObjectAt(i);palettes.Items().Append(box_value(str(palette,L"name")));if(num(palette,L"id")==paletteId)selected=i;}
             if(selected<0&&library.Size()){selected=0;paletteId=num(library.GetObjectAt(0),L"id");}
             palettes.SelectedIndex(selected);paletteName.Text(str(selectedPalette(),L"name"));updating=false;showSwatches();
         }
         paintContext=str(object(data->state,L"colors"),L"paint_slot");
-        form->load(object(panel(),L"definition"),str(panel(),L"rgb_space",L"Srgb"));
+        form->load(object(panel(),L"definition"),str(panel(),L"rgb_space",L"Srgb"),panel(),true);
     }
     void init(){
         root.Spacing(8);root.Width(300);auto weak=weak_from_this();form=std::make_shared<ColorForm>();

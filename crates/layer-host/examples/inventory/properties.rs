@@ -70,7 +70,7 @@ fn changed_value(control: &Value) -> Result<Value, String> {
                 (0., [0., 0., 0., 1.]),
                 (0.375, [0.75, 0.25, 0.5, 1.]),
                 (1., [1., 1., 1., 1.]),
-            ].map(|(position, rgba)| GradientStop { position, color: RgbColor { space, rgba } }))
+            ].map(|(position, rgba)| GradientStop { position, color: RgbColor { space, rgba, linear_rgb: None } }))
         }
         kind => return Err(format!("No inventory edit for property kind {kind}")),
     })

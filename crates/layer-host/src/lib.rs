@@ -37,6 +37,8 @@ pub struct PointerBatch<'a> {
 
 pub struct NativeHost {
     pub session: UiSession<Renderer>,
+    /// Number of drawings owned by the window, for shared header geometry.
+    pub document_count: usize,
     /// Configure before publishing UI; hosts tag these preview values to match.
     pub ui_color_space: layer_core::color::RgbSpace,
     pub logical: [f32; 2],
@@ -63,6 +65,14 @@ pub struct NativeHost {
 }
 
 impl NativeHost {
+    fn prepare_ui_previews(&mut self) -> Result<(), String> {
+        let rendition = self.session.engine().document().color.depth.is_float()
+            .then(|| self.session.effective_sdr_rendition());
+        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            gpu.set_ui_rendition(rendition).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
     /// Native adapters transfer only metadata and the completed packed atlas.
     pub fn poll_filter_previews(
         &mut self,
@@ -70,6 +80,7 @@ impl NativeHost {
         size: [u32; 2],
         cache: layer_ui::FilterPreviewCache,
     ) -> Result<layer_ui::FilterPreviewUpdate, String> {
+        self.prepare_ui_previews()?;
         let ready = self.session.engine().backend().0.is_some();
         self.session.poll_filter_previews(
             self.preview_clock.elapsed().as_nanos().min(u64::MAX as u128) as u64,
@@ -107,6 +118,7 @@ impl NativeHost {
             last_workspace_model_revision: None,
             last_workspace_content_revision: None,
             last_camera_revision: None,
+            document_count: 1,
             document_view_revision: 0,
             last_durable_workspace: None,
             service_changes: 0,
@@ -235,9 +247,25 @@ impl NativeHost {
         &mut self,
         requests: impl IntoIterator<Item = (u64, u64)>,
     ) -> Result<(Vec<u64>, Vec<layer_render::ReadbackImage>), String> {
+        self.prepare_ui_previews()?;
         let mut accepted = Vec::new();
-        if !self.dirty && !self.session.engine().has_pending_document_edits() {
+        // Background brush/filter warmup keeps the canvas dirty after document
+        // pixels settle. It must not starve visible thumbnails. Still yield to
+        // active input, pending edits and shared editor background operations.
+        if self.startup.canvas_ready
+            && !self.session.wants_continuous_frames()
+            && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.export_ready())
+        {
             for (request, target) in requests.into_iter().take(8) {
+                // Match GTK's bounded cold-photo work. The UI retries requests
+                // that are not yet accepted, leaving input/frame opportunities
+                // between batches instead of scanning an entire photo here.
+                #[cfg(not(target_arch = "wasm32"))]
+                if !self.session.renderer_mut().0.as_mut().unwrap()
+                    .prepare_thumbnail_batch(layer_core::LayerId(target))
+                    .map_err(|e| e.to_string())? {
+                    continue;
+                }
                 if self
                     .session
                     .renderer_mut()

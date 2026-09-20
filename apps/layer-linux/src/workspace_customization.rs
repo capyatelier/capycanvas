@@ -1557,6 +1557,17 @@ impl Workspace {
             "item",
             &actions,
         );
+        if menu.title == ApplicationMenu::Primary.label() || menu.title == ApplicationMenu::Window.label() {
+            let action = gtk::gio::SimpleAction::new("drawings", None);
+            action.connect_activate(glib::clone!(#[weak(rename_to=w)] self, #[weak] popover, move |_, _| {
+                popover.popdown(); w.documents.show_selector(&w);
+            }));
+            actions.add_action(&action);
+            let section = gtk::gio::Menu::new();
+            let item = gtk::gio::MenuItem::new(Some("Drawings…"), Some("context.drawings"));
+            item.set_attribute_value("accel", Some(&"<Control><Shift>a".to_variant()));
+            section.append_item(&item); root.append_section(None, &section);
+        }
         popover.insert_action_group("context", Some(&actions));
         popover.set_menu_model(Some(&root));
     }

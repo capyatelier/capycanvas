@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "precision_generator": "tools/validation/avif_precision.c (libavif 1.3.0, AOM)",
+  "gainmap_generator": "tools/validation/avif_gainmap.c (libavif 1.4.2, AOM; dav1d decoding)",
+  "reference_format": "Little-endian RGBA16 UNORM (.rgba16) or linear sRGB RGBA binary16 (.rgba16f)",
+  "files": {
+    "hdr-alternate.avif": "786ab0fed300157c07457da1cf991a5375de2710b9f007e146ce04a2ca98fb60",
+    "hdr-alternate.rgba16f": "1199f2f304b5f91e5588ec4ee5b8906213bec6666ee133de07138c0508826081",
+    "hdr-rgb.avif": "4acd8d8b2eec58c50f151698dc1713d78f562eb20d3e2e857ec0d20b737f267a",
+    "hdr-rgb.rgba16f": "f92c238e609b1cfc0dc565d8baa75c462843bfd28c06f0c600730c4422481d04",
+    "hdr-small-gray.avif": "033c057fdc117757a6f08ab55d5f7fead73d9d165c74771fd353b5660b60f9b7",
+    "hdr-small-gray.rgba16f": "44bfab727bd0da2d31cc99c85c36d92451efd941b61a0f12735dbd2c896a3181",
+    "p3-10bit-crop-r1-m1.avif": "985844aec0345b63473a16abb2fe584d594d17f63c4349a1ebc93464c9890340",
+    "p3-10bit-crop-r1-m1.rgba16": "6e16be448dc2e3124cd7487a2ef839e72c74a9717f9243911ffc2ea51015469d",
+    "p3-12bit.avif": "e9a8900f5691687f5c7b12b73af6c2e1f2d015ecde91a8ad816659398b617378",
+    "p3-12bit.rgba16": "1782a4489df7fd6041ce5811b36c1d27a4b4500fd64667612365bd81d31a8f2f"
+  },
+  "generators": {
+    "tools/validation/avif_precision.c": "e49ac818a4c73443818367845b6ab6a1fc7b39c4e75ab4df14ee36989b48b3a5",
+    "tools/validation/avif_gainmap.c": "7236611e5074d4ccdc8803513cb4d8efef02df4413e9e999974007c7a812bd6f"
+  }
+}

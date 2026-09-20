@@ -63,7 +63,11 @@ function Capture([string]$Name){
 }
 try{
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
-    $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+    $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+    # The smoke command strip covers the bottom swatches at this window size.
+    # This fixture uses native controls only; keep the isolated profile and all
+    # foreground/point ownership checks, without the unrelated overlay.
+    Remove-Item Env:CAPY_SMOKE_TEST -ErrorAction SilentlyContinue
     Remove-Item Env:CAPY_PRESENT_PROBE -ErrorAction SilentlyContinue
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
@@ -136,13 +140,10 @@ try{
     Start-Sleep -Milliseconds 1100
     if(Find 'color-swatch-swap'){throw 'Mouse hold incorrectly opened the paint menu'}
     [CapyRowPointer]::Up()
-    $zen=((Model).state.commands|Where-Object id -eq 'zen_mode').label
-    $toggle=Find $zen -Name
-    if($toggle){$toggle.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-    else{(Control 'Drawing canvas' -Name).SetFocus();[CapyRowPointer]::Key(0x09)}
-    Wait-Until {(Model).partial_zen} 'Partial Zen did not open for the retained drawer review'
+    # Partial Zen was retired in the shared UI. Exercise the retained drawer
+    # through its ordinary toolbar tile, which is the current user workflow.
     $tileId=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -ExpandProperty id
-    Invoke "zen-tile-toolbar-$tileId"
+    Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -ne (Find 'tool-drawer')} 'Color drawer did not open'
     $script:pickerScope=Control 'tool-drawer'
     # A visible drawer can still be moving from its opening animation.
@@ -170,7 +171,7 @@ try{
     if(((Control 'color-shape-0').GetRuntimeId() -join ':') -ne $drawerButton){throw 'Drawer edits replaced retained color controls'}
     Capture 'retained-drawer'
     $script:pickerScope=$null
-    Invoke "zen-tile-toolbar-$tileId"
+    Invoke "tile-toolbar-$tileId"
     Wait-Until {$null -eq (Find 'tool-drawer')} 'Color drawer did not close'
     if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Picker input painted or changed the document'}
     [CapyRowPointer]::Dispose()

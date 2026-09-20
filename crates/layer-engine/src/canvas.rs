@@ -232,6 +232,27 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         &mut self.backend
     }
 
+    pub fn retained_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
+        self.editor.retained_tiles()
+    }
+
+    /// Normal tab parking waits for submission, unlike device-failure recovery.
+    pub fn can_park(&self) -> bool {
+        !self.has_pending_input() && !self.has_active_stroke() && !self.has_pending_document_edits()
+    }
+
+    pub fn release_idle_buffers(&mut self) {
+        if !self.can_park() { return; }
+        self.builder = StrokeBuilder::with_capacity(0);
+        self.dabs = Vec::new();
+        self.batches = Vec::new();
+        self.pending_smudge_dabs = Vec::new();
+        self.completed_stroke = None;
+        self.completed_at = None;
+        self.completed_before = None;
+        self.estimates.clear();
+    }
+
     /// Replace GPU state while retaining committed raster roots and history.
     /// Prepare sources and resize before adoption; failure leaves live input intact.
     /// The active builder and queued samples survive; completed history restores

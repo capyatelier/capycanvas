@@ -2,7 +2,7 @@
 """Independent ICC-aware SDR JPEG references (system Pillow + LittleCMS).
 
 Run after the gainmap_rendition_changes Rust test with LAYER_GAINMAP_OUTPUT set
-and native_gainmap_export_choices_preview_flatten_and_reopen GTK journey.
+and portable_gainmap_export_without_codec_bundle GTK journey.
 The resulting control/references feed test.mjs --gainmap-interchange.
 """
 import io

@@ -57,12 +57,12 @@ pub extern "system" fn Java_art_capycanvas_Native_proofTask(
     control: jlong,
 ) -> jlong {
     let result = (|| {
-        let recipe = serde_json::from_str(&read(&mut env, &recipe)?).map_err(error)?;
-        let job = ProofPreparation::begin(
+        let recipe: Option<layer_core::color::ProofRecipe> = serde_json::from_str(&read(&mut env, &recipe)?).map_err(error)?;
+        let job = if id < 0 { ProofPreparation::panel(&unsafe { app(handle) }.host.session, recipe.ok_or("Choose a proof profile")?)? } else { ProofPreparation::begin(
             &unsafe { app(handle) }.host.session,
             (id != 0).then_some(id as u32),
             recipe,
-        )?;
+        )? };
         Ok(Box::into_raw(Box::new(Task {
             job,
             control: crate::inspection::control(control),

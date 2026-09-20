@@ -273,3 +273,94 @@ workstation budgets. GTK mapped-SDR operation is qualified within that envelope.
 Physical HDR display/monitor moves, constrained/mobile devices and other hosts'
 HDR integration remain outstanding; this is not a cross-platform phase-4 signoff.
 User feature feedback precedes any push to origin/master.
+
+## Phase 4 GTK follow-up qualification — 2026-09-19
+
+[GTK follow-up report](../development/color-management-m4-gtk-qualification.md)
+records the normal-package startup fix, unchanged-tolerance SDR hue correction,
+sustained local-tone presentation measurements, full 60 MP gain-map delivery,
+concurrent process/driver/staging memory, guide limits and animation assessment.
+The feature branch and runnable build are for review before merging. Existing
+JPEG numerical failures and missing physical-input/mixed-monitor evidence remain
+explicit; neither this entry nor software texture tests close whole phase 4.
+Float32 document storage remains outside scope.
+
+
+## Phase 4 Web/Android integration evidence — 2026-09-19
+
+[Web/Android report](../development/color-management-web-android-m4.md) records
+shared HDR editing, native persistence/recovery, GTK picker/dial controls, print
+proofing and EXR/PQ/SDR delivery in real desktop/tablet Chrome and native Android.
+Web has an explicit 12 MP HDR admission limit after larger documents exceeded
+memory budgets. Native Float16 measurements reach 60 MP. Proof now uses the
+shared GTK reveal workflow in docked, floating and drawer views, with pen/touch
+dragging, cancellation and workspace undo/redo checked on both hosts. Physical
+HDR surfaces, gain-map delivery and full presentation/thermal qualification
+remain explicit follow-up work; this entry is not global signoff.
+
+The [GTK parity follow-up](../development/color-management-gtk-parity.md) audits
+rendered Color/Proof contents, restored Paint/Photo layouts, held-key/contact
+history, shared color feedback, Print draft/preservation and Export ordering,
+and browser GPU replacement. Runnable packages and comparison evidence include
+the regular Android app, not only the isolated HDR test package.
+
+## Android HDR display follow-up — 2026-09-19
+
+The [tablet display investigation](../development/android-hdr-display.md) replaces
+the Android hardcoded SDR surface with Android 15 extended-linear float
+presentation, negotiated headroom and idle/lifecycle refresh. The attached Wacom
+now activates a real HDR layer, but its firmware grants only 1.004× headroom
+for the initial 2.300448× test request. The follow-up below corrects the
+request units and the near-SDR presentation policy. Web remains mapped SDR. Both hosts use the GTK
+left-side footer display button with matching zoom/rotation styling and details.
+Physical luminance, other displays and sustained thermal qualification remain open.
+
+
+## Android canvas and shared thumbnail follow-up — 2026-09-19
+
+The [same investigation](../development/android-hdr-display.md#canvas-navigator-and-layer-thumbnail-follow-up)
+records the pixel-level follow-up. Android now publishes Proof changes and
+completed tone analysis to an idle canvas. Its headroom request converts EV to a
+linear ratio. Below 1.05× granted headroom it keeps the authored SDR appearance,
+matching its SDR picker instead of changing color treatment for negligible HDR
+brightness. Float buffer readback verifies above-white canvas and Navigator
+output with simulated usable headroom; it does not establish physical HDR.
+Web/Android layer and filter previews now receive the shared SDR recipe, and
+native photo-thumbnail preparation uses GTK's bounded batches. Painted/photo
+pixel oracles and visible thumbnail edit/undo/redo checks cover the fix. The
+Android Compose picker still needs a qualified HDR presentation route on a
+display with useful headroom; global phase-4 signoff remains open.
+
+
+## Android compositor-managed HDR review — 2026-09-19
+
+The [PQ follow-up](../development/android-hdr-display.md#pq-display-validation)
+supersedes Android's 1.05× SDR-fallback threshold. HDR Off now submits PQ to
+Android with automatic brightness policy, independently of reported headroom;
+SDR/Print retain explicit mapped output. The shared GPU numerical oracle and
+actual tablet display switching/recovery tests validate the signal route. The
+user accepted the tablet's HDR appearance. Final cleanup removes unused
+headroom feedback, simulation plumbing and verbose footer details; the status
+reads **HDR**. Color controls and layer thumbnails remain SDR previews. This is not whole phase-4 signoff.
+
+## Web HDR output and EV drag follow-up — 2026-09-19
+
+The [Web/Android integration follow-up](../development/color-management-web-android-m4.md#web-hdr-display-and-ev-drag-follow-up--2026-09-19)
+replaces Web's mapped-SDR-only display route with qualified extended-range WebGPU
+canvas and Navigator output. Browser/display capability checks retain mapped SDR
+on unsupported hosts. Explicit SDR and Print proofing keep their existing shared
+mapping. Signed extended-sRGB encoding reuses the shared Rust presenter, with
+numerical GPU checks alongside the unchanged Android PQ route.
+
+The browser EV arc no longer snaps back when Chrome takes over a touch drag:
+touch arbitration is disabled on its SVG viewport. Actual cancellation still
+restores the starting value. Review evidence covers mouse/touch/pen, submitted
+HDR/SDR pixels, proof switching, save/reopen, delivery and GPU recovery. Color
+controls, layer thumbnails and export comparisons remain SDR previews; this does
+not close whole phase 4 or qualify physical screen luminance.
+
+The subsequent [SDR illustration packaging fix](../development/color-management-web-android-m4.md#web-sdr-proof-illustration-packaging-fix--2026-09-19)
+corrects a worker URL that escaped fingerprinting and left the inner circle gray.
+Production dependency checks now include worker URLs; tablet checks compare
+actual pattern pixels with GTK's shared texture and verify offline worker startup.
+The earlier opacity-only visual assertion did not qualify the illustration.

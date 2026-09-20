@@ -101,7 +101,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
             .headerSource(input, obj("kind" to "background"), "Title Bar", -1).headerChrome())
         val width = maxWidth.value
-        val geometryKey = "$width:$modelKey:$editing:$metrics"
+        val geometryKey = "$width:$modelKey:$editing:$metrics:${host.drawingTabs.rows.size}"
         SideEffect { input.width = width; input.metrics = metrics }
         LaunchedEffect(geometryKey) {
             input.finish(true)
@@ -164,6 +164,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
                         val spec = specs.getValue(id)
                         Row(Modifier.fillMaxWidth().height(44.dp).testTag("header-overflow-item-$id")
                             .headerSource(input, obj("kind" to "item", "value" to id), spec.getString("label"), 2)
+                            .then(if(entries.first { it.getInt("id")==id }.getJSONObject("item").getString("kind")=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier)
                             .clickable(enabled = !editing) {
                                 val entry = entries.first { it.getInt("id") == id }
                                 input.overflow = null
@@ -204,6 +205,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     when (entry.getJSONObject("item").getString("kind")) {
         "capy" -> host.invoke("zen_mode")
         "settings" -> host.invoke("settings")
+        "document_title" -> host.drawingTabs.selector = true
         "tool" -> host.dispatch(obj("type" to "activate_header_item", "id" to entry.getInt("id")))
     }
 }
@@ -241,7 +243,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         // the translucent fallback rather than a blur of the foreground text.
         Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()
             .then(if (kind in listOf("document_title", "clock", "battery"))
-                Modifier.background(colors.headerSurface, RoundedCornerShape(6.dp)) else Modifier), contentAlignment = Alignment.Center) {
+                Modifier.background(colors.headerSurface, RoundedCornerShape(6.dp)) else Modifier).then(if(kind=="document_title")Modifier.drawingDropTarget(host,!editing)else Modifier), contentAlignment = Alignment.Center) {
             val icon = when (kind) {
                 "capy" -> snapshot.getJSONObject("state").array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon")
                 "settings" -> "settings"
@@ -264,7 +266,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     }
                 }
                 kind == "workspaces" && !compact -> WorkspaceSwitcher(host, Modifier.fillMaxWidth(), interactive = !editing)
-                kind == "document_title" -> Text(title, Modifier.padding(horizontal = 6.dp).testTag("document-title"), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                kind == "document_title" -> DrawingHeader(host, title, editing)
                 kind == "clock" -> SystemStatus(showBattery = false)
                 kind == "battery" -> SystemStatus(clock = false)
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)

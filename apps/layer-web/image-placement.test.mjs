@@ -66,7 +66,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await evaluate(`{const fields=document.querySelectorAll('dialog[open] input[type=number]');fields[0].value=2000;fields[1].value=1500;[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click();}`);
     await idle();await wait('layerApp.app.brush_ready()');
     const base=await state(),baseCount=base.layers.length;
-    assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['TIFF','PNG','WebP','BMP','JPEG','GIF']);
+    assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['OpenEXR','TIFF','PNG','WebP','BMP','JPEG','GIF','HEIF','AVIF']);
     await importFiles(files);
     assert.equal((await state()).layers.length,baseCount+files.length);
     await click('.image-placement-controls [data-command=cancel_transform]');

@@ -1,7 +1,7 @@
 //! Shared geometry for the intensity arc; hosts own input capture and timing.
 use super::{ColorPanelLayout, ColorWheelGeometry};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct HdrIntensityArc {
     pub center: [f32; 2],
     pub radius: f32,

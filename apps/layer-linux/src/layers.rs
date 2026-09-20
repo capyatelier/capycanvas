@@ -286,6 +286,16 @@ fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
     }
 }
 impl LayerPanel {
+    pub fn document_changed(&self) {
+        self.previews.borrow_mut().clear();
+        self.requested.borrow_mut().clear();
+        self.pending.borrow_mut().clear();
+        for row in self.rows.borrow().values() {
+            row.content_image.set_paintable(None::<&gdk::Texture>);
+            row.mask_image.set_paintable(None::<&gdk::Texture>);
+        }
+        self.model.remove_all();
+    }
     #[cfg(test)]
     pub fn preview_requests(&self) -> u64 {
         self.next_preview.get() - 1

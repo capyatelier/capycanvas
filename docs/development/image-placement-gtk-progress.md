@@ -1506,6 +1506,10 @@ subsequent local implementation is recorded next.
 
 ## HEIF/AVIF implementation and open qualification
 
+Historical native-codec qualification: production readers and GTK packaging now
+use the [shared Rust core](portable-photo-core.md). The native tools below are
+optional interoperability references, and the old package verifier has been removed.
+
 The working tree includes a Linux reader behind `layer-color`'s `heif` feature,
 enabled by GTK. A narrow C bridge loads a packaged native bundle; capability
 checks require compatible libheif and actual HEVC and AV1 backends. GTK filters
@@ -1515,7 +1519,7 @@ is retained, high-depth samples use U16 storage, container orientation is applie
 once and collection primary images are labelled. Sequences and PQ/HLG HDR remain
 explicitly unsupported.
 
-`tools/build/photo-codecs.py` verifies pinned archives and builds libheif 1.23.4,
+`tools/validation/photo-codecs/photo-codecs.py` verifies pinned archives and builds libheif 1.23.4,
 libde265 1.1.3 and dav1d 1.5.3. `apps/layer-linux/photo-codecs.mjs` validates the
 recipe, bridge, patch, library and source hashes, then stages replaceable
 libraries and corresponding source/license material. The local libheif patch
@@ -1558,7 +1562,7 @@ Reproduce references with the system libavif 1.3.0/AOM library and C compiler:
 
 ```sh
 python3 tools/validation/avif_reference.py --fetch --output /tmp/capy-avif-reference
-CAPY_PHOTO_CODEC_DIR=target/photo-codecs/prefix/lib LAYER_HEIF_REFERENCES=target/photo-codecs/build/libheif-1.23.4 LAYER_AVIF_REFERENCES=/tmp/capy-avif-reference cargo test --locked --offline -p layer-color --features heif --lib heif_ -- --include-ignored --nocapture
+CAPY_PHOTO_CODEC_DIR=target/photo-codec-reference/prefix/lib LAYER_HEIF_REFERENCES=target/photo-codec-reference/build/libheif-1.23.4 LAYER_AVIF_REFERENCES=/tmp/capy-avif-reference cargo test --locked --offline -p layer-color --features native-codec-reference --lib heif_ -- --include-ignored --nocapture
 ```
 
 Use absolute paths for the three environment variables if running outside the

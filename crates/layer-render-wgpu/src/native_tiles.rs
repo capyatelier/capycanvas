@@ -161,7 +161,7 @@ impl NativeEncodeStatus {
         let invalid = u32::from_le_bytes(bytes[..4].try_into().unwrap());
         if invalid != 0 {
             return Err(GpuRasterError::Color(
-                "Color processing produced non-finite values, invalid coverage or RGB outside the half-float range".into(),
+                "Color processing produced non-finite values, invalid coverage or RGB outside the selected storage range".into(),
             ));
         }
         Ok(NativeEncodingStats {
@@ -232,6 +232,7 @@ impl NativeTileEncoder {
         for (output_format, output_name) in [
             (wgpu::TextureFormat::Rgba8Uint, "rgba8uint"),
             (wgpu::TextureFormat::Rgba16Uint, "rgba16uint"),
+            (wgpu::TextureFormat::Rgba32Uint, "rgba32uint"),
         ] {
             for count in 1..=tiles_per_dispatch {
                 let mut entries = Vec::new();
@@ -336,12 +337,12 @@ impl NativeTileEncoder {
                 layouts.push(layout);
             }
         }
-        let records = std::array::from_fn::<_, 24, _>(|i| {
-            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][i / 2 % 3];
+        let records = std::array::from_fn::<_, 32, _>(|i| {
+            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][i / 2 % 4];
             [
                 if depth.is_float() { 0 } else { depth.maximum() },
-                if depth.is_float() { 0 } else { 65535 / depth.maximum() },
-                (i / 6) as u32,
+                if depth.is_float() { depth.bits() as u32 } else { 65535 / depth.maximum() },
+                (i / 8) as u32,
                 (i % 2) as u32,
                 0,
                 0,
@@ -413,7 +414,7 @@ impl NativeTileEncoder {
             for (i, r) in requests.iter().enumerate() {
                 let values = [
                     if r.depth.is_float() { 0 } else { r.depth.maximum() },
-                    if r.depth.is_float() { 0 } else { 65535 / r.depth.maximum() },
+                    if r.depth.is_float() { r.depth.bits() as u32 } else { 65535 / r.depth.maximum() },
                     r.transfer.curve,
                     u32::from(r.alpha == AlphaAssociation::Straight),
                     r.region[0],
@@ -457,8 +458,8 @@ impl NativeTileEncoder {
                         && next.transfer == r.transfer
                 })
                 .count();
-            let depth = match r.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2 };
-            let format = usize::from(r.depth != SampleDepth::U8) * self.tiles_per_dispatch + count - 1;
+            let depth = match r.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 };
+            let format = (r.depth.bytes().ilog2() as usize) * self.tiles_per_dispatch + count - 1;
             let tile_views: Vec<_> = requests[first..first + count]
                 .iter()
                 .map(|r| {
@@ -506,7 +507,7 @@ impl NativeTileEncoder {
                 binding,
                 format,
                 offset: if full {
-                    (r.transfer.curve * 6
+                    (r.transfer.curve * 8
                         + depth as u32 * 2
                         + u32::from(r.alpha == AlphaAssociation::Straight))
                         * stride
@@ -647,6 +648,8 @@ fn validate(r: &NativeTileRequest<'_>, in_place: bool) -> Result<(), GpuRasterEr
     };
     let format = if r.depth == SampleDepth::U8 {
         wgpu::TextureFormat::Rgba8Uint
+    } else if r.depth == SampleDepth::F32 {
+        wgpu::TextureFormat::Rgba32Uint
     } else {
         wgpu::TextureFormat::Rgba16Uint
     };

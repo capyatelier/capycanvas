@@ -6,12 +6,18 @@ license.workspace = true
 description = "Portable ICC transforms and profiled SDR image interchange"
 
 [features]
-heif = ["dep:libloading"]
+# Optional independent interoperability tests; never needed by an application.
+native-codec-reference = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../layer-core" }
 libjpeg-turbo-rs = "=0.8.0"
+rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+rav1e = { version = "=0.8.1", default-features = false }
+oxideav-av1 = "=0.1.16"
+heif-oxide = "=0.1.0"
+quick-xml = "=0.41.0"
 moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }
 png = "=0.18.1"
 # Bilevel/fax TIFF is outside the supported unsigned 8/16-bit photo matrix.
@@ -19,9 +25,11 @@ tiff = { version = "=0.10.3", default-features = false, features = ["deflate", "
 image = { version = "=0.25.9", default-features = false, features = ["bmp"] }
 gif = "=0.14.2"
 image-webp = "=0.2.4"
+# Sequential block IO keeps HDR interchange bounded on native and wasm.
+exr = { version = "=1.74.0", default-features = false }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-libloading = { version = "=0.8.9", optional = true }
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libloading = "=0.8.9"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 sysinfo = { version = "=0.37.2", default-features = false, features = ["system", "apple-sandbox"] }

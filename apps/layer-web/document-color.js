@@ -18,7 +18,7 @@ export async function chooseDocumentColor({app,dialog,element,button,gpuOperatio
       if(source)form.append(element("p","",rasterize?"Convert the original to the document color space and bit depth at its full size. Existing paint, position, masks and adjustments stay intact. Undo restores the original profile and precision.":"Change how original image numbers are interpreted, keeping their samples and depth. A layer with pixel edits receives a separate corrected original at the same position; existing edits remain intact."));
       const profile=source&&!rasterize?select("Correct source profile",[["0","sRGB"],["1","Display P3"],["2","Adobe RGB (1998)"],["3","ProPhoto RGB"]],"0"):null;
       const space=!history&&!source&&operation!=="depth"?select("Color space",[["Srgb","sRGB"],["DisplayP3","Display P3"],["AdobeRgb","Adobe RGB"],["ProPhoto","ProPhoto RGB"]],current.space):null;
-      const depth=operation==="depth"?select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"]],current.depth):null;
+      const depth=operation==="depth"?select("Bit depth",[["U8","8-bit SDR"],["U16","16-bit SDR"],["F16","16-bit float HDR"],["F32","32-bit float HDR"]],current.depth):null;
       const dither=operation==="depth"?select("Dither",[["None","None"],["Stochastic8","Stochastic (8-bit)"]],"None"):null;
       const result=operation==="convert"?select("Result",[["layers","Editable layers"],["copy","Save flattened copy"]],"layers"):null;
       const intent=operation==="convert"?select("Rendering intent",[["RelativeColorimetric","Relative colorimetric"],["Perceptual","Perceptual"],["Saturation","Saturation"],["AbsoluteColorimetric","Absolute colorimetric"]],"RelativeColorimetric"):null;

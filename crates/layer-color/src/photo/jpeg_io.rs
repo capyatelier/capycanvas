@@ -20,12 +20,9 @@ pub(super) fn read_jpeg_with_cancel(mut input: impl Read + Seek, limits: DecodeL
     })?;
     input.seek(SeekFrom::Start(origin)).map_err(err)?;
     if metadata.gain_map {
-        #[cfg(all(feature="heif",target_os="linux"))]
         { let mut source=super::gainmap::read_gainmap(input,GainMapFormat::Jpeg,limits,cancelled)?;
           source.resolution=metadata.resolution;
           return super::orientation::normalize(source,metadata.orientation.unwrap_or(1),limits.source_bytes); }
-        #[cfg(not(all(feature="heif",target_os="linux")))]
-        { let _=cancelled; return Err("HDR gain-map JPEG is unavailable on this host".into()); }
     }
     let bytes = jpeg_codec::read_bounded(input, limits.codec_bytes)?;
     let mut decoder = jpeg_codec::decoder(&bytes, bytes.capacity(), limits)?;

@@ -2,9 +2,7 @@ package art.capycanvas
 
 import android.app.Application
 import android.os.ParcelFileDescriptor
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,122 +14,149 @@ import java.nio.file.StandardOpenOption
 import java.util.UUID
 import org.json.JSONObject
 
-/** One immutable capture in flight per window. File locks exclude live windows;
- * complete sibling-file publication is shared with GTK in Rust. */
+/** One shared policy/lease per drawing, one serialized immutable writer per
+ * window. Captures are frozen on the owner before waiting for older writes. */
 internal class RecoveryController(private val host: CanvasHost, application: Application) {
     companion object { @Volatile internal var directoryForTest: File? = null }
     private val directory = directoryForTest ?: File(application.filesDir, "raster-recovery")
-    private val path = File(directory, "${UUID.randomUUID()}.capy")
-    // Unlike viewModelScope, this scope finishes an accepted immutable write
-    // after Activity teardown. It never accesses the live App on the file worker.
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val storage = Mutex()
-    private var owner: Held? = null
-    private var offered: Held? = null
-    private var started = false
-    private var closed = false
-    private var policy = ""
-    var candidate by mutableStateOf<File?>(null)
-        private set
-    var working by mutableStateOf(false)
-        private set
-    private class Held(val path: File, val channel: FileChannel, val lock: FileLock) : AutoCloseable {
-        override fun close() { try { lock.release() } finally { channel.close() } }
+    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
+    private val storage=Mutex()
+    private val ownerLane=Mutex()
+    private class Held(val path:File,val channel:FileChannel,val lock:FileLock):AutoCloseable {
+        override fun close(){try{lock.release()}finally{channel.close()}}
     }
-    private fun claim(file: File): Held? {
-        val channel = FileChannel.open(File(file.parentFile, "${file.name}.lock").toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        val lock = try { channel.tryLock() }
-            catch (_: OverlappingFileLockException) { null }
-            catch (e: Exception) { channel.close(); throw e }
-        if (lock == null) { channel.close(); return null }
-        return Held(file, channel, lock)
+    private class Owner(val id:Long,val held:Held) {var policy="";var job:Job?=null}
+    private val owners=mutableMapOf<Long,Owner>()
+    private val origins=mutableMapOf<String,Held>()
+    private val seen=mutableSetOf<String>()
+    private var offered:Held?=null
+    private var polling:Job?=null
+    private var started=false
+    private var closed=false
+    var candidate by mutableStateOf<File?>(null);private set
+    var working by mutableStateOf(false);private set
+    private fun claim(file:File):Held? {
+        val channel=FileChannel.open(File(file.parentFile,"${file.name}.lock").toPath(),StandardOpenOption.CREATE,StandardOpenOption.WRITE)
+        val lock=try{channel.tryLock()}catch(_:OverlappingFileLockException){null}catch(e:Exception){channel.close();throw e}
+        if(lock==null){channel.close();return null};return Held(file,channel,lock)
+    }
+    suspend fun ensureOwners() {
+        if(!started||closed)return
+        ownerLane.withLock {
+            val view=JSONObject(host.drawingTabs.query(obj("op" to "view")))
+            for(tab in view.array("tabs").objects()) {
+                val id=tab.getLong("id")
+                if(id !in owners) {
+                    val held=withContext(Dispatchers.IO) {
+                        check(directory.mkdirs()||directory.isDirectory){"Cannot create recovery storage"}
+                        checkNotNull(claim(File(directory,"${UUID.randomUUID()}.capy")))
+                    }
+                    owners[id]=Owner(id,held)
+                }
+            }
+        }
     }
     fun start() {
-        if (started || closed) return
-        started = true
-        scope.launch {
-            try {
-                storage.withLock { withContext(Dispatchers.IO) {
-                    check(directory.mkdirs() || directory.isDirectory) { "Cannot create recovery storage" }
-                    owner = checkNotNull(claim(path))
-                    offered = directory.listFiles().orEmpty().filter { it.extension == "capy" && it != path }
-                        .sortedByDescending { it.lastModified() }.firstNotNullOfOrNull(::claim)
-                } }
-                offered?.let { update(obj("type" to "offer","key" to it.path.absolutePath,"owned" to true)) }
-                capture()
-                while (!closed) { delay(15_000); capture() }
-            } catch (e: Exception) { host.reportActionError("Recovery unavailable: ${e.message}") }
+        if(started||closed)return;started=true
+        polling=scope.launch {
+            try {ensureOwners();capture()?.join();offerNext();while(!closed){delay(15_000);capture()?.join()}}
+            catch(e:CancellationException){throw e}
+            catch(e:Exception){host.reportActionError("Recovery unavailable: ${e.message}")}
         }
     }
-    private fun update(event:JSONObject):JSONObject? {
-        val result=JSONObject(Native.recoveryUpdate(policy,event.toString()))
-        policy=result.getString("state")
+    private fun update(owner:Owner,event:JSONObject):JSONObject? {
+        val result=JSONObject(Native.recoveryUpdate(owner.policy,event.toString()));owner.policy=result.getString("state")
         val view=result.getJSONObject("update")
-        val key=view.optString("offer").takeUnless{it.isEmpty()||it=="null"}
-        candidate=offered?.path?.takeIf{it.absolutePath==key}
-        working=view.getBoolean("busy")
-        for(release in view.getJSONArray("release").values()) {
-            offered?.takeIf{it.path.absolutePath==release}?.let{held->held.close();offered=null}
-        }
+        for(key in view.array("release").values())origins.remove(key.toString())?.close()
         return view.objectOrNull("work")
     }
-    private suspend fun observation():JSONObject = JSONObject(host.withNative{Native.query(it,obj("type" to "recovery_document").toString())})
-    private fun execute(first:JSONObject?):Job? {
-        if(first==null)return null
-        return scope.launch { storage.withLock {
-            var next:JSONObject?=first
-            while(next!=null) {
-                val work=next;var success=false
-                try {
-                    when(work.getJSONObject("kind").getString("type")) {
-                        "capture" -> success=writeSnapshot()
-                        "retire" -> {withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(path.toPath())};success=true}
-                        "retire_origin" -> {
-                            val key=work.getJSONObject("kind").getString("key")
-                            val held=checkNotNull(offered?.takeIf{it.path.absolutePath==key})
-                            withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(held.path.toPath())};success=true
-                        }
-                        "restore" -> {
-                            val key=work.getJSONObject("kind").getString("key")
-                            val held=checkNotNull(offered?.takeIf{it.path.absolutePath==key})
-                            val task=host.withNative{Native.projectRecoveryTask(it,true)}
-                            try {
-                                withContext(Dispatchers.IO){Native.projectWork(task,ParcelFileDescriptor.open(held.path,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)}
-                                host.withNative{Native.projectAdopt(it,task,"null")};host.documentChanged()
-                                update(obj("type" to "observe","document" to observation(),"owned" to (owner!=null)))
-                                success=true
-                            }finally{withContext(NonCancellable+Dispatchers.IO){Native.projectFree(task)}}
-                        }
-                    }
-                }catch(e:Exception){host.reportActionError("Recovery operation failed: ${e.message}")}
-                next=update(obj("type" to "complete","token" to work.getLong("token"),"success" to success))
-            }
-        } }
+    private suspend fun freeze(owner:Owner,work:JSONObject?):Long {
+        if(work?.getJSONObject("kind")?.getString("type")!="capture")return 0
+        return host.withNative{Native.projectRecoveryFor(it,owner.id)}
     }
-    /** The shared observation excludes provisional operations, but allows committed ink capture. */
+    private suspend fun execute(owner:Owner,first:JSONObject?):Job? {
+        if(first==null)return owner.job
+        val frozen=try{freeze(owner,first)}catch(e:Exception){update(owner,obj("type" to "complete","token" to first.getLong("token"),"success" to false));throw e}
+        val job=scope.launch {
+            storage.withLock {
+                var work:JSONObject?=first;var task=frozen
+                while(work!=null) {
+                    val current=work;var success=false
+                    try {
+                        when(current.getJSONObject("kind").getString("type")) {
+                            "capture"->{if(task!=0L){withContext(Dispatchers.IO){Native.projectPublish(task,owner.held.path.absolutePath)};success=true}}
+                            "retire"->{withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(owner.held.path.toPath())};success=true}
+                            "retire_origin"->{val key=current.getJSONObject("kind").getString("key");val held=checkNotNull(origins[key]);withContext(Dispatchers.IO){java.nio.file.Files.deleteIfExists(held.path.toPath())};success=true}
+                        }
+                    }catch(e:Exception){host.reportActionError("Recovery operation failed: ${e.message}")}
+                    finally{withContext(NonCancellable+Dispatchers.IO){if(task!=0L)Native.projectFree(task)};task=0}
+                    work=update(owner,obj("type" to "complete","token" to current.getLong("token"),"success" to success))
+                    if(work!=null)try{task=freeze(owner,work)}catch(e:Exception){update(owner,obj("type" to "complete","token" to work.getLong("token"),"success" to false));host.reportActionError("Recovery capture failed: ${e.message}");break}
+                }
+            }
+        };owner.job=job;return job
+    }
     fun capture():Job? {
-        if(!started||owner==null||closed)return null
+        if(!started||closed)return null
         return scope.launch {
-            try{execute(update(obj("type" to "observe","document" to observation(),"owned" to true)))?.join()}
-            catch(e:Exception){host.reportActionError("Recovery copy could not be saved: ${e.message}")}
+            try {
+                ensureOwners()
+                for(owner in owners.values.toList()) {
+                    val observation=JSONObject(host.drawingTabs.query(obj("op" to "recovery","id" to owner.id)))
+                    execute(owner,update(owner,obj("type" to "observe","document" to observation,"owned" to true)))?.join()
+                }
+            }catch(e:Exception){host.reportActionError("Recovery copy could not be saved: ${e.message}")}
         }
     }
-    private suspend fun writeSnapshot(): Boolean {
-        val task = host.withNative { Native.projectRecoveryTask(it, false) }
-        if (task == 0L) return false
-        try { withContext(Dispatchers.IO) { Native.projectPublish(task, path.absolutePath) } }
-        finally { withContext(NonCancellable + Dispatchers.IO) { Native.projectFree(task) } }
-        return true
+    fun retire(id:Long=host.drawingTabs.selected,closedTab:Boolean=false):Job? {
+        val owner=owners[id]?:return null
+        return scope.launch {
+            if(closedTab)update(owner,obj("type" to "close"))
+            execute(owner,update(owner,obj("type" to "retire","discard_origin" to true)))?.join()
+            if(closedTab){owners.remove(id);withContext(Dispatchers.IO){owner.held.close()}}
+        }
     }
-    fun retire() { execute(update(obj("type" to "retire","discard_origin" to true))) }
-    fun dismiss(discard:Boolean) { execute(update(obj("type" to "dismiss","discard" to discard))) }
-    fun recover() { execute(update(obj("type" to "restore"))) }
+    private suspend fun offerNext() {
+        if(closed||working||offered!=null)return
+        while(host.drawingTabs.switching||host.documents.working||host.documents.picker!=null)delay(50)
+        offered=withContext(Dispatchers.IO) {
+            directory.listFiles().orEmpty().filter{it.extension=="capy"&&it.absolutePath !in seen&&owners.values.none {o->o.held.path==it}}
+                .sortedByDescending{it.lastModified()}.firstNotNullOfOrNull(::claim)
+        }
+        offered?.let{seen.add(it.path.absolutePath);candidate=it.path}
+    }
+    fun dismiss(discard:Boolean) {
+        val held=offered?:return;offered=null;candidate=null
+        scope.launch {try{withContext(Dispatchers.IO){if(discard)java.nio.file.Files.deleteIfExists(held.path.toPath());held.close()};offerNext()}catch(e:Exception){host.reportActionError("Recovery operation failed: ${e.message}")}}
+    }
+    fun recover() {
+        val held=offered?:return;if(working)return;working=true
+        scope.launch {
+            var task=0L;var transition=false;var adopted=false
+            try {
+                host.drawingTabs.waitReady();host.drawingTabs.trim()
+                task=host.withNative{Native.projectRecoveryTask(it,true)}
+                withContext(Dispatchers.IO){Native.projectWork(task,ParcelFileDescriptor.open(held.path,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)}
+                host.drawingTabs.beforeAdopt(task);transition=true
+                host.withNative{Native.projectAdopt(it,task,"null")};adopted=true
+                ensureOwners()
+                val id=JSONObject(host.drawingTabs.query(obj("op" to "view"))).getLong("selected")
+                origins[held.path.absolutePath]=held;offered=null;candidate=null
+                val owner=owners.getValue(id)
+                execute(owner,update(owner,obj("type" to "adopted","key" to held.path.absolutePath)))?.join()
+                capture()?.join()
+            }catch(e:Exception){host.reportActionError("Recovery operation failed: ${e.message}")}
+            finally {
+                withContext(NonCancellable+Dispatchers.IO){if(task!=0L)Native.projectFree(task)}
+                if(transition)host.drawingTabs.afterAdopt()
+                working=false;if(adopted)offerNext()
+            }
+        }
+    }
     fun close() {
-        closed = true
-        execute(update(obj("type" to "close")))
-        scope.launch { storage.withLock {
-            withContext(Dispatchers.IO) { offered?.close(); offered = null; owner?.close(); owner = null }
-            scope.cancel()
-        } }
+        closed=true;polling?.cancel()
+        val accepted=scope.coroutineContext.job.children.toList()
+        for(owner in owners.values)update(owner,obj("type" to "close"))
+        scope.launch {accepted.joinAll();owners.values.mapNotNull{it.job}.joinAll();storage.withLock {withContext(Dispatchers.IO){offered?.close();origins.values.forEach{it.close()};owners.values.forEach{it.held.close()}};scope.cancel()}}
     }
 }

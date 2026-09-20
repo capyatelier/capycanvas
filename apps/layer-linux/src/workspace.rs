@@ -296,6 +296,7 @@ mod allocation {
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.update_backdrop();
                 owner.allocate_workspace_motion();
                 owner.measure_drawer_tiles();
                 let placement = owner.drawer.geometry(&owner);
@@ -805,11 +806,13 @@ pub struct Workspace {
     pub window: adw::ApplicationWindow,
     pub area: gtk::Picture,
     pub gpu: RefCell<Option<GpuCanvas>>,
+    backdrop: RefCell<Option<crate::wayland::backdrop::Backdrop>>,
     pub(crate) proof: Rc<crate::proof_view::ProofView>,
     pub(crate) local_tone: Rc<crate::local_tone_view::LocalToneView>,
     pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
     pub(crate) hdr_status: gtk::Button,
-    pub(crate) recovery: Rc<crate::recovery::Recovery>,
+    pub(crate) recovery: RefCell<Rc<crate::recovery::Recovery>>,
+    pub(crate) documents: crate::documents::Documents,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
     surface: DockSurface,
@@ -842,7 +845,6 @@ pub struct Workspace {
     navigator_overviews: Rc<crate::navigator::Overviews>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
-    tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
     restart_canvas: gtk::Button,
@@ -866,13 +868,22 @@ impl Drop for Workspace {
     fn drop(&mut self) {
         // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
         // Join the GPU worker before any native window/surface fields drop.
+        self.local_tone.suspend();
         self.gpu.get_mut().take();
+        self.backdrop.get_mut().take();
         self.customization.dispose();
         gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
     }
 }
 
 impl Workspace {
+    pub(crate) fn recovery(&self) -> Rc<crate::recovery::Recovery> { self.recovery.borrow().clone() }
+    pub(crate) fn refresh_document_view(self: &Rc<Self>) { self.refresh(regions::ALL); }
+    pub(crate) fn document_canvas_error(self: &Rc<Self>, error: &str) {
+        self.gpu_error(error);
+        self.status.set_text(error); self.status.set_visible(true);
+        self.restart_canvas.set_visible(true);
+    }
     pub fn new(app: &adw::Application) -> Rc<Self> {
         Self::with_project(app, None)
     }
@@ -923,10 +934,6 @@ impl Workspace {
         // Dragged panels retain their size and may extend beyond any edge.
         // Clip at the application surface even in a decorated, windowed app.
         surface.set_overflow(gtk::Overflow::Hidden);
-        let tab = gtk::Label::new(Some(APP_NAME));
-        tab.add_css_class("document-title");
-        tab.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        tab.set_width_chars(1);
         let header = header::Header::new();
         let system_status = crate::system_status::SystemStatus::new();
         let view_info = gtk::Label::new(Some("100% · 0°"));
@@ -1007,12 +1014,14 @@ impl Workspace {
             window,
             area,
             gpu: RefCell::new(None),
+            backdrop: RefCell::new(None),
             image_drop: RefCell::new(None),
             image_drop_label,
             proof,
             local_tone,
             hdr_status,
-            recovery: Rc::new(crate::recovery::Recovery::default()),
+            recovery: RefCell::new(Rc::new(crate::recovery::Recovery::default())),
+            documents: crate::documents::Documents::new(),
             surface,
             palette_css,
             palette: Cell::new(None),
@@ -1056,7 +1065,6 @@ impl Workspace {
             navigator_overviews,
             layer_panel,
             effects,
-            tab,
             view_info,
             status,
             restart_canvas,
@@ -1104,6 +1112,7 @@ impl Workspace {
             this,
             move |_| this.restart_gpu()
         ));
+        this.documents.bind(&this);
         this.install_document_close();
         crate::recovery::install(&this);
         this.reconcile_layout(&DockLayout::default());
@@ -1207,6 +1216,7 @@ impl Workspace {
                 {
                     return glib::Propagation::Proceed;
                 }
+                if this.documents.key(&this, key, modifiers) { return glib::Propagation::Stop; }
                 // Space also pans the canvas, but focused color buttons own
                 // native Space / Enter activation, including in retained drawers.
                 if matches!(key, gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter)
@@ -1508,7 +1518,7 @@ impl Workspace {
                     ..
                 }
         ) || matches!(&input,UiInput::Key {key,..} if key == "Escape" || key == "Enter");
-        if !finishing && !self.workspaces.accepts_input(self) {
+        if !finishing && (self.documents.changing.get() || !self.workspaces.accepts_input(self)) {
             return InputReply {
                 handled: true,
                 ..Default::default()
@@ -1677,6 +1687,9 @@ impl Workspace {
         description
     }
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
+        if self.documents.changing.get() && !matches!(&action,
+            UiAction::CompleteRequest { .. } | UiAction::RestoreSettings { .. }
+            | UiAction::SystemThemeChanged { .. } | UiAction::WindowFullscreen { .. }) { return; }
         if self.refreshing.get() {
             return;
         }
@@ -1874,6 +1887,7 @@ impl Workspace {
         self.wake_frame(true, false);
     }
     fn wake_frame(self: &Rc<Self>, immediate: bool, navigation: bool) {
+        if self.documents.paused.get() { return; }
         if self
             .gpu
             .borrow()
@@ -1919,7 +1933,7 @@ impl Workspace {
                     #[cfg(test)]
                     let frame_start = std::time::Instant::now();
                     let area = &this.area;
-                    if !area.is_mapped() {
+                    if this.documents.paused.get() || !area.is_mapped() {
                         this.frame_timer.borrow_mut().take();
                         return glib::ControlFlow::Break;
                     }
@@ -2034,6 +2048,17 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                let background = crate::wayland::backdrop::Backdrop::new(area).and_then(|mut background| {
+                    background.update(area, this.palette.get().unwrap().bg.0)?;
+                    Ok(background)
+                });
+                match background {
+                    Ok(background) => {
+                        *this.backdrop.borrow_mut() = Some(background);
+                        this.window.add_css_class("native-canvas-background");
+                    }
+                    Err(error) => { this.gpu_error(&error); return; }
+                }
                 let reattached = this.gpu.borrow_mut().as_mut().map(|gpu| gpu.reattach(area));
                 if let Some(result) = reattached {
                     if let Err(error) = result {
@@ -2044,7 +2069,7 @@ impl Workspace {
                 }
                 match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
                     Ok(mut gpu) => {
-                        if this.recovery.recovered.get() {
+                        if this.recovery().recovered.get() {
                             gpu.session.mark_recovered();
                         }
                         *this.gpu.borrow_mut() = Some(gpu);
@@ -2060,7 +2085,7 @@ impl Workspace {
         self.area.connect_map(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |_| this.wake()
+            move |_| { this.local_tone.resume(); this.wake(); }
         ));
         self.area.connect_scale_factor_notify(glib::clone!(
             #[weak(rename_to = this)]
@@ -2071,10 +2096,13 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
+                this.local_tone.suspend();
                 area.set_paintable(None::<&gdk::Texture>);
                 if let Some(gpu) = this.gpu.borrow_mut().as_mut() {
                     gpu.session.renderer_mut().stop();
                 }
+                this.window.remove_css_class("native-canvas-background");
+                this.backdrop.borrow_mut().take();
             }
         ));
     }
@@ -2112,6 +2140,7 @@ impl Workspace {
         self.status.set_visible(true);
     }
     fn restart_gpu(self: &Rc<Self>) {
+        self.update_backdrop();
         let result = self
             .gpu
             .borrow_mut()
@@ -2161,6 +2190,7 @@ impl Workspace {
         if regions & (regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.proof_panel.refresh(self, &state);
         }
+        self.documents.refresh(self);
         self.header.refresh(self, &state);
         self.view_info
             .set_visible(state.workspace.layout.canvas_info.visible);
@@ -2199,10 +2229,6 @@ impl Workspace {
                 } else {
                     ""
                 };
-                self.tab.set_text(&format!(
-                    "{modified}{} · {} × {}",
-                    tab.title, tab.width, tab.height
-                ));
                 self.window
                     .set_title(Some(&format!("{modified}{} — {APP_NAME}", tab.title)));
             }
@@ -2302,6 +2328,24 @@ impl Workspace {
         }
         css.push('}');
         self.palette_css.load_from_string(&css);
+        self.update_backdrop();
+    }
+
+    fn update_backdrop(&self) {
+        if let Some(background) = self.backdrop.borrow_mut().as_mut()
+            && let Some(palette) = self.palette.get()
+        {
+            match background.update(&self.area, palette.bg.0) {
+                Ok(()) => self.window.add_css_class("native-canvas-background"),
+                Err(error) => {
+                    // Keep the window opaque on failure, then reveal the GPU
+                    // again after a successful resize, palette change or restart.
+                    self.window.remove_css_class("native-canvas-background");
+                    self.status.set_text(&format!("Canvas background unavailable: {error}"));
+                    self.status.set_visible(true);
+                }
+            }
+        }
     }
 
     fn resolved(&self) -> ResolvedLayout {

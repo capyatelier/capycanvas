@@ -1,6 +1,9 @@
+import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
+import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
+import {checkPortablePhoto} from "./portable-photo.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
-import {checkHdrLimits} from "./hdr-limits.test.mjs";
+import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
@@ -66,6 +69,7 @@ const chrome = spawn(
     "--remote-debugging-pipe",
     `--user-data-dir=${profile}`,
     "--no-first-run",
+    "--password-store=basic",
     "--no-default-browser-check",
     // GTK reference PNGs are sRGB; do not bake the monitor's gamma into captures.
     "--force-color-profile=srgb",
@@ -85,6 +89,7 @@ let sequence = 0,
   session;
 const requests = new Map(),
   errors = [];
+const observedError=message=>{errors.push(message);if(process.env.LAYER_TEST_VERBOSE)console.error(message);};
 chrome.stderr.on("data", (data) => {
   if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(data);
 });
@@ -102,8 +107,11 @@ chrome.stdio[4].on("data", (data) => {
       clearTimeout(waiter.timer);
       if (event.error) waiter.reject(new Error(`${waiter.method}: ${JSON.stringify(event.error)}`));
       else waiter.resolve(event.result);
+    } else if (event.method === "Page.javascriptDialogOpening" && event.params.type === "beforeunload") {
+      // Only this disposable test profile is navigated away from by the harness.
+      call("Page.handleJavaScriptDialog", {accept:true}).catch(()=>{});
     } else if (event.method === "Runtime.exceptionThrown")
-      errors.push(
+      observedError(
         event.params.exceptionDetails.exception?.description ||
           event.params.exceptionDetails.exception?.value ||
           event.params.exceptionDetails.text,
@@ -112,7 +120,7 @@ chrome.stdio[4].on("data", (data) => {
       event.method === "Runtime.consoleAPICalled" &&
       ["error", "warning"].includes(event.params.type)
     )
-      errors.push(
+      observedError(
         event.params.args.map((a) => a.value || a.description).join(" "),
       );
     else if (
@@ -122,7 +130,7 @@ chrome.stdio[4].on("data", (data) => {
       !(event.params.entry.level === "warning" && event.params.entry.text.startsWith('Compilation log for [ShaderModule "connected region"]:') && !/\berror(?:s)?\b/i.test(event.params.entry.text))
     ) {
       if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
-      errors.push([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
+      observedError([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
     }
   }
 });
@@ -141,7 +149,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes("--shared-workflows") ? 150000 : 30000);
+    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -229,10 +237,18 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--gainmap-interchange")) {
+  if (process.argv.includes("--drawing-tabs-recovery")) {
+    await checkDrawingTabRecovery({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--drawing-tabs")) {
+    await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--portable-photo")) {
+    await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--gainmap-interchange")) {
     await checkGainmapInterchange({evaluate});
-  } else if (process.argv.includes("--hdr-limits")) {
-    await checkHdrLimits({evaluate});
+  } else if (process.argv.includes("--hdr-performance")) {
+    await measureHdr({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--hdr")) {
+    await checkHdr({call,evaluate,settle});
     checkRasterErrors();
   } else if (process.argv.includes("--image-placement")) {
     await checkImagePlacement({call,evaluate,settle});
@@ -242,6 +258,7 @@ try {
     checkRasterErrors();
   } else if (process.argv.includes("--proof")) {
     await checkProof({call,evaluate,settle});
+    checkRasterErrors();
   } else if (process.argv.includes("--shared-workflows")) {
     await checkSdrColor({call,evaluate,settle});
     await checkColorEdits({call,evaluate,settle});
@@ -422,7 +439,7 @@ try {
     await checkPrediction({call, evaluate, settle});
     assert.deepEqual(errors, []);
   } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
-    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
+    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost, storageOnly: process.argv.includes("--package-offline") });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {
     await checkPreferences({ call, evaluate, settle });

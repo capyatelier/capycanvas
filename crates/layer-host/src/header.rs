@@ -49,7 +49,7 @@ impl NativeHost {
                 width,
                 insets,
                 metrics,
-            } => json!(model.resolve(width, insets, &metrics, editing)),
+            } => json!(model.resolve_documents(width, insets, &metrics, editing, self.document_count)),
             HeaderRequest::Begin {
                 source,
                 width,

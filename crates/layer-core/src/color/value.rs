@@ -10,20 +10,26 @@ pub struct RgbColor {
     /// Straight, profile-encoded RGB and linear alpha. Finite extended RGB is
     /// retained: a P3 color expressed in sRGB need not fit the sRGB unit cube.
     pub rgba: [f32; 4],
+    /// Exact authored linear RGB, when transfer encoding would lose precision.
+    /// `rgba` remains the encoded UI/legacy readout; alpha has one owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear_rgb: Option<[f32; 3]>,
 }
 
 impl RgbColor {
     pub const BLACK: Self = Self {
         space: RgbSpace::Srgb,
         rgba: [0., 0., 0., 1.],
+        linear_rgb: None,
     };
     pub const WHITE: Self = Self {
         space: RgbSpace::Srgb,
         rgba: [1.; 4],
+        linear_rgb: None,
     };
 
     pub fn new(space: RgbSpace, rgba: [f32; 4]) -> Result<Self, String> {
-        let color = Self { space, rgba };
+        let color = Self { space, rgba, linear_rgb: None };
         color.validate()?;
         Ok(color)
     }
@@ -31,6 +37,11 @@ impl RgbColor {
     pub fn validate(self) -> Result<(), String> {
         if !self.rgba.into_iter().all(f32::is_finite) || !(0.0..=1.0).contains(&self.rgba[3]) {
             return Err("Color requires finite RGB and alpha between 0 and 1".into());
+        }
+        if let Some(linear) = self.linear_rgb {
+            if linear.iter().any(|v| !v.is_finite()) || linear.map(|v| self.space.encode(f64::from(v)) as f32) != self.rgba[..3] {
+                return Err("Linear color and encoded readout disagree".into());
+            }
         }
         Ok(())
     }
@@ -49,21 +60,23 @@ impl RgbColor {
     /// Capture a document sample without clipping its RGB or associating alpha.
     pub fn from_linear(space: RgbSpace, rgba: [f32; 4]) -> Result<Self, String> {
         Self::new(space, rgba)?;
-        Self::new(
-            space,
-            [
-                space.encode(f64::from(rgba[0])) as f32,
-                space.encode(f64::from(rgba[1])) as f32,
-                space.encode(f64::from(rgba[2])) as f32,
-                rgba[3],
-            ],
-        )
+        let linear = [rgba[0], rgba[1], rgba[2]];
+        let encoded = linear.map(|v| space.encode(f64::from(v)) as f32);
+        let mut color = Self::new(space, [encoded[0], encoded[1], encoded[2], rgba[3]])?;
+        if encoded.map(|v| (space.decode(f64::from(v)) as f32).to_bits()) != linear.map(f32::to_bits) {
+            color.linear_rgb = Some(linear);
+        }
+        Ok(color)
     }
 
     pub fn encoded_in(self, destination: RgbSpace) -> Result<[f32; 4], String> {
         self.validate()?;
-        let [r, g, b, _] = self.rgba;
-        let rgb = self.space.convert(destination, [r, g, b].map(f64::from));
+        if destination == self.space { return Ok(self.rgba); }
+        let rgb = if let Some(linear) = self.linear_rgb {
+            rgb::apply(self.space.linear_transform(destination), linear.map(f64::from)).map(|v| destination.encode(v))
+        } else {
+            self.space.convert(destination, [self.rgba[0], self.rgba[1], self.rgba[2]].map(f64::from))
+        };
         Ok(Self::new(
             destination,
             [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, self.rgba[3]],
@@ -74,8 +87,8 @@ impl RgbColor {
     pub fn linear_in(self, destination: RgbSpace) -> Result<[f32; 4], String> {
         self.validate()?;
         let [r, g, b, _] = self.rgba;
-        let linear = [r, g, b].map(|v| self.space.decode(f64::from(v)));
-        let rgb = rgb::apply(self.space.linear_transform(destination), linear);
+        let linear = self.linear_rgb.map(|p| p.map(f64::from)).unwrap_or_else(|| [r, g, b].map(|v| self.space.decode(f64::from(v))));
+        let rgb = if destination == self.space { linear } else { rgb::apply(self.space.linear_transform(destination), linear) };
         let rgba = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, self.rgba[3]];
         // This is only finite/coverage validation, independent of transfer.
         Self::new(destination, rgba)?;
@@ -98,17 +111,21 @@ impl RgbColor {
     }
 
     pub fn with_brightness_ev(self, destination: RgbSpace, stops: f32) -> Result<Self, String> {
-        if !stops.is_finite() || !(-16. ..=15.).contains(&stops) {
-            return Err("Brightness must be between −16 and +15 EV".into());
+        self.with_brightness_ev_at_depth(destination, stops, super::SampleDepth::F16)
+    }
+
+    pub fn with_brightness_ev_at_depth(self, destination: RgbSpace, stops: f32, depth: super::SampleDepth) -> Result<Self, String> {
+        let lower = if depth == super::SampleDepth::F32 { -149. } else { -16. };
+        let upper = if depth == super::SampleDepth::F32 { 128. } else { 15. };
+        if !stops.is_finite() || !(lower..=upper).contains(&stops) {
+            return Err(format!("Brightness must be between {lower} and {upper} EV"));
         }
         let mut p = self.linear_in(destination)?;
         let peak = p[..3].iter().copied().fold(0., f32::max);
         if peak <= 0. { return Err("Choose a color brighter than black first".into()); }
-        let scale = stops.exp2() / peak;
-        for v in &mut p[..3] { *v *= scale; }
-        if p[..3].iter().any(|v| !v.is_finite() || v.abs() > 65504.) {
-            return Err("Color exceeds HDR storage range".into());
-        }
+        let scale = f64::from(stops).exp2() / f64::from(peak);
+        for v in &mut p[..3] { *v = (f64::from(*v) * scale) as f32; }
+        super::hdr::validate_pixel(depth, p).map_err(str::to_string)?;
         Self::from_linear(destination, p)
     }
 
@@ -124,6 +141,24 @@ impl RgbColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_linear_float32_survives_transfer_encoding_and_serialization() {
+        for space in RgbSpace::ALL {
+            for pixel in [
+                [65504., 100000.125, -0.12345679, 0.25],
+                [f32::MAX, -f32::MAX, f32::MIN_POSITIVE, 1.],
+                [f32::from_bits(1), -f32::from_bits(1), -0., 0.],
+            ] {
+                let color = RgbColor::from_linear(space, pixel).unwrap();
+                let restored: RgbColor = serde_json::from_slice(&serde_json::to_vec(&color).unwrap()).unwrap();
+                assert_eq!(restored.linear_in(space).unwrap().map(f32::to_bits), pixel.map(f32::to_bits));
+            }
+        }
+        let mut inconsistent = RgbColor::WHITE;
+        inconsistent.linear_rgb = Some([2.; 3]);
+        assert!(inconsistent.validate().is_err());
+    }
 
     #[test]
     fn hdr_brightness_preserves_chromaticity_alpha_and_separates_gamut() {

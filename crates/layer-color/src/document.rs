@@ -159,7 +159,7 @@ impl Converter<'_> {
             {
                 match self.target.depth.coverage() {
                     SampleDepth::U16 => new.copy_from_slice(&(old[0] as u16 * 257).to_le_bytes()),
-                    SampleDepth::F16 => unreachable!("coverage is integer"),
+                    SampleDepth::F16 | SampleDepth::F32 => unreachable!("coverage is integer"),
                     SampleDepth::U8 => {
                         new[0] = ((u16::from_le_bytes([old[0], old[1]]) as u32 + 128) / 257) as u8
                     }
@@ -192,7 +192,7 @@ impl Converter<'_> {
         }
         self.check()?;
         // This runs on a document worker, so favor compact retained backing.
-        let blob = Arc::new(TileBlob::encode_source(descriptor, &encoded)?);
+        let blob = Arc::new(TileBlob::encode(descriptor, &encoded)?);
         self.charge(blob.resident_bytes().saturating_add(128))?;
         self.blobs.insert(key, blob.clone());
         Ok(blob)

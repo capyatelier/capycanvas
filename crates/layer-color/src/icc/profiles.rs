@@ -250,7 +250,6 @@ pub(crate) fn calibrated_rgb_profile(
 }
 
 /// Materialize supported SDR CICP transfer/primaries as a reusable source ICC.
-#[cfg(all(feature = "heif", target_os = "linux"))]
 pub(crate) fn nclx_profile(xy: [f32; 8], transfer: u32) -> Result<ColorProfile, String> {
     if xy.chunks_exact(2).any(|p| !p[0].is_finite() || !p[1].is_finite()
         || p[0] < 0. || p[1] <= 0. || p[0] + p[1] > 1.00001) {

@@ -91,7 +91,7 @@ impl NativeEdit {
                 NativeScalarEncoder::with_device(&r.device)
             },
             promoter: (!in_place).then(|| NativePromoter::with_device(&r.device)),
-            validator: validate::Validator::new(&r.device, r.document_color().depth.is_float()),
+            validator: validate::Validator::new(&r.device, r.document_color().depth),
         }
     }
     pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
@@ -347,7 +347,7 @@ impl WgpuRasterizer {
         for publication in &frame.publications {
             let pending_bytes = publication.data.tiles.values()
                 .filter(|tile| tile.try_backing().is_none())
-                .map(|tile| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64 + 1024)
+                .map(|tile| layer_core::raster::TileBlob::max_compressed_len(tile.descriptor()).unwrap() as u64)
                 .sum::<u64>();
             publication.revision.reserve_pending_bytes(pending_bytes);
         }

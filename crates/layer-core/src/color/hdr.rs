@@ -25,13 +25,37 @@ pub fn srgb_to_bt2020() -> super::rgb::Matrix3 {
 /// Validate straight RGB before half quantization. Zero-alpha hidden RGB may be
 /// retained in source files; edited pixels use canonical transparent black.
 pub fn encode_pixel(pixel: [f32; 4]) -> Result<[u16; 4], &'static str> {
+    validate_pixel(super::SampleDepth::F16, pixel)?;
+    Ok(pixel.map(|v| f16::from_f32(v).to_bits()))
+}
+
+/// Validate without quantizing. Signed RGB, subnormals and hidden RGB are valid;
+/// alpha is finite linear coverage in [0, 1]. Storage never silently clamps.
+pub fn validate_pixel(depth: super::SampleDepth, pixel: [f32; 4]) -> Result<(), &'static str> {
+    if !depth.is_float() { return Err("Expected floating-point storage"); }
     if pixel.iter().any(|v| !v.is_finite()) || !(0. ..=1.).contains(&pixel[3]) {
         return Err("HDR requires finite RGB and coverage between zero and one");
     }
-    if pixel[..3].iter().any(|v| v.abs() > MAX_LINEAR) {
-        return Err("HDR RGB exceeds the supported half-float range");
+    if pixel[..3].iter().any(|v| v.abs() > depth.max_linear()) {
+        return Err("HDR RGB exceeds the selected storage range");
     }
-    Ok(pixel.map(|v| f16::from_f32(v).to_bits()))
+    Ok(())
+}
+
+/// Decode one little-endian RGB/RGBA pixel at its declared precision.
+pub fn decode_samples(depth: super::SampleDepth, bytes: &[u8]) -> Result<[f32; 4], &'static str> {
+    let step = depth.bytes();
+    if !depth.is_float() || ![3 * step, 4 * step].contains(&bytes.len()) {
+        return Err("Incomplete floating-point RGB/RGBA pixel");
+    }
+    let mut pixel = [0., 0., 0., 1.];
+    for (channel, sample) in bytes.chunks_exact(step).enumerate() {
+        pixel[channel] = if depth == super::SampleDepth::F32 {
+            f32::from_le_bytes(sample.try_into().unwrap())
+        } else { f16::from_bits(u16::from_le_bytes(sample.try_into().unwrap())).to_f32() };
+    }
+    validate_pixel(depth, pixel)?;
+    Ok(pixel)
 }
 
 pub fn decode_pixel(bits: [u16; 4]) -> Result<[f32; 4], &'static str> {

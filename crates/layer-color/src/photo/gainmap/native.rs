@@ -15,16 +15,6 @@ fn worker() -> Result<PathBuf, String> {
     let mut paths = Vec::new();
     if let Some(p) = std::env::var_os("CAPY_PHOTO_CODEC_DIR") {
         paths.push(PathBuf::from(p));
-    } else if let Ok(exe) = std::env::current_exe() {
-        if let Some(p) = exe.parent() {
-            for path in [
-                "../lib/capycanvas/photo",
-                "../photo-codecs/prefix/lib",
-                "../../photo-codecs/prefix/lib",
-            ] {
-                paths.push(p.join(path));
-            }
-        }
     }
     paths
         .into_iter()
@@ -33,7 +23,7 @@ fn worker() -> Result<PathBuf, String> {
                 && p.join("capy-hdr-codec").is_file()
         })
         .map(|p| p.join("capy-hdr-codec"))
-        .ok_or("HDR JPEG/AVIF codecs are not installed".into())
+        .ok_or("Set CAPY_PHOTO_CODEC_DIR for the independent native codec tests".into())
 }
 pub(super) fn available() -> bool {
     worker().is_ok()

@@ -161,7 +161,7 @@ pub(super) async fn run(
     let depth = choice(
         "Bit depth",
         "document-color-depth",
-        &["8-bit SDR", "16-bit SDR", "16-bit float HDR"],
+        &["8-bit SDR", "16-bit SDR", "16-bit float HDR", "32-bit float HDR"],
         false,
     );
     depth.set_selected(if color.depth.is_float() { 2 } else { u32::from(color.depth == SampleDepth::U8) });
@@ -257,7 +257,7 @@ pub(super) async fn run(
         #[weak]
         dialog,
         move || {
-            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16][depth.selected() as usize];
+            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][depth.selected() as usize];
             let intent = [
                 RenderingIntent::RelativeColorimetric,
                 RenderingIntent::Perceptual,

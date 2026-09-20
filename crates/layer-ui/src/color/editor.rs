@@ -52,6 +52,7 @@ pub struct ColorEditor {
     fields: [String; 4],
     initial: [String; 4],
     hdr: Option<HdrPaint>,
+    depth: layer_core::color::SampleDepth,
 }
 impl ColorEditor {
     pub fn new(definition: RgbColor, document_space: RgbSpace) -> Result<Self, String> {
@@ -63,9 +64,15 @@ impl ColorEditor {
             fields: Default::default(),
             initial: Default::default(),
             hdr: None,
+            depth: layer_core::color::SampleDepth::F16,
         };
         editor.populate();
         Ok(editor)
+    }
+    pub fn set_document_depth(&mut self, depth: layer_core::color::SampleDepth) { self.depth = depth; }
+    fn validate_range(&self, color: RgbColor) -> Result<(), String> {
+        if self.hdr.is_some() { layer_core::color::hdr::validate_pixel(self.depth, color.linear_in(self.document_space)?).map_err(str::to_string)?; }
+        Ok(())
     }
     pub fn enable_hdr(&mut self, stops: f32) -> Result<(), String> {
         self.hdr = Some(HdrPaint::at_intensity(self.color()?, self.document_space, stops)?);
@@ -83,7 +90,7 @@ impl ColorEditor {
     /// RGB fields describe the final color. EV multiplies its remembered base,
     /// while numeric RGB edits keep the explicitly selected EV.
     pub fn set_intensity(&mut self, stops: f32) -> Result<(), String> {
-        HdrPaint::validate_stops(stops)?;
+        super::hdr_picker::validate_intensity(self.depth, stops)?;
         let mut paint = self.hdr.ok_or("Intensity requires an HDR color draft")?;
         if paint.stops == stops { self.color()?; return Ok(()); }
         let color = self.color()?;
@@ -91,6 +98,7 @@ impl ColorEditor {
         paint.stops = stops;
         let color = paint.color(self.document_space)?;
         ColorState::validate_definition(color)?;
+        self.validate_range(color)?;
         self.hdr = Some(paint);
         self.definition = color;
         self.populate();
@@ -173,15 +181,10 @@ impl ColorEditor {
         };
         // Readout formatting, hex previews, and alpha-only edits never rebuild RGB.
         if self.fields[..3] == self.initial[..3] {
-            return RgbColor::new(
-                self.definition.space,
-                [
-                    self.definition.rgba[0],
-                    self.definition.rgba[1],
-                    self.definition.rgba[2],
-                    alpha,
-                ],
-            );
+            let mut color = self.definition;
+            color.rgba[3] = alpha;
+            color.validate()?;
+            return Ok(color);
         }
         let color = match self.model {
             ColorInputModel::SrgbHex => {
@@ -242,6 +245,7 @@ impl ColorEditor {
             }
         };
         ColorState::validate_definition(color)?;
+        self.validate_range(color)?;
         Ok(color)
     }
     pub fn description(&self) -> String {

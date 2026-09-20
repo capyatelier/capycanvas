@@ -91,6 +91,10 @@ import kotlin.math.roundToInt
 }
 
 @Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
+    if(panel.getString("id")=="proof") {
+        ProofPanel(host,modifier,scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
+        return
+    }
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
     if (layers) {
@@ -121,7 +125,7 @@ import kotlin.math.roundToInt
                 when (item.getString("control")) {
                     "brushes" -> ToolSetControls(host, state)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host, availableHeight) { natural, displayed -> colorHeightDeficit = natural - displayed }
+                    "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> colorHeightDeficit = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> navigatorHeightDeficit = natural - displayed }
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
@@ -188,9 +192,7 @@ import kotlin.math.roundToInt
     ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
         host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
     }
-    var palettes by remember { mutableStateOf(false) }
-    OutlinedButton({ palettes = true }) { Text("Palettes…") }
-    if (palettes) ColorLibraryDialog(host, slot, { palettes = false })
+
 }
 @Composable internal fun ConfigurePanel(host: CanvasHost, panel: JSONObject, onHeight: (Float) -> Unit = {}) {
     val density = LocalDensity.current.density

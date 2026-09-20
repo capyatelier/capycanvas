@@ -232,7 +232,7 @@ impl NativeHost {
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
         map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
-        map.serialize_entry("color_panel", &state.colors.view_in(self.ui_color_space))?;
+        map.serialize_entry("color_panel", &if matches!(state.platform, layer_ui::Platform::Android | layer_ui::Platform::Windows) {state.colors.view_mapped(self.session.effective_sdr_rendition())}else{state.colors.view_in(self.ui_color_space)})?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
             "creation": state.settings.new_document.form_for(state.platform),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
@@ -616,7 +616,7 @@ mod tests {
                 let expected =
                     if matches!(
                         platform,
-                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios
+                        Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows
                     ) {
                         layer_ui::Bounds {
                             x: x - 10.,

@@ -5,6 +5,8 @@
 mod native_penup;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
+#[path = "editing_tools_tests.rs"]
+mod editing_tools;
 #[path = "color_panel_tests.rs"]
 mod color_panel;
 #[path = "color_management_tests.rs"]
@@ -27,6 +29,8 @@ mod place_source;
 mod photo_drop;
 #[path = "file_launch_tests.rs"]
 mod file_launch;
+#[path = "document_tab_tests.rs"]
+mod document_tabs;
 #[path = "column_drop_tests.rs"]
 mod column_drop;
 #[path = "column_stack_tests.rs"]
@@ -480,7 +484,7 @@ fn native_document_files() {
     assert!(state(&w).document_file.modified);
     // Autosave publishes a separate durable copy without acknowledging Save.
     let recovery_dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
-    w.recovery.capture(&w);
+    w.recovery().capture(&w);
     let deadline = Instant::now() + Duration::from_secs(10);
     let recovery_path = loop {
         pump(20);
@@ -514,7 +518,7 @@ fn native_document_files() {
         "{:?}",
         state(&w).host_error
     );
-    w.recovery.capture(&w);
+    w.recovery().capture(&w);
     let deadline = Instant::now() + Duration::from_secs(5);
     while recovery_path.exists() {
         pump(20);
@@ -1081,8 +1085,7 @@ impl Drop for NativeTestApp {
 }
 fn native_test_app(id: &str) -> NativeTestApp {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -3530,6 +3533,7 @@ fn native_figure_tools() {
             controllers
                 .item(i)
                 .and_downcast::<gtk::EventControllerKey>()
+                .filter(|controller| controller.name().as_deref() == Some("workspace-shortcuts"))
         })
         .unwrap();
     for index in 1..3 {
@@ -3538,29 +3542,49 @@ fn native_figure_tools() {
         pump(40);
         let start = [830. + (index - 1) as f32 * 390., 300.];
         let end = [start[0] + 200., start[1] + 80.];
+        let before = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers[0].raster.clone();
         send(PenPhase::Down, start);
         send(PenPhase::Move, end);
         keys.emit_by_name::<bool>(
             "key-pressed",
             &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::empty()],
         );
+        // Completed operations are baked and discarded. Check the constrained
+        // guide before release, then require an actual committed raster edit.
+        let mut guide = Vec::new();
+        w.gpu.borrow().as_ref().unwrap().session.append_layer_overlay(&mut guide);
+        assert!(!guide.is_empty());
+        let gpu = w.gpu.borrow();
+        let camera = &gpu.as_ref().unwrap().session.state().camera;
+        let inverse = camera.input_transform();
+        let scale = w.area.scale_factor() as f32;
+        let points: Vec<_> = guide.iter().flat_map(|segment| [segment.from, segment.to])
+            .map(|p| inverse.map(Point { x: p[0]*scale, y: p[1]*scale })).collect();
+        drop(gpu);
+        if index == 1 {
+            let min = points.iter().fold([f32::INFINITY; 2], |a, p| [a[0].min(p.x), a[1].min(p.y)]);
+            let max = points.iter().fold([f32::NEG_INFINITY; 2], |a, p| [a[0].max(p.x), a[1].max(p.y)]);
+            assert!(((max[0]-min[0])-(max[1]-min[1])).abs() < 0.001,
+                "native Shift constrains rectangle proportions: {min:?}..{max:?}");
+        } else {
+            // Ellipse guide tessellation need not include cardinal vertices.
+            // Every point must lie on the expected 200px-diameter circle.
+            for p in points {
+                let radius = (p.x-start[0]-100.).hypot(p.y-start[1]-100.);
+                assert!((radius-100.).abs() < 0.001, "native Shift constrains ellipse proportions: {radius}");
+            }
+        }
         send(PenPhase::Up, end);
         pump(100);
         keys.emit_by_name::<()>(
             "key-released",
             &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::SHIFT_MASK],
         );
-        let gpu = w.gpu.borrow();
-        let doc = gpu.as_ref().unwrap().session.engine().document();
-        let layer_core::LayerOperationKind::Figure(f) =
-            &doc.layers[0].pending_operations.last().unwrap().kind
-        else {
-            panic!("figure");
-        };
-        assert!(
-            ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001,
-            "native Shift constrains proportions"
-        );
+        new_photo::ready(&w);
+        let after = w.gpu.borrow().as_ref().unwrap().session.engine().document().layers[0].raster.clone();
+        assert_ne!(after, before);
+        assert!(after.host_backed());
+        assert!(!w.status.is_visible(), "{}", w.status.text());
     }
     w.cursor_input(None);
     for theme in [Theme::Dark, Theme::Light] {
@@ -9489,8 +9513,7 @@ fn native_window_lifecycle() {
 #[ignore = "native GTK widgets: requires a Wayland display"]
 fn native_ribbon_allocation() {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -13070,8 +13093,7 @@ fn native_compositor_input() {
 #[ignore = "hardware desktop: run this test separately with --ignored --test-threads=1"]
 fn native_workspace_controls_docking_and_ink() {
     adw::init().unwrap();
-    let css = gtk::CssProvider::new();
-    css.load_from_string(&crate::stylesheet());
+    let css = crate::stylesheet_provider();
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,

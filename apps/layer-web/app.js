@@ -1,5 +1,6 @@
 import init, { WebApp, WebGpu, configure_raster_worker } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
+import { createDocumentStorage } from "./document-storage.js";
 import { createWorkspaceClient } from "./workspace-store.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
@@ -45,7 +46,7 @@ let refreshPreferences, customization, layerPanel, effectPanels, editor, workspa
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
-let compilerScheduled = false, compilerFailed = false;
+let compilerScheduled = false, compilerFailed = false, compilerEpoch = 0;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
 installTooltips();
 let startupNotice;
@@ -195,6 +196,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
+    if(documents?.busy()&&!['complete_request','measure_panels','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
     if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
@@ -325,26 +327,30 @@ function refreshStartup() {
 function scheduleCompiler() {
   if (!gpuReady || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
   compilerScheduled = true;
+  const epoch=compilerEpoch;
   // Start after this display callback can present. The next job is scheduled
   // by a later frame, with input/UI opportunities between each GPU scope.
   setTimeout(async () => {
     try {
+      if(epoch!==compilerEpoch)return;
       if (!firstCanvasRendered) {
         // A display callback alone does not mean the GPU has rendered paper.
         // Starting document compilation sooner can hold up Chrome's GPU-process
         // command batch, including the pending first canvas presentation.
         await gpuOperation(() => app.wait_for_canvas());
+        if(epoch!==compilerEpoch)return;
         firstCanvasRendered = true;
         await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
       }
+      if(epoch!==compilerEpoch)return;
       await gpuOperation(() => app.compile_startup_step());
+      if(epoch!==compilerEpoch)return;
       refreshStartup();
       wake();
     } catch (error) {
-      compilerFailed = true;
-      stopGpu(error);
+      if(epoch===compilerEpoch){compilerFailed = true;stopGpu(error);}
     } finally {
-      compilerScheduled = false;
+      if(epoch===compilerEpoch)compilerScheduled = false;
     }
   }, 0);
 }
@@ -643,7 +649,9 @@ function buildPanels() {
 }
 function contentPanel(id) {
   const panel=element("div",`panel ${id}-panel`);
-  if(id==="layers") {
+  if(id==="proof") {
+    panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
+  } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["adjustments","properties","stats"].includes(id)) {
@@ -1320,6 +1328,7 @@ function keyInput(e, pressed, divider = null) {
 }
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
+  if(documents?.key(e))return;
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));
@@ -1400,7 +1409,8 @@ workspace.addEventListener("drop", (e) => {
 });
 try {
   await init();
-  const rasterWorker = createRasterWorker();
+  const fileWorker = createRasterWorker(),documentStorage=createDocumentStorage();
+  const rasterWorker = request=>request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request);
   configure_raster_worker(rasterWorker);
   canvas.width = 800;
   canvas.height = 600;
@@ -1440,9 +1450,10 @@ try {
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
-  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation,rasterWorker});
+  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
+  documents.mountProof(panels.get("proof"));
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js"), { onSettled: () => workspaceManager?.wake() }), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
-  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
+  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
@@ -1451,6 +1462,22 @@ try {
   // Test harness accesses the actual Wasm instance and native widgets.
   window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes, documents, restartGpu };
   await startGpu();
+  if (window.launchQueue?.setConsumer) {
+    let launches=Promise.resolve();
+    window.launchQueue.setConsumer(params=>{
+      const files=params.files??[];
+      launches=launches.then(async()=>{
+        if(!files.length)return;
+        const deadline=performance.now()+240000;
+        while(documents.busy()||!app.document_park_ready()||document.querySelector('dialog[open]')) {
+          if(performance.now()>deadline)throw Error('Finish the current operation, then open the files again.');
+          await new Promise(resolve=>setTimeout(resolve,50));
+        }
+        const selected=[];for(const handle of files)selected.push({file:await handle.getFile(),handle});
+        await documents.openFiles(selected);
+      }).catch(error=>message(String(error)));
+    });
+  }
 } catch (error) {
   $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
     element("p", "", "Reload the page. If the problem continues, check that the complete app package is being served."), element("pre", "", String(error)));
@@ -1459,6 +1486,9 @@ try {
 }
 
 function stopGpu(error) {
+  // A retired device may finish compilation late, or never settle its Promise.
+  // Neither case may hold the new renderer’s compilation lane or stop it.
+  compilerEpoch++;compilerScheduled=false;
   gpuReady=false;pending.length=0;
   applyChange(app.suspend_gpu());
   if(startupNotice)startupNotice.hidden=true;
@@ -1472,6 +1502,21 @@ async function restartGpu() {
   compilerFailed=false;firstCanvasRendered=false;
   for(const key of Object.keys(startupTimes))startupTimes[key]=null;
   await startGpu();
+}
+
+async function resumeDocumentCanvas() {
+  compilerEpoch++;compilerScheduled=false;compilerFailed=false;
+  gpuReady=app.gpu_ready();firstCanvasRendered=false;pending.length=0;
+  for(const key of Object.keys(startupTimes))startupTimes[key]=null;
+  if(!gpuReady){
+    try{gpuReady=app.resume_document_gpu();}
+    catch(error){stopGpu(error);return;}
+  }
+  if(!gpuReady)await startGpu();
+  else {document.body.dataset.gpu='ready';$('gpu-notice').hidden=true;wake();}
+  // Renderer replacement refreshes shared command availability. Publish that
+  // change after attachment so retained controls do not keep their parked state.
+  if(gpuReady){update(255);wake();}
 }
 
 async function startGpu() {

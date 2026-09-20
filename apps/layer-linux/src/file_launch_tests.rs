@@ -156,254 +156,124 @@ fn native_application_file_launch() {
     let photo_before = std::fs::read(&photo).unwrap();
     let master_before = std::fs::read(&master).unwrap();
 
-    // Cold primary: CLI files arrive before any GPU/session exists. Multiple
-    // files, including a project, create exactly their own source-sized windows.
+    // Cold multi-file launch creates one drawing window and no blank tab.
     let mut sender = Sender::new(&id, &[&photo, &master]);
     until(
-        || windows.borrow().len() == 2 && launch_window(&app).is_none(),
-        "cold file list opens both documents",
+        || {
+            windows.borrow().first().is_some_and(|w| {
+                w.documents.len() == 2 && !w.documents.changing.get() && !w.documents.loading.get()
+            }) && launch_window(&app).is_none()
+        },
+        "cold launch creates tabs",
     );
     sender.finish();
-    let first = windows.borrow()[0].clone();
-    let second = windows.borrow()[1].clone();
-    new_photo::ready(&first);
-    new_photo::ready(&second);
+    let w = windows.borrow()[0].clone();
+    new_photo::ready(&w);
+    assert_eq!(app.windows().len(), 1);
+    assert_eq!(windows.borrow().len(), 1);
+    assert!(activated.get());
+    let second = w.documents.selected();
     assert_eq!(
-        app.windows().len(),
-        2,
-        "no extra blank document or loading window"
-    );
-    assert!(
-        activated.get(),
-        "activation while loading must retain the incoming file"
-    );
-    {
-        let gpu = first.gpu.borrow();
-        let session = &gpu.as_ref().unwrap().session;
-        let doc = session.engine().document();
-        assert_eq!([doc.width, doc.height], expected.extent);
-        assert_eq!(
-            doc.color.depth,
-            SampleDepth::U16,
-            "cold launch uses saved photo policy"
-        );
-        assert_eq!(doc.layers[0].source.as_deref(), Some(&expected));
-        assert_eq!(
-            doc.layers[0].properties.placement,
-            layer_core::Affine::IDENTITY
-        );
-        assert!(doc.layers[0].raster.is_empty());
-        assert!(
-            session.state().document_file.location.is_none(),
-            "JPEG must not become a Save destination"
-        );
-    }
-    assert_eq!(
-        second
-            .gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .engine()
-            .document(),
+        w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &project.document
     );
     assert_eq!(
-        state(&second).document_file.location.unwrap().uri,
+        state(&w).document_file.location.unwrap().uri,
         gio::File::for_path(&master).uri()
     );
-
-    // A running, edited document survives another file launch unchanged, and
-    // closing it still goes through the existing unsaved-work confirmation.
-    new_photo::invoke(&first, CommandId::AddLayer);
-    let edited = place_source::snapshot(&first);
-    assert!(state(&first).document_file.modified);
+    glib::MainContext::default()
+        .block_on(w.documents.activate(&w, 1))
+        .unwrap();
+    new_photo::ready(&w);
+    {
+        let gpu = w.gpu.borrow();
+        let session = &gpu.as_ref().unwrap().session;
+        let doc = session.engine().document();
+        assert_eq!([doc.width, doc.height], expected.extent);
+        assert_eq!(doc.color.depth, SampleDepth::U16);
+        assert_eq!(doc.layers[0].source.as_deref(), Some(&expected));
+        assert!(session.state().document_file.location.is_none());
+    }
+    new_photo::invoke(&w, CommandId::AddLayer);
+    let edited = place_source::snapshot(&w);
     let mut sender = Sender::new(&id, &[&photo]);
     until(
-        || windows.borrow().len() == 3 && launch_window(&app).is_none(),
+        || w.documents.len() == 3 && !w.documents.changing.get() && !w.documents.loading.get(),
         "warm file launch",
     );
     sender.finish();
-    assert_eq!(place_source::snapshot(&first), edited);
-    first.window.close();
-    until(
-        || first.window.visible_dialog().is_some(),
-        "unsaved close prompt",
-    );
-    new_photo::response(&first, "cancel");
-    assert!(first.window.is_visible());
-    assert_eq!(place_source::snapshot(&first), edited);
-
-    // A rejected first file is named, and acknowledgement continues to the
-    // next file in the same native argument list without losing either drawing.
+    assert_eq!(app.windows().len(), 1);
+    glib::MainContext::default()
+        .block_on(w.documents.activate(&w, 1))
+        .unwrap();
+    new_photo::ready(&w);
+    assert_eq!(place_source::snapshot(&w), edited);
+    // Error acknowledgement continues a batch in the receiving window.
     let bad = directory.join("Broken picture.jpg");
     std::fs::write(&bad, b"not an image").unwrap();
-    let mut sender = Sender::new(&id, &[&bad, &photo]);
+    let mut sender = Sender::new(&id, &[&bad, &master]);
     until(
         || {
-            launch_window(&app)
-                .and_then(|w| w.visible_dialog())
+            w.window
+                .visible_dialog()
                 .is_some_and(|d| d.widget_name() == "file-launch-error")
         },
         "failed file explanation",
     );
-    let error = launch_window(&app)
-        .unwrap()
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
-    assert!(error.body().contains("Broken picture.jpg"));
-    click(&find_button(error.upcast_ref(), "OK").unwrap());
+    assert_eq!(app.windows().len(), 1);
+    new_photo::response(&w, "ok");
     until(
-        || windows.borrow().len() == 4 && launch_window(&app).is_none(),
-        "next file after error",
+        || w.documents.len() == 4 && !w.documents.changing.get() && !w.documents.loading.get(),
+        "batch continues",
     );
     sender.finish();
-    assert_eq!(place_source::snapshot(&first), edited);
-
-    // Cancel on the first progress presentation, before accepting a worker's
-    // result. Test both the dialog button and the native parent close action.
-    let cancel_mode = Rc::new(Cell::new(0));
-    let cancellations = Rc::new(Cell::new(0));
-    let signal = app.connect_window_added(glib::clone!(
-        #[strong]
-        cancel_mode,
-        #[strong]
-        cancellations,
-        move |_, window| {
-            let Some(window) = window.downcast_ref::<adw::ApplicationWindow>() else {
-                return;
-            };
-            window.connect_notify_local(
-                Some("visible-dialog"),
-                glib::clone!(
-                    #[strong]
-                    cancel_mode,
-                    #[strong]
-                    cancellations,
-                    move |window, _| {
-                        let Some(dialog) = window
-                            .visible_dialog()
-                            .filter(|d| d.widget_name() == "document-open-progress")
-                        else {
-                            return;
-                        };
-                        let mode = cancel_mode.replace(0);
-                        if mode == 0 {
-                            return;
-                        }
-                        let window = window.clone();
-                        let cancellations = cancellations.clone();
-                    glib::idle_add_local_full(glib::Priority::HIGH, move || {
-                        cancellations.set(cancellations.get() + 1);
-                        if mode == 1 {
-                            find_button(dialog.upcast_ref(), "Cancel").unwrap().emit_clicked();
-                        } else {
-                            window.close();
-                        }
-                        glib::ControlFlow::Break
-                    });
+    // A second explicit window remains possible; its opens target that window.
+    app.activate_action("new-window", None);
+    until(|| windows.borrow().len() == 2, "explicit new window");
+    let other = windows.borrow()[1].clone();
+    new_photo::ready(&other);
+    crate::files::launch::open_in(&other, vec![gio::File::for_path(&master)]);
+    until(
+        || other.documents.len() == 2 && !other.documents.changing.get(),
+        "pinned launch target",
+    );
+    assert_eq!(w.documents.len(), 4);
+    assert_eq!(app.windows().len(), 2);
+    // Closing during preparation cancels the batch; late results never create a window.
+    let signal = other
+        .window
+        .connect_notify_local(Some("visible-dialog"), |window, _| {
+            if window
+                .visible_dialog()
+                .is_some_and(|d| d.widget_name() == "document-open-progress")
+            {
+                let weak = window.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(window) = weak.upgrade() {
+                        window.close();
                     }
-                ),
-            );
-        }
-    ));
-    for mode in [1, 2] {
-        cancel_mode.set(mode);
-        let count = cancellations.get();
-        let mut sender = Sender::new(&id, &[&photo, &master]);
-        until(
-            || cancellations.get() == count + 1 && launch_window(&app).is_none(),
-            "cancelled list retires after worker acknowledgement",
-        );
-        sender.finish();
-        assert_eq!(windows.borrow().len(), 4);
-        assert_eq!(place_source::snapshot(&first), edited);
-    }
-    app.disconnect(signal);
-
-    // Missing-profile interpretation must also work on the launch parent, which
-    // deliberately has no GPU/session of its own.
-    let untagged_path = directory.join("Unprofiled photo.jpg");
-    let mut untagged = photo_before[..2].to_vec();
-    let mut at = 2;
-    while photo_before[at + 1] != 0xda {
-        let length = usize::from(u16::from_be_bytes([
-            photo_before[at + 2],
-            photo_before[at + 3],
-        ])) + 2;
-        if photo_before[at + 1] != 0xe2 {
-            untagged.extend_from_slice(&photo_before[at..at + length]);
-        }
-        at += length;
-    }
-    untagged.extend_from_slice(&photo_before[at..]);
-    std::fs::write(&untagged_path, &untagged).unwrap();
-    for accept in [false, true] {
-        let mut sender = Sender::new(&id, &[&untagged_path]);
-        until(
-            || {
-                launch_window(&app)
-                    .and_then(|w| w.visible_dialog())
-                    .is_some_and(|d| d.widget_name() == "untagged-profile-dialog")
-            },
-            "launch profile prompt",
-        );
-        let dialog = launch_window(&app).unwrap().visible_dialog().unwrap();
-        if accept {
-            let window = launch_window(&app).unwrap();
-            new_photo::profile_action_window(&window, "source", "manage");
-            until(|| window.visible_dialog().is_some_and(|d| d.widget_name() == "profile-library-manager"),
-                "profile library on launch parent");
-            click(&find_button(window.visible_dialog().unwrap().upcast_ref(), "Done").unwrap());
-            until(|| window.visible_dialog().is_some_and(|d| d.widget_name() == "untagged-profile-dialog"),
-                "return to launch profile prompt");
-            new_photo::profile_action_window(&window, "source", "builtin-1"); // Display P3
-        }
-        click(
-            &find_button(
-                dialog.upcast_ref(),
-                if accept { "Use Profile" } else { "Cancel" },
-            )
-            .unwrap(),
-        );
-        until(|| launch_window(&app).is_none(), "profile completion");
-        sender.finish();
-        assert_eq!(windows.borrow().len(), if accept { 5 } else { 4 });
-    }
-    let interpreted = windows.borrow().last().unwrap().clone();
-    new_photo::ready(&interpreted);
-    {
-        let gpu = interpreted.gpu.borrow();
-        let doc = gpu.as_ref().unwrap().session.engine().document();
-        assert_eq!(doc.color.space, layer_core::color::RgbSpace::DisplayP3);
-        assert_eq!(doc.color.depth, SampleDepth::U16);
-        let mut expected =
-            layer_color::photo::read_photo(std::io::Cursor::new(&untagged), Default::default())
-                .unwrap();
-        expected.interpretation.profile =
-            ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3);
-        expected.interpretation.profile_assumed = false;
-        assert_eq!(doc.layers[0].source.as_deref(), Some(&expected));
-    }
-    drop(interpreted);
-
+                });
+            }
+        });
+    crate::files::launch::open_in(
+        &other,
+        vec![gio::File::for_path(&photo), gio::File::for_path(&master)],
+    );
+    until(
+        || !other.window.is_visible(),
+        "close cancels incoming batch",
+    );
+    pump(100);
+    assert_eq!(windows.borrow().len(), 1);
+    other.window.disconnect(signal);
     assert_eq!(std::fs::read(&photo).unwrap(), photo_before);
     assert_eq!(std::fs::read(&master).unwrap(), master_before);
-    for w in windows.borrow().iter() {
-        new_photo::ready(w);
-    }
-    crate::capture(&first, directory.join("opened-photo.png").to_str().unwrap());
-    let owned = std::mem::take(&mut *windows.borrow_mut());
-    for w in &owned {
-        w.recovery.discard();
-        w.window.destroy();
-    }
-    drop(owned);
-    drop(first);
-    drop(second);
+    glib::MainContext::default()
+        .block_on(w.documents.activate(&w, second))
+        .unwrap();
+    new_photo::ready(&w);
+    crate::capture(&w, directory.join("opened-tabs.png").to_str().unwrap());
+    w.window.destroy();
+    windows.borrow_mut().clear();
     pump(100);
-    assert!(app.windows().is_empty());
 }

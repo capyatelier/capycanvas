@@ -2,10 +2,10 @@
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
-export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen}) {
+export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
-  const title = document.querySelector('#document-title');
+  const title = documents.title;
   const switcher = document.querySelector('.workspace-switcher');
   const recovery = document.querySelector('.workspace-recovery');
   retained.append(title, switcher, systemStatus.root);
@@ -46,12 +46,12 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     const summary = element('summary', '', glyph ? null : label); summary.setAttribute('aria-label', label);
     if (glyph) summary.append(icon(glyph));
     const contents = element('div', 'popover'); contents.setAttribute('role', 'menu'); node.append(summary, contents);
-    node.refreshMenu = () => {
-      customization.renderMenu(contents, model(), () => {node.open=false; updateZen();});
+    node.refreshMenu = (reset=false) => {
+      customization[reset?'renderMenu':'refreshMenu'](contents, model(), () => {node.open=false; updateZen();});
       const r = node.getBoundingClientRect();
       contents.style.left = `${Math.min(0, innerWidth-r.x-contents.offsetWidth-6)}px`;
     };
-    node.addEventListener('toggle', () => {if(node.open)node.refreshMenu(); updateZen();});
+    node.addEventListener('toggle', () => {if(node.open)node.refreshMenu(true); updateZen();});
     return node;
   }
   const application = id => app.editor_models(0,0).application_menus.find(m=>m.id===id).model;
@@ -229,7 +229,9 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       else if(kind==='document_title'){width=180;compact=80;}
       // Fold the labels inside their original item before shared whole-item
       // overflow can hide that item and the rest of its region.
-      else if(kind==='menu_labels'){width=Math.max(width,r.full.scrollWidth);compact=size.tile;}
+      // Popovers overflow their labels; they must not enlarge the title-bar item
+      // and make allocation hide the very menu the user just opened.
+      else if(kind==='menu_labels'){width=Math.max(width,r.full.offsetWidth);compact=size.tile;}
       else if(['clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
       if(r.compact){r.full.hidden=fullHidden;r.compact.hidden=compactHidden;}
       r.root.classList.remove('header-measuring');r.root.hidden=wasHidden;

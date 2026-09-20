@@ -36,6 +36,7 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val proof=ProofController(this)
+    internal val hdr=HdrController(this)
     companion object {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
@@ -72,7 +73,25 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         updateWorkspaceManager(request); refreshChrome(); publish(true); wake()
     }
     private var closingWorkspaceWindow = false
-    internal fun closeWorkspaceWindow(complete: () -> Unit) = post {
+    // Main-thread window attachment survives the gap during configuration
+    // recreation without retaining or finishing a retired Activity.
+    private var attachedWindow = java.lang.ref.WeakReference<MainActivity>(null)
+    private var finishWindowPending = false
+    internal fun attachWindow(activity: MainActivity) {
+        attachedWindow = java.lang.ref.WeakReference(activity)
+        finishAttachedWindow()
+    }
+    internal fun detachWindow(activity: MainActivity) {
+        if(attachedWindow.get() === activity) attachedWindow.clear()
+    }
+    private fun finishAttachedWindow() {
+        val activity = attachedWindow.get() ?: return
+        if(finishWindowPending && !activity.isChangingConfigurations && !activity.isDestroyed) {
+            finishWindowPending = false
+            activity.finish()
+        }
+    }
+    internal fun closeWorkspaceWindow() = post {
         if (closingWorkspaceWindow) return@post
         closingWorkspaceWindow = true
         updateWorkspaceManager(obj("type" to "suspend"))
@@ -84,7 +103,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     val view = workspaceManagerKey?.let(::JSONObject)
                     if (view?.optBoolean("busy") == true) { worker.postDelayed(this, 20); return@attempt }
                     closingWorkspaceWindow = false
-                    if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post(complete)
+                    if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post {
+                        finishWindowPending = true
+                        finishAttachedWindow()
+                    }
                 }
             }
         }
@@ -132,6 +154,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
+    @Volatile internal var documentInputBlocked = false
+    internal fun documentCanvasFailure(message: String?) { failure=message }
+    internal val drawingTabs = DrawingTabsController(this)
     internal val documents = DocumentController(this, application)
     internal val recovery = RecoveryController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
@@ -154,7 +179,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
     private var documentEpoch = 0L
-    private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 17) else null
+    private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 18) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
     private val frameCosts = if (BuildConfig.DEBUG) LongArray(11) else null
     private var frameCount = 0
@@ -235,11 +260,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
     }
     internal fun documentChanged(complete: () -> Unit = {}) = post {
-        refreshChrome(); publish(true); wake(); main.post(complete)
+        refreshChrome(); publish(true); wake(); main.post { drawingTabs.refresh(); complete() }
     }
     internal fun reportActionError(message: String) { actionError = message; actionErrorFromCanvasFailure = false }
     fun clearActionError() { actionError = null; actionErrorFromCanvasFailure = false }
     fun dispatch(action: JSONObject) = post {
+        val type=action.optString("type")
+        if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen")) return@post
         Native.dispatch(handle, action.toString())
         refreshChrome()
         publish(true)
@@ -312,6 +339,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
     }
     fun input(input: JSONObject, reply: ((JSONObject) -> Unit)? = null) = post {
+        if(documentInputBlocked && input.optString("type") in listOf("key_down", "scroll")) return@post
         val value = JSONObject(Native.input(handle, input.toString()))
         if (reply != null) main.post { reply(value) }
         publish(false)
@@ -333,8 +361,18 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         "facts" to chromeFacts, "viewport" to JSONArray(listOf(logicalWidth, logicalHeight)))
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
+    internal fun displayInfo(available:Boolean) = post {
+        Native.displayInfo(handle,available);publish(true);wake()
+    }
+
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
+        currentSurface=surface
+        if(documentInputBlocked) {
+            main.postDelayed({if(currentSurface===surface&&surface.isValid)attach(surface,width,height,density,refreshRate)},16)
+            return
+        }
         proof.resume()
+        hdr.resume()
         filterPreviewCache.resume()
         currentSurface = surface
         surfaceReady = false
@@ -380,6 +418,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
         proof.pause()
+        hdr.pause()
         filterPreviewCache.pause()
         currentSurface = null
         surfaceReady = false
@@ -405,7 +444,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 attempt {
                     val started = System.nanoTime()
                     val phase = samples[count - 1].toInt()
-                    if (phase == 1 && !predicted) {
+                    if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
+                    if (phase == 1 && !predicted && !documentInputBlocked) {
                         val event = obj("kind" to "contact", "canvas" to true,
                             "position" to JSONArray(listOf(samples[0] / surfaceDensity, samples[1] / surfaceDensity)))
                         val reply = JSONObject(Native.input(handle, chromeInput(event).toString()))
@@ -443,6 +483,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (!attached || disposed) return
         attempt {
             val start = System.nanoTime()
+            val threadStart = if (measuredFrames != null) android.os.Debug.threadCpuTimeNanos() else 0L
             val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
             if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
                 awaitingSurfaceFrame = false
@@ -472,7 +513,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
             if (measuredFrames != null && frameCount < 8192) {
                 val end = System.nanoTime()
-                val offset = frameCount++ * 17
+                val offset = frameCount++ * 18
                 measuredFrames[offset] = frameTime
                 measuredFrames[offset + 1] = start
                 measuredFrames[offset + 2] = elapsed
@@ -481,6 +522,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 frameCosts.copyInto(measuredFrames, offset + 11, 5, 11)
                 measuredFrames[offset + 9] = end - publicationStart
                 measuredFrames[offset + 10] = end - start
+                measuredFrames[offset + 17] = android.os.Debug.threadCpuTimeNanos() - threadStart
             }
         }
     }
@@ -492,7 +534,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         val report = obj("startup_boot_ns" to JSONArray(startupTimes.toList()),
             "ui_first_draw_boot_ns" to firstUiDraw, "surface_ready_boot_ns" to firstSurfaceReady,
-            "frames" to rows(measuredFrames, frameCount, 17),
+            "frames" to rows(measuredFrames, frameCount, 18),
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
@@ -501,7 +543,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "publication_fields" to JSONArray(listOf("native_ns", "parse_ns", "prepare_ns", "utf16_units")),
             "panel_content_changes" to panelContentChanges,
             "pointer_allocations" to pointerAllocations,
-            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns", "prepare_ns", "committed_paint_ns", "capture_ns", "prediction_ns", "composition_ns", "submission_ns")),
+            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns", "prepare_ns", "committed_paint_ns", "capture_ns", "prediction_ns", "composition_ns", "submission_ns", "owner_thread_cpu_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
         if (reset) { publicationCount = 0; panelContentChanges = 0; frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
         main.post { reply(report) }
@@ -635,6 +677,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             if (changedContent) panelContent = content
             snapshot = next
+            drawingTabs.refresh()
             workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L
             workspaceModelRevision = geometry?.modelRevision ?: -1L
             if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
@@ -680,6 +723,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     override fun onCleared() {
         proof.pause()
+        hdr.pause()
         documents.images.cancel()
         recovery.close()
         worker.post {

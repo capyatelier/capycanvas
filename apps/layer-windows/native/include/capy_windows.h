@@ -34,6 +34,8 @@ __declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_
 /* Prepare on the render worker, then park it for the first UI-thread capy_resize.
    Every subsequent resize also requires exclusive ownership on the UI thread. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
+__declspec(dllimport) int32_t capy_test_display(CapyHost*, bool hdr);
+__declspec(dllimport) int32_t capy_set_window(CapyHost*, void* hwnd);
 /* Device loss is observed by the render owner. A poisoned host cannot recover. */
 __declspec(dllimport) bool capy_device_lost(const CapyHost*);
 /* CPU retirement after input admission stops; keep document services alive. */
@@ -67,6 +69,7 @@ __declspec(dllimport) bool capy_color_raster(uint32_t side, float hue, uint32_t 
 __declspec(dllimport) char* capy_color_ui(char const* json);
 __declspec(dllimport) char* capy_color_layout(float size);
 __declspec(dllimport) char* capy_color_hue_stops(uint32_t projection);
+__declspec(dllimport) bool capy_color_mapped_field(uint32_t side, char const* input, uint8_t* output, size_t length);
 __declspec(dllimport) bool capy_color_field(uint32_t side, float hue, uint32_t projection, uint8_t* output, size_t length);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */

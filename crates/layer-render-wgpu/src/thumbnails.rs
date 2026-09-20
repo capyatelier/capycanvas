@@ -588,6 +588,19 @@ impl PreviewPipeline {
         );
         for (batch, chunk) in sources.chunks(SOURCE_SLOTS).enumerate() {
             let bindings = inputs(r, encoder, chunk)?;
+            if r.device.portable_blend() {
+                if batch == 0 { r.encode_clear(encoder,&result.view,"clear portable thumbnail"); }
+                let temporary=r.portable_blend.source(&r.device,&result.view,r.device.working_format());
+                for (i,source) in bindings.iter().enumerate() {
+                    let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label:Some("portable thumbnail"), color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&temporary,resolve_target:None,depth_slice:None,ops:wgpu::Operations {load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store}})],..Default::default()
+                    });
+                    pass.set_pipeline(&self.draw);pass.set_bind_group(0,&read,&[]);
+                    pass.set_bind_group(1,source,&[((batch*SOURCE_SLOTS+i)*stride) as u32]);pass.draw(0..3,0..1);drop(pass);
+                    r.portable_blend.apply(&r.device,encoder,&temporary,&result.view,PixelRect::full([32,32]),0);
+                }
+                continue;
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("thumbnail framing and checkerboard"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

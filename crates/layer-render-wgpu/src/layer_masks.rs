@@ -102,7 +102,7 @@ impl MaskRenderer {
                         color: blend,
                         alpha: blend,
                     },
-                    device.scalar_format(),
+                    if device.portable_blend() { wgpu::TextureFormat::Rgba32Float } else { device.scalar_format() },
                     "mask coverage brush",
                 )
             })
@@ -371,14 +371,17 @@ impl WgpuRasterizer {
                 let texture_tip = matches!(batch.style.tip, BrushTip::Mask(_));
                 let pipeline = &self.layer_masks.brush[usize::from(texture_tip) * 2
                     + usize::from(batch.style.mode == DabMode::Erase)];
+                let source = self.device.portable_blend().then(|| self.portable_blend.source(&self.device,&page.view,wgpu::TextureFormat::Rgba32Float));
+                let count = if source.is_some() { batch.dab_count } else { 1 };
+                for dab in 0..count {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("incremental visibility mask brush"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &page.view,
+                        view: source.as_ref().unwrap_or(&page.view),
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
+                            load: if source.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -412,7 +415,12 @@ impl WgpuRasterizer {
                         start..start + batch.dab_count as u64 * mem::size_of::<Dab>() as u64,
                     ),
                 );
-                pass.draw(0..4, 0..batch.dab_count);
+                pass.draw(0..4, if source.is_some() { dab..dab+1 } else { 0..batch.dab_count });
+                drop(pass);
+                if let Some(source) = &source {
+                    self.portable_blend.apply(&self.device,encoder,source,&page.view,local,u32::from(batch.style.mode == DabMode::Erase));
+                }
+                }
             }
         }
         Ok(())

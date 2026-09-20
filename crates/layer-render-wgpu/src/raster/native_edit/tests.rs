@@ -96,9 +96,107 @@ fn engine(
 }
 
 #[test]
-fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples() {
+fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
+    use layer_core::{Affine, Figure, FigurePaint, FigureShape, LayerMask, LayerOperation, LayerOperationKind, Point};
+    use layer_core::color::{RgbColor, f16};
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
+            let color = DocumentColor { space, depth };
+            let mut document = layer_core::Document::new("portable paint", 384, 128);
+            document.color = color;
+            let id = document.layers[0].id;
+            let (_, mut live) = engine(document);
+            let empty = backing(&live.document().layers[0].raster);
+            let colors = if depth.is_float() {
+                [[8., -0.125, 2., 0.625], [-0.25, 3., 0.5, 0.375]]
+            } else {
+                [[1., 0., 0., 0.625], [0., 1., 0.5, 0.375]].map(|p|
+                    RgbColor::new(RgbSpace::DisplayP3, p).unwrap().linear_in(space).unwrap())
+            };
+            let start = Point { x: 64., y: 32. };
+            let end = Point { x: 320., y: 96. };
+            let mut kinds = vec![LayerOperationKind::Fill { color: colors[0], alpha_locked: false }];
+            for radial in [false, true] {
+                for transparent in [false, true] {
+                    let mut colors = colors;
+                    if transparent { colors[1][3] = 0.; }
+                    kinds.push(LayerOperationKind::Gradient { start, end, colors, radial, alpha_locked: false });
+                }
+            }
+            kinds.push(LayerOperationKind::Figure(Figure {
+                shape: FigureShape::Rectangle, paint: FigurePaint::Fill,
+                start, end, width: 4., colors, alpha_locked: false, erase: false,
+            }));
+            kinds.push(LayerOperationKind::Figure(Figure {
+                shape: FigureShape::Rectangle, paint: FigurePaint::Both,
+                start, end, width: 4., colors, alpha_locked: false, erase: false,
+            }));
+            for kind in kinds {
+                live.append_layer_operation(id, LayerOperation {
+                    placement: Affine::IDENTITY,
+                    coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
+                    kind: kind.clone(),
+                }).unwrap();
+                flush(&mut live);
+                let pixels = backing(&live.document().layers[0].raster);
+                assert_ne!(pixels, empty, "{color:?} {kind:?}");
+                // Independent straight-linear reference, including both sides
+                // of the 256px page boundary and outside the figure.
+                for (x, y) in [(16, 64), (128, 64), (300, 64), (368, 64)] {
+                    let expected = match &kind {
+                        LayerOperationKind::Fill { color, .. } => *color,
+                        LayerOperationKind::Gradient { colors: [a, b], radial, .. } => {
+                            let p = [x as f64 + 0.5 - 64., y as f64 + 0.5 - 32.];
+                            let t = (if *radial { p[0].hypot(p[1]) / 256f64.hypot(64.) }
+                                else { (p[0]*256. + p[1]*64.) / (256.*256. + 64.*64.) }).clamp(0., 1.);
+                            let alpha = (1.-t)*f64::from(a[3]) + t*f64::from(b[3]);
+                            std::array::from_fn(|i| if i == 3 { alpha as f32 } else if alpha == 0. { 0. }
+                                else { (((1.-t)*f64::from(a[i])*f64::from(a[3]) + t*f64::from(b[i])*f64::from(b[3])) / alpha) as f32 })
+                        },
+                        LayerOperationKind::Figure(f) => if (64..320).contains(&x) {
+                            colors[usize::from(f.paint == FigurePaint::Both)]
+                        } else { [0.; 4] },
+                        _ => unreachable!(),
+                    };
+                    let key = TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [x / 256, y / 256] };
+                    let bpp = depth.bytes() * 4;
+                    let offset = ((y % 256 * 256 + x % 256) as usize) * bpp;
+                    let absent = vec![0; bpp];
+                    let bytes = pixels.get(&key).map_or(absent.as_slice(), |p| &p[offset..offset+bpp]);
+                    for i in 0..4 {
+                        if depth == SampleDepth::F16 {
+                            let actual = f16::from_bits(u16::from_le_bytes(bytes[2*i..2*i+2].try_into().unwrap()));
+                            let reference = f16::from_f32(expected[i]);
+                            assert_eq!(actual, reference, "{color:?} {kind:?} at {x},{y}/{i}");
+                        } else {
+                            let max = if depth == SampleDepth::U8 { 255. } else { 65535. };
+                            let encoded = if i == 3 { f64::from(expected[i]) } else { space.encode(f64::from(expected[i])) };
+                            let reference = (encoded.clamp(0., 1.)*max).round() as u16;
+                            let actual = if depth == SampleDepth::U8 { u16::from(bytes[i]) }
+                                else { u16::from_le_bytes(bytes[2*i..2*i+2].try_into().unwrap()) };
+                            assert!(actual.abs_diff(reference) <= 1, "{color:?} {kind:?} at {x},{y}/{i}: {actual} vs {reference}");
+                        }
+                    }
+                }
+                assert!(live.undo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&live.document().layers[0].raster), empty);
+                assert!(live.redo().unwrap()); flush(&mut live);
+                assert_eq!(backing(&live.document().layers[0].raster), pixels);
+                let project = layer_core::Project { document: live.document().clone(), assets: Default::default() };
+                let mut bytes = Vec::new(); project.write(&mut bytes).unwrap();
+                let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
+                assert_eq!(loaded.document.color, color);
+                assert_eq!(backing(&loaded.document.layers[0].raster), pixels);
+                assert!(live.undo().unwrap()); flush(&mut live);
+            }
+        }
+    }
+}
+
+#[test]
+fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples() {
+    for space in RgbSpace::ALL {
+        for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             let color = DocumentColor { space, depth };
             let mut document = layer_core::Document::new("native workflow", 256, 256);
             document.color = color;
@@ -174,6 +272,137 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
 }
 
 #[test]
+fn native_gpen_batch_edges_do_not_darken_opaque_source_pixels() {
+    use layer_core::color::{ColorProfile, source::*};
+    // Prediction leaves finalized contacts at different offsets/batch sizes.
+    // This exposed dark crescents in both fragment and compute specialization
+    // on Adreno; a small brush or prediction-disabled stroke missed the defect.
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
+        for fragment in [false, true] {
+            let extent = [4097, 2049];
+            let mut document = layer_core::Document::new("G-Pen batch edges", extent[0], extent[1]);
+            document.color.depth = depth;
+            document.layers[1].visible = false;
+            let mut source = SourceBuilder::new(
+                extent,
+                SourceInterpretation {
+                    channels: SourceChannels::Rgb,
+                    depth: SampleDepth::U8,
+                    profile: ColorProfile::Builtin(RgbSpace::Srgb),
+                    profile_assumed: false,
+                },
+                64 * 1024 * 1024,
+            )
+            .unwrap();
+            let row = [230, 230, 230].repeat(extent[0] as usize);
+            for _ in 0..extent[1] {
+                source.push_row(&row).unwrap();
+            }
+            document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+            let (mut input, mut live) = engine(document);
+            if fragment {
+                live.backend_mut().pipelines.dry_material = None;
+            }
+            let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+            brush.diameter = 2048.;
+            brush.color_rgba_linear = [
+                0.5,
+                0.6,
+                0.05,
+                if depth == SampleDepth::U8 { 1. } else { 0.35 },
+            ];
+            live.set_brush(brush).unwrap();
+            live.set_instant_feedback(layer_engine::InstantFeedbackConfig {
+                enabled: true,
+                prediction_horizon_micros: 16_000,
+                ..Default::default()
+            })
+            .unwrap();
+            for i in 0..18 {
+                input
+                    .push(PenEvent {
+                        device_id: 1,
+                        sequence: i + 1,
+                        timestamp_ns: (i + 1) * 16_666_667,
+                        view_revision: 0,
+                        surface_position: layer_core::Point {
+                            x: 650. + i as f32 * 140.,
+                            y: 1020. + (i as f32 * 0.2).sin() * 230.,
+                        },
+                        pressure: 0.35 + 0.6 * (i as f32 / 17.),
+                        tilt_radians: [0.; 2],
+                        twist_radians: 0.,
+                        distance: 0.,
+                        phase: if i == 0 {
+                            PenPhase::Down
+                        } else if i == 17 {
+                            PenPhase::Up
+                        } else {
+                            PenPhase::Move
+                        },
+                        tool: ToolKind::Pen,
+                        flags: SampleFlags::PRIMARY,
+                    })
+                    .unwrap();
+                live.render_frame_for((i + 1) * 16_666_667, (i + 1) * 16_666_667 + 16_000_000)
+                    .unwrap();
+            }
+            flush(&mut live);
+            let stored = backing(&live.document().layers[0].raster);
+            assert!(!stored.is_empty());
+            let stride = usize::from(depth.bits() / 8);
+            let maximum = if depth == SampleDepth::U8 { 255 } else { 65535 };
+            let background = 230 * (maximum / 255);
+            // Normal source-over stays between the ink and opaque background.
+            // Allow two integer code values for transfer/quantization rounding.
+            let minimum = [0.5_f64, 0.6, 0.05].map(|linear| {
+                ((1.055 * linear.powf(1. / 2.4) - 0.055) * f64::from(maximum)).floor() as u32 - 2
+            });
+            let mut dark = 0;
+            let mut first = None;
+            let mut painted = 0;
+            for (key, tile) in &stored {
+                if key.plane != RasterPlane::Color {
+                    continue;
+                }
+                for (index, pixel) in tile.chunks_exact(4 * stride).enumerate() {
+                    let point = [
+                        key.coordinate[0] * PAGE_SIZE + index as u32 % PAGE_SIZE,
+                        key.coordinate[1] * PAGE_SIZE + index as u32 / PAGE_SIZE,
+                    ];
+                    if point[0] >= extent[0] || point[1] >= extent[1] {
+                        continue;
+                    }
+                    let rgba: [u32; 4] = std::array::from_fn(|channel| {
+                        let offset = channel * stride;
+                        if stride == 1 {
+                            u32::from(pixel[offset])
+                        } else {
+                            u32::from(u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
+                        }
+                    });
+                    assert_eq!(
+                        rgba[3], maximum,
+                        "photo alpha at {point:?}, {depth:?}, fragment={fragment}"
+                    );
+                    assert!(rgba[..3].iter().all(|v| *v <= background + 2));
+                    painted += usize::from(rgba[0] + 2 < background);
+                    if (0..3).any(|channel| rgba[channel] < minimum[channel]) {
+                        dark += 1;
+                        first.get_or_insert((point, rgba));
+                    }
+                }
+            }
+            assert!(painted > 1000, "stroke must actually paint the source");
+            assert_eq!(
+                dark, 0,
+                "G-Pen darkened {dark} source pixels; first={first:?}, {depth:?}, fragment={fragment}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
     use layer_core::color::{ColorProfile, source::*};
     for depth in [SampleDepth::U8, SampleDepth::U16] {
@@ -214,7 +443,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             }];
             let stride = usize::from(depth.bits() / 8) * 4;
             let expected: Vec<u8> = match depth {
-                SampleDepth::F16 => unreachable!("SDR-only fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
                 SampleDepth::U8 => vec![70, 140, 210, 255],
                 SampleDepth::U16 => [70u16, 140, 210, 255]
                     .into_iter()

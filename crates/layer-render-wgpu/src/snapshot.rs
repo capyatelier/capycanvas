@@ -98,6 +98,11 @@ impl WgpuRasterizer {
     pub fn source_sample_cache_stats(&self) -> layer_core::raster::DecodedTileCacheStats {
         self.device.source_samples.stats()
     }
+    /// Hosts can prewarm immutable samples in bounded batches before first
+    /// presentation. Rendering and snapshot workers reuse the same cache.
+    pub fn prepare_source_sample(&self, tile: &Arc<layer_core::raster::TileBlob>) -> Result<(), GpuRasterError> {
+        self.device.source_samples.decode(tile).map(|_| ()).map_err(GpuRasterError::Color)
+    }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             #[cfg(target_arch = "wasm32")]
@@ -132,11 +137,14 @@ impl SnapshotGpu {
 pub struct SnapshotRenderer {
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
+    gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
     renderer: WgpuRasterizer,
     layers: Vec<Layer>,
     backing: HashMap<LayerId, Arc<RasterData>>,
     resident: HashMap<LayerId, RasterData>,
     extent: [u32; 2],
+    #[cfg(not(target_arch = "wasm32"))]
+    shared_device: bool,
     #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
@@ -280,11 +288,14 @@ impl SnapshotRenderer {
                 .is_float()
                 .then_some(project.document.sdr_rendition),
             local_tone: None,
+            gpu_local_tone: None,
             renderer,
             layers,
             backing,
             resident: HashMap::new(),
             extent,
+            #[cfg(not(target_arch = "wasm32"))]
+            shared_device: gpu.is_some(),
             #[cfg(not(target_arch = "wasm32"))]
             output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))]
@@ -435,10 +446,19 @@ impl SnapshotRenderer {
         if y >= height {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        // Keep browser readback conversion and inspection below a frame-sized
+        // input-owner slice. Native workers retain their larger bands.
+        let maximum = if self.color().depth.is_float() {
+            (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
+        } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
-            match self.read_region([0, y, width, rows]) {
+            let result = if self.shared_device && width > 512 {
+                self.read_interactive_band(y, rows)
+            } else {
+                self.read_region([0, y, width, rows])
+            };
+            match result {
                 Ok(pixels) => return Ok((rows, pixels)),
                 Err(GpuRasterError::CaptureBudget { .. }) if rows > 16 => {
                     rows = (rows / 2).max(16);
@@ -448,13 +468,43 @@ impl SnapshotRenderer {
         }
     }
 
+    /// A file worker shares the canvas queue. Complete at most two tile
+    /// columns before yielding it through readback; a full 8K-wide effect band
+    /// otherwise blocks presentation for several refresh intervals. Preserve
+    /// the row-band cache and exact pixel/halo semantics of read_region.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_interactive_band(&mut self, y: u32, rows: u32) -> Result<Vec<[f32; 4]>, GpuRasterError> {
+        let width = self.extent[0];
+        let band_bytes = u64::from(width) * u64::from(rows) * 16;
+        if band_bytes > self.limits.planned_pixel_bytes {
+            return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.limits.planned_pixel_bytes });
+        }
+        let mut band = vec![[0.; 4]; width as usize * rows as usize];
+        for x in (0..width).step_by(512) {
+            self.check_cancelled()?;
+            let columns = 512.min(width - x);
+            // The assembled CPU band stays alive beside each bounded GPU job.
+            self.limits.planned_pixel_bytes -= band_bytes;
+            let result = self.read_region([x, y, columns, rows]);
+            self.limits.planned_pixel_bytes += band_bytes;
+            let pixels = result?;
+            for (row, source) in pixels.chunks_exact(columns as usize).enumerate() {
+                let start = row * width as usize + x as usize;
+                band[start..start + columns as usize].copy_from_slice(source);
+            }
+        }
+        Ok(band)
+    }
+
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
     /// mask-area tint, checkerboard or UI overlays participate. Waits on this
     /// capture only; call from the owning file/inspection worker.
-    fn prepare_region(
+    fn capture_region_gpu<T>(
         &mut self,
         [x, y, width, height]: [u32; 4],
-    ) -> Result<RegionReadback, GpuRasterError> {
+        reserved_bytes: u64,
+        consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
+    ) -> Result<T, GpuRasterError> {
         self.check_cancelled()?;
         let region = PixelRect::new(
             x,
@@ -474,6 +524,7 @@ impl SnapshotRenderer {
         let mut selected = HashMap::new();
         let mut masks = HashMap::new();
         let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
+            .saturating_add(reserved_bytes)
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
             .saturating_add((self.layers.len() as u64 * 3 + 32) * 256 * 256 * 16);
         for layer in &self.layers {
@@ -624,34 +675,37 @@ impl SnapshotRenderer {
         let captured = scene.capture_region(r, packet, &target, region, None, &mut encoder);
         r.scene = Some(scene);
         captured?;
-        let stride = (width * 16).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let size = stride as u64 * height as u64;
-        let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("snapshot region readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: None,
-                },
-            },
-            target.size(),
-        );
+        let result = consume(&r.device, &target, &mut encoder);
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         self.control.observe_allocations(&r.device);
-        Ok(RegionReadback {
-            buffer,
-            stride,
-            width,
-            height,
+        Ok(result)
+    }
+
+    fn prepare_region(&mut self, region: [u32; 4]) -> Result<RegionReadback, GpuRasterError> {
+        let [_, _, width, height] = region;
+        self.capture_region_gpu(region, 0, |device, target, encoder| {
+            let stride = (width * 16).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+            let size = stride as u64 * height as u64;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("snapshot region readback"),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: None,
+                    },
+                },
+                target.size(),
+            );
+            RegionReadback { buffer, stride, width, height }
         })
     }
 
@@ -701,7 +755,11 @@ impl SnapshotRenderer {
         if y >= height {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let maximum = (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE);
+        // Keep browser readback conversion and inspection below a frame-sized
+        // input-owner slice. Native workers retain their larger bands.
+        let maximum = if self.color().depth.is_float() {
+            (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
+        } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
         let mut rows = maximum.min(height - y);
         loop {
             match self.read_region_async([0, y, width, rows]).await {
@@ -750,6 +808,7 @@ struct RegionReadback {
 mod flatten;
 #[cfg(not(target_arch = "wasm32"))]
 mod output;
+mod tone;
 #[cfg(not(target_arch = "wasm32"))]
 mod preview;
 /// Linear premultiplied viewing pixels. Hosts apply their view-only checkerboard

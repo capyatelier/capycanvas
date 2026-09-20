@@ -5,6 +5,10 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod document_tabs;
+pub use document_tabs::{DocumentTabs, DocumentTabHit};
+mod document_sessions;
+pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
 pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod document_workflow;
@@ -35,7 +39,7 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_ui,
+    ColorEditor, ColorInputModel, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form, color_preview, color_validation, color_ui,
     ColorLibrary, ColorLibraryAction, ColorPalette, SavedColor,
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color, render_color_field, render_hls_field, render_okhsv_disc, render_hsv_field, render_hue_guide, render_hue_guide_in,
@@ -193,6 +197,7 @@ pub const PRIMARY_MENU: &[&[CommandId]] = &[
         CommandId::KeyboardShortcuts,
         CommandId::About,
     ],
+    &[CommandId::Drawings],
 ];
 pub const EDIT_MENU: MenuSpec = MenuSpec {
     label: "Edit",
@@ -209,7 +214,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
     label: "View",
     sections: &[
         &[CommandId::Histogram],
-        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::PreviewSdr],
+        &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SdrRendition, CommandId::PreviewSdr],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
@@ -242,7 +247,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
             CommandId::SaveDocumentAs,
             CommandId::ExportDocument,
         ],
-        &[CommandId::DocumentProperties, CommandId::RepairSourceProfile, CommandId::CloseDocument],
+        &[CommandId::DocumentProperties, CommandId::RepairSourceProfile, CommandId::Drawings, CommandId::CloseDocument],
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
@@ -532,12 +537,14 @@ pub enum CommandId {
     About,
     Website,
     SourceCode,
+    Drawings,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
-            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
+            Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows),
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -674,14 +681,14 @@ impl CommandId {
             Self::RaiseLayer => "up",
             Self::LowerLayer => "down",
             Self::ResetLayout => "reset-layout",
-            Self::NewWindow => "new-window",
+            Self::NewWindow | Self::Drawings => "new-window",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 78] = [
+    pub const ALL: [Self; 79] = [
         Self::SdrRendition,
         Self::PreviewSdr,
         Self::SoftProofSetup,
@@ -760,6 +767,7 @@ impl CommandId {
         Self::About,
         Self::Website,
         Self::SourceCode,
+        Self::Drawings,
     ];
     pub const TOOLS: [Self; 18] = [
         Self::Pen,
@@ -863,6 +871,7 @@ impl CommandId {
             Self::ZenMode => "Zen mode",
             Self::Fullscreen => "Full screen",
             Self::NewWindow => "New Window",
+            Self::Drawings => "Drawings…",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

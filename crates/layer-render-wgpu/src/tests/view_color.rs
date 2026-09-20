@@ -345,6 +345,43 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
 }
 
 #[test]
+fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
+    use layer_core::{color::hdr::SdrRendition, raster::*};
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
+    let pixel = [4., 1., 0.25, 1.];
+    let sample: Vec<_> = pixel.into_iter().flat_map(|v| layer_core::color::f16::from_f32(v).to_bits().to_le_bytes()).collect();
+    let raw = sample.repeat(256 * 256);
+    for retained in [false, true] {
+        let mut layer = Layer::paint(LayerId(1), "HDR thumbnail");
+        if retained {
+            let mut builder = SourceBuilder::new([256; 2], SourceInterpretation {
+                channels: SourceChannels::Rgba, depth: SampleDepth::F16,
+                profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
+            }, 4 * 1024 * 1024).unwrap();
+            for row in raw.chunks_exact(256 * 8) { builder.push_row(row).unwrap(); }
+            layer.source = Some(Arc::new(builder.finish().unwrap()));
+        } else {
+            layer.raster = RasterRevision::backed(RasterData {
+                tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
+                    RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &raw).unwrap()))].into(),
+                watercolor: None,
+            });
+        }
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+        frame(&mut r, &layer);
+        let original = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        for recipe in [SdrRendition::default(), SdrRendition { exposure: -2., ..Default::default() }, SdrRendition::default()] {
+            r.set_ui_rendition(Some(recipe)).unwrap();
+            r.request_thumbnail(7, layer.id).unwrap(); complete(&r);
+            let thumbnail = r.take_thumbnail().unwrap().unwrap();
+            let expected = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb).map_rgb(pixel[..3].try_into().unwrap());
+            close(&thumbnail.bytes[(16 * 32 + 16) * 4..][..4], bytes(expected.map(f64::from), 1.), "HDR thumbnail");
+        }
+        assert_eq!(crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap()), original);
+    }
+}
+
+#[test]
 fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork() {
     for native in [false, true] {
         let mut r = if native {
@@ -421,11 +458,43 @@ fn proof_shadow_grid_matches_cpu_and_never_changes_artwork_or_export() {
     check_proof_view(&recipe);
 }
 
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "Requires a hardware D3D12 adapter; functional pixel comparison, not performance"]
+fn d3d12_proof_view_matches_cpu_without_changing_artwork_or_export() {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::DX12;
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    })).unwrap();
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    eprintln!("D3D12 proof adapter: {:?}", adapter.get_info());
+    let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features,
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    })).unwrap();
+    let recipe = layer_core::color::ProofRecipe::new("sRGB proof".into(), ColorProfile::Builtin(RgbSpace::Srgb));
+    check_proof_renderer(&recipe, |color| {
+        WgpuRasterizer::native_capture_on_gpu(adapter.clone(), device.clone().into(), queue.clone(), color).unwrap()
+    });
+}
+
 fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
+    check_proof_renderer(recipe, |color| WgpuRasterizer::new_native_headless(color).unwrap());
+}
+fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl Fn(DocumentColor) -> WgpuRasterizer) {
     for space in RgbSpace::ALL {
         let lut = Arc::new(layer_color::ProofLut::build(space, recipe, || false).unwrap());
         for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth }).unwrap();
+            let mut r = renderer(DocumentColor { space, depth });
             let format = wgpu::TextureFormat::Rgba8Unorm;
             let target = texture(&r, format);
             let target_view = target.create_view(&Default::default());
@@ -467,53 +536,89 @@ fn check_proof_view(recipe: &layer_core::color::ProofRecipe) {
 
 #[test]
 fn hdr_presentation_mapping_reference_white_and_mapped_proof_match_cpu() {
+    check_hdr_renderer(|color| WgpuRasterizer::new_native_headless(color).unwrap());
+}
+fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
     use layer_core::color::{hdr::SdrRendition, ProofRecipe};
+    for depth in [SampleDepth::F16, SampleDepth::F32] {
     for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
-        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth:SampleDepth::F16}).unwrap();
+        let mut r=make(DocumentColor{space,depth});
         let lut=Arc::new(layer_color::ProofLut::build(space,&ProofRecipe::new("SDR proof".into(),ColorProfile::Builtin(RgbSpace::Srgb)),||false).unwrap());
         let target=texture(&r,wgpu::TextureFormat::Rgba32Float);
         let output=target.create_view(&Default::default());
         for p in [[1.,1.,1.,1.],[8.,0.,0.,1.],[0.,0.,16.,1.],[8.,2.,-0.125,1.],[32.,4.,1.,0.5],[1.,1.,1.,1./65536.],[0.;4]] {
             let bits=layer_core::color::hdr::encode_pixel(p).unwrap();
             let p=layer_core::color::hdr::decode_pixel(bits).unwrap();
-            let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
-            let row=bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(256);
+            let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
+            let row=if depth == SampleDepth::F16 { bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>() } else { p.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>() }.repeat(256);
             for _ in 0..256 {builder.push_row(&row).unwrap();}
             let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
             frame(&mut r,&layer);
             let original=crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap());
-            for surface in [SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
+            for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::ExtendedSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             let mut capture=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
             for recipe in [SdrRendition::default(),SdrRendition{balance:-1.,contrast:0.5,..Default::default()},SdrRendition{balance:1.,contrast:2.,exposure:1.3,highlight_color:0.8,..Default::default()},SdrRendition{highlight_color:1.,headroom:4.,..Default::default()}] {
                 for headroom in [1.,4.] {
-                    for proof in [false,true] {
-                        presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();
-                        presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
-                        // Retained captures share proof buffers. HDR uniforms must
-                        // still update when the proof inheritance shortcut applies.
-                        capture.inherit_proof(&r,&presenter);
-                        capture.present(&r,&output,view(),[0.;4]).unwrap();
-                        let mut expected=if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
-                        else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
-                        if proof {expected=lut.apply_premultiplied(expected,true,false);}
-                        let rgb=if headroom==1. && !proof {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
-                        let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
-                        let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
-                        else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
-                        let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
-                        // PQ encode/decode uses hardware Float32 powers. The independent
-                        // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
-                        // 203/80. Both tolerances remain well below one 8-bit code.
-                        let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else{0.00008}}else{0.};
-                        for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
-                        assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
+                    for compositor in [false, true] {
+                        if compositor && (!matches!(surface, SdrSurfaceColor::Bt2100Pq | SdrSurfaceColor::ExtendedSrgb) || headroom != 1.) {continue;}
+                        for proof in [false,true] {
+                            if compositor {presenter.set_compositor_hdr_view(&r,recipe).unwrap();}
+                            else {presenter.set_hdr_view(&r,Some(recipe),headroom).unwrap();}
+                            presenter.set_proof(&r,Some(lut.clone()),proof,false).unwrap();
+                            // Retained captures share proof buffers. HDR uniforms must
+                            // still update when the proof inheritance shortcut applies.
+                            capture.inherit_proof(&r,&presenter);
+                            capture.present(&r,&output,view(),[0.;4]).unwrap();
+                            let mut expected=if compositor && !proof {[p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]]}
+                            else if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
+                            else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
+                            if proof {expected=lut.apply_premultiplied(expected,true,false);}
+                            let rgb=if headroom==1. && !proof && !compositor {[expected[0],expected[1],expected[2]].map(f64::from)} else {rgb::apply(space.linear_transform(RgbSpace::Srgb),[expected[0],expected[1],expected[2]].map(f64::from))};
+                            let expected=rgb.map(|v|v+0.94*(1.-f64::from(p[3])));
+                            let expected = if surface == SdrSurfaceColor::WindowsScrgb { expected.map(|v| v*2.5375) }
+                            else if surface == SdrSurfaceColor::ExtendedLinearSrgb { expected }
+                            else if surface == SdrSurfaceColor::ExtendedSrgb { expected.map(|v| v.signum()*if v.abs()<=0.0031308 {12.92*v.abs()} else {1.055*v.abs().powf(1./2.4)-0.055}) }
+                            else { rgb::apply(layer_core::color::hdr::srgb_to_bt2020(), expected).map(|v| layer_core::color::hdr::pq_encode((v*203.).clamp(0.,10000.))) };
+                            let bytes=crate::layer_tests::page_bytes(&r,&target);let i=(16*256+16)*16;
+                            // PQ encode/decode uses hardware Float32 powers. The independent
+                            // Float64 oracle permits 0.00015 linear SDR; scRGB scales by
+                            // 203/80. Both tolerances remain well below one 8-bit code.
+                            let tolerance=if headroom==1. || proof {if surface==SdrSurfaceColor::WindowsScrgb{0.0004}else if surface==SdrSurfaceColor::ExtendedLinearSrgb{0.00015}else{0.00008}}else{0.};
+                            for c in 0..3 {let actual=f32::from_le_bytes(bytes[i+c*4..i+c*4+4].try_into().unwrap()) as f64;assert!((actual-expected[c]).abs()<=tolerance+2e-6+expected[c].abs()*2e-5,"{space:?} {p:?} {recipe:?} headroom={headroom} proof={proof}: {actual} != {}",expected[c]);}
+                            assert_eq!(crate::layer_tests::page_bytes(&r,r.composite_texture.as_ref().unwrap()),original);
+                        }
                     }
                 }
             }
             }
         }
     }
+}
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "Requires hardware D3D12; functional HDR/SDR pixel oracle, not display acceptance"]
+fn d3d12_hdr_float16_float32_display_switching_and_proof_match_cpu() {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::DX12;
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default()
+    })).unwrap();
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    eprintln!("D3D12 HDR adapter: {:?}", adapter.get_info());
+    let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features,
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    })).unwrap();
+    check_hdr_renderer(|color| WgpuRasterizer::native_capture_on_gpu(adapter.clone(),device.clone().into(),queue.clone(),color).unwrap());
 }
 
 #[test]

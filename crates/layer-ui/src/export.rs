@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportFormat {
+    Exr,
     PngHdr,
     PngHdrMapped,
     JpegHdr,
@@ -18,7 +19,7 @@ pub enum ExportFormat {
     Jpeg,
 }
 impl ExportFormat {
-    pub fn is_hdr(self) -> bool { matches!(self, Self::PngHdr | Self::PngHdrMapped | Self::JpegHdr | Self::JpegHdrMapped | Self::AvifHdr | Self::AvifHdrMapped) }
+    pub fn is_hdr(self) -> bool { matches!(self, Self::Exr | Self::PngHdr | Self::PngHdrMapped | Self::JpegHdr | Self::JpegHdrMapped | Self::AvifHdr | Self::AvifHdrMapped) }
     pub fn maps_hdr_range(self) -> bool { matches!(self, Self::PngHdrMapped | Self::JpegHdrMapped | Self::AvifHdrMapped) }
     pub fn with_hdr_range_mapping(self, mapped: bool) -> Self {
         match self {
@@ -34,6 +35,7 @@ impl ExportFormat {
     }}
     pub fn extension(self) -> &'static str {
         match self {
+            Self::Exr => "exr",
             Self::Png | Self::PngHdr | Self::PngHdrMapped => "png",
             Self::Tiff => "tif",
             Self::Jpeg | Self::JpegHdr | Self::JpegHdrMapped => "jpg",
@@ -42,6 +44,7 @@ impl ExportFormat {
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::Exr => "OpenEXR · 32-bit float",
             Self::Png => "PNG image",
             Self::PngHdr => "HDR PNG · BT.2020 PQ",
             Self::PngHdrMapped => "HDR PNG · clipped to PQ range",
@@ -165,6 +168,9 @@ impl ExportRecipe {
     /// Validate the complete delivery transform and size on a file worker.
     pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), String> {
         self.validate()?;
+        if self.format == ExportFormat::Exr && self.profile != ExportProfile::builtin(document.color.space) {
+            return Err("OpenEXR preserves the document primaries; convert the document color space first".into());
+        }
         if self.format.is_hdr() && !document.color.depth.is_float() { return Err("HDR delivery requires an HDR document".into()); }
         if layer_color::profile_channels(&self.profile.profile)? != self.profile.channels {
             return Err("Profile channels do not match the ICC data".into());
@@ -194,9 +200,9 @@ impl ExportRecipe {
     }
     pub fn further_editing(document: DocumentColor) -> Self {
         Self {
-            format: ExportFormat::Tiff,
+            format: if document.depth.is_float() { ExportFormat::Exr } else { ExportFormat::Tiff },
             profile: ExportProfile::builtin(document.space),
-            depth: SampleDepth::U16,
+            depth: if document.depth.is_float() { SampleDepth::F32 } else { SampleDepth::U16 },
             background: ExportBackground::Preserve,
             jpeg_quality: 90,
             encoding: Default::default(),
@@ -229,6 +235,12 @@ impl ExportRecipe {
         }
         self.size.extent([1, 1])?;
         self.encoding.validate(self.depth)?;
+        if self.format == ExportFormat::Exr {
+            if self.depth != SampleDepth::F32 || !matches!(self.profile.profile, ColorProfile::Builtin(_)) || self.profile.channels != ProfileChannels::Rgb || self.background != ExportBackground::Preserve || self.encoding != Default::default() {
+                return Err("OpenEXR requires linear Float32 RGB, a built-in set of primaries, preserved alpha and no dither".into());
+            }
+            return Ok(());
+        }
         if self.format.is_hdr() && (self.depth != SampleDepth::U16 || self.profile != ExportProfile::builtin(RgbSpace::Srgb) || (self.background != ExportBackground::Preserve && self.format.gainmap()!=Some(layer_color::photo::GainMapFormat::Jpeg)) || self.encoding != OutputEncoding::default()) {
             return Err("HDR delivery uses its defined encoding with no ICC or dither override".into());
         }
@@ -277,7 +289,7 @@ impl ExportRecipe {
                 ExportFormat::Tiff => {
                     value.tiff_density()?;
                 }
-                ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => (),
+                ExportFormat::Exr | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => (),
                 ExportFormat::Jpeg | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped => {
                     value.jfif_density()?;
                 }
@@ -311,6 +323,20 @@ pub struct ExportDraft {
     pub dithers: Vec<layer_core::color::OutputDither>,
 }
 impl ExportRecipe {
+    pub fn draft_for_color(self, color: DocumentColor, action: ExportDraftAction) -> ExportDraft {
+        let mut draft = self.draft(action);
+        if draft.recipe.format == ExportFormat::Exr {
+            draft.recipe.profile = ExportProfile::builtin(color.space);
+        }
+        draft.formats = if draft.recipe.profile.channels == ProfileChannels::Cmyk {
+            vec![ExportFormat::Tiff, ExportFormat::Jpeg]
+        } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] };
+        if color.depth.is_float() {
+            draft.formats.extend([ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::Exr,
+                ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped]);
+        }
+        draft
+    }
     pub fn draft(mut self, action: ExportDraftAction) -> ExportDraft {
         use layer_core::color::OutputDither;
         match action {
@@ -322,12 +348,18 @@ impl ExportRecipe {
             ExportDraftAction::Background(v) => self.background = v,
             ExportDraftAction::Encoding(v) => self.encoding = v,
         }
-        if self.format.is_hdr() {
+        if self.format == ExportFormat::Exr {
+            if !matches!(self.profile.profile, ColorProfile::Builtin(_)) { self.profile = ExportProfile::builtin(RgbSpace::Srgb); }
+            self.depth = SampleDepth::F32;
+            self.background = ExportBackground::Preserve;
+            self.encoding = Default::default();
+        } else if self.format.is_hdr() {
             self.profile = ExportProfile::builtin(RgbSpace::Srgb);
             self.depth = SampleDepth::U16;
             if self.format.gainmap()!=Some(layer_color::photo::GainMapFormat::Jpeg) { self.background = ExportBackground::Preserve; }
             self.encoding = Default::default();
         }
+        if !self.format.is_hdr() && self.depth.is_float() { self.depth = SampleDepth::U16; }
         let cmyk = self.profile.channels == ProfileChannels::Cmyk;
         if cmyk && self.format == ExportFormat::Png { self.format = ExportFormat::Tiff; }
         let jpeg = self.format == ExportFormat::Jpeg;
@@ -336,8 +368,8 @@ impl ExportRecipe {
         if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
         ExportDraft {
             hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
-            formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr] } else if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
-            depths: if self.format.is_hdr() { vec![SampleDepth::U16] } else if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
+            formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr] } else if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
+            depths: if self.format == ExportFormat::Exr { vec![SampleDepth::F32] } else if self.format.is_hdr() { vec![SampleDepth::U16] } else if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
             backgrounds: if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },
             dithers: if self.depth == SampleDepth::U8 { vec![OutputDither::None, OutputDither::Stochastic8] } else { vec![OutputDither::None] },
             recipe: self,
@@ -381,7 +413,7 @@ impl ExportForm {
                 ("Web / Share", ExportRecipe::web_share()),
                 ("Wide-color image", ExportRecipe::wide_color()),
                 (
-                    if document.color.depth.is_float() { "Further editing (SDR)" } else { "Further editing" },
+                    "Further editing",
                     ExportRecipe::further_editing(document.color),
                 ),
             ],
@@ -397,12 +429,19 @@ mod tests {
     fn hdr_choices_describe_only_the_fixed_delivery_contract() {
         for format in [ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped] {
             let draft = ExportRecipe::web_share().draft(ExportDraftAction::Format(format));
-            assert_eq!(draft.formats, [ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr]);
+            assert_eq!(draft.formats, [ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr, ExportFormat::Exr]);
             assert_eq!(draft.depths, [SampleDepth::U16]);
             if format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg){assert_eq!(draft.backgrounds,[ExportBackground::Preserve,ExportBackground::White,ExportBackground::Black]);}else{assert_eq!(draft.backgrounds, [ExportBackground::Preserve]);}
             assert_eq!(draft.dithers, [layer_core::color::OutputDither::None]);
             assert_eq!(draft.recipe.format, format);
             draft.recipe.validate().unwrap();
+            for depth in [SampleDepth::F16, SampleDepth::F32] {
+                let color = DocumentColor { space: RgbSpace::Srgb, depth };
+                let choices = draft.recipe.clone().draft_for_color(color, ExportDraftAction::Refresh);
+                assert!(choices.formats.contains(&format), "Authored range policy must remain selectable");
+            }
+            let integer = ExportRecipe::web_share().draft_for_color(DocumentColor::default(), ExportDraftAction::Refresh);
+            assert!(!integer.formats.contains(&format));
         }
         let sdr = ExportRecipe::web_share().draft(ExportDraftAction::Refresh);
         assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]);
@@ -572,4 +611,17 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn document_delivery_switches_between_hdr_and_sdr_without_relabelling_primaries() {
+        for space in RgbSpace::ALL {
+            let color=DocumentColor {space,depth:SampleDepth::F32};
+            let exr=ExportRecipe::web_share().draft_for_color(color,ExportDraftAction::Format(ExportFormat::Exr));
+            assert_eq!(exr.recipe.profile,ExportProfile::builtin(space));assert_eq!(exr.recipe.depth,SampleDepth::F32);
+            let sdr=exr.recipe.draft_for_color(color,ExportDraftAction::Format(ExportFormat::Png));
+            assert_eq!(sdr.recipe.depth,SampleDepth::U16);assert!(sdr.formats.contains(&ExportFormat::Exr));sdr.recipe.validate().unwrap();
+            let integer=ExportRecipe::web_share().draft_for_color(DocumentColor{space,depth:SampleDepth::U8},ExportDraftAction::Refresh);
+            assert!(integer.formats.iter().all(|f|!f.is_hdr()));
+        }
+    }
+
 }

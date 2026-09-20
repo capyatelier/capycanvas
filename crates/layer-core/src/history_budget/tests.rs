@@ -27,7 +27,7 @@ fn source() -> Arc<SourceImage> {
             profile: ColorProfile::Icc(vec![19; 16 * 1024].into()),
             profile_assumed: false,
         },
-        1024,
+        256 * 256 * 4,
     )
     .unwrap();
     builder.push_row(&[31, 127, 200, 255]).unwrap();

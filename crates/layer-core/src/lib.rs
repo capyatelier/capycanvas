@@ -19,6 +19,7 @@ pub use contact_presets::CONTACT_BRUSH_PRESETS;
 mod effect_catalog;
 mod effects;
 pub mod raster;
+pub mod raster_storage;
 pub use effect_catalog::*;
 mod layers;
 pub use effects::*;

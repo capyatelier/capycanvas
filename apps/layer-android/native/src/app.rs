@@ -1,5 +1,8 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
+    pub documents: crate::document_tabs::Sessions,
+    pub document_gpu: Option<crate::document_tabs::DocumentGpu>,
+    pub tone: crate::hdr::ToneState,
     pub proof: layer_ui::proof_workflow::ProofView,
     pub host: layer_host::NativeHost,
     pub workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
@@ -9,6 +12,7 @@ pub(crate) struct App {
     pub pointer_records: Vec<f64>,
     pub cursor: layer_ui::CanvasCursor,
     pub surface: Option<crate::android::Surface>,
+    pub display_hdr_available: bool,
     pub cache_directory: String,
     pub overviews: Vec<crate::android::OverviewSlot>,
     pub instance: Option<wgpu::Instance>,
@@ -19,14 +23,17 @@ impl App {
     pub fn new() -> Result<Self, String> {
         let mut host = layer_host::NativeHost::new(layer_ui::Platform::Android)?;
         host.startup = Default::default();
-        host.session.set_document_replacement(true);
+        host.session.set_document_replacement(false);
         host.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(
                 layer_ui::Platform::Android,
             )),
         })?;
         Ok(Self {
+            documents: Default::default(),
+            document_gpu: None,
             proof: Default::default(),
+            tone: Default::default(),
             host,
             workspaces: None,
             blank_presented: false,
@@ -35,6 +42,7 @@ impl App {
             pointer_records: Vec::new(),
             cursor: layer_ui::CanvasCursor::default(),
             surface: None,
+            display_hdr_available: false,
             instance: None,
             gpu_generation: 0,
             gpu_failure: Default::default(),

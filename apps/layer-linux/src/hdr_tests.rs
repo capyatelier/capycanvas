@@ -5,6 +5,11 @@ use super::*;
 use layer_core::color::{RgbSpace, SampleDepth, hdr::SdrRendition};
 use layer_ui::{ColorInputModel, ColorSlot, EffectAction};
 
+#[path = "hdr_qualification_tests.rs"]
+mod qualification;
+#[path = "gpu_tone_tests.rs"]
+mod gpu_tone;
+
 fn project(w: &Rc<Workspace>) -> layer_core::Project {
     layer_core::Project::read(std::io::Cursor::new(snapshot(w)), Default::default()).unwrap()
 }
@@ -746,11 +751,10 @@ fn large_export_preview_and_cancellation(output:u32) {
 }
 
 #[test]
-#[ignore = "isolated Wayland display, GPU and pinned HDR codecs"]
+#[ignore = "isolated Wayland display and GPU; run with no photo codec bundle"]
 #[allow(deprecated)]
-fn native_gainmap_export_choices_preview_flatten_and_reopen() {
+fn portable_gainmap_export_without_codec_bundle() {
     use layer_core::color::{ColorProfile, source::*};
-    assert!(layer_color::photo::gainmap_available());
     let app=native_test_app("art.capycanvas.GainmapExport");
     let output=std::path::Path::new("../../artifacts/color-m4/gainmap-ui");std::fs::create_dir_all(output).unwrap();let output=output.canonicalize().unwrap();
     // These are generated test fixtures. Clear previous outputs so repeating
@@ -1149,4 +1153,79 @@ fn native_proof_dial_pointer_input() {
     assert_eq!(rendition().highlight_color,0.3);
     std::fs::write(dir.join("finished"),"done").unwrap();
     w.window.destroy();pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_float32_new_open_edit_save_and_exr_export() {
+    let app = native_test_app("art.capycanvas.Float32Journey");
+    let directory = std::env::temp_dir().join(format!("capy-float32-{}",std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let w = Workspace::with_project(&app, Some((new_drawing(64,64).unwrap(),None)));
+    let opened = Rc::new(RefCell::new(None)); let result = opened.clone();
+    *w.open_document.borrow_mut() = Some(Rc::new(move |p,l,_| { result.replace(Some((p,l))); }));
+    w.window.present(); ready(&w);
+    invoke(&w, CommandId::NewDocument);
+    combo(&w,"new-document-depth").set_selected(3);
+    response(&w,"create"); finish(&w);
+    assert_eq!(opened.borrow_mut().take().unwrap().0.document.color.depth, SampleDepth::F32);
+    let path = directory.join("source.exr");
+    layer_color::photo::write_exr_rows(std::fs::File::create(&path).unwrap(),[64,48],RgbSpace::DisplayP3,None,|_,row| {
+        for (x,p) in row.iter_mut().enumerate() { *p=[70000.125+x as f32/32.,-0.125,1.0000001,1.]; } Ok(())
+    }).unwrap();
+    invoke(&w,CommandId::OpenDocument);
+    let file=chooser(); file.set_file(&gtk::gio::File::for_path(&path)).unwrap(); pump(100);file.response(gtk::ResponseType::Accept);finish(&w);
+    let (p,_) = opened.borrow_mut().take().unwrap();
+    assert_eq!(p.document.color.depth,SampleDepth::F32);
+    assert_eq!(p.document.color.space,RgbSpace::DisplayP3);
+    let photo=Workspace::with_project(&app,Some((p,None)));photo.window.present();ready(&photo);
+    effect(&photo,"exposure","exposure",layer_core::EffectValue::Number(-1.));
+    let master=project(&photo);
+    let before=pixels(&photo);
+    assert!((before[0][0]-35000.0625).abs()<0.1,"{:?}",before[0]);
+    invoke(&photo,CommandId::ExportDocument);
+    let range=combo(&photo,"export-output");
+    range.set_selected(range.model().unwrap().n_items()-1);range.notify("selected");
+    let deadline=Instant::now()+Duration::from_secs(45);
+    while !super::new_photo::export_enabled(&photo) {pump(20);assert!(Instant::now()<deadline,"EXR preview: {}",photo.status.text());}
+    response(&photo,"export");let file=chooser();
+    file.set_current_folder(Some(&gtk::gio::File::for_path(&directory))).unwrap();file.set_current_name("edited.exr");pump(150);file.response(gtk::ResponseType::Accept);finish(&photo);
+    let result=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(directory.join("edited.exr")).unwrap()),Default::default()).unwrap();
+    assert_eq!(result.interpretation.depth,SampleDepth::F32);
+    assert_eq!(result.interpretation.profile,layer_core::color::ColorProfile::Builtin(RgbSpace::DisplayP3));
+    let mut row=vec![0;result.row_bytes()];result.rows().read(0,&mut row).unwrap();
+    let pixel=layer_core::color::hdr::decode_samples(SampleDepth::F32,&row[..16]).unwrap();
+    assert!((pixel[0]-35000.0625).abs()<0.1,"{pixel:?}");
+    assert_eq!(project(&photo),master);
+    photo.window.destroy();w.window.destroy();pump(100);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_hdr_close_cancels_pending_local_analysis() {
+    let app = native_test_app("art.capycanvas.HdrCloseAnalysis");
+    for depth in [SampleDepth::F16, SampleDepth::F32] {
+        let mut project = new_drawing(4096, 4096).unwrap();
+        project.document.color.depth = depth;
+        let w = Workspace::with_project(&app, Some((project, None)));
+        w.window.present();
+        ready(&w);
+        // Startup may already have completed its first guide. Invalidate it
+        // through an ordinary document edit before observing the next job.
+        w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while w.local_tone.worker_state().1 != Some(false) {
+            pump(5);
+            assert!(Instant::now() < deadline, "local analysis never started");
+        }
+        w.window.destroy();
+        assert_eq!(w.local_tone.worker_state(), (true, Some(true)), "canvas unrealize must cancel before the future releases its window reference (visible={}, mapped={}, realized={})", w.window.is_visible(), w.window.is_mapped(), w.window.is_realized());
+        while w.local_tone.worker_state().0 {
+            pump(5);
+            assert!(Instant::now() < deadline, "cancelled local analysis did not finish");
+        }
+        pump(50);
+    }
 }

@@ -94,7 +94,7 @@ impl Pipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        has_dynamic_offset: true,
                         min_binding_size: std::num::NonZeroU64::new(16),
                     },
                     count: None,
@@ -146,6 +146,92 @@ struct Record {
     uniform: wgpu::Buffer,
     binding: wgpu::BindGroup,
 }
+
+/// Update an already admitted complete pyramid in place. Immutable coordinates
+/// avoid per-frame uniform allocations and remain valid across submissions.
+/// Each dispatch writes one tile region; each level reads the completed finer
+/// level. The same reduction kernel also serves the bounded scratch path.
+pub(super) struct CompleteUpdates {
+    records: wgpu::Buffer,
+    bindings: Vec<wgpu::BindGroup>,
+    pipeline: Deferred<wgpu::ComputePipeline>,
+    columns: u32,
+    stride: u32,
+    pending: Vec<[u32; 2]>,
+}
+impl CompleteUpdates {
+    pub(super) const BATCH: usize = 128;
+
+    pub fn record_bytes(device: &wgpu::Device, plan: Plan) -> u64 {
+        u64::from(plan.extent[0].div_ceil(PAGE_SIZE))
+            * u64::from(plan.extent[1].div_ceil(PAGE_SIZE))
+            * u64::from(plan.level)
+            * u64::from(device.limits().min_uniform_buffer_offset_alignment.max(16))
+    }
+
+    pub fn new(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan,
+        views: &[&wgpu::TextureView]) -> Self {
+        assert_eq!(views.len(), plan.level as usize + 1);
+        let stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
+        let columns = plan.extent[0].div_ceil(PAGE_SIZE);
+        let mut bytes = vec![0; Self::record_bytes(device, plan) as usize];
+        for y in 0..plan.extent[1].div_ceil(PAGE_SIZE) {
+            for x in 0..columns {
+                for level in 1..=plan.level {
+                    let offset = ((y * columns + x) * plan.level + level - 1) * stride;
+                    for (i, value) in [plan.extent[0], plan.extent[1], 1 << (level - 1), x | (y << 16)]
+                        .into_iter().enumerate() {
+                        bytes[offset as usize + i * 4..offset as usize + i * 4 + 4]
+                            .copy_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        let records = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("retained display tile coordinates"), contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bindings = views.windows(2).map(|pair| device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("retained display reduction"), layout: &pipelines.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(pair[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &records, offset: 0, size: NonZeroU64::new(16),
+                }) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(pair[1]) },
+            ],
+        })).collect();
+        Self { records, bindings, pipeline: pipelines.reduce.clone(), columns, stride,
+            pending: Vec::with_capacity(Self::BATCH) }
+    }
+
+    pub fn storage_bytes(&self) -> u64 { self.records.size() }
+
+    pub fn discard_pending(&mut self) { self.pending.clear(); }
+
+    pub fn tile(&mut self, encoder: &mut crate::submission::CommandEncoder, coordinate: [u32; 2]) {
+        self.pending.push(coordinate);
+        if self.pending.len() == Self::BATCH { self.flush(encoder); }
+    }
+
+    pub fn flush(&mut self, encoder: &mut crate::submission::CommandEncoder) {
+        if self.pending.is_empty() { return; }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("reduce retained display tiles"), timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        for (level, binding) in self.bindings.iter().enumerate() {
+            let side = PAGE_SIZE >> (level + 1);
+            for &[x, y] in &self.pending {
+                let offset = ((y * self.columns + x) * self.bindings.len() as u32 + level as u32) * self.stride;
+                pass.set_bind_group(0, binding, &[offset]);
+                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
+            }
+        }
+        self.pending.clear();
+    }
+}
+
 pub(super) struct Image {
     pub plan: Plan,
     pub texture: wgpu::Texture,
@@ -383,7 +469,7 @@ impl Image {
             });
             pass.set_pipeline(&pipelines.reduce);
             for (index, record) in records.iter().enumerate() {
-                pass.set_bind_group(0, &record.binding, &[]);
+                pass.set_bind_group(0, &record.binding, &[0]);
                 let side = PAGE_SIZE >> (index + 1);
                 pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
             }

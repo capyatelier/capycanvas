@@ -1,9 +1,47 @@
 // Included in session::tests, using the protocol recorder (no simulated pixels).
 #[test]
+fn tone_preview_survives_edits_but_not_document_replacement() {
+    use crate::proof_workflow::ToneKey;
+    use layer_core::color::{SampleDepth,hdr::SdrRendition};
+    let mut document=Document::new("HDR",32,32); document.color.depth=SampleDepth::F32;
+    let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32]).unwrap();
+    let mut s=make();
+    let original=ToneKey::current(&s).unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
+    let edited=ToneKey::current(&s).unwrap();
+    assert!(edited != original && original.can_preview(&edited));
+    s.set_sdr_view(Some(SdrRendition {exposure:2.,..Default::default()}),true).unwrap();
+    assert!(ToneKey::current(&s).unwrap() == edited,"appearance changes reuse exact analysis");
+    let epoch=s.state.document_file.epoch; let revision=s.engine.document().revision;
+    assert!(s.adopt_project(Box::new(make()),epoch,revision,None).is_ok());
+    let replacement=ToneKey::current(&s).unwrap();
+    assert!(!original.can_preview(&replacement),"same-size replacement must reject old illumination");
+}
+
+#[test]
+fn print_panel_first_use_has_no_target_and_off_rejects_late_publication() {
+    use crate::proof_workflow::{proof_form,ProofPreparation};
+    use layer_core::color::{ColorProfile,ProofRecipe,RgbSpace};
+    let mut s=session();
+    let before=s.engine.checkpoint();
+    let form=proof_form(&s);
+    assert!(form["print_settings"]["profile"].is_null());
+    assert_eq!(form["print_settings"]["simulation"],"black_ink");
+    assert_eq!(form["print_controls"].as_array().unwrap().iter().map(|v|v["label"].as_str().unwrap()).collect::<Vec<_>>(),["Profile","Simulate","Intent","Black point compensation","Gamut warning"]);
+    s.select_proof_mode(ProofMode::Print).unwrap();
+    let job=ProofPreparation::panel(&s,ProofRecipe::new("sRGB".into(),ColorProfile::Builtin(RgbSpace::Srgb))).unwrap();
+    job.validate(&s).unwrap();
+    s.select_proof_mode(ProofMode::Off).unwrap();
+    assert!(job.apply(&mut s,true).is_err());
+    assert_eq!(s.engine.checkpoint(),before);
+    assert!(s.engine.document().proof.is_none());
+}
+
+#[test]
 fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_jobs() {
     use crate::proof_workflow::{ProofPreparation, ProofView};
     use layer_core::color::{ColorProfile, ProofRecipe, RgbSpace};
-    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+    for platform in [Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         let mut s = session(); s.set_platform(platform);
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
         let original = ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(bytes.clone().into()));
@@ -116,11 +154,9 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     assert_eq!(s.engine.document().proof, Some(recipe.clone()));
     assert!(!s.state.document_file.modified);
     assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
-    for platform in [Platform::Windows] {
-        s.set_platform(platform);
-        assert!(!s.command(CommandId::SoftProofSetup).enabled);
-        assert!(s.set_proof_recipe(Some(recipe.clone())).is_err());
-    }
+    s.set_platform(Platform::Windows);
+    assert!(s.command(CommandId::SoftProofSetup).enabled);
+    assert!(s.set_proof_recipe(Some(recipe)).is_ok());
 }
 
 #[test]
@@ -422,10 +458,15 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     let original = s.engine.document().clone();
     let checkpoint = s.engine.checkpoint();
     assert!(!s.command(CommandId::PreviewSdr).enabled);
+    let published = s.workspace_update().model_revision;
     s.set_hdr_display_available(true);
     assert!(s.command(CommandId::PreviewSdr).enabled);
+    assert!(s.workspace_update().model_revision > published, "Display capability republishes command availability");
     let recipe = SdrRendition { exposure: -2., ..Default::default() };
+    let thumbnail_revisions = || s.state.layers.iter().map(|l| (l.paint_revision, l.mask_revision)).collect::<Vec<_>>();
+    let original_thumbnails = thumbnail_revisions();
     s.preview_sdr_appearance(Some(recipe)).unwrap();
+    assert!(s.state.layers.iter().zip(&original_thumbnails).all(|(l, &(paint, mask))| l.paint_revision != paint && l.mask_revision == mask));
     assert_eq!(s.effective_sdr_rendition(), recipe);
     assert_eq!(s.engine.document(), &original);
     assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition, original.sdr_rendition);
@@ -433,6 +474,7 @@ fn hdr_appearance_draft_is_transient_and_preview_follows_display_capability() {
     assert!(!s.command(CommandId::PreviewSdr).enabled);
     s.preview_sdr_appearance(None).unwrap();
     assert_eq!(s.effective_sdr_rendition(), original.sdr_rendition);
+    assert_eq!(s.state.layers.iter().map(|l| (l.paint_revision, l.mask_revision)).collect::<Vec<_>>(), original_thumbnails);
     assert!(s.command(CommandId::PreviewSdr).enabled);
     s.set_sdr_rendition(recipe).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
@@ -577,4 +619,64 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
     toggle(&mut s);
     assert_eq!(s.proof_panel_mode(), ProofMode::Print, "SDR artwork opens Print setup");
     assert_eq!(s.proof_mode(), ProofMode::Off);
+}
+
+#[test]
+fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
+    use layer_core::{EffectInstance, EffectValue, Layer, LayerKind};
+    use std::sync::Arc;
+    use layer_core::color::SampleDepth;
+    for (name, key, value) in [("exposure", "exposure", 30.), ("curves", "hdr_stops", 40.)] {
+        // An older embedded program keeps its original range when promoted.
+        let mut document = Document::new("Float32", 32, 32);
+        document.color.depth = SampleDepth::F32;
+        let id = document.allocate_layer_id();
+        let mut layer = Layer::paint(id, name);
+        layer.kind = LayerKind::Effect;
+        layer.effect = Some(Arc::new(EffectInstance::new(layer_core::bundled_effect_catalog().get(name).unwrap().program())));
+        document.layers.insert(0, layer);
+        document.active_layer = id;
+        let renderer = Recorder { color: document.color, ..Default::default() };
+        let mut s = UiSession::new(renderer, document, [32,32]).unwrap();
+        s.set_platform(Platform::Gtk);
+        let before = s.engine.document().clone();
+        let set = |value| UiAction::Effect { action: EffectAction::Set { layer: id.0, key: key.into(), value: EffectValue::Number(value) } };
+        s.dispatch(set(value)).unwrap();
+        assert_eq!(s.engine.document().layer(id).unwrap().effect.as_ref().unwrap().value(key), Some(&EffectValue::Number(value)));
+        let edited = s.engine.document().clone();
+        assert!(s.dispatch(set(200.)).is_err());
+        assert_eq!(s.engine.document().layers, edited.layers);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layers, before.layers);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers, edited.layers);
+        s.capture_project_recovery().unwrap().validate(Default::default()).unwrap();
+    }
+}
+
+
+#[test]
+fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Windows] {
+        let mut s=session();s.set_platform(platform);
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetPanelVisible {panel:Panel::Color,visible:true}}).unwrap();
+        let before=s.engine.document().clone();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        let layout=&s.state.workspace.layout;
+        let group=layout.panel_group(Panel::Proof).unwrap();
+        assert_eq!(layout.panel_group(Panel::Color),Some(group));
+        assert_eq!(layout.active_panel(Panel::Proof),Some(Panel::Proof));
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert!(s.state.customization.expanded.is_none(),"Reopening must not toggle expanded controls");
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetColumnCollapsed {group,collapsed:true}}).unwrap();
+        let column=s.state.workspace.layout.collapsed_column_for_group(group).unwrap();
+        s.dispatch(UiAction::Customize {action:CustomizationAction::SetColumnDrawers {column,drawers:true}}).unwrap();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert_eq!(s.state.customization.column_drawers.len(),1);
+        let layout=s.state.workspace.layout.clone();
+        crate::proof_panel::reveal(&mut s).unwrap();
+        assert_eq!(s.state.customization.column_drawers.len(),1);
+        assert_eq!(s.state.workspace.layout,layout);
+        assert_eq!(s.engine.document(),&before);
+    }
 }

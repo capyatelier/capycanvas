@@ -149,7 +149,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         .map_err(|e| e.to_string())?;
         let mut colors = ColorState::default();
         colors.set_rgb_space(engine.document().color.space)?;
-        colors.set_hdr_enabled(engine.document().color.depth.is_float())?;
+        colors.set_document_depth(engine.document().color.depth)?;
         let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -1799,7 +1799,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
                 self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
             }
-            CommandId::CloseDocument => self.require_document_idle().is_ok(),
+            CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::PlacementOriginalSize => idle && self.operation.placing(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
@@ -2389,6 +2389,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return self.activate_tool(control, DrawerAnchor::Tile { panel, tile });
             }
             UiAction::ActivateHeaderItem { id } => {
+                if self.state.workspace.layout.header.entry(id)?.item == HeaderItem::DocumentTitle {
+                    return self.dispatch(UiAction::Invoke { command: CommandId::Drawings });
+                }
                 let HeaderItem::Tool { control } =
                     self.state.workspace.layout.header.entry(id)?.item
                 else {
@@ -2494,7 +2497,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if matches!(action, ColorAction::Brightness { .. } | ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
-                self.state.colors.set_hdr_enabled(hdr)?;
+                self.state.colors.set_document_depth(self.engine.document().color.depth)?;
                 self.state.colors.apply(action)?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
@@ -3754,6 +3757,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request(HostRequestKind::NewWindow)?;
                 Ok((HOST, false))
             }
+            CommandId::Drawings => {
+                self.request(HostRequestKind::Drawings)?;
+                Ok((HOST, false))
+            }
             CommandId::Website | CommandId::SourceCode => {
                 self.request(HostRequestKind::OpenLink {
                     link: if command == CommandId::Website {
@@ -4168,6 +4175,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.reconcile_transform();
         self.source_preview_revisions.update(&self.engine.document().layers);
+        let ui_rendition = self.effective_sdr_rendition();
         if self
             .rulers
             .selected
@@ -4230,7 +4238,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .identity()
                 .wrapping_mul(4099)
                 .wrapping_add(if doc.color.depth.is_float() {
-                    doc.sdr_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
+                    ui_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
                 } else { 0 })
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(u64::from(l.asset.is_some()))
@@ -5695,6 +5703,32 @@ mod tests {
             .write(&mut reopened_stream)
             .unwrap();
         assert_eq!(reopened_stream, stream);
+    }
+
+    #[test]
+    fn normal_parking_keeps_unsubmitted_ink_and_restores_the_same_editor() {
+        let mut s = session();
+        s.frame(0, 0).unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        assert!(s.park_document().is_err());
+        assert!(!s.rendering_suspended());
+        s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        assert!(s.park_document().is_err());
+        s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
+        assert!(s.park_document().is_err());
+        s.frame(30_000_000, 38_000_000).unwrap();
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        s.park_document().unwrap();
+        assert!(s.rendering_suspended());
+        s.replace_renderer(Recorder::default()).unwrap();
+        assert!(!s.rendering_suspended());
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        invoke(&mut s, CommandId::Undo);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers, document.layers);
     }
 
     #[test]
@@ -7728,6 +7762,7 @@ mod tests {
             for dirty in [false, true] {
                 for interaction in [false, true] {
                     let mut s = session();
+                    s.set_platform(Platform::Web);
                     s.set_document_replacement(true);
                     if dirty {
                         s.dispatch(UiAction::Invoke {
@@ -7760,6 +7795,8 @@ mod tests {
                     assert_eq!(s.require_workspace_idle().is_ok(), library && !interaction);
                     let accepted = library && !interaction;
                     let can_close = accepted && !dirty;
+                    s.refresh_commands();
+                    assert_eq!(s.command(CommandId::CloseDocument).enabled, accepted);
                     assert_eq!(s.request_document_close().is_ok(), accepted);
                     if accepted && dirty {
                         let id = s.files.pending.as_ref().unwrap().0;
@@ -13232,7 +13269,7 @@ mod tests {
             // Preserve deliberately invalid samples for the dispatch rejection
             // case below; valid upstream fixtures described linear sRGB.
             let [r, g, b] = [r, g, b].map(|v| RgbSpace::Srgb.encode(v as f64) as f32);
-            RgbColor { space: RgbSpace::Srgb, rgba: [r, g, b, a] }
+            RgbColor { linear_rgb: None, space: RgbSpace::Srgb, rgba: [r, g, b, a] }
         }
         for platform in [
             Platform::Gtk,
@@ -13912,7 +13949,7 @@ mod tests {
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
                 ["histogram"],
-                ["soft_proof_setup", "soft_proof", "gamut_warning", "preview_sdr"],
+                ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],

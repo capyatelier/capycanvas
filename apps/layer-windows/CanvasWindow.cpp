@@ -29,6 +29,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
         case CanvasCommandKind::Action:return capy_action(host,json);
         case CanvasCommandKind::Filters:return capy_load_filter_directory(host,json);
         case CanvasCommandKind::DeviceLoss:return capy_test_device_loss(host);
+        case CanvasCommandKind::TestDisplay:return capy_test_display(host,command.json=="hdr");
     }
     return -1;
 }
@@ -139,6 +140,7 @@ void CanvasWindow::Open() {
         recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
             self->Send("",CanvasCommandKind::DeviceLoss);});
         toolbar.Children().Append(recover);
+        if(GetEnvironmentVariableW(L"CAPY_TEST_HDR",nullptr,0))for(bool hdr:{false,true}){Button test;test.Content(box_value(hdr?L"Test HDR output":L"Test SDR output"));test.Click([weak=weak_from_this(),hdr](auto&&,auto&&){if(auto self=weak.lock())self->Send(hdr?"hdr":"sdr",CanvasCommandKind::TestDisplay);});toolbar.Children().Append(test);}
     }
     root.Children().Append(toolbar);
     status.Text(L"Preparing canvas…");
@@ -268,6 +270,7 @@ void CanvasWindow::Start() {
     auto native=panel.as<ISwapChainPanelNative>();
     host=capy_create(native.get(),desired.width,desired.height,desired.scale);
     if(!host) {status.Text(to_hstring(capy_error()));return;}
+    capy_set_window(host,Handle());
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,dark?R"({"type":"system_theme_changed","theme":"dark"})":R"({"type":"system_theme_changed","theme":"light"})");
     window.AppWindow().TitleBar().ButtonForegroundColor(dark?
@@ -1099,6 +1102,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         if(message.empty()&&flag(object(model,L"windows_filter_load"),L"pending"))message=L"Loading filters…";
         if(message.empty()&&flag(model,L"windows_importing")&&!flag(object(model,L"windows_image_import"),L"picking"))
             message=L"Importing image…";
+        if(message.empty())message=str(object(model,L"windows_proof"),L"text");
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     auto nextTheme=theme==L"dark"?ElementTheme::Dark:ElementTheme::Light;

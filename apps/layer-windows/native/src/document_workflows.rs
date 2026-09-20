@@ -21,11 +21,19 @@ mod color;
 mod export;
 #[path = "document_source.rs"]
 mod source;
+#[path = "document_proof.rs"]
+mod proof;
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
     Describe,
+    SdrOptions { recipe: layer_core::color::hdr::SdrRendition, pad: [f64; 2] },
+    ProofOptions {
+        settings: layer_ui::proof_panel::PrintProofSettings,
+        profile_id: Option<String>,
+    },
+    ProofPreserve,
     ExportOptions {
         recipe: layer_ui::ExportRecipe,
         profile_id: Option<String>,
@@ -78,6 +86,8 @@ impl Drop for Import {
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 enum Payload {
     Profiles,
+    Sdr { form: Value, epoch: u64, revision: u64, recipe: layer_core::color::hdr::SdrRendition },
+    Proof(Box<proof::Task>),
     Export(Box<export::Task>),
     Import(Import),
     Color(Box<color::Task>),
@@ -125,6 +135,13 @@ impl Task {
             .ok_or("Request expired")?
             .kind;
         let (kind, payload) = match request {
+            HostRequestKind::SdrRendition => ("sdr", Payload::Sdr {
+                form: layer_ui::proof_workflow::proof_form(session),
+                epoch: session.state().document_file.epoch,
+                revision: session.engine().document().revision,
+                recipe: session.engine().document().sdr_rendition,
+            }),
+            HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id)?))),
             HostRequestKind::Document {
                 request: DocumentRequest::Export { .. },
             } => (
@@ -255,9 +272,11 @@ impl Task {
     }
     fn describe(&mut self) -> Result<(), String> {
         self.details = match &mut self.payload {
+            Payload::Sdr { form, .. } => form.clone(),
             Payload::Profiles => {
                 json!({"profiles":crate::color_storage::list(self.control.cancellation_flag())?})
             }
+            Payload::Proof(task) => task.details(self.control.cancellation_flag())?,
             Payload::Export(task) => {
                 if self.preset_view.is_null() {
                     self.preset_view = serde_json::to_value(crate::color_storage::presets(
@@ -315,7 +334,8 @@ impl Task {
                         self.control.clone(),
                     )
                     .map_err(|e| e.to_string())?;
-                json!({"histogram":renderer.histogram().map_err(|e| e.to_string())?,"sampled_time":sampled_time})
+                let histogram=renderer.histogram().map_err(|e| e.to_string())?;
+                json!({"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})
             }
         };
         Ok(())
@@ -327,6 +347,15 @@ impl Task {
                 return Err("Document operation cancelled".into());
             }
             match action {
+                Action::SdrOptions { recipe, pad } => {
+                    let Payload::Sdr { recipe: saved, .. } = &mut self.payload else { return Err("No SDR appearance request".into()); };
+                    if !pad.iter().all(|v| v.is_finite() && (-1. ..=1.).contains(v)) { return Err("Invalid SDR tone settings".into()); }
+                    recipe.validate().map_err(str::to_string)?;
+                    *saved = layer_ui::proof_panel::sdr_from_pad(recipe, pad);
+                    saved.validate().map_err(str::to_string)?;
+                    self.stage = "commit";
+                    Ok(())
+                }
                 Action::Describe if self.kind == "history" => {
                     if let Payload::Color(task) = &mut self.payload {
                         task.work(None, false, self.control.clone())?;
@@ -345,6 +374,18 @@ impl Task {
                 Action::ProfileRemove { id } => {
                     crate::color_storage::remove(&id, self.control.cancellation_flag())?;
                     self.describe()
+                }
+                Action::ProofOptions { settings, profile_id } => {
+                    let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
+                    task.work(settings, profile_id, &self.control)?;
+                    self.stage = "proof_candidate";
+                    self.describe()
+                }
+                Action::ProofPreserve => {
+                    let Payload::Proof(task) = &mut self.payload else { return Err("No proof setup is pending".into()); };
+                    task.preserve(&self.control)?;
+                    self.stage = "commit";
+                    Ok(())
                 }
                 Action::ExportOptions {
                     mut recipe,
@@ -546,6 +587,12 @@ impl Task {
         matches!(self.payload, Payload::Import(_))
     }
     pub fn prepare_owner(&mut self, host: &NativeHost) -> Result<bool, String> {
+        if self.stage == "proof_candidate" {
+            let Payload::Proof(task) = &mut self.payload else { return Err("No proof candidate".into()); };
+            task.validate(host, &self.control)?;
+            self.stage = "proof_preserve";
+            return Ok(true);
+        }
         if self.stage != "source_candidate" {
             return Ok(false);
         }
@@ -560,6 +607,17 @@ impl Task {
             return Err("Preview the result before applying it".into());
         }
         match &mut self.payload {
+            Payload::Sdr { epoch, revision, recipe, .. } => {
+                if self.control.is_cancelled() || host.session.state().document_file.epoch != *epoch
+                    || host.session.engine().document().revision != *revision
+                    || !host.session.state().requests.iter().any(|r| r.id == self.id && matches!(r.kind, HostRequestKind::SdrRendition)) {
+                    return Err("SDR appearance request changed or was cancelled".into());
+                }
+                let previous = host.session.state().revision;
+                let change = host.session.set_sdr_rendition(*recipe)?;
+                host.apply_change(previous, change);
+                host.dispatch(layer_ui::UiAction::CompleteRequest { id: self.id, error: None })
+            }
             Payload::Import(task) => {
                 let session = &mut host.session;
                 session.validate_image_placement(&task.context)?;
@@ -582,6 +640,7 @@ impl Task {
                 host.apply_change(previous, change);
                 Ok(())
             }
+            Payload::Proof(task) => task.adopt(host, &self.control),
             Payload::Color(task) => task.adopt(host, &self.control),
             Payload::Source(task) => task.adopt(host, &self.control),
             _ => Err("No document edit is ready".into()),
@@ -591,7 +650,7 @@ impl Task {
         if self.id == 0 {
             return Ok(());
         }
-        if self.kind == "histogram" {
+        if matches!(self.kind, "histogram" | "proof" | "sdr") {
             host.dispatch(layer_ui::UiAction::CompleteRequest {
                 id: self.id,
                 error: None,
@@ -602,6 +661,10 @@ impl Task {
             host.apply_change(previous, change);
             Ok(())
         }
+    }
+    pub fn retain_proof(&self, view: &mut layer_ui::proof_workflow::ProofView) -> Result<(), String> {
+        if let Payload::Proof(task) = &self.payload { task.retain(view)?; }
+        Ok(())
     }
     pub fn fail(&mut self, error: String) {
         self.error = Some(error);
@@ -645,6 +708,14 @@ mod tests {
     fn ready(task: &mut Task, action: Action) {
         task.work(action);
         assert!(task.error.is_none(), "{}: {:?}", task.kind, task.error);
+    }
+    fn pixels(gpu: &mut WgpuRasterizer) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !gpu.export_ready() {
+            assert!(Instant::now() < deadline, "export did not prepare");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        gpu.begin_export_readback(0).unwrap().finish().unwrap().bytes
     }
     fn settle(host: &mut NativeHost) {
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -840,7 +911,23 @@ mod tests {
         assert_eq!(import.stage, "commit");
         import.commit(&mut host).unwrap();
         drop(import);
+        let target = host.session.engine().document().active_layer.0;
+        assert!(host.layer_thumbnails([(90, target)]).unwrap().0.is_empty(), "unrendered imports cannot publish a thumbnail");
         settle(&mut host);
+        // Simulate unrelated shader warmup after the document frame settled.
+        // This used to starve native thumbnails until every warmup job finished.
+        host.dirty = true;
+        host.startup.complete = false;
+        let (accepted, mut thumbnails) = host.layer_thumbnails([(91, target)]).unwrap();
+        assert_eq!(accepted, vec![91]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while thumbnails.is_empty() {
+            assert!(Instant::now() < deadline, "thumbnail map did not complete");
+            thumbnails = host.layer_thumbnails([]).unwrap().1;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!((thumbnails[0].request_id, thumbnails[0].bytes.len()), (91, 4096));
+        host.startup.complete = true;
         assert_eq!(host.session.engine().document().layers.len(), before + 2);
         host.dispatch(UiAction::Invoke {
             command: CommandId::ApplyTransform,
@@ -880,5 +967,65 @@ mod tests {
         let id = layer_ui::profile_library::profile_identity(&profile);
         assert!(inventory.iter().any(|p| p.id == id && p.issue.is_none()));
         crate::color_storage::remove(&id, &cancel).unwrap();
+
+        // Proof uses the real Windows transport, shared transaction and D3D12
+        // presenter. Viewing never enters the project/export or edit history.
+        let before_proof = host.session.engine().checkpoint();
+        let source_pixels = pixels(host.session.renderer_mut().0.as_mut().unwrap());
+        let mut setup = begin(&mut host, CommandId::SoftProof);
+        let embedded = layer_core::color::ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(profile.clone().into()));
+        ready(&mut setup, Action::ProofOptions {
+            settings: layer_ui::proof_panel::PrintProofSettings::from_recipe(&embedded).unwrap(),
+            profile_id: None,
+        });
+        assert!(setup.prepare_owner(&host).unwrap());
+        ready(&mut setup, Action::ProofPreserve);
+        setup.commit(&mut host).unwrap();
+        let mut view = layer_ui::proof_workflow::ProofView::default();
+        setup.retain_proof(&mut view).unwrap();
+        assert!(!view.observe(&host.session).needed);
+        assert_eq!(host.session.engine().document().proof, Some(embedded.clone()));
+        let proof_checkpoint = host.session.engine().checkpoint();
+        let gpu = host.session.renderer_mut().0.as_mut().unwrap();
+        let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, wgpu::TextureFormat::Rgba8Unorm, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+        for command in [CommandId::GamutWarning, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SoftProof] {
+            host.dispatch(UiAction::Invoke { command }).unwrap();
+            let lut = view.lut(&host.session);
+            let (enabled, warning) = (host.session.state().soft_proof, host.session.state().gamut_warning);
+            let gpu = host.session.renderer_mut().0.as_mut().unwrap();
+            presenter.set_proof(gpu, lut, enabled, warning).unwrap();
+            assert_eq!(pixels(gpu), source_pixels);
+            assert_eq!(host.session.engine().checkpoint(), proof_checkpoint);
+        }
+        let portable = directory.join("proof-portable.capy");
+        host.session.capture_project_recovery().unwrap().write(std::fs::File::create(&portable).unwrap()).unwrap();
+        let environment = crate::documents::Environment::capture(&host).unwrap();
+        let restored = crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap();
+        assert_eq!(restored.engine().document().proof, Some(embedded.clone()));
+        assert!(!restored.state().soft_proof && !restored.state().gamut_warning);
+        let mut replacement = begin(&mut host, CommandId::SoftProofSetup);
+        let replacement_recipe = layer_core::color::ProofRecipe::new("sRGB".into(), ColorProfile::Builtin(RgbSpace::Srgb));
+        ready(&mut replacement, Action::ProofOptions {
+            settings: layer_ui::proof_panel::PrintProofSettings::from_recipe(&replacement_recipe).unwrap(), profile_id: None,
+        });
+        assert!(replacement.commit(&mut host).is_err());
+        assert!(replacement.prepare_owner(&host).unwrap());
+        ready(&mut replacement, Action::ProofPreserve);
+        assert!(crate::color_storage::list(&cancel).unwrap().iter().any(|p| p.id == id));
+        replacement.commit(&mut host).unwrap();
+        replacement.retain_proof(&mut view).unwrap();
+        assert_eq!(host.session.engine().document().proof, Some(replacement_recipe.clone()));
+        host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert_eq!(host.session.engine().document().proof, Some(embedded));
+        host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert!(host.session.engine().document().proof.is_none());
+        assert_eq!(host.session.engine().checkpoint(), before_proof);
+        host.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+        host.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
+        assert_eq!(host.session.engine().document().proof, Some(replacement_recipe));
+        assert_eq!(pixels(host.session.renderer_mut().0.as_mut().unwrap()), source_pixels);
     }
+    #[cfg(target_os = "windows")]
+    include!("document_hdr_tests.rs");
+
 }

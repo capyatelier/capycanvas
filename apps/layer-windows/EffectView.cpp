@@ -43,7 +43,7 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         auto next=context?context():L"";
         if(next!=editingContext){editingContext=next;rebuild();}
         auto space=str(object(property->data->model,L"color_panel"),L"rgb_space",L"Srgb");
-        form->load(get(),space);
+        form->load(get(),space,object(property->data->model,L"color_panel"));
         sample.Color(displayColor(object(form->view,L"preview")));
     }
 };

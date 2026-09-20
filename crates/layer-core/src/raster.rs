@@ -16,7 +16,10 @@ use std::{
 };
 
 pub const TILE_SIZE: u32 = 256;
-pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 8) as usize;
+pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 16) as usize;
+pub(crate) const MAX_COMPRESSED_TILE_BYTES: usize =
+    lz4_flex::block::get_maximum_output_size(MAX_TILE_BYTES);
+mod compression;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -108,7 +111,7 @@ pub struct TileKey {
 pub struct TileBlob {
     pub digest: [u8; 32],
     pub descriptor: PixelDescriptor,
-    compressed: Arc<[u8]>,
+    pub(crate) compressed: crate::raster_storage::Bytes,
 }
 impl std::fmt::Debug for TileBlob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,10 +122,10 @@ impl std::fmt::Debug for TileBlob {
             .finish()
     }
 }
-fn shuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+fn shuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     let bpp = descriptor
         .bytes_per_pixel()
-        .expect("validated integer16 descriptor");
+        .expect("validated multibyte descriptor");
     let pixels = bytes.len() / bpp;
     let mut result = vec![0; bytes.len()];
     for (pixel, source) in bytes.chunks_exact(bpp).enumerate() {
@@ -132,10 +135,10 @@ fn shuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     }
     result
 }
-fn unshuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
+fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
     let bpp = descriptor
         .bytes_per_pixel()
-        .expect("validated integer16 descriptor");
+        .expect("validated multibyte descriptor");
     let pixels = bytes.len() / bpp;
     let mut result = vec![0; bytes.len()];
     for (pixel, destination) in result.chunks_exact_mut(bpp).enumerate() {
@@ -147,19 +150,11 @@ fn unshuffle16(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 }
 
 impl TileBlob {
+    /// Worst-case encoded ownership reserved before a tile is published.
+    pub fn max_compressed_len(descriptor: PixelDescriptor) -> Option<usize> {
+        descriptor.byte_len([TILE_SIZE; 2]).map(lz4_flex::block::get_maximum_output_size)
+    }
     pub fn encode(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_at_level(descriptor, bytes, -20)
-    }
-    /// Immutable imported samples are compressed on the file worker. Unlike
-    /// interactive capture, favor source residency over minimum commit latency.
-    pub fn encode_source(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_at_level(descriptor, bytes, 1)
-    }
-    fn encode_at_level(
-        descriptor: PixelDescriptor,
-        bytes: &[u8],
-        level: i32,
-    ) -> Result<Self, String> {
         let expected = descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
@@ -167,16 +162,16 @@ impl TileBlob {
             return Err("Invalid raster tile byte count".into());
         }
         descriptor.validate_samples(bytes)?;
-        // Integer16 source channels benefit from byte planes: smooth high
+        // Multibyte source channels benefit from byte planes: smooth high
         // bytes no longer alternate with noisy low bytes. This is a reversible
         // permutation, not a precision change; the digest covers original bytes.
-        let shuffled = (descriptor.bits_per_channel == 16).then(|| shuffle16(descriptor, bytes));
+        let shuffled = (descriptor.bits_per_channel > 8).then(|| shuffle_samples(descriptor, bytes));
         Ok(Self {
             digest: Self::digest(descriptor, bytes),
             descriptor,
-            compressed: zstd::bulk::compress(shuffled.as_deref().unwrap_or(bytes), level)
-                .map_err(|e| e.to_string())?
-                .into(),
+            compressed: Arc::<[u8]>::from(compression::compress(
+                shuffled.as_deref().unwrap_or(bytes),
+            )?).into(),
         })
     }
     fn digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
@@ -187,31 +182,22 @@ impl TileBlob {
         hash.update(bytes);
         hash.finalize().into()
     }
-    pub fn compressed(&self) -> &[u8] {
-        &self.compressed
-    }
-    pub fn compressed_owned(&self) -> Arc<[u8]> {
-        self.compressed.clone()
-    }
-    pub fn resident_bytes(&self) -> usize {
-        self.compressed.len()
-    }
+    pub fn compressed_len(&self) -> usize { self.compressed.len() }
+    pub fn compressed(&self) -> Result<Arc<[u8]>, String> { self.compressed.read() }
+    /// Poll asynchronous backing without synchronously reading native files.
+    pub fn compressed_ready(&self) -> Result<bool, String> { self.compressed.ready() }
+    pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     pub fn decode(&self) -> Result<Vec<u8>, String> {
         let size = self
             .descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
-        let frame_size = zstd::zstd_safe::find_frame_compressed_size(&self.compressed)
-            .map_err(|_| "Invalid compressed raster frame")?;
-        if frame_size != self.compressed.len() {
-            return Err("Trailing compressed raster data".into());
+        let compressed = self.compressed()?;
+        let mut bytes = compression::decompress(&compressed, size)?;
+        if self.descriptor.bits_per_channel > 8 {
+            bytes = unshuffle_samples(self.descriptor, &bytes);
         }
-        let mut bytes =
-            zstd::bulk::decompress(&self.compressed, size).map_err(|e| e.to_string())?;
-        if bytes.len() == size && self.descriptor.bits_per_channel == 16 {
-            bytes = unshuffle16(self.descriptor, &bytes);
-        }
-        if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
+        if Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
         self.descriptor.validate_samples(&bytes)?;
@@ -222,13 +208,13 @@ impl TileBlob {
         digest: [u8; 32],
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
-        if bytes.len() > MAX_TILE_BYTES + 1024 {
+        if bytes.len() > MAX_COMPRESSED_TILE_BYTES {
             return Err("Oversized compressed raster tile".into());
         }
         let result = Self {
             descriptor,
             digest,
-            compressed: bytes,
+            compressed: bytes.into(),
         };
         result.decode()?;
         Ok(result)
@@ -244,7 +230,7 @@ impl TileBlob {
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
         if bytes.is_empty()
-            || bytes.len() > MAX_TILE_BYTES + 1024
+            || bytes.len() > MAX_COMPRESSED_TILE_BYTES
             || descriptor.byte_len([TILE_SIZE; 2]).is_none()
         {
             return Err("Invalid raster worker blob".into());
@@ -252,7 +238,7 @@ impl TileBlob {
         Ok(Self {
             descriptor,
             digest,
-            compressed: bytes,
+            compressed: bytes.into(),
         })
     }
 }
@@ -474,22 +460,19 @@ mod tests {
     fn pending_history_charges_each_retained_tiles_own_precision() {
         use crate::color::{DocumentColor, SampleDepth, RgbSpace};
         use crate::{Document, Edit, Editor, LayerId};
-        for (bits, expected_undo) in [(8, 4), (16, 2), (32, 2)] {
+        for (bits, expected_undo) in [(8, 4), (16, 2), (32, 1)] {
             // Even while the current document is still sRGB8, old revision
             // tickets own their layout. No pixel allocation/readback is needed
-            // to enforce the 512 MiB history ceiling.
+            // to enforce the 512 MiB history ceiling. 450 tiles leave room
+            // for the codec's worst-case expansion within that ceiling.
             let mut editor = Editor::new(Document::new("pending history", 6400, 5120));
-            let descriptor = PixelDescriptor {
-                bits_per_channel: bits,
-                ..DocumentColor {
-                    space: RgbSpace::ProPhoto,
-                    depth: SampleDepth::U16,
-                }
-                .paint_descriptor()
-            };
+            let descriptor = DocumentColor {
+                space: RgbSpace::ProPhoto,
+                depth: match bits { 8 => SampleDepth::U8, 16 => SampleDepth::U16, _ => SampleDepth::F32 },
+            }.paint_descriptor();
             for _ in 0..3 {
                 let data = RasterData {
-                    tiles: (0..500)
+                    tiles: (0..450)
                         .map(|i| {
                             (
                                 TileKey {
@@ -696,7 +679,7 @@ mod tests {
     fn independently_compressed_tiles_reject_corruption_and_expansion() {
         let blob = TileBlob::encode(PixelDescriptor::COVERAGE8, &vec![17; 65536]).unwrap();
         assert_eq!(blob.decode().unwrap(), vec![17; 65536]);
-        let mut compressed = blob.compressed().to_vec();
+        let mut compressed = blob.compressed().unwrap().to_vec();
         compressed[4] ^= 1;
         assert!(
             TileBlob::from_compressed(blob.descriptor, blob.digest, compressed.into()).is_err()
@@ -705,11 +688,11 @@ mod tests {
             TileBlob::from_compressed(
                 PixelDescriptor::SRGB8_PAINT,
                 blob.digest,
-                blob.compressed.clone()
+                blob.compressed().unwrap()
             )
             .is_err()
         );
-        let mut tail = blob.compressed().to_vec();
+        let mut tail = blob.compressed().unwrap().to_vec();
         tail.push(0);
         assert!(TileBlob::from_compressed(blob.descriptor, blob.digest, tail.into()).is_err());
     }

@@ -49,6 +49,10 @@ async function execute({id,request}) {
         job.raw.close();job.raw=null;await job.directory.removeEntry("capture");
         result={token:metadata.token,blob:await handle.getFile(),statistics};break;
       }
+      case "output-discard": {
+        const root=await(await navigator.storage.getDirectory()).getDirectoryHandle("capy-output",{create:true});
+        await navigator.locks.request(`capy-output:${request.metadata}`,()=>root.removeEntry(request.metadata,{recursive:true}).catch(e=>{if(e.name!=="NotFoundError")throw e;}));result=true;break;
+      }
       case "output-close": await closeOutput(request.metadata); result=true;break;
       case "recover-list": result = await recovery("readonly", store=>store.getAllKeys()); break;
       case "recover-get": result = await recovery("readonly", store=>store.get(request.metadata)); break;
@@ -61,7 +65,7 @@ async function execute({id,request}) {
       case "write": result = await wasm.raster_worker_write(request.metadata,request.buffers); break;
       default: throw new Error("Unknown raster worker operation");
     }
-    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.buffers || []).map(bytes=>bytes.buffer));
+    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.bytes ? [result.bytes] : result?.buffers || []).map(bytes=>bytes.buffer));
   } catch(error) { self.postMessage({id,error:String(error),retire:retire()}); }
 }
 

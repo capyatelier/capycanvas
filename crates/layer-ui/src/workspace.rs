@@ -205,7 +205,7 @@ impl LayoutHistory {
 
 /// Only the in-flight gesture uses the legacy snapshot, to serve existing drag
 /// projections. Durable history stores layouts and never restores working values.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct WorkspaceHistory {
     durable: Option<LayoutHistory>,
     gesture: Option<WorkspaceState>,

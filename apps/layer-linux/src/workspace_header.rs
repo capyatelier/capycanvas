@@ -390,7 +390,7 @@ impl Header {
             }
             // These are retained application controls, not disposable copies.
             for widget in [
-                w.tab.clone().upcast::<gtk::Widget>(),
+                w.documents.root.clone().upcast::<gtk::Widget>(),
                 w.workspaces.switcher.clone().upcast(),
                 w.system_status.clock.clone().upcast(),
                 w.system_status.battery.clone().upcast(),
@@ -675,7 +675,7 @@ impl Header {
                 compact = Some(menu);
                 stack.upcast()
             }
-            HeaderItem::DocumentTitle => w.tab.clone().upcast(),
+            HeaderItem::DocumentTitle => w.documents.root.clone().upcast(),
             HeaderItem::Clock => w.system_status.clock.clone().upcast(),
             HeaderItem::Battery => w.system_status.battery.clone().upcast(),
             HeaderItem::Space => gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(),
@@ -711,7 +711,7 @@ impl Header {
         };
         let content = if matches!(
             entry.item,
-            HeaderItem::DocumentTitle | HeaderItem::Clock | HeaderItem::Battery | HeaderItem::Space
+            HeaderItem::Clock | HeaderItem::Battery | HeaderItem::Space
         ) {
             let handle = gtk::WindowHandle::new();
             if entry.item != HeaderItem::Space {
@@ -919,7 +919,7 @@ impl Header {
             native[1] + if recovery { model.size.tile() } else { 0. },
         ];
         self.insets.set(insets);
-        let geometry = model.resolve(width, insets, &self.metrics(model.size), self.editing.get());
+        let geometry = model.resolve_documents(width, insets, &self.metrics(model.size), self.editing.get(), w.documents.len());
         if self
             .drag
             .borrow()
@@ -944,6 +944,10 @@ impl Header {
             }
             item.root.set_child_visible(allocation.is_some());
             if let Some(a) = allocation {
+                if item.entry.item == HeaderItem::DocumentTitle {
+                    w.documents.allocate(a.bounds.width);
+                    w.documents.root.set_sensitive(!self.editing.get());
+                }
                 if item.compact.is_some()
                     && let Some(stack) = item.content.downcast_ref::<gtk::Stack>()
                 {
@@ -1139,7 +1143,11 @@ impl Header {
                     .and_then(|m| m.location(id))
                     .map(|(z, _)| z.index())
                     .unwrap_or(0);
-                if entry.item == HeaderItem::Workspaces {
+                if entry.item == HeaderItem::DocumentTitle {
+                    let popup = w.documents.popup(w);
+                    self.overflow[zone].set_popover(Some(&popup));
+                    popup.popup();
+                } else if entry.item == HeaderItem::Workspaces {
                     let popup = w.workspaces.switcher_popup(w);
                     self.overflow[zone].set_popover(Some(&popup));
                     popup.popup();

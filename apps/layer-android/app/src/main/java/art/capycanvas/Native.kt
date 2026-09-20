@@ -8,6 +8,8 @@ internal object Native {
     @JvmStatic external fun create(profiling: Boolean): Long
     @JvmStatic external fun destroy(handle: Long)
     @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
+    @JvmStatic external fun displayStatus(handle: Long): String
+    @JvmStatic external fun displayInfo(handle: Long, available: Boolean)
     @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun resetGpu(handle: Long)
     external fun destroyGpuForTest(handle: Long)
@@ -31,10 +33,20 @@ internal object Native {
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
+    @JvmStatic external fun documentTabs(handle: Long, request: String): String
+    @JvmStatic external fun documentSwitch(handle: Long, id: Long, close: Boolean): Long
+    @JvmStatic external fun documentResumeWork(task: Long)
+    @JvmStatic external fun documentResume(handle: Long, task: Long)
+    @JvmStatic external fun documentResumeFree(task: Long)
+    @JvmStatic external fun documentSpillTask(handle: Long): Long
+    @JvmStatic external fun documentSpillWork(task: Long)
+    @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean
+    @JvmStatic external fun projectRecoveryFor(handle: Long, id: Long): Long
     @JvmStatic external fun projectRecoveryTask(handle: Long, opening: Boolean): Long
     /** File worker only: atomic publication of a captured recovery snapshot. */
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
+    @JvmStatic external fun importSource(prefix: ByteArray): String
     @JvmStatic external fun photoFormats(): String
     @JvmStatic external fun imageImportContext(handle: Long, screen: String, destination: String): String
     @JvmStatic external fun imageImportTask(handle: Long, request: Int, context: String, cancel: Long): Long
@@ -52,6 +64,7 @@ internal object Native {
     @JvmStatic external fun projectProfilePrompt(task: Long): String
     @JvmStatic external fun projectAssumeProfile(task: Long, profile: String)
     @JvmStatic external fun projectOptions(task: Long, options: String)
+    @JvmStatic external fun projectOpenControl(task: Long, control: Long)
     @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)
     @JvmStatic external fun projectAdopt(handle: Long, task: Long, location: String)
     @JvmStatic external fun projectFree(task: Long)
@@ -73,6 +86,15 @@ internal object Native {
     @JvmStatic external fun colorWriteCopy(task: Long, fd: Int)
     @JvmStatic external fun colorFree(task: Long)
     @JvmStatic external fun captureControl(): Long
+    @JvmStatic external fun proofTexture(edge: Int): IntArray
+    @JvmStatic external fun proofControl(handle: Long, action: String)
+    @JvmStatic external fun toneStatus(handle: Long): String
+    @JvmStatic external fun toneTask(handle: Long, control: Long): Long
+    @JvmStatic external fun toneReferenceDifference(task: Long): String
+    @JvmStatic external fun toneWork(task: Long)
+    @JvmStatic external fun toneApply(handle: Long, task: Long): Boolean
+    @JvmStatic external fun toneFailed(handle: Long, generation: Int, error: String)
+    @JvmStatic external fun toneRelease(task: Long)
     @JvmStatic external fun proofStatus(handle: Long): String
     @JvmStatic external fun proofForm(handle: Long): String
     @JvmStatic external fun presentationTimings(handle: Long, enabled: Boolean): String
@@ -83,6 +105,7 @@ internal object Native {
     @JvmStatic external fun proofApply(handle: Long, task: Long, preserved: Boolean)
     @JvmStatic external fun proofFailed(handle: Long, task: Long, error: String)
     @JvmStatic external fun proofRelease(task: Long)
+    @JvmStatic external fun captureCancelled(control: Long): Boolean
     @JvmStatic external fun captureCancel(control: Long)
     @JvmStatic external fun captureFree(control: Long)
     @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long
@@ -97,5 +120,6 @@ internal object Native {
     @JvmStatic external fun colorPanelLayout(size: Float): String
     @JvmStatic external fun colorHueStops(shape: String, space: String): String
     /** Shared sRGB field raster as Android ARGB pixels; no session access. */
+    @JvmStatic external fun colorFieldMapped(size: Int, state: String, rendition: String): IntArray
     @JvmStatic external fun colorFieldPixels(size: Int, hue: Float, shape: String, space: String): IntArray
 }

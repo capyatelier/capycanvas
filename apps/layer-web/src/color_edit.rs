@@ -146,6 +146,7 @@ impl WebApp {
                 project.validate(Default::default()).map_err(js)?;
                 (project, clipped)
             };
+            hdr::admit_document(&project.document)?;
             let old_background = view.background_rgba_linear;
             layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush, &mut view);
             let mut previews = Vec::new();
@@ -154,21 +155,7 @@ impl WebApp {
                     (original, old_background),
                     (project.clone(), view.background_rgba_linear),
                 ] {
-                    let mut snapshot = gpu
-                        .capture(
-                            source,
-                            background,
-                            time,
-                            Default::default(),
-                            control.clone(),
-                        )
-                        .map_err(js)?;
-                    previews.push(
-                        snapshot
-                            .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
-                            .await
-                            .map_err(js)?,
-                    );
+                    previews.push(hdr::preview_document(&gpu,source,background,time,control.clone()).await?);
                 }
             }
             let renderer = if copy {
@@ -237,7 +224,7 @@ impl WebApp {
             std::mem::swap(&mut live.0.as_mut().unwrap().renderer, &mut renderer);
         }).map_err(js)?;
         let live = s.renderer_mut().0.as_mut().unwrap();
-        live.presenter = ViewportPresenter::for_renderer(&live.renderer, live.config.format);
+        live.presenter = ViewportPresenter::for_surface(&live.renderer, live.config.format, live.color).map_err(js)?;
         self.deferred_contacts.clear();
         self.prepare_startup()?;
         serialize(

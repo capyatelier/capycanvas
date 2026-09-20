@@ -1004,7 +1004,8 @@ fn native_desktop_file_picker_uses_portal() {
 #[test]
 #[ignore = "isolated Wayland display and GPU"]
 fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
-    let output=std::path::Path::new("../../artifacts/color-m4/proof-polish/layout");
+    let directory=std::env::var_os("LAYER_PROOF_OUTPUT").map(std::path::PathBuf::from).unwrap_or_else(|| "../../artifacts/color-m4/proof-polish/layout".into());
+    let output=directory.as_path();
     std::fs::create_dir_all(output).unwrap();
     let app=native_test_app("art.capycanvas.ProofPanel");
     let mut p=new_drawing(512,384).unwrap();p.document.color.depth=SampleDepth::F16;

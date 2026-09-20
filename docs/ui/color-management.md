@@ -236,7 +236,7 @@ monitor moves. **Display Details…** reports active management and capabilities
 show limitations truthfully. Do not offer a monitor profile as a working-space
 fix or ask users to configure technical display settings on every launch.
 
-**8. Edit HDR and provide an intentional SDR version — GTK review candidate**
+**8. Edit HDR and provide an intentional SDR version**
 
 **Open HDR → edit → preview SDR rendition → export SDR or supported HDR.**
 
@@ -401,3 +401,35 @@ ordinary tasks without visiting global settings or confusing Assign with Convert
 Check cancelled operations, reopen/editability, exported color/depth and work on
 multiple displays. Numerical/performance tests remain in the implementation plan;
 manual availability is evidence of expectations, not a substitute for these checks.
+
+
+Web and Android's [phase-4 integration report](../development/color-management-web-android-m4.md)
+records their supported HDR editing and delivery routes. Both reuse the GTK
+picker placement and shared Proof dial. Web uses extended-range `rgba16float`
+WebGPU canvases when the browser accepts extended tone mapping and the display
+reports HDR support. Canvas and Navigator pass signed, above-white sRGB values
+to the browser; the browser and system choose display brightness. SDR/Print
+proofing uses the shared SDR rendition on standard canvases. Unsupported
+browsers/displays keep mapped SDR. Android 15+
+uses a floating-point BT.2100 PQ surface for HDR artwork with Proof Off when
+both the HDR10 display and the Vulkan format/encoding support it. Android chooses
+brightness and tone mapping; reported headroom does not precompress the artwork
+or force an SDR preview. SDR, Print, gamut warning and appearance drafts use the
+shared SDR mapping on an sRGB surface. Older/unsupported hosts retain mapped SDR.
+The left footer button matches zoom/rotation styling and opens Display Details;
+**HDR** describes the active output route, not measured screen
+brightness. PQ output is bounded to BT.2020 and 0–10,000 cd/m² at the fixed 203
+cd/m² artwork reference white. The HDR master remains unchanged.
+The [tablet display investigation](../development/android-hdr-display.md#pq-display-validation)
+records the reviewed route. Color controls and layer thumbnails remain SDR previews.
+Web admits HDR documents up to 12 MP and rejects larger ones while retaining the
+open artwork. Neither host currently offers gain-map output. The user accepted the tablet’s HDR appearance;
+instrumented brightness/colorimetry remain unqualified. Proof shares Color's Paint/Photo tab group and supports the normal
+docked, floating and drawer views. The report separates these tested workflows
+from outstanding hardware qualification and measured performance limits.
+
+The [GTK parity audit](../development/color-management-gtk-parity.md) records the
+near visual match for Color, Proof and Edit Color: shared geometry and labels,
+neutral mode buttons, compact Print rows, grouped color entries and the same
+color-definition/gamut feedback. Restore Starting Layout includes adjacent
+Color/Proof tabs in Paint and Photo on both hosts.

@@ -1,4 +1,5 @@
 use layer_host::NativeHost;
+use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
@@ -45,6 +46,11 @@ pub struct CapyHost {
     poisoned: bool,
     gpu: std::sync::Arc<crate::device::DeviceState>,
     gpu_generation: u64,
+    window: usize,
+    display: crate::display::Display,
+    display_checked: Option<std::time::Instant>,
+    test_display: Option<crate::display::Display>,
+    presenter_key: Option<(layer_core::color::DocumentColor, layer_render_wgpu::SdrSurfaceColor)>,
     target: Option<wgpu::SurfaceTexture>,
     surface: wgpu::Surface<'static>,
     config: Option<wgpu::SurfaceConfiguration>,
@@ -90,6 +96,11 @@ impl CapyHost {
             poisoned: false,
             gpu: Default::default(),
             gpu_generation: 0,
+            window: 0,
+            display: Default::default(),
+            display_checked: None,
+            test_display: None,
+            presenter_key: None,
             target: None,
             surface,
             config: None,
@@ -131,8 +142,26 @@ impl CapyHost {
                 .is_none_or(|s| s.accepts_input(crate::workspace_service::now_ms()))
     }
     fn poll_services(&mut self) -> Result<(), String> {
+        if self.display_checked.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(500)) {
+            self.display_checked = Some(std::time::Instant::now());
+            let display = self.test_display.clone().unwrap_or_else(|| crate::display::probe(self.window));
+            if display != self.display {
+                self.display = display;
+                self.native.dirty = true;
+                self.native.invalidate_snapshot();
+            }
+            let headroom = self.config.as_ref().map_or(1., |c| self.display.available_headroom(c.format));
+            if self.native.session.set_hdr_display_available(headroom > 1.) {
+                self.native.dirty = true;
+                self.native.invalidate_snapshot();
+            }
+        }
         if let Some(service) = self.documents.as_mut() {
             service.poll(&mut self.native)?;
+            service.proof.poll(&mut self.native)?;
+            if !self.gpu.is_lost(self.native.session.engine().backend().0.as_ref().map(|g| g.device())) {
+                service.tone.poll(&mut self.native, self.gpu_generation)?;
+            }
         }
         if let Some(service) = self.recovery.as_mut() { service.poll(&mut self.native)?; }
         if let Some(service) = self.services.as_mut() {
@@ -172,7 +201,9 @@ impl CapyHost {
             // D3D12 devices are process/adapter singletons. Release the removed
             // renderer and presenter before requesting another device. Retained
             // CPU assets, history and input remain in the same UiSession.
+            if let Some(service) = &mut self.documents { service.tone.stop()?; }
             self.presenter = None;
+            self.presenter_key = None;
             let renderer = layer_host::Renderer(self.native.session.renderer_mut().0.take());
             if let Some(service) = &mut self.recovery { service.retire_renderer(renderer); } else { drop(renderer); }
             self.native.startup = Default::default();
@@ -210,10 +241,20 @@ impl CapyHost {
         config.present_mode = wgpu::PresentMode::Fifo;
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
-        let mut presenter = ViewportPresenter::new(&device, config.format);
+        // Keep scRGB across monitor moves; only viewing changes, never artwork.
+        if self.surface.get_capabilities(&adapter).format_capabilities.iter().any(|f|
+            f.format == wgpu::TextureFormat::Rgba16Float
+                && f.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)) {
+            config.format = wgpu::TextureFormat::Rgba16Float;
+            config.color_space = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
+            config.view_formats.clear();
+        }
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue,
             self.native.session.engine().document().color).map_err(err)?;
         renderer.configure_ui_previews(layer_core::color::RgbSpace::Srgb).map_err(err)?;
+        let encoding = self.display.encoding(config.format);
+        let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
+        self.presenter_key = Some((renderer.document_color(), encoding));
         // Prepare the optional overview pipeline during GPU startup, before input is live.
         presenter.prepare_overviews(&renderer);
         gpu_state.check()?;
@@ -255,11 +296,27 @@ impl CapyHost {
             .append_layer_overlay(&mut self.cursor.segments);
         let view = self.native.session.state().camera.view();
         let surround = self.native.session.state().palette.surround_linear;
+        let proof = self.documents.as_mut().and_then(|s| s.proof.view.lut(&self.native.session));
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
+        let config = self.config.as_ref().ok_or("Missing surface configuration")?;
+        let encoding = self.display.encoding(config.format);
+        let key = (gpu.document_color(), encoding);
+        if self.presenter_key != Some(key) {
+            let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
+            presenter.prepare_overviews(gpu);
+            self.presenter = Some(presenter);
+            self.presenter_key = Some(key);
+        }
         let presenter = self
             .presenter
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
+        let state = self.native.session.state();
+        let headroom = if state.preview_sdr || state.soft_proof || state.gamut_warning || state.sdr_appearance_preview.is_some() { 1. }
+            else { self.display.available_headroom(config.format) };
+        presenter.set_hdr_view(gpu, gpu.document_color().depth.is_float().then(|| self.native.session.effective_sdr_rendition()), headroom).map_err(err)?;
+        presenter.set_gpu_local_tone_guide(gpu, self.documents.as_ref().and_then(|s| s.tone.preview(&self.native, self.gpu_generation))).map_err(err)?;
+        presenter.set_proof(gpu, proof, self.native.session.state().soft_proof, self.native.session.state().gamut_warning).map_err(err)?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
         presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
@@ -304,10 +361,16 @@ pub unsafe extern "C" fn capy_create(
         }
     }
 }
+/// Associate the HWND before transferring ownership to the render worker.
 /// # Safety
-/// `host` must be null or the uniquely owned pointer from `capy_create`, freed
-/// exactly once. Stop input/render callers and finish service callbacks first;
-/// detach the swap chain on the panel's XAML thread before destroying the host.
+/// Exclusive access to a live host; window remains valid for its lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_set_window(host: *mut CapyHost, window: *mut c_void) -> i32 {
+    guard(host, |host| { host.window = window as usize; host.display_checked = None; Ok(0) })
+}
+/// Destroy after stopping callers and detaching the panel.
+/// # Safety
+/// The pointer must be uniquely owned and freed once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_destroy(host: *mut CapyHost) {
     if !host.is_null() {
@@ -820,6 +883,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     guard(host, |host| {
         let metadata = crate::snapshots::WindowsMetadata {
             windows_gpu_generation: host.gpu_generation,
+            windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
             windows_importing: host
                 .documents
@@ -831,6 +895,8 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .and_then(|service| service.import_request()),
             windows_recovery: host.recovery.as_ref().map(|service| service.status()),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
+            windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
+            windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
@@ -1177,4 +1243,21 @@ pub unsafe extern "C" fn capy_workspace_query(
         Ok(0)
     });
     result
+}
+
+/// Synthetic capability changes exercise native presentation, never hardware acceptance.
+/// # Safety
+/// Exclusive access to the render-owned host. Only an isolated smoke test can call it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_test_display(host: *mut CapyHost, hdr: bool) -> i32 {
+    guard(host, |host| {
+        if std::env::var_os("CAPY_SMOKE_TEST").is_none() || std::env::var_os("CAPY_TEST_HDR").is_none()
+            || !std::env::var_os("CAPY_SETTINGS_DIRECTORY").map(std::path::PathBuf::from).is_some_and(|p| p.is_absolute()) {
+            return Err("Display injection requires an isolated HDR smoke test".into());
+        }
+        host.test_display = Some(crate::display::Display::reported(hdr, if hdr { 1015. } else { 80. }, "Synthetic test output".into()));
+        host.display_checked = None;
+        host.poll_services()?;
+        Ok(0)
+    })
 }

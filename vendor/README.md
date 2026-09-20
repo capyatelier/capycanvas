@@ -1,5 +1,73 @@
 # Pinned dependency fixes
 
+## Portable HEIF/HEVC decoding
+
+`heif-oxide` 0.1.0 and `rust_h265` 0.1.0 are the published MIT OR Apache-2.0
+crates. Their sources, test fixtures, original licenses and registry provenance
+are retained. Unused examples (including the minifb development dependency),
+package lockfiles and registry cache markers are omitted.
+
+| Crate | Upstream revision | Registry archive SHA-256 |
+| --- | --- | --- |
+| [heif-oxide](https://github.com/dan335/heif-oxide) | `86d722e46da3292cc5d777aaa99198fdc516f0c5` | `e12acb6edcb3bb9227dc6a06dd375a221eafe397ae2de72a876d79313831e365` |
+| [rust_h265](https://github.com/roticv/rust_h265) | `e51348807a685b00343212a77e13d32692954321` | `dde60f5842f27ed06f1d84844cacd93d1a159f606365b30a5594c771e6b4eb17` |
+
+`heif-portable.patch` exposes a bounded still-picture decoder that returns source
+YUV and VUI color/chroma metadata. It admits coded dimensions and estimated
+picture working memory before allocation, bounds parameter-set syntax, rejects
+truncated header reads, and borrows cancellation callbacks at NAL, coding-tree
+and filter boundaries. Independently coded stills cannot consume external
+reference pictures or silently return an incomplete frame. The HEVC prediction,
+transform and filtering algorithms are unchanged. The test-only container writer
+adds the picture handler required by independent libheif enumeration.
+
+The application uses its shared BMFF, grid, ICC, geometry and source-storage
+pipeline around this API. It does not call the convenience `decode_bytes` path,
+which converts source color to sRGB and uses scoped threads for grids. Application
+grids decode one tile at a time, also on Wasm. Memory estimates are conservative
+admission checks, not a hard allocator quota. Individual in-loop filters remain
+synchronous between cancellation checks.
+
+Verification includes the upstream suites (128 HEVC and 35 HEIF tests), exact
+libde265 YUV comparison of a photographic still, shared source/ICC/grid/alpha
+tests, Chrome execution and GTK Open/Import/Paste with an empty codec directory.
+Initial HEIC variant limits and outstanding host work are recorded in the
+[migration plan](../docs/development/portable-photo-core.md).
+
+Run the isolated vendor tests with:
+
+```sh
+cargo test --offline --release --manifest-path vendor/rust_h265/Cargo.toml --lib
+cargo test --offline --release --manifest-path vendor/heif-oxide/Cargo.toml \
+  --config 'patch.crates-io.rust_h265.path="vendor/rust_h265"' --lib
+```
+
+## AV1 decoder portability
+
+`rav1d` 1.1.0 is the published BSD-2-Clause crate from
+<https://github.com/memorysafety/rav1d>, revision
+`782dab2135ea64a057c097088a13eb8ed3cc3320`, registry archive SHA-256
+`1932f060d5e7bd49dc9f8b272c1dc5e9ce0ffe141c28be900265d3989b36c9ed`.
+The library sources, manifest, build script, license, release notes and registry
+provenance are retained; development CI/configuration files and package lockfiles
+are omitted.
+
+`rav1d-portable.patch` makes `cc`/`nasm-rs` optional dependencies of the existing
+`asm` feature. Pointer-sized C integer aliases use the matching Rust primitives.
+The native `off_t` and errno values remain from libc; `wasm32-unknown-unknown`
+uses an i64 offset and conventional Linux result codes without a libc dependency
+or syscalls. The public error enum lets callers match target-correct EAGAIN
+without hard-coding Unix errno values. The AV1 decoding algorithm is unchanged.
+Both bit-depth features are enabled and default/assembly features disabled by
+the application and the
+[portability check](../tools/validation/portable-av1/README.md).
+
+That independent check proves exact lossless 8/10/12-bit plane decoding in native
+Rust and Chrome WebAssembly, with no WebAssembly host imports, and checks the
+Android target. It uses one decoder thread and a frame-size limit. Application
+container/color/memory/cancellation integration is tracked separately in the
+[migration plan](../docs/development/portable-photo-core.md).
+
 ## WebP entropy-table admission
 
 `image-webp` is the published 0.2.4 crate, retaining its MIT/Apache licenses.
@@ -81,6 +149,25 @@ reached 8.33 ms presentation intervals. Submission ownership and completion
 synchronization remain unchanged. Other targets retain their existing policy. See the
 [host qualification](../docs/development/image-placement-web-android-progress.md).
 
+`wgpu-android-resource-reuse.patch` applies after the command-memory patch
+and reuses up to 128 Vulkan framebuffers per completed Android encoder. Entries
+expire after one unused completed cycle;
+encoders with larger sets release the entire set. Permanent attachment-view
+identities prevent recycled Vulkan handles from matching retired attachments.
+The [Vulkan object lifetime rules](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-objectmodel-lifetime)
+permit destroying referenced objects before an unused referencing object;
+object destruction must not access the referenced objects. Cache entries do not
+retain textures and are never reused after their view identities are retired.
+Every completed command buffer is still freed on every reset. Once per 256
+nonempty completed resets, the encoder also releases retained pool storage and
+its framebuffer cache. Empty resets do not advance the interval. This amortized
+cleanup addresses mapping growth in sustained wide-brush drawing; releasing
+pool storage at every reset would restore the earlier driver-allocation cost.
+Completion synchronization is unchanged. Other platforms keep their original
+pool policy and continue to destroy framebuffers at every reset.
+See the [wide-brush measurements](../docs/development/android-wide-brush-performance.md)
+for driver allocation costs, performance and sustained-memory qualification.
+
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when no patch remains necessary.
 
@@ -99,7 +186,9 @@ stalls that merely yielding JavaScript tasks did not resolve. The
 records the evidence and physical-device regressions.
 ## HEIF/AVIF source color preservation
 
-`libheif-source-profile.patch` applies to upstream libheif **1.23.4**. With
+The validation-only
+[`libheif-source-profile.patch`](../tools/validation/photo-codecs/libheif-source-profile.patch)
+applies to upstream libheif **1.23.4**. With
 `output_image_nclx_profile_passthrough` enabled, the RGB conversion pipeline can
 return pixels without their source NCLX primaries/transfer. The patch restores
 an actually present source profile after successful passthrough conversion,
@@ -107,9 +196,10 @@ including profiles signalled only by the compressed bitstream. It does not
 invent a profile for an untagged source or change sample conversion.
 
 The pinned archive, dynamic libde265 backend and bridge are built by
-[`tools/build/photo-codecs.py`](../tools/build/photo-codecs.py). No codec source
-is downloaded during a Cargo build. GTK packaging verifies the source/recipe,
-patch and library checksums and includes corresponding sources and licenses.
+[`tools/validation/photo-codecs/photo-codecs.py`](../tools/validation/photo-codecs/photo-codecs.py). No codec source
+is downloaded during a Cargo build. The optional reference build verifies the
+source hashes and retains recipe, patch and library checksums, corresponding
+sources and licenses. Application packages do not include these reference codecs.
 The patch is supplied under libheif's LGPL-3.0-or-later terms.
 
 Reference: [libheif 1.23.4 decoding options](https://github.com/strukturag/libheif/blob/v1.23.4/libheif/api/libheif/heif_decoding.h).

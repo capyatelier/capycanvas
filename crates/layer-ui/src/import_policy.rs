@@ -270,7 +270,7 @@ mod tests {
                 profile: ColorProfile::Builtin(RgbSpace::ProPhoto),
                 profile_assumed: true,
             },
-            1024,
+            1024 * 1024,
         )
         .unwrap();
         builder

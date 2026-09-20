@@ -1,11 +1,14 @@
 #![cfg(target_arch = "wasm32")]
 
 mod documents;
+mod document_tabs;
+mod document_storage;
 mod image_import;
 mod color_edit;
 mod source_edit;
 mod color_preferences;
 mod proof;
+mod hdr;
 mod output;
 mod editor;
 mod header;
@@ -16,16 +19,19 @@ mod workspaces;
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
-use layer_render_wgpu::{GpuRasterError, StartupProgress, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{GpuRasterError, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    tone: hdr::ToneState,
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
+    documents: layer_ui::DocumentSessions<UiSession<WebRenderer>>,
+    document_gpu: Option<document_tabs::DocumentGpu>,
     canvas: web_sys::HtmlCanvasElement,
     sequence: u64,
     startup: StartupProgress,
@@ -63,6 +69,9 @@ pub struct WebGpu {
     instance: wgpu::Instance,
     surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
+    sdr_format: wgpu::TextureFormat,
+    color: SdrSurfaceColor,
+    hdr_capable: bool,
     presenter: ViewportPresenter,
     blank_presented: bool,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
@@ -90,7 +99,7 @@ impl CanvasRenderer for WebRenderer {
         let changed = self.renderer()?.adopt_prepared_color(color)?;
         if changed {
             let gpu = self.0.as_mut().unwrap();
-            gpu.presenter = ViewportPresenter::for_renderer(&gpu.renderer, gpu.config.format);
+            gpu.presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, gpu.color)?;
         }
         Ok(changed)
     }
@@ -289,6 +298,7 @@ impl WebApp {
         let filters = if self.gpu_ready() {
             serde_wasm_bindgen::from_value(filters).map_err(js)?
         } else { Vec::new() };
+        self.prepare_ui_previews()?;
         let cache = serde_wasm_bindgen::from_value(cache).map_err(js)?;
         let update = self.session.poll_filter_previews(
             (now_ms.max(0.) * 1_000_000.) as u64, filters, [width, height],
@@ -318,6 +328,7 @@ impl WebApp {
         if !self.startup.complete || self.session.engine().has_pending_document_edits() {
             return Ok(false);
         }
+        self.prepare_ui_previews()?;
         self.session
             .renderer_mut()
             .request_thumbnail(request, layer_core::LayerId(target))
@@ -391,7 +402,7 @@ impl WebApp {
         )
         .map_err(js)?;
         session.set_platform(layer_ui::Platform::Web);
-        session.set_document_replacement(true);
+        session.set_document_replacement(false);
         session
             .dispatch(UiAction::RestoreWorkspace {
                 workspace: Box::new(layer_ui::WorkspaceState::for_platform(
@@ -401,7 +412,10 @@ impl WebApp {
             .map_err(js)?;
         Ok(Self {
             proof: Default::default(),
+            tone: Default::default(),
             session,
+            documents: Default::default(),
+            document_gpu: None,
             workspaces: None,
             canvas,
             sequence: 0,
@@ -504,6 +518,7 @@ impl WebApp {
             .clone()
     }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
+        if let Some(context) = self.document_gpu.take() { context.device.destroy(); }
         let change = self.session.suspend_renderer().map_err(js)?;
         if let Some(gpu) = self.session.renderer_mut().0.take() {
             // Dropping WebGPU handles leaves release to JavaScript GC. Retire
@@ -534,6 +549,7 @@ impl WebApp {
         self.session
             .replace_renderer(WebRenderer(Some(gpu)))
             .map_err(js)?;
+        self.session.set_hdr_display_available(false);
         self.startup = StartupProgress::default();
         Ok(())
     }
@@ -591,6 +607,9 @@ impl WebGpu {
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
+        let hdr_capable = surface.get_capabilities(renderer.adapter())
+            .color_spaces(wgpu::TextureFormat::Rgba16Float)
+            .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
         let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         raster_worker::install(&mut renderer);
         renderer.wait_for_startup_catalog();
@@ -601,6 +620,9 @@ impl WebGpu {
             renderer,
             instance,
             surface: Some(surface),
+            sdr_format: config.format,
+            color: SdrSurfaceColor::Srgb,
+            hdr_capable,
             config,
             presenter,
             blank_presented: false,
@@ -610,6 +632,14 @@ impl WebGpu {
 }
 
 impl WebApp {
+    fn prepare_ui_previews(&mut self) -> Result<(), JsValue> {
+        let rendition = self.session.engine().document().color.depth.is_float()
+            .then(|| self.session.effective_sdr_rendition());
+        if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            gpu.renderer.set_ui_rendition(rendition).map_err(js)?;
+        }
+        Ok(())
+    }
     fn install_filters(
         &mut self,
         manifest: &str,
@@ -791,6 +821,7 @@ impl WebApp {
         if let layer_ui::UiInput::Pointer { id, phase, .. } = &input {
             use layer_ui::ContactPhase;
             if *phase == ContactPhase::Down {
+                if let Some(control) = self.tone.pending.take() { control.cancel(); }
                 self.deferred_contacts.remove(id);
                 if !self.brush_ready() {
                     self.deferred_contacts.insert(*id);
@@ -924,6 +955,9 @@ impl WebApp {
                     _ => ToolKind::Pen,
                 },
             };
+            if event.phase == PenPhase::Down {
+                if let Some(control) = self.tone.pending.take() { control.cancel(); }
+            }
             if self.session.pen(event).is_err() {
                 return Ok(index as u32);
             }
@@ -1009,10 +1043,28 @@ impl WebApp {
             }
         }
         change.canvas_wake |= !self.startup.complete;
+        let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
+        let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);
+        self.clear_incompatible_tone()?;
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
+            let color = if hdr_output { SdrSurfaceColor::ExtendedSrgb } else { SdrSurfaceColor::Srgb };
+            if gpu.color != color {
+                gpu.config.format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { gpu.sdr_format };
+                gpu.config.color_space = color.surface_color_space();
+                let mut presenter = ViewportPresenter::for_surface(&gpu.renderer, gpu.config.format, color).map_err(js)?;
+                presenter.inherit_proof(&gpu.renderer, &gpu.presenter);
+                gpu.presenter = presenter;
+                gpu.color = color;
+                gpu.surface.as_ref().unwrap().configure(gpu.renderer.device(), &gpu.config);
+            }
             gpu.presenter.set_proof(&gpu.renderer, lut, enabled, gamut).map_err(js)?;
+            if hdr_output {
+                gpu.presenter.set_compositor_hdr_view(&gpu.renderer, rendition.unwrap()).map_err(js)?;
+            } else {
+                gpu.presenter.set_hdr_view(&gpu.renderer, rendition, 1.).map_err(js)?;
+            }
         }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;

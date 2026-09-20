@@ -2,6 +2,80 @@
 use super::*;
 
 impl<R: CanvasRenderer> UiSession<R> {
+    /// The host has no modal work and must wait for this boundary before normal
+    /// parking. Failed renderers remain navigable/saveable/closeable.
+    pub fn can_park_document(&self) -> bool {
+        (self.rendering_suspended || (self.require_workspace_idle().is_ok()
+            && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
+            && self.engine.can_park()))
+            && !self.workspace_transition && !self.state.customization.header_editing
+            && self.state.requests.is_empty() && !self.state.document_file.busy
+    }
+
+    pub fn release_idle_document_buffers(&mut self) {
+        self.engine.release_idle_buffers();
+        self.navigator_preview = Default::default();
+        self.filter_previews.renderer_replaced();
+    }
+
+    /// Normal resource retirement is allowed only after input submission and
+    /// immutable backing publication. Unlike failure suspension, this never
+    /// blurs a contact or discards unsubmitted input. The host can now stop/drop
+    /// its renderer, and later use `replace_renderer` on this same session.
+    pub fn park_document(&mut self) -> Result<layer_core::raster_storage::RetainedTiles, String> {
+        if !self.can_park_document() {
+            return Err("Finish the current operation before switching drawings".into());
+        }
+        let tiles = self.retained_document_tiles();
+        if !self.rendering_suspended && !self.state.document_file.close_ready
+            && tiles.try_blobs()?.is_none()
+        {
+            return Err("Wait for drawing capture before switching drawings".into());
+        }
+        self.release_idle_document_buffers();
+        self.rendering_suspended = true;
+        self.refresh_commands();
+        Ok(tiles)
+    }
+
+    pub fn retained_document_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
+        let mut tiles = self.engine.retained_tiles();
+        // Include the fixed native input queue/session structures and retained
+        // non-tiled legacy assets. This is admission accounting, not process RSS.
+        tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(2 * 1024 * 1024);
+        for asset in self.files.assets.values() {
+            tiles.metadata_bytes = tiles.metadata_bytes.saturating_add(asset.bytes.len());
+        }
+        tiles
+    }
+
+    /// A host with multiple drawings retains one workspace owner. Bring its
+    /// layout/history/settings forward without overwriting this drawing's view,
+    /// tools, history, dirty checkpoint or color interpretation.
+    pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
+        self.state.platform = previous.state.platform;
+        self.platform_prediction_available = previous.platform_prediction_available;
+        self.system_theme = previous.system_theme;
+        self.state.workspace = previous.state.workspace.clone();
+        self.workspace_history = previous.workspace_history.clone();
+        self.workspace_read_only = previous.workspace_read_only;
+        self.managed_workspace = previous.managed_workspace.clone();
+        self.state.fullscreen = previous.state.fullscreen;
+        self.state.customization = Default::default();
+        self.state.document_file.epoch = previous.state.document_file.epoch.checked_add(1)
+            .ok_or("Document activation generation exhausted")?;
+        self.state.revision = self.state.revision.max(previous.state.revision);
+        self.apply_settings(previous.state.settings.clone())?;
+        // View orientation/zoom belongs to this drawing; display size and scale
+        // belong to the window and may have changed while this editor slept.
+        if let Some(logical) = previous.logical_viewport {
+            self.set_viewport(logical, previous.state.camera.viewport)?;
+        }
+        self.sync_work_area();
+        self.refresh_commands();
+        Ok(self.changed(regions::ALL, true))
+    }
+
     pub fn rendering_suspended(&self) -> bool {
         self.rendering_suspended
     }
@@ -18,6 +92,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | CommandId::ToggleTheme
                 | CommandId::Fullscreen
                 | CommandId::NewWindow
+                | CommandId::Drawings
                 | CommandId::About
                 | CommandId::Website
                 | CommandId::SourceCode
@@ -38,6 +113,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | UiAction::WindowFullscreen { .. }
             | UiAction::MeasurePanels { .. }
             | UiAction::MeasureTitlebar { .. }
+            | UiAction::MeasureHeader { .. }
             | UiAction::MeasureWorkspaceBottom { .. }
             | UiAction::MeasureColumnDrawers { .. }
             | UiAction::MeasureDrawerTiles { .. }
@@ -133,6 +209,39 @@ mod tests {
     use layer_core::{AssetId, ProjectAsset};
     use layer_render::{BackendError, FramePacket, HostImage, ReadbackImage};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn header_layout_remains_publishable_after_final_document_retirement() {
+        let mut session = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        session.set_platform(Platform::Android);
+        session.frame(0, 0).unwrap();
+        session.dispatch(UiAction::Invoke { command: CommandId::CloseDocument }).unwrap();
+        assert!(session.state().document_file.close_ready);
+        session.park_document().unwrap();
+        let document = session.engine().document().clone();
+        session.dispatch(UiAction::MeasureHeader { height: 48., items: vec![] }).unwrap();
+        assert_eq!(session.state().workspace.layout.header_presentation.height, 48.);
+        assert_eq!(session.engine().document(), &document);
+        assert!(session.state().document_file.close_ready);
+        assert!(session.rendering_suspended());
+        assert!(session.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).is_err());
+    }
+
+    #[test]
+    fn parked_editor_inherits_window_viewport_without_losing_its_history() {
+        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let layers = parked.engine().document().layers.len();
+        parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+        let revision = parked.engine().document().revision;
+        active.set_viewport([1000., 700.], [2000, 1400]).unwrap();
+        parked.inherit_window_state(&active).unwrap();
+        assert_eq!(parked.state().camera.viewport, [2000, 1400]);
+        assert_eq!(parked.logical_viewport, Some([1000., 700.]));
+        assert_eq!(parked.engine().document().revision, revision);
+        parked.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert_eq!(parked.engine().document().layers.len(), layers);
+    }
 
     #[derive(Default)]
     struct Backend {

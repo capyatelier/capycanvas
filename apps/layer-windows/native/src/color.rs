@@ -26,10 +26,12 @@ pub unsafe extern "C" fn capy_export_draft(input: *const c_char) -> *mut c_char 
     if input.is_null() { return std::ptr::null_mut(); }
     let result = std::panic::catch_unwind(|| -> Result<serde_json::Value, String> {
         #[derive(serde::Deserialize)]
-        struct Request { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction, #[serde(default)] validate: bool, extent: Option<[u32;2]> }
+        struct Request { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction, #[serde(default)] validate: bool, extent: Option<[u32;2]>, color: Option<layer_core::color::DocumentColor> }
         let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
         let request: Request = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        let draft=request.recipe.draft(request.action);
+        let draft = if let Some(color) = request.color {
+            request.recipe.draft_for_color(color, request.action)
+        } else { request.recipe.draft(request.action) };
         if request.validate {
             draft.recipe.validate()?;
             draft.recipe.size.extent(request.extent.ok_or("Export extent is missing")?)?;
@@ -125,6 +127,23 @@ pub unsafe extern "C" fn capy_color_field(
     } else {
         layer_ui::render_hls_field(side, hue, rgba)
     }
+}
+
+/// Shared SDR projection of the active HDR picker, including its EV and recipe.
+/// # Safety
+/// Input is a readable C string; output is writable for exactly length bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_color_mapped_field(side: u32, input: *const c_char, output: *mut u8, length: usize) -> bool {
+    if input.is_null() || output.is_null() || !(1..=2048).contains(&side) || length != side as usize * side as usize * 4 { return false; }
+    std::panic::catch_unwind(|| {
+        #[derive(serde::Deserialize)]
+        struct Request { state: ColorState, rendition: layer_core::color::hdr::SdrRendition }
+        let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().ok()?;
+        if text.len()>256*1024 { return None; }
+        let request: Request=serde_json::from_str(text).ok()?;
+        request.rendition.validate().ok()?;
+        Some(request.state.render_field_mapped(side, request.rendition, unsafe { std::slice::from_raw_parts_mut(output,length) }))
+    }).ok().flatten().unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ impl Canvas {
                     65535,
                 ] {
                     match color.depth {
-                SampleDepth::F16 => unreachable!("SDR-only benchmark fixture"),
+                SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only benchmark fixture"),
                         SampleDepth::U8 => row.push((code >> 8) as u8),
                         SampleDepth::U16 => row.extend_from_slice(&code.to_le_bytes()),
                     }

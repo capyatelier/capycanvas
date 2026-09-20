@@ -2,8 +2,8 @@
 //! immutable document-space guide; no image work occurs on the GTK thread.
 use crate::workspace::Workspace;
 use gtk::{gio, glib, prelude::*};
-use layer_core::{Layer, color::DocumentColor};
 use layer_render_wgpu::snapshot::CaptureControl;
+use layer_ui::proof_workflow::ToneKey;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -13,12 +13,8 @@ use std::{
 
 #[derive(Clone, PartialEq)]
 struct Key {
-    epoch: u64,
+    tone: ToneKey,
     owner: u64,
-    color: DocumentColor,
-    extent: [u32; 2],
-    background: [f32; 4],
-    layers: Vec<Layer>,
 }
 pub(crate) struct LocalToneView {
     pub label: gtk::Label,
@@ -58,32 +54,37 @@ impl LocalToneView {
     fn key(w: &Workspace) -> Option<Key> {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref()?.session;
-        if session.rendering_suspended() {
-            return None;
-        }
-        let d = session.engine().document();
-        if !d.color.depth.is_float() { return None; }
         Some(Key {
-            epoch: session.state().document_file.epoch,
+            tone: ToneKey::current(session)?,
             owner: session.engine().backend().proof_owner,
-            color: d.color,
-            extent: [d.width, d.height],
-            background: session.engine().view().background_rgba_linear,
-            layers: d.layers.iter().map(Layer::composite_snapshot).collect(),
         })
+    }
+    fn idle(w: &Workspace) -> bool {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .is_some_and(|g| g.session.require_document_snapshot_idle().is_ok())
+    }
+
+    pub fn suspend(&self) {
+        self.closed.set(true);
+        if let Some(control) = self.control.borrow().as_ref() {
+            control.cancel();
+        }
+    }
+    pub fn resume(&self) {
+        self.closed.set(false);
+    }
+    pub async fn pause(&self) {
+        self.suspend();
+        while self.running.get() {
+            glib::timeout_future(Duration::from_millis(5)).await;
+        }
+        self.wanted.borrow_mut().take();
+        self.published.borrow_mut().take();
     }
     pub fn sync(self: &Rc<Self>, w: &Rc<Workspace>) {
         if self.timer.borrow().is_none() {
-            w.window.connect_destroy(glib::clone!(
-                #[weak(rename_to=state)]
-                self,
-                move |_| {
-                    state.closed.set(true);
-                    if let Some(c) = state.control.borrow().as_ref() {
-                        c.cancel();
-                    }
-                }
-            ));
             *self.timer.borrow_mut() = Some(glib::timeout_add_local(
                 Duration::from_millis(100),
                 glib::clone!(
@@ -112,11 +113,21 @@ impl LocalToneView {
                 control.cancel();
             }
             *self.wanted.borrow_mut() = key.clone();
-            self.published.borrow_mut().take();
-            self.changed.set(Instant::now());
-            if let Some(g) = w.gpu.borrow().as_ref() {
-                let _ = g.session.engine().backend().set_local_tone(None);
+            let compatible = self
+                .published
+                .borrow()
+                .as_ref()
+                .zip(key.as_ref())
+                .is_some_and(|(old, new)| {
+                    old.owner == new.owner && old.tone.can_preview(&new.tone)
+                });
+            if !compatible {
+                self.published.borrow_mut().take();
+                if let Some(g) = w.gpu.borrow().as_ref() {
+                    let _ = g.session.engine().backend().set_local_tone(None);
+                }
             }
+            self.changed.set(Instant::now());
             self.failed.set(false);
             self.label.set_tooltip_text(None);
             self.label.set_label("Preparing SDR…");
@@ -126,6 +137,13 @@ impl LocalToneView {
         let Some(key) = key else {
             return;
         };
+        if !Self::idle(w) {
+            if let Some(control) = self.control.borrow().as_ref() {
+                control.cancel();
+            }
+            self.changed.set(Instant::now());
+            return;
+        }
         let time = w
             .gpu
             .borrow()
@@ -143,6 +161,7 @@ impl LocalToneView {
         let refresh = time != self.analysed_time.get()
             && self.last_start.get().elapsed() >= Duration::from_millis(500);
         if self.running.get()
+            || self.failed.get()
             || (self.published.borrow().as_ref() == Some(&key) && !refresh)
             || self.changed.get().elapsed() < Duration::from_millis(180)
         {
@@ -166,19 +185,23 @@ impl LocalToneView {
         self.running.set(true);
         let control = CaptureControl::default();
         *self.control.borrow_mut() = Some(control.clone());
+        // Snapshot workers own live GPU objects. Keep the application/driver
+        // alive until cancellation has finished and those objects are dropped.
+        let hold = w.window.application().map(|app| app.hold());
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to=state)]
             self,
             #[weak]
             w,
             async move {
+                let _hold = hold;
                 let c = control.clone();
-                let background = key.background;
+                let background = key.tone.background();
                 let result = gio::spawn_blocking(move || {
                     let mut renderer = gpu
                         .capture(project, background, time, Default::default(), c)
                         .map_err(|e| e.to_string())?;
-                    renderer.local_tone_guide()
+                    renderer.gpu_local_tone_guide()
                 })
                 .await
                 .map_err(|_| "Local tone worker stopped".to_string())
@@ -187,18 +210,21 @@ impl LocalToneView {
                 if !state.closed.get()
                     && !control.is_cancelled()
                     && Self::key(&w).as_ref() == Some(&key)
+                    && Self::idle(&w)
                 {
                     let result = match result {
                         Ok(guide) => Self::publish(&w, guide).await,
                         Err(e) => Err(e),
                     };
                     if Self::key(&w).as_ref() == Some(&key) {
-                        *state.published.borrow_mut() = Some(key);
-                        state.analysed_time.set(time);
-                        state.completed.set(state.completed.get() + 1);
                         state.failed.set(result.is_err());
                         match result {
-                            Ok(()) => state.label.set_visible(false),
+                            Ok(()) => {
+                                *state.published.borrow_mut() = Some(key);
+                                state.analysed_time.set(time);
+                                state.completed.set(state.completed.get() + 1);
+                                state.label.set_visible(false);
+                            }
                             Err(e) => {
                                 state.label.set_label("Local SDR unavailable");
                                 state.label.set_tooltip_text(Some(&e));
@@ -214,15 +240,32 @@ impl LocalToneView {
         ));
     }
     #[cfg(test)]
+    pub fn worker_state(&self) -> (bool, Option<bool>) {
+        (
+            self.running.get(),
+            self.control
+                .borrow()
+                .as_ref()
+                .map(CaptureControl::is_cancelled),
+        )
+    }
+    #[cfg(test)]
     pub fn ready_count(&self) -> Option<u64> {
         (!self.failed.get()
             && self.published.borrow().is_some()
             && *self.published.borrow() == *self.wanted.borrow())
         .then_some(self.completed.get())
     }
+    #[cfg(test)]
+    pub fn preview_count(&self) -> Option<u64> {
+        self.published
+            .borrow()
+            .as_ref()
+            .map(|_| self.completed.get())
+    }
     async fn publish(
         w: &Workspace,
-        guide: Arc<layer_core::color::hdr::LocalToneGuide>,
+        guide: Arc<layer_render_wgpu::local_tone::GpuToneGuide>,
     ) -> Result<(), String> {
         let rx = w
             .gpu

@@ -15,7 +15,7 @@ impl HdrPaint {
         }
         let mut p = color.linear_in(space)?;
         for v in &mut p[..3] {
-            *v /= stops.exp2();
+            *v = (f64::from(*v) / f64::from(stops).exp2()) as f32;
         }
         Ok(Self {
             base: RgbColor::from_linear(space, p)?,
@@ -25,26 +25,66 @@ impl HdrPaint {
     pub fn at_intensity(color: RgbColor, space: RgbSpace, stops: f32) -> Result<Self, String> {
         Self::validate_stops(stops)?;
         let mut p = color.linear_in(space)?;
-        for v in &mut p[..3] { *v /= stops.exp2(); }
+        for v in &mut p[..3] { *v = (f64::from(*v) / f64::from(stops).exp2()) as f32; }
         Ok(Self { base: if stops == 0. { color } else { RgbColor::from_linear(space, p)? }, stops })
     }
     pub fn validate_stops(stops: f32) -> Result<(), String> {
-        if !stops.is_finite() || !(-16. ..=65504f32.log2()).contains(&stops) {
-            return Err("Intensity must be between −16 and +16 EV (half-float limit)".into());
+        if !stops.is_finite() || !(-149. ..=128.).contains(&stops) {
+            return Err("Intensity must be between −149 and +128 EV; the color must fit the document precision".into());
         }
         Ok(())
     }
     pub fn color(self, space: RgbSpace) -> Result<RgbColor, String> {
         let mut p = self.base.linear_in(space)?;
         for v in &mut p[..3] {
-            *v *= self.stops.exp2();
+            *v = (f64::from(*v) * f64::from(self.stops).exp2()) as f32;
         }
-        layer_core::color::hdr::encode_pixel(p).map_err(str::to_string)?;
+        layer_core::color::hdr::validate_pixel(layer_core::color::SampleDepth::F32, p).map_err(str::to_string)?;
         RgbColor::from_linear(space, p)
     }
 }
+pub(super) fn validate_intensity(depth: layer_core::color::SampleDepth, stops: f32) -> Result<(), String> {
+    HdrPaint::validate_stops(stops)?;
+    if depth != layer_core::color::SampleDepth::F32 && !(-16. ..=65504f32.log2()).contains(&stops) {
+        return Err("Intensity must be between −16 and +16 EV (half-float limit)".into());
+    }
+    Ok(())
+}
 impl ColorState {
+    pub fn view_mapped(&self, recipe: layer_core::color::hdr::SdrRendition) -> ColorPanelView {
+        let mut view=self.view();
+        if self.hdr_picker.is_none() {return view;}
+        view.rendition=Some(recipe);
+        let base=self.picker_base().linear_in(self.rgb_space).unwrap();
+        let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
+        view.intensity_ramp=(0..=64).map(|i| {
+            let gain=(-2.+8.*i as f64/64.).exp2();
+            let rgb=mapper.map_rgb([base[0],base[1],base[2]].map(|v|
+                (f64::from(v)*gain).clamp(-f64::from(f32::MAX),f64::from(f32::MAX)) as f32));
+            [RgbSpace::Srgb.encode(rgb[0] as f64) as f32,RgbSpace::Srgb.encode(rgb[1] as f64) as f32,RgbSpace::Srgb.encode(rgb[2] as f64) as f32,1.]
+        }).collect();
+        let preview=|color| super::form::mapped_preview(color,self.rgb_space,RgbSpace::Srgb,Some(recipe)).unwrap().rgba;
+        view.marker_color=preview(self.definition())[..3].try_into().unwrap();
+        for swatch in &mut view.swatches {swatch.rgba=match swatch.slot {ColorSlot::Foreground=>preview(self.foreground),ColorSlot::Background=>preview(self.background),ColorSlot::Transparent=>[0.;4]};}
+        view.outside_document_gamut=!self.definition().in_hdr_gamut(self.rgb_space).unwrap();
+        view.outside_display_gamut=!self.definition().in_hdr_gamut(RgbSpace::Srgb).unwrap();
+        view
+    }
+    pub fn render_field_mapped(&self, side:u32, recipe:layer_core::color::hdr::SdrRendition, bytes:&mut [u8]) -> bool {
+        if self.validate().is_err() || recipe.validate().is_err() || bytes.len()!=side as usize*side as usize*4{return false;}
+        let mut pixels=vec![[0.;4];side as usize*side as usize];
+        if !self.render_field_linear(side,&mut pixels){return false;}
+        let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
+        for (out,p) in bytes.chunks_exact_mut(4).zip(pixels){let rgb=mapper.map_rgb([p[0],p[1],p[2]]);for c in 0..3{out[c]=(RgbSpace::Srgb.encode(rgb[c] as f64).clamp(0.,1.)*255.).round() as u8;}out[3]=255;}
+        true
+    }
     /// Called at document/workspace boundaries; changing mode never alters paint.
+    pub fn set_document_depth(&mut self, depth: layer_core::color::SampleDepth) -> Result<(), String> {
+        self.set_hdr_enabled(depth.is_float())?;
+        self.hdr_depth = depth;
+        Ok(())
+    }
+    pub fn hdr_depth(&self) -> layer_core::color::SampleDepth { self.hdr_depth }
     pub fn set_hdr_enabled(&mut self, enabled: bool) -> Result<(), String> {
         if enabled == self.hdr_picker.is_some() {
             return Ok(());
@@ -67,7 +107,7 @@ impl ColorState {
             .map_or(self.definition(), |p| p[self.index()].base)
     }
     pub(super) fn set_hdr_intensity(&mut self, stops: f32) -> Result<(), String> {
-        HdrPaint::validate_stops(stops)?;
+        validate_intensity(self.hdr_depth, stops)?;
         let mut paint = self
             .hdr_picker
             .ok_or("HDR intensity requires an HDR drawing")?[self.index()];
@@ -91,12 +131,12 @@ impl ColorState {
         if let Some(paints) = self.hdr_picker {
             for (paint, actual) in paints.into_iter().zip([self.foreground, self.background]) {
                 paint.base.validate_working_spaces()?;
-                if !paint.stops.is_finite() || !(-16. ..=128.).contains(&paint.stops) {
+                if !paint.stops.is_finite() || !(-149. ..=128.).contains(&paint.stops) {
                     return Err("Invalid HDR picker intensity".into());
                 }
                 let mut expected = paint.base.linear_in(actual.space)?;
                 for v in &mut expected[..3] {
-                    *v *= paint.stops.exp2();
+                    *v = (f64::from(*v) * f64::from(paint.stops).exp2()) as f32;
                 }
                 if expected
                     .into_iter()
@@ -112,13 +152,13 @@ impl ColorState {
     /// Float32 document-linear field before display mapping. No 8-bit intermediate.
     /// The host clips the shape using the same geometry as ordinary SDR picking.
     pub fn render_field_linear(&self, side: u32, pixels: &mut [[f32; 4]]) -> bool {
-        self.render_field_with_gain(side, pixels, self.hdr_intensity().exp2())
+        self.render_field_with_gain(side, pixels, f64::from(self.hdr_intensity()).exp2())
     }
     /// Hosts retain this Float32 base across EV and display-capability changes.
     pub fn render_field_base_linear(&self, side: u32, pixels: &mut [[f32; 4]]) -> bool {
         self.render_field_with_gain(side, pixels, 1.)
     }
-    fn render_field_with_gain(&self, side: u32, pixels: &mut [[f32; 4]], gain: f32) -> bool {
+    fn render_field_with_gain(&self, side: u32, pixels: &mut [[f32; 4]], gain: f64) -> bool {
         if side == 0 || (side as usize).checked_mul(side as usize) != Some(pixels.len()) {
             return false;
         }
@@ -146,7 +186,10 @@ impl ColorState {
                         .map(|v| self.rgb_space.decode((weights[0] + weights[2] * v) as f64) as f32)
                 }
             };
-            *p = [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain, 1.];
+            // The field previews colors beyond the current selection. Saturate
+            // only this display buffer; accepting a color still validates range.
+            let rgb = rgb.map(|v| (f64::from(v) * gain).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32);
+            *p = [rgb[0], rgb[1], rgb[2], 1.];
         }
         true
     }
@@ -300,5 +343,54 @@ mod boundary_tests {
                 recovered.validate().unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod float32_tests {
+    use super::*;
+    use layer_core::color::SampleDepth;
+    #[test]
+    fn float32_intensity_extremes_keep_state_and_preview_finite() {
+        let mut state = ColorState::default();
+        state.set_document_depth(SampleDepth::F32).unwrap();
+        state.set_color(RgbColor::from_linear(RgbSpace::Srgb, [0.25; 4]).unwrap()).unwrap();
+        state.set_hdr_intensity(128.).unwrap();
+        state.validate().unwrap();
+        let restored: ColorState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        restored.validate().unwrap();
+        let mut pixels = vec![[0.; 4]; 49];
+        assert!(state.render_field_linear(7, &mut pixels));
+        assert!(pixels.into_iter().flatten().all(f32::is_finite));
+        assert!(state.view_mapped(Default::default()).intensity_ramp.into_iter().flatten().all(f32::is_finite));
+        state.set_hdr_intensity(-149.).unwrap();
+        state.validate().unwrap();
+        let before = state.clone();
+        assert!(state.set_hdr_intensity(-150.).is_err());
+        assert_eq!(state, before);
+    }
+    #[test]
+    fn float32_color_entry_uses_document_range_and_roundtrips_workspace() {
+        let mut state = ColorState::default();
+        state.set_document_depth(SampleDepth::F32).unwrap();
+        let color = RgbColor::from_linear(RgbSpace::Srgb, [100000.125,-1.,0.000000123,0.25]).unwrap();
+        state.set_color(color).unwrap();
+        assert!(state.hdr_intensity() > 16.);
+        let mut draft = ColorEditor::new(color, RgbSpace::Srgb).unwrap();
+        draft.set_document_depth(SampleDepth::F32);
+        draft.enable_hdr(state.hdr_intensity()).unwrap();
+        draft.set_model(ColorInputModel::LinearRgb).unwrap();
+        draft.set_field(0, "200000.125".into()).unwrap();
+        assert!(draft.color().unwrap().linear_in(RgbSpace::Srgb).unwrap()[0] > 200000.);
+        draft.set_document_depth(SampleDepth::F16);
+        assert!(draft.color().is_err());
+        let restored: ColorState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(restored, state);
+        state.apply(ColorAction::HdrIntensity { stops: 30. }).unwrap();
+        let before = state.clone();
+        assert!(state.apply(ColorAction::HdrIntensity { stops: 129. }).is_err());
+        assert_eq!(state, before);
+        state.set_document_depth(SampleDepth::F16).unwrap();
+        assert!(state.set_color(color).is_err());
     }
 }

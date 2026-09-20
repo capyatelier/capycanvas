@@ -69,3 +69,13 @@ import org.json.JSONObject
             }
         }
 }
+
+/** Drawing-title drops open independent documents, including compact titles. */
+@Composable internal fun Modifier.drawingDropTarget(host:CanvasHost,enabled:Boolean=true):Modifier {
+    val activity=LocalActivity.current
+    val available by rememberUpdatedState(enabled)
+    val target=remember(host,activity){object:DragAndDropTarget {
+        override fun onDrop(event:DragAndDropEvent)=available&&activity?.let{host.documents.drop(it,event.toAndroidDragEvent())}==true
+    }}
+    return dragAndDropTarget({available&&host.documents.acceptsDrop(it.toAndroidDragEvent())},target)
+}

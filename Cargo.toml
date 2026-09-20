@@ -17,7 +17,7 @@ members = [
     "apps/layer-windows/native",
 ]
 resolver = "2"
-exclude = ["vendor/wgpu", "vendor/wgpu-hal", "vendor/wgpu-types", "vendor/image-webp"]
+exclude = ["vendor/wgpu", "vendor/wgpu-hal", "vendor/wgpu-types", "vendor/image-webp", "vendor/rav1d", "vendor/heif-oxide", "vendor/rust_h265"]
 
 # Explicit Wayland SDR image descriptions need Vulkan pass-through support.
 # See vendor/README.md for the narrowly scoped patch and upstream provenance.
@@ -26,6 +26,9 @@ wgpu = { path = "vendor/wgpu" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 wgpu-types = { path = "vendor/wgpu-types" }
 image-webp = { path = "vendor/image-webp" }
+rav1d = { path = "vendor/rav1d" }
+heif-oxide = { path = "vendor/heif-oxide" }
+rust_h265 = { path = "vendor/rust_h265" }
 
 [workspace.package]
 edition = "2024"

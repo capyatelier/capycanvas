@@ -230,7 +230,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         // SurfaceView punches through the window background. Cover its empty
         // layer with normal Android UI until this surface has a finished buffer.
         // This requires none of the application's Vulkan shaders.
-        if (!host.surfaceReady) {
+        if (!host.surfaceReady || host.drawingTabs.switching) {
             Box(Modifier.fillMaxSize().background(colors.surround).testTag("canvas-placeholder"))
         }
         if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
@@ -317,8 +317,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
             if (!hidden && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
-                if(host.proof.status.isNotEmpty()) Surface(color=colors.surround,shape=RoundedCornerShape(20.dp)) {
-                    TextButton({host.invoke("soft_proof_setup")},Modifier.testTag("proof-status")){Text(host.proof.status,maxLines=1)}
+                Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Bottom) {
+                    if(host.hdr.status.isNotEmpty()) DisplayStatus(host)
+                    if(host.proof.status.isNotEmpty()) Surface(color=colors.surround,shape=RoundedCornerShape(20.dp)) {
+                        Text(host.proof.status,Modifier.testTag("proof-status").clickable {host.invoke("soft_proof_setup")}
+                            .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
                 }
                 Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
                     CameraStatus(host)
@@ -361,6 +365,16 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         layout(((b?.number("width") ?: 0f) * density).roundToInt().coerceAtLeast(0),
             ((b?.number("height") ?: 0f) * density).roundToInt().coerceAtLeast(0)) {}
     }
+}
+
+@Composable private fun DisplayStatus(host: CanvasHost) {
+    var open by remember { mutableStateOf(false) }
+    Surface(color=LocalPalette.current.surround,shape=RoundedCornerShape(20.dp)) {
+        Text(host.hdr.status,Modifier.testTag("hdr-status").clickable {open=true}
+            .padding(horizontal=10.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
+    }
+    if(open) AlertDialog(onDismissRequest={open=false},title={Text("Display Details")},
+        text={Text(host.hdr.details)},confirmButton={TextButton({open=false}){Text("Close")}})
 }
 
 /** Read camera state here so navigation never invalidates the workspace tree. */

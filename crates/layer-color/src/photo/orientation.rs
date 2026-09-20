@@ -64,7 +64,7 @@ pub(super) fn normalize(
                     output[to..to + bpp].copy_from_slice(&decoded[&coordinate][from..from + bpp]);
                 }
             }
-            let blob = TileBlob::encode_source(descriptor, &output)?;
+            let blob = TileBlob::encode(descriptor, &output)?;
             retained += blob.resident_bytes();
             if retained > max_bytes {
                 return Err("Oriented source exceeds the memory budget".into());

@@ -315,11 +315,11 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
 #[test]
 fn hdr_linear_curves_and_exposure_retain_range_across_physical_passes() {
     let points=vec![[0.,0.05],[0.25,0.2],[0.75,0.85],[1.,0.95]];
-    for space in RgbSpace::ALL {
-        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth:SampleDepth::F16}).unwrap();
+    for (space, depth) in RgbSpace::ALL.into_iter().flat_map(|space| [SampleDepth::F16, SampleDepth::F32].map(|depth| (space, depth))) {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space,depth}).unwrap();
         for image in [false,true] {
             for alpha in [0.,1./16777216.,0.5,1.] {
-                let rgb=[-0.25,4.,32768.];
+                let rgb=[-0.25,4.,if depth == SampleDepth::F32 { 1000000.125 } else { 32768. }];
                 let mut curve=effect(2,"curves",image);
                 set(&mut curve,"domain",EffectValue::Choice(1));set(&mut curve,"hdr_stops",EffectValue::Number(4.));
                 set(&mut curve,"curve_0",EffectValue::Curve(points.clone()));
@@ -337,7 +337,7 @@ fn hdr_linear_curves_and_exposure_retain_range_across_physical_passes() {
 
 #[test]
 fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
-    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16] {
+    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::Srgb,depth}).unwrap();
         let layers=[effect(2,"exposure",false),source([0.25,2.,-0.125],1.)];
         for extent in [[512,384],[513,385],[385,513]] {

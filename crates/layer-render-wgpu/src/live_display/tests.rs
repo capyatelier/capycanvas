@@ -9,25 +9,41 @@ fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterErr
 }
 
 #[test]
-fn display_batches_submit_complete_halves_and_leave_final_tiles_with_the_frame() {
-    for tiles in [8, 9, 16, 17, 32] {
-        let doc = layer_core::Document::new("paper batches", tiles * PAGE_SIZE, PAGE_SIZE);
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
-        r.native_edit.as_mut().unwrap().display_complete_bytes = u64::MAX;
-        let v = ViewState {
-            width_px: tiles * 8,
-            height_px: 8,
-            ..view([1. / 32., 0., 0., 1. / 32., 0., 0.])
+fn display_batches_preserve_direct_and_fallback_submission_bounds() {
+    for complete in [false, true] {
+        let cases = if complete {
+            let batch = display_mips::CompleteUpdates::BATCH as u32;
+            [[8, 1], [16, batch / 16], [17, batch / 16], [16, batch / 8], [9, 1]]
+        } else {
+            [[8, 1], [9, 1], [16, 1], [17, 1], [32, 1]]
         };
-        submit(&mut r, &doc, v, true);
-        assert!(r.live_display.is_some());
-        assert_eq!(r.metrics.display_composition_submissions, u64::from((tiles - 1) / 8));
-        assert_eq!(r.metrics.composited_pixels, u64::from(doc.width) * u64::from(doc.height));
-        let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
-            SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
-        for pixel in present(&r, &mut presenter, v) {
-            assert!(pixel.into_iter().all(|channel| (channel - 1.).abs() < 5e-6));
+        for [columns, rows] in cases {
+            let tiles = columns * rows;
+            let doc = layer_core::Document::new("paper batches", columns * PAGE_SIZE, rows * PAGE_SIZE);
+            let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+            r.native_edit.as_mut().unwrap().display_complete_bytes = if complete { u64::MAX } else { 0 };
+            // Devices without Float32 attachment blending keep the eight-tile
+            // composition bound even when the complete pyramid is admitted.
+            let batch = if complete && !r.device.portable_blend() {
+                display_mips::CompleteUpdates::BATCH
+            } else {
+                SOURCE_SLOTS / 2
+            } as u32;
+            let v = ViewState {
+                width_px: columns * 8,
+                height_px: rows * 8,
+                ..view([1. / 32., 0., 0., 1. / 32., 0., 0.])
+            };
+            submit(&mut r, &doc, v, true);
+            assert_eq!(r.live_display.as_ref().unwrap().complete_updates.is_some(), complete);
+            assert_eq!(r.metrics.display_composition_submissions, u64::from((tiles - 1) / batch));
+            assert_eq!(r.metrics.composited_pixels, u64::from(doc.width) * u64::from(doc.height));
+            let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+                SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+            for pixel in present(&r, &mut presenter, v) {
+                assert!(pixel.into_iter().all(|channel| (channel - 1.).abs() < 5e-6));
+            }
         }
     }
 }
@@ -305,6 +321,37 @@ fn complete_display_matches_bounded_pixels_and_never_recomposes_for_navigation()
                 assert_eq!(full.metrics.source_tile_misses, misses);
             }
         }
+    }
+}
+
+#[test]
+fn complete_display_batches_match_scratch_reduction_exactly_through_edits() {
+    // Odd edges, transparency and 136 tiles exercise weighted reduction,
+    // multiple complete/partial batches and every retained mip level.
+    let mut doc = document([4097, 1793]);
+    let mut direct = bounded_renderer(doc.color).unwrap();
+    let mut reference = bounded_renderer(doc.color).unwrap();
+    for r in [&mut direct, &mut reference] {
+        r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+        r.native_edit.as_mut().unwrap().display_complete_bytes = 256 * 1024 * 1024;
+        r.ensure_document([doc.width, doc.height], &doc.layers).unwrap();
+        assert!(r.live_display.as_ref().unwrap().complete_updates.is_some());
+    }
+    // Keep the existing scratch implementation as an independent pixel oracle.
+    reference.live_display.as_mut().unwrap().complete_updates = None;
+    let v = centered_view([doc.width, doc.height], [320, 240], 0.125, 0.);
+    let levels = |r: &WgpuRasterizer| {
+        let cache = r.live_display.as_ref().unwrap();
+        cache.retained.iter().map(|level| &level.texture)
+            .chain(std::iter::once(&cache.coarse.texture))
+            .map(|texture| pixels(r, texture)).collect::<Vec<_>>()
+    };
+    for opacity in [1., 0.35, 0., 0.7, 1.] {
+        doc.layers[0].opacity = opacity;
+        for r in [&mut direct, &mut reference] { submit(r, &doc, v, true); }
+        assert_eq!(levels(&direct), levels(&reference));
+        let cache = direct.live_display.as_ref().unwrap();
+        assert!(cache.storage_bytes() <= cache.limit);
     }
 }
 
@@ -727,8 +774,12 @@ fn cache_changes_shape_within_budget_and_rebinds_retired_presenter_views() {
         SdrSurfaceColor::ExtendedLinearSrgb,
     )
     .unwrap();
+    // Revisit retired views across many completed command-pool lifetimes,
+    // including Android's occasional reclamation of retained driver storage.
     for (index, [width_px, height_px]) in [[1024, 240], [240, 768], [1024, 240]]
         .into_iter()
+        .cycle()
+        .take(384)
         .enumerate()
     {
         let v = ViewState {

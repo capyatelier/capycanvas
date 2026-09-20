@@ -2,6 +2,8 @@
 //! evaluator together instead of opening a render pass for every page.
 use super::*;
 
+pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool);
+
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 2],
     pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
@@ -87,7 +89,7 @@ impl Pipelines {
         color: &wgpu::TextureView,
         coverage: Option<&wgpu::TextureView>,
     ) -> wgpu::BindGroup {
-        let mut entries = vec![
+        let entries = [
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -100,24 +102,28 @@ impl Pipelines {
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(color),
             },
-        ];
-        if let Some(view) = coverage {
-            entries.push(wgpu::BindGroupEntry {
+            wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(view),
-            });
-        }
+                resource: wgpu::BindingResource::TextureView(coverage.unwrap_or(color)),
+            },
+        ];
         r.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("dry material page output"),
             layout: &self.layouts[usize::from(coverage.is_some())],
-            entries: &entries,
+            entries: &entries[..2 + usize::from(coverage.is_some())],
         })
     }
 }
 
 impl WgpuRasterizer {
     pub(super) fn compute_dry_material(&self, batch: &DabBatch) -> bool {
-        batch.style.execution == BrushExecution::Dry && self.pipelines.dry_material.is_some()
+        // Normal source-over stays on the compute evaluator. On Adreno, its
+        // specialized destination-blend variant disagrees with the legacy fragment path
+        // for a predicted Multiply batch.  Keep the established fragment
+        // route for every non-normal blend: it has the same ordered dab
+        // evaluation and avoids making preview correctness depend on that
+        // driver specialization.
+        dry_material_compute_eligible(&batch.style) && self.pipelines.dry_material.is_some()
     }
 
     pub(super) fn encode_dry_material_jobs(
@@ -125,12 +131,12 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
-        jobs: &[(wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool)],
+        jobs: &[Job],
     ) {
         if jobs.is_empty() {
             return;
         }
-        let operation = BrushPassPlan::for_style(&batch.style).material;
+        let operation = BrushPassPlan::for_device(&batch.style, &self.device).material;
         let texture_key = Self::texture_set_key(&batch.style);
         let textures = self
             .texture_sets
@@ -155,5 +161,24 @@ impl WgpuRasterizer {
             pass.set_bind_group(3, &textures.bind_group, &[]);
             pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
         }
+    }
+}
+
+fn dry_material_compute_eligible(style: &layer_render::DabStyle) -> bool {
+    style.execution == BrushExecution::Dry && style.rendering.blend_mode == BrushBlendMode::Normal
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_normal_dry_material_uses_the_fragment_path() {
+        let normal = crate::tests::test_style(BrushExecution::Dry);
+        assert!(dry_material_compute_eligible(&normal));
+
+        let mut multiply = normal;
+        multiply.rendering.blend_mode = BrushBlendMode::Multiply;
+        assert!(!dry_material_compute_eligible(&multiply));
     }
 }

@@ -71,23 +71,13 @@ fn paths() -> Vec<PathBuf> {
     if let Some(directory) = std::env::var_os("CAPY_PHOTO_CODEC_DIR") {
         return vec![PathBuf::from(directory).join("libcapy_photo.so.1")];
     }
-    let Ok(executable) = std::env::current_exe() else {
-        return Vec::new();
-    };
-    let Some(parent) = executable.parent() else {
-        return Vec::new();
-    };
-    vec![
-        parent.join("../lib/capycanvas/photo/libcapy_photo.so.1"),
-        parent.join("../photo-codecs/prefix/lib/libcapy_photo.so.1"),
-        parent.join("../../photo-codecs/prefix/lib/libcapy_photo.so.1"),
-    ]
+    Vec::new()
 }
 fn api() -> Result<&'static Api, String> {
     API.get_or_init(|| {
         let path = paths().into_iter().find(|p| p.is_file())
-            .ok_or("HEIF/AVIF photo codecs are not installed")?;
-        // SAFETY: a trusted installed/developer bundle, held for process lifetime.
+            .ok_or("Set CAPY_PHOTO_CODEC_DIR for the independent native codec tests")?;
+        // SAFETY: an explicitly selected trusted test bundle, held for process lifetime.
         // The C bridge's ABI number and structure size are checked before calls.
         unsafe {
             let library = libloading::Library::new(&path).map_err(|e| format!("Cannot load HEIF/AVIF photo codecs: {e}"))?;
