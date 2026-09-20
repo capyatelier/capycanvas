@@ -1,6 +1,6 @@
 // Native GTK package. Photo codecs are compiled into the shared Rust core.
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,7 +44,13 @@ writeFileSync(join(docs, "dependency-licenses.html"), '<!doctype html><meta char
   + '<style>body{max-width:70rem;margin:2rem auto;font:16px system-ui}pre{white-space:pre-wrap}</style>'
   + '<h1>Rust dependency licenses</h1>' + licenseHtml);
 const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
-cpSync(join(sysroot, "share/doc/rust/COPYRIGHT.html"), join(docs, "rust-toolchain-notices.html"));
+const rustNotices = [
+  join(sysroot, "share/doc/rust/COPYRIGHT.html"),
+  // Arch's system toolchain relocates rustc's complete copyright notice.
+  join(sysroot, "share/licenses/rust/COPYRIGHT.html.rustc"),
+].find(existsSync);
+if (!rustNotices) throw new Error(`Rust toolchain copyright notice not found under ${sysroot}`);
+cpSync(rustNotices, join(docs, "rust-toolchain-notices.html"));
 chmodSync(join(output, "bin/capycanvas"), 0o755);
 execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas-bin")]);
 writeFileSync(join(output, "share/doc/capycanvas-gtk/manifest.json"), JSON.stringify(gtkRuntime, null, 2) + "\n");

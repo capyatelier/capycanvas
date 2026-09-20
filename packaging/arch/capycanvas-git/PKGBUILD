@@ -12,15 +12,10 @@ optdepends=('vulkan-driver: hardware Vulkan rendering (required at runtime)')
 makedepends=('cargo-about' 'desktop-file-utils' 'git' 'glib2-devel' 'libdrm' 'meson' 'ninja' 'nodejs' 'python' 'rust' 'shaderc' 'vulkan-headers' 'wayland-protocols')
 provides=('capycanvas')
 conflicts=('capycanvas')
-options=('!debug')
-source=(
-  'capycanvas::git+https://github.com/capyatelier/capycanvas.git'
-  'protected-paper-fix.patch::https://github.com/jordanhubbard/capycanvas/commit/3336fc79a83e2594a1919c4fe191809a4aa64783.patch'
-)
-sha256sums=(
-  'SKIP'
-  '54c0a618bed8b63991a078b786772970dd3bb1f5b9548ddc6bcc56654d054696'
-)
+# The native packager strips the app; preserve the bundled GTK manifest hashes.
+options=('!debug' '!strip')
+source=('capycanvas::git+https://github.com/capyatelier/capycanvas.git')
+sha256sums=('SKIP')
 
 pkgver() {
   cd capycanvas
@@ -29,12 +24,6 @@ pkgver() {
 
 prepare() {
   cd capycanvas
-  if git apply --check "$srcdir/protected-paper-fix.patch"; then
-    git apply "$srcdir/protected-paper-fix.patch"
-  elif ! git apply --reverse --check "$srcdir/protected-paper-fix.patch"; then
-    printf 'The temporary upstream build fix no longer applies cleanly.\n' >&2
-    return 1
-  fi
   cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
 }
 
