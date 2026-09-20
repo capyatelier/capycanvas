@@ -2,6 +2,30 @@ use super::*;
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 #[test]
+fn source_residency_and_upload_window_follow_admitted_headroom() {
+    let gib = 1024 * 1024 * 1024;
+    for (allowance, slots) in [(0, 64), (gib - 1, 64), (gib, 128),
+        (2 * gib - 1, 128), (2 * gib, 256), (u64::MAX, 256)] {
+        let limits = SourceLimits::admitted(allowance);
+        assert_eq!(limits.slots, slots);
+        assert_eq!(limits.upload_bytes, slots as u64 * FLOAT_TILE_BYTES / 4);
+        let cache = DecodedTiles { limits, ..Default::default() };
+        // Simulate already-admitted mixed uploads without a GPU allocation.
+        // The next worst-case tile always fits; completion releases the charge.
+        let mut charges = Vec::new();
+        while !cache.uploads_full() {
+            let bytes = if charges.len() % 2 == 0 { FLOAT_TILE_BYTES / 4 } else { FLOAT_TILE_BYTES };
+            let total = cache.in_flight.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
+            charges.push(UploadCharge(cache.in_flight.clone(), bytes));
+            assert!(total <= limits.upload_bytes);
+        }
+        drop(charges);
+        assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
+        assert!(!cache.uploads_full());
+    }
+}
+
+#[test]
 fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
@@ -175,12 +199,12 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
             let bytes = sizes[uploads % sizes.len()];
             let total = cache.charge_upload(&abandoned, bytes);
             assert!(
-                total <= 16 * 1024 * 1024,
-                "staging exceeds its existing ceiling"
+                total <= cache.limits.upload_bytes,
+                "staging exceeds its admitted ceiling"
             );
             uploads += 1;
             assert!(
-                uploads <= 64,
+                uploads as u64 <= cache.limits.upload_bytes / (256 * 1024),
                 "admission must eventually drain pending uploads"
             );
         }
@@ -201,7 +225,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
         cache.charge_upload(&abandoned, FLOAT_TILE_BYTES / 4);
         if cache.uploads_full() { break; }
         assert!(cache.charge_upload(&abandoned, FLOAT_TILE_BYTES)
-            <= SOURCE_SLOTS as u64 * FLOAT_TILE_BYTES);
+            <= cache.limits.upload_bytes);
     }
     drop(abandoned);
     assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);

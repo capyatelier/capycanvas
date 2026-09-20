@@ -137,6 +137,12 @@ impl Scene {
     pub fn source_cache_work(&self) -> [u64; 2] {
         [self.source_tiles.hits, self.source_tiles.misses]
     }
+    pub fn admit_native_sources(&mut self, allowance: u64) {
+        self.source_tiles.admit(allowance);
+    }
+    pub fn source_cache_limits(&self) -> [u64; 2] {
+        self.source_tiles.admitted_bytes()
+    }
     #[cfg(test)]
     pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
         let mip = self.placement_mips.get(&id)?;
@@ -352,7 +358,7 @@ impl Scene {
                 || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
                 paint_transform::PaintTransforms::placement_pass,
             ),
-            source_tiles: sources::DecodedTiles::new(r.document_color().space),
+            source_tiles: sources::DecodedTiles::for_renderer(r),
             reverse_composition_tiles: false,
             pool: Vec::new(),
             used: Vec::new(),
@@ -1688,11 +1694,53 @@ impl Scene {
     fn encode_display_jobs(&mut self, r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder, tiles: &[[u32; 2]],
     ) -> Result<(), GpuRasterError> {
+        self.group_display_decodes();
         self.encode_jobs(r, encoder)?;
         if let Some(cache) = &mut r.live_display {
             for &tile in tiles { cache.direct_tile_written(encoder, tile); }
         }
         Ok(())
+    }
+
+    // Only independent source preparation can cross a display draw. Keep both
+    // decode order and draw order, and stop before a source slot is overwritten
+    // after an earlier draw sampled it. Other job types are hard boundaries.
+    // This makes adjacent draws share a pass without changing cache capacity,
+    // upload admission, tile pixels, or layer order.
+    #[allow(clippy::mutable_key_type)] // Texture views hash by stable resource identity.
+    fn group_display_decodes(&mut self) {
+        let mut start = 0;
+        while start < self.jobs.len() {
+            let mut target = None;
+            let mut reads = std::collections::HashSet::new();
+            let mut writes = std::collections::HashSet::new();
+            let mut end = start;
+            while let Some(job) = self.jobs.get(end) {
+                match job {
+                    Job::DecodedTile(pending)
+                        if !reads.contains(&pending.view)
+                            && target.as_ref() != Some(&pending.view)
+                            && writes.len() < 64 =>
+                    {
+                        writes.insert(pending.view.clone());
+                    }
+                    Job::Draw { target: next, sources, clip: Some(_), .. }
+                        if target.as_ref().is_none_or(|target| target == next)
+                            && !writes.contains(next)
+                            && sources.iter().all(|source| source != next) =>
+                    {
+                        target = Some(next.clone());
+                        reads.extend(sources.iter().cloned());
+                    }
+                    _ => break,
+                }
+                end += 1;
+            }
+            if end > start {
+                self.jobs[start..end].sort_by_key(|job| !matches!(job, Job::DecodedTile(_)));
+            }
+            start = end.max(start + 1);
+        }
     }
 
     // wgpu handles hash by stable resource identity, not mutable GPU contents.

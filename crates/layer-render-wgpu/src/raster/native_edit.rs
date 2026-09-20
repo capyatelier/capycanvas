@@ -253,6 +253,16 @@ impl WgpuRasterizer {
                 pipeline.compile();
             }
         }
+        // Transfer-table preparation creates the scene before NativeEdit's
+        // headroom snapshot exists. Admit live source storage now, while that
+        // new scene still owns no decoded pixels. Background snapshots retain
+        // the original smaller source/upload ceilings.
+        let allowance = native.display_complete_bytes;
+        #[cfg(not(target_arch = "wasm32"))]
+        let allowance = if self.snapshot_worker { 0 } else { allowance };
+        if let Some(scene) = &mut self.scene {
+            scene.admit_native_sources(allowance);
+        }
         self.native_edit = Some(native);
         Ok(())
     }

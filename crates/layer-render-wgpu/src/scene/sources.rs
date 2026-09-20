@@ -24,6 +24,27 @@ const DECODED_SLOTS: usize = 64;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
+#[derive(Clone, Copy)]
+struct SourceLimits {
+    slots: usize,
+    upload_bytes: u64,
+}
+impl Default for SourceLimits {
+    fn default() -> Self { Self { slots: DECODED_SLOTS, upload_bytes: 16 * 1024 * 1024 } }
+}
+impl SourceLimits {
+    fn admitted(display_allowance: u64) -> Self {
+        // Reuse the native renderer's measured headroom admission snapshot.
+        // Unknown/small budgets retain the original 64+16 MiB ceilings. Larger
+        // devices admit at most 256 MiB of source pixels and 64 MiB in flight;
+        // their source pixels use no more than one eighth of that allowance.
+        let slots = if display_allowance >= 8 * 256 * FLOAT_TILE_BYTES { 256 }
+            else if display_allowance >= 8 * 128 * FLOAT_TILE_BYTES { 128 }
+            else { DECODED_SLOTS };
+        Self { slots, upload_bytes: slots as u64 * FLOAT_TILE_BYTES / 4 }
+    }
+}
+
 enum Key {
     Image(Weak<SourceImage>, [u32; 2]),
     Raster([u8; 32], RgbSpace, RgbSpace),
@@ -51,7 +72,7 @@ enum Pixels {
 pub(super) struct PendingTile {
     pixels: Pixels,
     pub texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    pub(super) view: wgpu::TextureView,
     pub data: Option<[f32; 24]>,
     write: crate::submission::CacheWrite,
 }
@@ -111,6 +132,7 @@ impl Drop for UploadCharge {
 #[derive(Default)]
 pub(super) struct DecodedTiles {
     destination: RgbSpace,
+    limits: SourceLimits,
     slots: Vec<Slot>,
     clock: u64,
     decoders: VecDeque<(Weak<SourceImage>, layer_color::WorkingDecoder)>,
@@ -127,6 +149,21 @@ impl DecodedTiles {
             destination,
             ..Self::default()
         }
+    }
+    pub fn for_renderer(r: &WgpuRasterizer) -> Self {
+        let allowance = r.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
+        #[cfg(not(target_arch = "wasm32"))]
+        let allowance = if r.snapshot_worker { 0 } else { allowance };
+        let mut tiles = Self::new(r.document_color().space);
+        tiles.admit(allowance);
+        tiles
+    }
+    pub fn admit(&mut self, allowance: u64) {
+        debug_assert!(self.slots.is_empty(), "source admission precedes pixel allocation");
+        self.limits = SourceLimits::admitted(allowance);
+    }
+    pub fn admitted_bytes(&self) -> [u64; 2] {
+        [self.limits.slots as u64 * FLOAT_TILE_BYTES, self.limits.upload_bytes]
     }
     pub fn prepare_transfer(
         &mut self,
@@ -149,11 +186,10 @@ impl DecodedTiles {
             .map(|s| &s.view)
     }
     pub fn uploads_full(&self) -> bool {
-        // Preserve the 16 MiB worst-case staging ceiling, reserving room for
-        // one Float32 tile. U8/U16 inputs consume less; charging them as full
-        // Float32 uploads needlessly stalls ordinary layered strokes.
+        // Reserve room for one Float32 tile within the bounded staging window.
+        // U8/U16 inputs consume less; charge their actual encoded byte size.
         self.in_flight.bytes.load(Ordering::Acquire)
-            > (SOURCE_SLOTS as u64 - 1) * FLOAT_TILE_BYTES
+            > self.limits.upload_bytes - FLOAT_TILE_BYTES
     }
     pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace) -> Option<&wgpu::TextureView> {
         let key = Key::Raster(blob.digest, space, self.destination);
@@ -258,7 +294,7 @@ impl DecodedTiles {
             ));
         }
         self.misses += 1;
-        let index = if self.slots.len() < DECODED_SLOTS {
+        let index = if self.slots.len() < self.limits.slots {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded Float32 source tile"),
                 size: wgpu::Extent3d {

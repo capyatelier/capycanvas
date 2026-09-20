@@ -1,5 +1,9 @@
 # Wacom 2048 px G-Pen: current latency and limits — 2026-09-20
 
+Later shared-renderer changes and a measured 30+ FPS result are documented in
+[the follow-up optimization report](android-pen-30fps-20260920.md). This report
+preserves the original baseline investigation.
+
 ## Result
 
 The primary app still has severe wide-pen latency. A fast 2048 px stroke on the

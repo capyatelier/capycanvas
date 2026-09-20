@@ -736,6 +736,12 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
+    // Fully covered incoming pixels cannot receive more uniform pigment.
+    // Keep this outside the contact loop: a loop-carried early break produces
+    // dark contact seams on Adreno for large, multi-contact batches.
+    if style.render_mode.y > 0.5 && style.render_mode.x < 0.5 && stroke_coverage >= 1.0 {
+        return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+    }
     let range = select(style.operation.xy, material_sources.header.zw, style.contact_a.x > 0.5);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];

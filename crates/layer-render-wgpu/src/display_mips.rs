@@ -217,16 +217,27 @@ impl CompleteUpdates {
     pub fn flush(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.pending.is_empty() { return; }
         let _trace = crate::performance_trace::Span::new(c"capy.mip_encode");
+        // Same pixels and per-level dependency order, fewer driver commands.
+        self.pending.sort_unstable_by_key(|&[x, y]| (y, x));
+        self.pending.dedup();
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce retained display tiles"), timestamp_writes: None,
         });
         pass.set_pipeline(&self.pipeline);
         for (level, binding) in self.bindings.iter().enumerate() {
             let side = PAGE_SIZE >> (level + 1);
-            for &[x, y] in &self.pending {
+            let mut first = 0;
+            while first < self.pending.len() {
+                let [x, y] = self.pending[first];
+                let mut end = first + 1;
+                while end < self.pending.len()
+                    && self.pending[end] == [x + (end - first) as u32, y] {
+                    end += 1;
+                }
                 let offset = ((y * self.columns + x) * self.bindings.len() as u32 + level as u32) * self.stride;
                 pass.set_bind_group(0, binding, &[offset]);
-                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
+                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), (end - first) as u32);
+                first = end;
             }
         }
         self.pending.clear();

@@ -9,7 +9,9 @@ fn reduce(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let span = footprint.z;
     let side = 128u / span;
     if any(invocation.xy >= vec2<u32>(side)) { return; }
-    let tile = vec2<u32>(footprint.w & 65535u, footprint.w >> 16u);
+    // A retained row run uses one Z workgroup per adjacent tile. Scratch
+    // reduction and isolated tiles dispatch Z=1 and retain their original XY.
+    let tile = vec2<u32>((footprint.w & 65535u) + invocation.z, footprint.w >> 16u);
     let position = tile * side + invocation.xy;
     if any(position >= textureDimensions(destination)) { return; }
     let start = position * 2u;

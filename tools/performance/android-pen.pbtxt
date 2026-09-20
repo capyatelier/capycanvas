@@ -9,7 +9,6 @@ data_sources {
     ftrace_config {
       ftrace_events: "ftrace/print"
       atrace_categories: "gfx"
-      atrace_categories: "view"
       ftrace_events: "sched/sched_switch"
       ftrace_events: "sched/sched_waking"
       atrace_apps: "art.capycanvas"

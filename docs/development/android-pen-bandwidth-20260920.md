@@ -2,6 +2,8 @@
 
 Follow-up to [the primary-app latency investigation](android-pen-latency-20260920.md).
 Source inspected at `cef89441`. No renderer behavior changed for this analysis.
+The subsequent [30 FPS investigation](android-pen-30fps-20260920.md) implements
+and measures the shared command/cache improvements discussed here.
 
 ## CPU: elapsed time versus active execution
 

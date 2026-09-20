@@ -5285,11 +5285,15 @@ impl CanvasRenderer for WgpuRasterizer {
         performance_trace::counter(c"Capy composited pixels", self.metrics.composited_pixels);
         performance_trace::counter(c"Capy display batches", self.metrics.display_composition_submissions);
         performance_trace::counter(c"Capy upload drains", self.metrics.source_upload_submissions);
+        performance_trace::counter(c"Capy source upload peak bytes", self.metrics.source_upload_peak_bytes);
         performance_trace::counter(c"Capy restore batches", self.metrics.native_restore_submissions);
         performance_trace::counter(c"Capy paint pages", self.metrics.paint_pages);
         performance_trace::counter(c"Capy preview pages", self.metrics.preview_pages);
         if let Some(scene) = &self.scene {
             let [hits, misses] = scene.source_cache_work();
+            let [resident, uploads] = scene.source_cache_limits();
+            performance_trace::counter(c"Capy source resident limit bytes", resident);
+            performance_trace::counter(c"Capy source upload limit bytes", uploads);
             performance_trace::counter(c"Capy source hits", hits);
             performance_trace::counter(c"Capy source misses", misses);
         }

@@ -272,6 +272,107 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
 }
 
 #[test]
+fn saturated_uniform_contacts_match_the_full_evaluator_exactly() {
+    // Compile the original evaluator with the shortcut disabled. Compare native
+    // Float32 working pixels, coverage and prediction, not just an 8-bit export.
+    fn reference(r: &mut WgpuRasterizer) {
+        let source = include_str!("../../material_brush.wgsl");
+        assert!(source.contains("&& stroke_coverage >= 1.0"));
+        let source = source.replace("&& stroke_coverage >= 1.0", "&& false");
+        let device = r.device.clone();
+        let shader = Deferred::new(move || device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("full uniform contact reference"),
+            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                &working_color::shader(&device), &source,
+                include_str!("../../brush_geometry.wgsl"),
+                include_str!("../../brush_coverage.wgsl"),
+                include_str!("../../contact.wgsl"),
+                include_str!("../../selection_clip.wgsl"),
+            ])),
+        }));
+        r.pipelines.dry_material = Some(dry_material::Pipelines::new(&r.device, &PipelineLayouts {
+            style: &r.style_layout, texture: &r.texture_layout,
+            advanced_texture: &r.advanced_texture_layout, target: &r.target_layout,
+            material: &r.material_layout, edge: &r.edge_layout,
+            watercolor: &r.watercolor_layout, transport: &r.transport_layout,
+        }, &shader));
+    }
+    fn state(r: &WgpuRasterizer) -> Vec<([u32; 2], Vec<u8>)> {
+        r.paint_layers.iter().flat_map(|layer| layer.pages.iter()
+            .map(|page| (page.coordinate, &page.active().texture))
+            .chain(layer.coverage_pages.iter().map(|page| (page.coordinate, &page.active().texture))))
+            .chain(r.preview_pages.iter().map(|page| (page.coordinate, &page.active().texture)))
+            .map(|(coordinate, texture)| (coordinate, crate::layer_tests::page_bytes(r, texture)))
+            .collect()
+    }
+    for (depth, alpha, large) in [(SampleDepth::U8, 1., false), (SampleDepth::U16, 0.37, false),
+        (SampleDepth::F16, 1., false), (SampleDepth::U8, 1., true)] {
+        let extent = if large { [4096, 3072] } else { [512, 384] };
+        let mut document = layer_core::Document::new("saturated contact oracle", extent[0], extent[1]);
+        document.color.depth = depth;
+        let (mut input, mut live) = engine(document.clone());
+        let (mut full_input, mut full) = engine(document);
+        reference(full.backend_mut());
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        brush.diameter = if large { 2048. } else { 224. };
+        brush.color_rgba_linear = if large { [0.006, 0.006, 0.006, 1.] }
+            else if depth.is_float() { [2., -0.125, 0.25, alpha] }
+            else { [0.4, 0.03, 0.1, alpha] };
+        for engine in [&mut live, &mut full] {
+            engine.set_brush(brush.clone()).unwrap();
+            engine.set_instant_feedback(layer_engine::InstantFeedbackConfig {
+                enabled: true, prediction_horizon_micros: 16_000, ..Default::default()
+            }).unwrap();
+        }
+        for stroke in 0..2 {
+            for frame in 0..10 {
+                // Alternate sample counts, revisit saturated pixels, vary
+                // pressure and cross a page boundary in the same stroke.
+                let count = if frame % 2 == 0 { 1 } else { 3 };
+                let now = 1_000_000_000 + (stroke * 10 + frame + 1) * 33_333_333;
+                for sample in 0..count {
+                    let event = PenEvent {
+                        device_id: 1, sequence: now + sample,
+                        timestamp_ns: now - (count - sample - 1) * 5_000_000,
+                        view_revision: 0,
+                        surface_position: layer_core::Point {
+                            x: if large { 1300. + frame as f32 * 150. + sample as f32 * 25. }
+                                else { 170. + frame as f32 * 9. + sample as f32 * 2. },
+                            y: if large { 1536. + (frame as f32 * 0.7).sin() * 250. }
+                                else { 175. + (frame as f32 * 0.7).sin() * 12. },
+                        },
+                        pressure: if frame == 4 { 0.4 } else { 1. },
+                        tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
+                        phase: if frame == 0 { PenPhase::Down }
+                            else if frame == 9 && sample == count - 1 { PenPhase::Up }
+                            else { PenPhase::Move },
+                        tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+                    };
+                    input.push(event).unwrap();
+                    full_input.push(event).unwrap();
+                }
+                live.render_frame_for(now, now + 16_000_000).unwrap();
+                full.render_frame_for(now, now + 16_000_000).unwrap();
+                // Large contacts are compared through exact native backing
+                // below, avoiding thousands of per-page synchronous readbacks.
+                if large { continue; }
+                let actual = state(live.backend());
+                let expected = state(full.backend());
+                assert_eq!(actual.len(), expected.len());
+                for (a, b) in actual.iter().zip(&expected) {
+                    assert_eq!(a.0, b.0);
+                    assert!(a.1 == b.1, "working/coverage/preview: {depth:?} stroke={stroke} frame={frame} page={:?}", a.0);
+                }
+            }
+            flush(&mut live);
+            flush(&mut full);
+            assert!(backing(&live.document().layers[0].raster) == backing(&full.document().layers[0].raster),
+                "native publication: {depth:?} stroke={stroke}");
+        }
+    }
+}
+
+#[test]
 fn native_gpen_batch_edges_do_not_darken_opaque_source_pixels() {
     use layer_core::color::{ColorProfile, source::*};
     // Prediction leaves finalized contacts at different offsets/batch sizes.
