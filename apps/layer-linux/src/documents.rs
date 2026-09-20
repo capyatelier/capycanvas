@@ -3,17 +3,13 @@ use crate::{canvas::GpuCanvas, recovery::Recovery, workspace::Workspace};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use layer_core::{Project, raster_storage::RetainedTiles};
-use layer_ui::{DocumentLocation, DocumentTabs};
+use layer_ui::{DocumentLocation, DocumentTabs, DocumentSessions, DocumentTabLabel as Label};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
     rc::Rc,
     time::{Duration, Instant},
 };
-
-const INACTIVE_RAM: usize = 64 * 1024 * 1024;
-const METADATA_WATERMARK: usize = 256 * 1024 * 1024;
-const CHUNK: usize = 8 * 1024 * 1024;
 
 type Prepared = (
     Project,
@@ -33,18 +29,9 @@ struct TabDrag {
     button: gtk::Widget,
     width: i32,
 }
-struct Parked {
+pub(crate) struct Parked {
     canvas: GpuCanvas,
     recovery: Rc<Recovery>,
-    tiles: RetainedTiles,
-    used: u64,
-}
-#[derive(Clone, PartialEq)]
-struct Label {
-    id: u64,
-    title: String,
-    location: String,
-    modified: bool,
 }
 pub(crate) struct Documents {
     pub root: gtk::Stack,
@@ -52,8 +39,7 @@ pub(crate) struct Documents {
     title: gtk::Label,
     selector: gtk::MenuButton,
     selector_label: gtk::Label,
-    pub model: RefCell<DocumentTabs>,
-    parked: RefCell<BTreeMap<u64, Parked>>,
+    pub model: RefCell<DocumentSessions<Parked>>,
     labels: RefCell<Vec<Label>>,
     pending: RefCell<VecDeque<Queued>>,
     draining: Cell<bool>,
@@ -65,8 +51,6 @@ pub(crate) struct Documents {
     pub paused: Cell<bool>,
     pub closing_window: Cell<bool>,
     pub closing_tab: Cell<bool>,
-    clock: Cell<u64>,
-    spill_error: RefCell<Option<String>>,
     dragging: Cell<bool>,
     drag: RefCell<Option<TabDrag>>,
     #[cfg(test)]
@@ -314,8 +298,7 @@ impl Documents {
             title,
             selector,
             selector_label,
-            model: RefCell::new(DocumentTabs::default()),
-            parked: Default::default(),
+            model: RefCell::new(DocumentSessions::default()),
             labels: Default::default(),
             pending: Default::default(),
             draining: Cell::new(false),
@@ -327,12 +310,10 @@ impl Documents {
             paused: Cell::new(false),
             closing_window: Cell::new(false),
             closing_tab: Cell::new(false),
-            clock: Cell::new(0),
-            spill_error: Default::default(),
             dragging: Cell::new(false),
             drag: Default::default(),
             #[cfg(test)]
-            ram_budget: Cell::new(INACTIVE_RAM),
+            ram_budget: Cell::new(layer_ui::DocumentBudget::default().inactive_ram),
         }
     }
     pub fn len(&self) -> usize {
@@ -379,21 +360,7 @@ impl Documents {
         });
     }
     fn label(id: u64, canvas: &GpuCanvas) -> Label {
-        let file = &canvas.session.state().document_file;
-        Label {
-            id,
-            title: if file.location.is_none() && file.unsaved_name.is_none() {
-                format!("Untitled {id}")
-            } else {
-                file.title().into()
-            },
-            modified: file.modified,
-            location: file
-                .location
-                .as_ref()
-                .map(|l| l.uri.clone())
-                .unwrap_or_else(|| "Unsaved drawing".into()),
-        }
+        Label::new(id, &canvas.session.state().document_file)
     }
     pub fn refresh(&self, w: &Rc<Workspace>) {
         let Some(current) = w.gpu.borrow().as_ref().map(|g| {
@@ -416,8 +383,8 @@ impl Documents {
             return;
         };
         let mut labels = BTreeMap::from([(current.id, current.clone())]);
-        for (&id, tab) in self.parked.borrow().iter() {
-            labels.insert(id, Self::label(id, &tab.canvas));
+        for (&id, tab) in self.model.borrow().parked() {
+            labels.insert(id, Self::label(id, &tab.owner.canvas));
         }
         let labels: Vec<_> = self
             .model
@@ -789,28 +756,22 @@ impl Documents {
             return Err("The drawing window was closed".into());
         }
         self.paused.set(true);
-        if let Some(g) = w.gpu.borrow_mut().as_mut() {
-            g.session.release_idle_document_buffers();
+        let parked = w.gpu.borrow_mut().as_mut().map(|g| {
+            g.session.park_document()?;
             g.session.renderer_mut().stop();
+            Ok::<_, String>(())
+        }).unwrap_or(Ok(()));
+        if let Err(error) = parked {
+            self.paused.set(false);
+            self.changing.set(false);
+            w.proof.resume(w);
+            w.local_tone.resume();
+            return Err(error);
         }
         Ok(())
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
         w.gpu.borrow_mut().take()
-    }
-    fn remember(&self, id: u64, canvas: GpuCanvas, recovery: Rc<Recovery>) {
-        let tiles = canvas.session.retained_document_tiles();
-        let used = self.clock.get();
-        self.clock.set(used + 1);
-        self.parked.borrow_mut().insert(
-            id,
-            Parked {
-                canvas,
-                recovery,
-                tiles,
-                used,
-            },
-        );
     }
     fn finish_switch(&self, w: &Rc<Workspace>, error: Option<String>) {
         self.paused.set(false);
@@ -819,9 +780,10 @@ impl Documents {
         w.refresh_document_view();
         w.proof.resume(w);
         w.local_tone.resume();
+        let storage_error = self.model.borrow().storage_error().map(str::to_owned);
         if let Some(error) = error {
             w.document_canvas_error(&error);
-        } else if let Some(error) = self.spill_error.borrow().as_ref() {
+        } else if let Some(error) = storage_error {
             w.changed(Err(format!(
                 "{error}\nThe drawing is retained in memory. Free disk space or close some tabs."
             )));
@@ -841,24 +803,22 @@ impl Documents {
         if self.selected() == id {
             return Ok(());
         }
-        if !self.parked.borrow().contains_key(&id) {
+        if !self.model.borrow().contains_parked(id) {
             return Err("Drawing tab is no longer open".into());
         }
         self.prepare_switch(w).await?;
-        let previous_id = self.selected();
         let previous = self.park(w).ok_or("Canvas unavailable")?;
-        let previous_recovery = w.recovery();
-        let mut next = self.parked.borrow_mut().remove(&id).unwrap();
-        let error = next
-            .canvas
-            .session
-            .inherit_window_state(&previous.session)
-            .err()
-            .or_else(|| next.canvas.reattach(&w.area).err());
+        let tiles = previous.session.retained_document_tiles();
+        let error = {
+            let mut model = self.model.borrow_mut();
+            let next = model.parked_owner_mut(id).unwrap();
+            next.canvas.session.inherit_window_state(&previous.session).err()
+                .or_else(|| next.canvas.reattach(&w.area).err())
+        };
+        let next = self.model.borrow_mut().exchange(id, Parked { canvas: previous, recovery: w.recovery() }, tiles)
+            .unwrap_or_else(|_| unreachable!("validated drawing target"));
         *w.gpu.borrow_mut() = Some(next.canvas);
         *w.recovery.borrow_mut() = next.recovery;
-        self.model.borrow_mut().select(id);
-        self.remember(previous_id, previous, previous_recovery);
         self.trim().await;
         self.finish_switch(w, error);
         Ok(())
@@ -871,38 +831,12 @@ impl Documents {
         if !w.window.is_visible() || self.closing_window.get() {
             return Err("The drawing window was closed".into());
         }
-        let metadata: usize = self
-            .parked
-            .borrow()
-            .values()
-            .map(|p| p.tiles.metadata_bytes)
-            .sum();
-        let active = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .map_or(0, |g| g.session.retained_document_tiles().metadata_bytes);
-        let candidate = project
-            .assets
-            .values()
-            .map(|a| a.bytes.len())
-            .sum::<usize>()
-            + layer_core::Editor::new(project.document.clone())
-                .retained_tiles()
-                .metadata_bytes
-            + 2 * 1024 * 1024;
-        if metadata.saturating_add(active).saturating_add(candidate) > METADATA_WATERMARK {
-            return Err("Too much drawing data is open. Save and close some tabs before opening another drawing.".into());
-        }
-        let storage_error = self.spill_error.borrow().clone();
-        if let Some(error) = storage_error {
+        let retry_storage = self.model.borrow().storage_error().is_some();
+        if retry_storage {
             self.trim().await;
-            if self.spill_error.borrow().is_some() {
-                return Err(format!(
-                    "{error}\nFree disk space or close some tabs before opening another drawing."
-                ));
-            }
         }
+        let active = w.gpu.borrow().as_ref().map(|g| g.session.retained_document_tiles()).unwrap_or_default();
+        self.model.borrow().admit(&active, &project)?;
         self.prepare_switch(w).await?;
         let mut previous = self.park(w).ok_or("Canvas unavailable")?;
         if self.closing_window.get() || self.cancel_open.get() {
@@ -930,9 +864,8 @@ impl Documents {
         if let Err(e) = recovery.set_origin(origin) {
             eprintln!("Recovery ownership: {e}");
         }
-        let previous_id = self.selected();
-        self.remember(previous_id, previous, w.recovery());
-        self.model.borrow_mut().add();
+        let tiles = previous.session.retained_document_tiles();
+        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles);
         *w.gpu.borrow_mut() = Some(next);
         *w.recovery.borrow_mut() = recovery;
         self.trim().await;
@@ -941,26 +874,10 @@ impl Documents {
     }
     async fn trim(&self) {
         #[cfg(test)]
-        let budget = self.ram_budget.get();
-        #[cfg(not(test))]
-        let budget = INACTIVE_RAM;
-        self.spill_error.borrow_mut().take();
+        { self.model.borrow_mut().budget.inactive_ram = self.ram_budget.get(); }
+        self.model.borrow_mut().storage_completed(Ok(()));
         loop {
-            let candidate = {
-                let parked = self.parked.borrow();
-                let total = parked
-                    .values()
-                    .map(|p| p.tiles.resident_bytes())
-                    .sum::<usize>();
-                if total <= budget {
-                    break;
-                }
-                parked
-                    .values()
-                    .filter(|p| p.tiles.resident_bytes() > 0)
-                    .min_by_key(|p| p.used)
-                    .map(|p| p.tiles.clone())
-            };
+            let candidate = self.model.borrow().spill_candidate();
             let Some(tiles) = candidate else {
                 break;
             };
@@ -969,7 +886,7 @@ impl Documents {
                 .map_err(|_| "Drawing storage worker stopped".to_string())
                 .and_then(|r| r);
             if let Err(error) = result {
-                *self.spill_error.borrow_mut() = Some(error);
+                self.model.borrow_mut().storage_completed(Err(error));
                 break;
             }
         }
@@ -1020,13 +937,10 @@ impl Documents {
                     w.changed(Err(error));
                     return;
                 }
-                let old = w.documents.selected();
-                w.documents.model.borrow_mut().close(old);
-                let id = w.documents.selected();
+                let mut next = w.documents.model.borrow_mut().close_selected().unwrap();
                 let previous = w.gpu.borrow_mut().take().unwrap();
                 let recovery = w.recovery();
                 recovery.discard();
-                let mut next = w.documents.parked.borrow_mut().remove(&id).unwrap();
                 let error = next
                     .canvas
                     .session
@@ -1050,55 +964,17 @@ impl Documents {
     }
     #[cfg(test)]
     pub fn parked_memory(&self) -> (usize, bool) {
-        let p = self.parked.borrow();
+        let p = self.model.borrow();
         (
-            p.values().map(|p| p.tiles.resident_bytes()).sum(),
-            p.values()
-                .all(|p| p.canvas.session.engine().backend().worker_is_joined()),
+            p.resident_bytes(),
+            p.parked().all(|(_, p)| p.owner.canvas.session.engine().backend().worker_is_joined()),
         )
     }
 }
 
 fn spill(tiles: RetainedTiles) -> Result<(), String> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
     let directory = std::env::var_os("CAPY_TAB_CACHE_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| glib::user_cache_dir().join("capycanvas/tabs"));
-    std::fs::create_dir_all(&directory).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
-    let blobs: Vec<_> = tiles
-        .blobs()?
-        .into_iter()
-        .filter(|b| b.resident_bytes() > 0)
-        .collect();
-    let mut start = 0;
-    while start < blobs.len() {
-        let mut end = start;
-        let mut bytes = 0;
-        while end < blobs.len() && (bytes == 0 || bytes + blobs[end].compressed_len() <= CHUNK) {
-            bytes += blobs[end].compressed_len();
-            end += 1;
-        }
-        let path = directory.join(format!(
-            "{}-{}.tiles",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| format!("Cannot create drawing cache: {e}"))?;
-        // Unlink while open: reference-counted file ownership handles normal
-        // close and crashes, without leaving stale cache files or lock records.
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        layer_core::raster_storage::spill_tiles(&blobs[start..end], file)?;
-        start = end;
-    }
-    Ok(())
+    layer_core::raster_storage::spill_to_directory(&tiles, &directory)
 }

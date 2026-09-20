@@ -570,6 +570,25 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
     }
 }
 impl HeaderLayout {
+    /// Drawing tabs consume the remaining title interval on every host. The
+    /// single-title and customization presentations keep their normal geometry.
+    pub fn resolve_documents(
+        &self,
+        width: f32,
+        insets: [f32; 2],
+        metrics: &[HeaderMetric],
+        editing: bool,
+        documents: usize,
+    ) -> HeaderGeometry {
+        let mut geometry = self.resolve(width, insets, metrics, editing);
+        if !editing && documents > 1
+            && let Some(entry) = self.entries().find(|e| e.item == HeaderItem::DocumentTitle)
+        {
+            geometry.expand_document(entry.id, width, insets);
+        }
+        geometry
+    }
+
     /// Whole-item overflow, a truly centered middle region and protected native
     /// caption areas. Hosts measure text; the allocation/overflow policy is shared.
     pub fn resolve(

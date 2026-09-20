@@ -150,6 +150,23 @@ impl Editor {
     }
 }
 impl RetainedTiles {
+    /// Poll every current/undo/redo root without blocking the host event loop.
+    /// Hosts await completion before normal parking; pending readbacks may need
+    /// that same event loop to publish their immutable backing.
+    pub fn try_blobs(&self) -> Result<Option<Vec<Arc<TileBlob>>>, String> {
+        let mut blobs = self.sources.clone();
+        for raster in &self.rasters {
+            let Some(data) = raster.try_data() else { return Ok(None) };
+            for tile in data?.tiles.values() {
+                let Some(blob) = tile.try_backing() else { return Ok(None) };
+                blobs.push(blob?);
+            }
+        }
+        let mut seen = HashSet::new();
+        blobs.retain(|b| seen.insert(Arc::as_ptr(b) as usize));
+        Ok(Some(blobs))
+    }
+
     /// Run on a worker: pending immutable captures can require a GPU fence.
     pub fn blobs(&self) -> Result<Vec<Arc<TileBlob>>, String> {
         let mut blobs = self.sources.clone();
@@ -192,6 +209,40 @@ impl RetainedTiles {
         }
         bytes.saturating_add(pending)
     }
+}
+
+/// Shared chunk bound for native and browser backing. Chunk ownership follows
+/// the immutable tiles, including references held by undo, redo and file jobs.
+pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Hosts choose an appropriate private cache directory and run this on their
+/// file worker. Unlinked open files survive pathname eviction and disappear on
+/// final-owner release or process exit, without a compactor or orphan scan.
+#[cfg(unix)]
+pub fn spill_to_directory(tiles: &RetainedTiles, directory: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(directory).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+    let blobs: Vec<_> = tiles.blobs()?.into_iter().filter(|b| b.resident_bytes() > 0).collect();
+    let mut start = 0;
+    while start < blobs.len() {
+        let mut end = start;
+        let mut bytes = 0;
+        while end < blobs.len() && (bytes == 0 || bytes + blobs[end].compressed_len() <= SPILL_CHUNK_BYTES) {
+            bytes += blobs[end].compressed_len();
+            end += 1;
+        }
+        let path = directory.join(format!("{}-{}.tiles", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let file = std::fs::OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
+            .open(&path).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        spill_tiles(&blobs[start..end], file)?;
+        start = end;
+    }
+    Ok(())
 }
 
 /// Atomically migrate one immutable chunk after successful write + flush.
@@ -280,6 +331,24 @@ mod tests {
             .into(),
             ..Default::default()
         })
+    }
+    #[test]
+    fn nonblocking_parking_waits_for_redo_only_captures_and_reports_failure() {
+        let mut editor = Editor::new(Document::new("pending redo", 256, 256));
+        let target = editor.document().layers[0].id;
+        let root = RasterRevision::pending();
+        editor.perform(Edit::SetRaster { target, revision: root.clone() }).unwrap();
+        editor.undo().unwrap();
+        let retained = editor.retained_tiles();
+        assert!(retained.try_blobs().unwrap().is_none());
+        let tile = RasterTile::pending(crate::color::PixelDescriptor::SRGB8_PAINT);
+        root.publish(Ok(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile.clone())].into(),
+            ..Default::default()
+        })).unwrap();
+        assert!(retained.try_blobs().unwrap().is_none());
+        tile.publish(Err("Capture worker stopped".into())).unwrap();
+        assert_eq!(retained.try_blobs().unwrap_err(), "Capture worker stopped");
     }
     #[test]
     fn spill_shared_history_save_and_restore_are_exact() {

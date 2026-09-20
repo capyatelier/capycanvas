@@ -7,6 +7,8 @@
 mod camera;
 mod document_tabs;
 pub use document_tabs::DocumentTabs;
+mod document_sessions;
+pub use document_sessions::{DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
 pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod document_workflow;

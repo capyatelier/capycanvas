@@ -5699,6 +5699,32 @@ mod tests {
     }
 
     #[test]
+    fn normal_parking_keeps_unsubmitted_ink_and_restores_the_same_editor() {
+        let mut s = session();
+        s.frame(0, 0).unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
+        assert!(s.park_document().is_err());
+        assert!(!s.rendering_suspended());
+        s.frame(10_000_000, 18_000_000).unwrap();
+        assert!(s.engine.has_active_stroke());
+        assert!(s.park_document().is_err());
+        s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
+        assert!(s.park_document().is_err());
+        s.frame(30_000_000, 38_000_000).unwrap();
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        s.park_document().unwrap();
+        assert!(s.rendering_suspended());
+        s.replace_renderer(Recorder::default()).unwrap();
+        assert!(!s.rendering_suspended());
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        invoke(&mut s, CommandId::Undo);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().layers, document.layers);
+    }
+
+    #[test]
     fn renderer_replacement_retains_saved_checkpoint_history_and_live_contact() {
         let mut s = session();
         invoke(&mut s, CommandId::AddLayer);

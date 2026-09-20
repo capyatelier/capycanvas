@@ -171,8 +171,7 @@ mod tests {
                     compact: 60.,
                 })
                 .collect();
-            let mut geometry = layout.resolve(1400., [48., 100.], &metrics, false);
-            geometry.expand_document(title, 1400., [48., 100.]);
+            let geometry = layout.resolve_documents(1400., [48., 100.], &metrics, false, 3);
             let title_bounds = geometry
                 .items
                 .iter()
