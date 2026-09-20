@@ -3,8 +3,33 @@
 The [behavior inventory](document-tabs-web-android-assessment.md) enumerates the
 opening, presentation, input, session, close/recovery and storage contract. The
 [implementation log](document-tabs-progress.md) records commits, upstream merges,
-failed attempts and successful checks. This document is the review guide; final
-deployment details will be filled after the final upstream synchronization.
+failed attempts and successful checks.
+
+## Huion review installations
+
+Device: Huion KP1202 / Kamvas Pad 12, serial `G7DL2S300241`.
+
+- **Android:** open **Capy Tabs Test**, isolated package `art.capycanvas.tabtest`.
+  The APK is `apps/layer-android/app/build/outputs/apk/debug/app-debug.apk`.
+  The existing production installation and its drawings were preserved.
+- **Web:** open **http://127.0.0.1:8162/** in Huion Chrome. This serves the complete
+  production PWA from `dist/capycanvas`, including fingerprinted modules, Wasm,
+  filters, icons and dependency notices. Test origins use separate ports.
+
+The initial load and updates use USB forwarding to this workstation. The review
+server is bound only to localhost. To restore the connection after reconnecting
+USB or restarting the workstation, run from the repository root:
+
+```sh
+python3 -m http.server 8162 --bind 127.0.0.1 --directory dist/capycanvas
+# In another terminal:
+adb -s G7DL2S300241 reverse tcp:8162 tcp:8162
+adb -s G7DL2S300241 shell am start -a android.intent.action.VIEW -d http://127.0.0.1:8162/ com.android.chrome
+```
+
+Both builds include upstream `a23c627a`, merged in `3a710bd6`. Each implementation
+milestone fetched/merged `origin/main`; the final check was already up to date.
+Later Web-only input and harness changes do not alter the installed Android APK.
 
 ## Shared ownership
 

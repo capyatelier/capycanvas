@@ -2,6 +2,11 @@
 
 Assessment: 2026-09-19, against repository HEAD `1881a0b2` and the current working tree. This is an implementation assessment, not a claim that either port is implemented or qualified. No runtime code was changed or platform tests run for this assessment.
 
+Implementation followed this assessment. See the [review guide](document-tabs-review.md)
+for the resulting architecture, deployments and acceptance journeys, and the
+[progress log](document-tabs-progress.md) for qualification evidence. The tables
+below preserve the original gap analysis and behavior inventory.
+
 The reference is GTK's **drawing/document tabs**, described in [GTK drawing tabs](gtk-document-tabs.md) and implemented in [GTK Documents](../../apps/layer-linux/src/documents.rs). Web and Android already have workspace **panel** tabs; those do not provide multiple drawing sessions. Drawing tabs are an ordered set of independent editors sharing one window's workspace and one active canvas.
 
 **Android is a substantial host/lifecycle port with reusable native storage. Web has the same functional work plus a larger storage architecture gap.** The tab widgets are a relatively small part of either port. The critical work is exact session parking, asynchronous request ownership, per-drawing recovery, and bounded inactive memory. Start with shared orchestration and an early Web storage experiment; Android can then serve as the first complete second host.

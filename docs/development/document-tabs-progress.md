@@ -221,3 +221,50 @@ M3 final reruns:
   reached its real-ink presentation assertion and failed under the already
   documented headless Dawn issue; final offline presentation must be checked on
   the Huion, not counted as a desktop pass.
+
+## M3 committed; M4 final qualification
+
+- M3 Android/shared work committed as `db92d0da`; Web packaging and ordered
+  external opening follow-up as `e8df2d95`. M3 merged latest upstream `a23c627a`
+  (AVIF gain-map delivery quality) in `3a710bd6`, without conflicts. Final M4
+  fetch/merge again reported already up to date at `a23c627a`.
+- Merged builds pass: GTK release test binary (`m4-gtk-build.log`), Android debug
+  APK/instrumentation APK/lint (`m4-android-build.log`), production Web package
+  including original dependency notices (`m4-merged-package.log`, 282 precached
+  files). Upstream affected gain-map tests pass: 11 passed, 2 intentionally
+  ignored (`m4-merged-color.log`).
+- Final packaged Web lifecycle passed on the Huion ARM Valhall GPU, with strict
+  zero unexpected browser errors (`m4-huion-packaged-tabs.log`). It covers real
+  mouse/pen/touch reorder, independent sessions/history, close decisions, compact
+  selector, final blank, exact redo-only OPFS spill/restore, corrupt/duplicate
+  batch opens, failed Save, quota failure and retry.
+- An overly broad GTK filter was invalid: the disk-failure fixture needs its
+  dedicated environment and GTK initialization cannot move between libtest
+  threads, even with `--test-threads=1`. The failed-renderer case passed before
+  the process aborted. Reran separate processes successfully: history/storage/
+  close 10.13 s (`m4-gtk-history.log`), immediate stroke/undo 4.26 s
+  (`m4-gtk-immediate.log`). Earlier dedicated disk/recovery/input runs remain
+  recorded above.
+- Installed final isolated Android APKs on Huion `G7DL2S300241`. An initial
+  final input test lost the foreground when Web testing opened Chrome and timed
+  out during row dragging (`m4-huion-native-input.log`); this run is invalid as
+  qualification. The retry reserves the tablet foreground for instrumentation.
+- That final Android retry passed in 25.365 s (`m4-huion-native-input-retry.log`).
+- A final Web input audit found that selector row holds needed non-passive touch
+  arbitration and retained contextual actions. Added these, clipped drop hit
+  rectangles to the visible list, added edge scrolling during drag, and centered
+  strip titles independently of close controls. Extended the lifecycle journey
+  with mouse-hold suppression, touch/pen pre-hold movement, held release, continued
+  drag, late native context events and independent reorder undo. The updated
+  desktop journey passes (`m4-web-row-hold-retry.log`); it retains the documented
+  offscreen-presentation limitation. The first desktop attempt omitted this
+  task's server URL and did not load the app (`m4-web-row-hold.log`).
+- Rebuilt the production package with these input fixes (`m4-final-package.log`).
+  Another milestone fetch/merge confirmed upstream remains `a23c627a`.
+- Offline harness correction: CDP `Page.reload(ignoreCache: true)` bypasses
+  service-worker control in Chrome, leaving an activated registration but an
+  uncontrolled page. The tablet offline journey now uses normal navigation,
+  independently disables the HTTP cache, then disables networking. Earlier
+  interrupted/uncontrolled offline attempts are not counted as passes.
+- The final packaged Huion lifecycle, including the new selector row gestures,
+  passes with zero unexpected browser errors (`m4-huion-final-tabs.log`).

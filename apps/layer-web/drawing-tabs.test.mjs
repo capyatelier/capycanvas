@@ -100,6 +100,42 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
     assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third]);
   }
   if(compact)await evaluate(`document.querySelector('.drawing-list header button').click()`);
+  // Selector bodies preserve pre-hold scrolling, then keep the same touch/pen
+  // contact across their contextual actions. Handles were tested above.
+  await evaluate('layerApp.documents.showSelector()');await settle();
+  for(const device of ['mouse','pen','touch']){
+    const order=[first,second,third];
+    const positions=()=>evaluate(`(()=>{const rows=[...document.querySelectorAll('.drawing-list-row')],a=rows[0].querySelector('.drawing-list-pick').getBoundingClientRect(),b=rows.at(-1).getBoundingClientRect();return{from:{x:a.x+a.width/2,y:a.y+a.height/2},to:{x:a.x+a.width/2,y:b.bottom-8}}})()`);
+    let p=await positions();
+    const send=async(type,point=p.from)=>{
+      if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd',cancel:'touchCancel'}[type],touchPoints:['up','cancel'].includes(type)?[]:[{id:18,...point,radiusX:3,radiusY:3,force:1}]});
+      else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],...point,button:'left',buttons:type==='up'?0:1,clickCount:1,pointerType:device,force:type==='up'?0:.7});
+      await settle();
+    };
+    if(device!=='mouse'){
+      await send('down');await send('move',{x:p.from.x,y:p.from.y-20});await send('up',{x:p.from.x,y:p.from.y-20});
+      await evaluate('new Promise(r=>setTimeout(r,350))');
+      assert.deepEqual((await tabs()).tabs.map(t=>t.id),order,`${device} pre-hold movement does not reorder`);
+      assert.equal((await tabs()).selected,third,`${device} scrolling does not select the row`);
+    }
+    p=await positions();await send('down');await evaluate('new Promise(r=>setTimeout(r,600))');
+    assert.equal(await evaluate('!!document.querySelector(".drawing-row-menu")'),device!=='mouse',`${device} hold menu policy`);
+    if(device!=='mouse'){
+      await send('up');await evaluate('new Promise(r=>setTimeout(r,350))');
+      assert.equal(await evaluate('!!document.querySelector(".drawing-row-menu")'),true,'Release retains held actions');
+      assert.equal((await tabs()).selected,third,'Holding an inactive row does not select it');
+      await send('down');await evaluate('new Promise(r=>setTimeout(r,600))');
+    }
+    await send('move',p.to);
+    assert.equal(await evaluate('!!document.querySelector(".drawing-row-menu")'),false,'Dragging dismisses held actions');
+    if(device==='pen')await evaluate(`document.querySelector('.drawing-list-pick').dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'pen'}))`);
+    assert.equal(await evaluate('!!document.querySelector(".drawing-row-menu")'),false,'A native context event cannot reopen actions during a drag');
+    await send('up',p.to);await evaluate('new Promise(r=>setTimeout(r,350))');
+    assert.deepEqual((await tabs()).tabs.map(t=>t.id),[second,third,first],`${device} row drag after hold`);
+    assert.equal((await tabs()).selected,third);
+    await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');await settle();
+  }
+  await evaluate(`document.querySelector('.drawing-list header button').click()`);
   await evaluate(`layerApp.documents.close(BigInt(${first}))`);await ready();
   // First is clean after Undo, so it closes directly and picks its right neighbor.
   await wait(`layerApp.app.document_tabs(0).tabs.length===2`);await ready();
