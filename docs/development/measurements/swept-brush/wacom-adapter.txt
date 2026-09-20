@@ -1,0 +1,18 @@
+AdapterInfo {
+    name: "Adreno (TM) 735",
+    vendor: 20803,
+    device: 1124272896,
+    device_type: IntegratedGpu,
+    device_pci_bus_id: "",
+    driver: "Qualcomm Technologies Inc. Adreno Vulkan Driver",
+    driver_info: "Driver Build: ae801e1e7c, I15873b352d, 1735922436\nDate: 01/03/25\nCompiler Version: E031.45.02.23\nDriver Branch: \n",
+    backend: Vulkan,
+    subgroup_min_size: 64,
+    subgroup_max_size: 128,
+    transient_saves_memory: Some(
+        true,
+    ),
+    limit_bucket: None,
+}
+repetitions=50
+reverse=true
