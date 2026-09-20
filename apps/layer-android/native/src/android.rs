@@ -32,6 +32,7 @@ pub(crate) struct Surface {
     presented_hdr: Option<bool>,
     presented_tone_generation: Option<u32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
+    submitted_frames: u64,
     _instance: wgpu::Instance,
     _window: Window,
 }
@@ -52,6 +53,10 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
             serde_json::json!({
                 "format": format!("{:?}", surface.config.format),
                 "color_space": format!("{:?}", surface.config.color_space),
+                "present_mode": format!("{:?}", surface.config.present_mode),
+                "desired_maximum_frame_latency": surface.config.desired_maximum_frame_latency,
+                // Submission progress is not proof that Android displayed a buffer.
+                "submitted_frames": surface.submitted_frames,
                 "hdr_capable": a.hdr_capable(),
                 "hdr_output": a.hdr_output(),
                 "presented_hdr": surface.presented_hdr,
@@ -223,11 +228,12 @@ impl App {
             .get_default_config(gpu.adapter(), width, height)
             .ok_or("The Vulkan device cannot present to this surface")?;
         let caps = surface.get_capabilities(gpu.adapter());
-        config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo
-        };
+        // Choreographer already paces this producer. The Wacom/Android 15 freeze
+        // trace showed Mailbox replacing buffers with no canvas consumer progress.
+        // FIFO avoids that replacement-only path and retains bounded backpressure.
+        // This is a mitigation, not proof of the original synchronization defect;
+        // see docs/development/android-presentation-progress.md for qualification.
+        config.present_mode = wgpu::PresentMode::Fifo;
         config.desired_maximum_frame_latency = 2;
         if let Some(format) = caps
             .formats
@@ -255,6 +261,7 @@ impl App {
             presented_hdr: None,
             presented_tone_generation: None,
             first_frame_complete: None,
+            submitted_frames: 0,
             _instance: instance,
             _window: window,
         });
@@ -317,6 +324,7 @@ impl App {
         self.host
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = self.host.session.state().camera.view();
+        let zoom_milli_percent = (self.host.session.state().camera.zoom * 100_000.0).round() as i64;
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
         self.host
@@ -421,6 +429,13 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
+        surface.submitted_frames += 1;
+        // Perfetto can compare these submissions with this SurfaceView's actual
+        // latch events. No polling, readback, or per-frame diagnostic allocation.
+        unsafe {
+            ndk_sys::ATrace_setCounter(c"Capy canvas submitted".as_ptr(), surface.submitted_frames as i64);
+            ndk_sys::ATrace_setCounter(c"Capy canvas zoom milli-percent".as_ptr(), zoom_milli_percent);
+        }
         surface.presented_hdr = Some(hdr_output);
         surface.presented_tone_generation = self.tone.published_generation;
         if surface.first_frame_complete.is_none() {

@@ -1,0 +1,142 @@
+{
+  "base": "efe76d57ca199a4425d02cff0b5cb54d642a92a5",
+  "device": "Wacom DTHA140 5ll21u1002931",
+  "note": "FIFO mitigation; fresh-start old build also passed. Not a proven cure or speedup. Includes failed exploratory FIFO check.",
+  "reports": [
+    {
+      "name": "original-frozen",
+      "trace": "presentation.perfetto-trace",
+      "retained_seconds": 4.616,
+      "active_submission_seconds": 4.509,
+      "present_calls": 534,
+      "canvas_latches": 0,
+      "latches_per_second": 0,
+      "latch_gap_ms": {
+        "p50": 4508.95,
+        "p99": 4508.95,
+        "max": 4508.95
+      },
+      "present_call_ms": {
+        "p50": 0.125,
+        "p99": 0.251,
+        "max": 0.669
+      },
+      "zoom_percent": null,
+      "trace_errors": [],
+      "progress_check_passed": false
+    },
+    {
+      "name": "control-limits",
+      "trace": "control-limits.perfetto-trace",
+      "retained_seconds": 20.029,
+      "active_submission_seconds": 19.96,
+      "present_calls": 1792,
+      "canvas_latches": 1704,
+      "latches_per_second": 85.37,
+      "latch_gap_ms": {
+        "p50": 8.422,
+        "p99": 25.159,
+        "max": 33.679
+      },
+      "present_call_ms": {
+        "p50": 0.188,
+        "p99": 8.72,
+        "max": 15.308
+      },
+      "zoom_percent": null,
+      "trace_errors": [],
+      "progress_check_passed": true
+    },
+    {
+      "name": "control-diagnostics",
+      "trace": "control-diagnostics.perfetto-trace",
+      "retained_seconds": 20.028,
+      "active_submission_seconds": 11.784,
+      "present_calls": 1112,
+      "canvas_latches": 1064,
+      "latches_per_second": 90.29,
+      "latch_gap_ms": {
+        "p50": 8.39,
+        "p99": 25.151,
+        "max": 25.489
+      },
+      "present_call_ms": {
+        "p50": 0.138,
+        "p99": 8.078,
+        "max": 11.093
+      },
+      "zoom_percent": null,
+      "trace_errors": [],
+      "progress_check_passed": true
+    },
+    {
+      "name": "fifo-extreme",
+      "trace": "fifo-extreme.perfetto-trace",
+      "retained_seconds": 14.855,
+      "active_submission_seconds": 14.753,
+      "present_calls": 1243,
+      "canvas_latches": 1242,
+      "latches_per_second": 84.19,
+      "latch_gap_ms": {
+        "p50": 8.561,
+        "p99": 24.704,
+        "max": 25.276
+      },
+      "present_call_ms": {
+        "p50": 1.037,
+        "p99": 9.508,
+        "max": 13.43
+      },
+      "zoom_percent": null,
+      "trace_errors": [],
+      "progress_check_passed": true
+    },
+    {
+      "name": "fifo-limits",
+      "trace": "fifo-limits.perfetto-trace",
+      "retained_seconds": 16.658,
+      "active_submission_seconds": 16.412,
+      "present_calls": 1209,
+      "canvas_latches": 1208,
+      "latches_per_second": 73.61,
+      "latch_gap_ms": {
+        "p50": 8.463,
+        "p99": 25.382,
+        "max": 1500.46
+      },
+      "present_call_ms": {
+        "p50": 0.746,
+        "p99": 12.808,
+        "max": 16.958
+      },
+      "zoom_percent": null,
+      "trace_errors": [],
+      "progress_check_passed": false
+    },
+    {
+      "name": "final-limits",
+      "trace": "final-limits.perfetto-trace",
+      "retained_seconds": 20.029,
+      "active_submission_seconds": 19.951,
+      "present_calls": 1478,
+      "canvas_latches": 1477,
+      "latches_per_second": 74.03,
+      "latch_gap_ms": {
+        "p50": 16.362,
+        "p99": 25.403,
+        "max": 41.143
+      },
+      "present_call_ms": {
+        "p50": 0.662,
+        "p99": 9.126,
+        "max": 16.77
+      },
+      "zoom_percent": {
+        "min": 2,
+        "max": 1600
+      },
+      "trace_errors": [],
+      "progress_check_passed": true
+    }
+  ]
+}
