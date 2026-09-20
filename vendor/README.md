@@ -1,5 +1,47 @@
 # Pinned dependency fixes
 
+## Portable HEIF/HEVC decoding
+
+`heif-oxide` 0.1.0 and `rust_h265` 0.1.0 are the published MIT OR Apache-2.0
+crates. Their sources, test fixtures, original licenses and registry provenance
+are retained. Unused examples (including the minifb development dependency),
+package lockfiles and registry cache markers are omitted.
+
+| Crate | Upstream revision | Registry archive SHA-256 |
+| --- | --- | --- |
+| [heif-oxide](https://github.com/dan335/heif-oxide) | `86d722e46da3292cc5d777aaa99198fdc516f0c5` | `e12acb6edcb3bb9227dc6a06dd375a221eafe397ae2de72a876d79313831e365` |
+| [rust_h265](https://github.com/roticv/rust_h265) | `e51348807a685b00343212a77e13d32692954321` | `dde60f5842f27ed06f1d84844cacd93d1a159f606365b30a5594c771e6b4eb17` |
+
+`heif-portable.patch` exposes a bounded still-picture decoder that returns source
+YUV and VUI color/chroma metadata. It admits coded dimensions and estimated
+picture working memory before allocation, bounds parameter-set syntax, rejects
+truncated header reads, and borrows cancellation callbacks at NAL, coding-tree
+and filter boundaries. Independently coded stills cannot consume external
+reference pictures or silently return an incomplete frame. The HEVC prediction,
+transform and filtering algorithms are unchanged. The test-only container writer
+adds the picture handler required by independent libheif enumeration.
+
+The application uses its shared BMFF, grid, ICC, geometry and source-storage
+pipeline around this API. It does not call the convenience `decode_bytes` path,
+which converts source color to sRGB and uses scoped threads for grids. Application
+grids decode one tile at a time, also on Wasm. Memory estimates are conservative
+admission checks, not a hard allocator quota. Individual in-loop filters remain
+synchronous between cancellation checks.
+
+Verification includes the upstream suites (128 HEVC and 35 HEIF tests), exact
+libde265 YUV comparison of a photographic still, shared source/ICC/grid/alpha
+tests, Chrome execution and GTK Open/Import/Paste with an empty codec directory.
+Initial HEIC variant limits and outstanding host work are recorded in the
+[migration plan](../docs/development/portable-photo-core.md).
+
+Run the isolated vendor tests with:
+
+```sh
+cargo test --offline --release --manifest-path vendor/rust_h265/Cargo.toml --lib
+cargo test --offline --release --manifest-path vendor/heif-oxide/Cargo.toml \
+  --config 'patch.crates-io.rust_h265.path="vendor/rust_h265"' --lib
+```
+
 ## AV1 decoder portability
 
 `rav1d` 1.1.0 is the published BSD-2-Clause crate from

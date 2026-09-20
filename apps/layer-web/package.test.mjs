@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, posix } from "node:path";
 import { runInNewContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
 import { gpuEnvironment, gpuProblem } from "./gpu.js";
@@ -202,6 +203,10 @@ test("dependency notices require original text and exclude private metadata", ()
   assert.throws(() => dependencyNotices([{ ...license, source_path: null }]), /Missing original/);
   assert.throws(() => dependencyNotices([{ ...license, text: "Copyright <year> <copyright holders>" }]), /Missing original/);
   assert.equal(dependencyNotices([{ ...license, source_path: null, used_by: [{ crate: { source: null } }] }]), "");
+  const vendored = { ...license, used_by: [{ crate: { name: "heif-oxide", version: "0.1.0", source: null,
+    manifest_path: fileURLToPath(new URL("../../vendor/heif-oxide/Cargo.toml", import.meta.url)) } }] };
+  assert.ok(dependencyNotices([vendored]).includes("heif-oxide"));
+  assert.throws(() => dependencyNotices([{ ...vendored, source_path: null }]), /Missing original/);
 });
 
 test("the pinned zune-core notice preserves its complete alternative and rejects version drift", () => {

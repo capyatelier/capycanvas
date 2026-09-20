@@ -1,4 +1,4 @@
-//! Shared Rust AVIF container, AV1 decode, and source color/geometry pipeline.
+//! Shared HEIF/AVIF container, Rust HEVC/AV1 codecs and source color/geometry.
 use super::*;
 use std::{borrow::Cow, sync::atomic::AtomicBool};
 mod codec;
@@ -6,13 +6,14 @@ mod color;
 mod container;
 mod encode;
 mod gainmap;
+mod hevc;
 mod mux;
 mod output;
 mod properties;
 mod sequence;
 use container::{Container, Reader};
-use properties::{Color, Geometry, Properties};
 pub(super) use output::{preview, write};
+use properties::{Color, Geometry, Properties};
 
 // Probe brands without buffering the image or selecting a host-specific codec.
 pub(super) fn is_avif(
@@ -63,6 +64,7 @@ struct RawImage {
     depth: u8,
     layout: u32,
     color: Color,
+    chroma_location: u8,
     premultiplied: bool,
     pixels: Vec<[u16; 4]>,
 }
@@ -150,6 +152,9 @@ fn decode_coded(
     cancel: &AtomicBool,
 ) -> Result<RawImage, String> {
     let extent = p.extent.ok_or("Missing AVIF spatial extent")?;
+    if p.hevc.is_some() {
+        return Err("AVIF item has incompatible HEVC configuration".into());
+    }
     let config = p.config.ok_or("Missing AVIF AV1 configuration")?;
     let mut output = pixels(extent, budget)?;
     let remaining = budget
@@ -204,6 +209,7 @@ fn decode_coded(
         depth: plane.depth,
         layout: plane.layout,
         color,
+        chroma_location: 1,
         premultiplied: false,
         pixels: output,
     })
@@ -229,7 +235,7 @@ fn decode_item(
         validate_extent(extent, 32768)?;
         let inherited = p.color.or(parent_color);
         let mut image = match &item.kind {
-            b"av01" => {
+            b"av01" | b"hvc1" => {
                 let payload = container.payload(id, budget)?;
                 let owned = if matches!(payload, Cow::Owned(_)) {
                     payload.len()
@@ -239,7 +245,14 @@ fn decode_item(
                 let budget = budget
                     .checked_sub(owned)
                     .ok_or("AVIF item exceeds the codec budget")?;
-                decode_coded(&payload, &p, inherited, alpha, budget, cancel)?
+                if &item.kind == b"hvc1" {
+                    if p.channels == Some(4) && alpha_item(container, id)?.is_none() {
+                        return Err("HEIF declares alpha without an auxiliary image".into());
+                    }
+                    hevc::decode(&payload, &p, inherited, alpha, budget, cancel)?
+                } else {
+                    decode_coded(&payload, &p, inherited, alpha, budget, cancel)?
+                }
             }
             b"grid" => {
                 let payload = container.payload(id, 12)?;
@@ -277,7 +290,13 @@ fn decode_item(
                     }
                     let tile =
                         decode_item(container, tile, inherited, alpha, stack, remaining, cancel)?;
-                    let current = (tile.extent, tile.depth, tile.layout, tile.color);
+                    let current = (
+                        tile.extent,
+                        tile.depth,
+                        tile.layout,
+                        tile.color,
+                        tile.chroma_location,
+                    );
                     if characteristics.is_some_and(|v| v != current) {
                         return Err("Inconsistent AVIF grid tile representation".into());
                     }
@@ -305,7 +324,8 @@ fn decode_item(
                             .copy_from_slice(&tile.pixels[source..source + width]);
                     }
                 }
-                let (_, depth, layout, color) = characteristics.ok_or("Empty AVIF grid")?;
+                let (_, depth, layout, color, chroma_location) =
+                    characteristics.ok_or("Empty AVIF grid")?;
                 if p.bits.is_some_and(|v| v != depth) {
                     return Err("AVIF grid precision mismatch".into());
                 }
@@ -314,6 +334,7 @@ fn decode_item(
                     depth,
                     layout,
                     color,
+                    chroma_location,
                     premultiplied: false,
                     pixels: output,
                 }
@@ -370,11 +391,29 @@ pub(super) fn read(
     read_rendition(input, limits, cancel, true)
 }
 
+pub(super) fn read_heif(
+    input: impl BufRead + Seek,
+    limits: DecodeLimits,
+    cancel: &AtomicBool,
+) -> Result<DecodedPhoto, String> {
+    read_kind(input, limits, cancel, true, true)
+}
+
 fn read_rendition(
     input: impl BufRead + Seek,
     limits: DecodeLimits,
     cancel: &AtomicBool,
     reconstruct: bool,
+) -> Result<DecodedPhoto, String> {
+    read_kind(input, limits, cancel, reconstruct, false)
+}
+
+fn read_kind(
+    input: impl BufRead + Seek,
+    limits: DecodeLimits,
+    cancel: &AtomicBool,
+    reconstruct: bool,
+    heif: bool,
 ) -> Result<DecodedPhoto, String> {
     codec::check(cancel)?;
     let mut input = super::raster_io::Input::new(input, limits)?;
@@ -384,8 +423,19 @@ fn read_rendition(
         codec::check(cancel)?;
         input.read_exact(chunk).map_err(err)?;
     }
-    let container = Container::parse(&encoded, limits.codec_bytes - length, cancel)?;
-    let sequence = sequence::Sequence::parse(&container, cancel)?;
+    let container = if heif {
+        Container::parse_heif(&encoded, limits.codec_bytes - length, cancel)?
+    } else {
+        Container::parse(&encoded, limits.codec_bytes - length, cancel)?
+    };
+    if heif && container.movie.is_some() {
+        return Err("HEIF image sequences are not yet supported by the Rust decoder".into());
+    }
+    let sequence = if heif {
+        None
+    } else {
+        sequence::Sequence::parse(&container, cancel)?
+    };
     let primary = container.primary.unwrap_or(0);
     let descriptor = if sequence.is_none() {
         gainmap::Descriptor::find(
@@ -437,7 +487,8 @@ fn read_rendition(
         ProfileChannels::Rgb => SourceChannels::Rgba,
         _ => return Err("AVIF pixels disagree with the embedded profile".into()),
     };
-    let gainmap = descriptor.filter(|_| reconstruct)
+    let gainmap = descriptor
+        .filter(|_| reconstruct)
         .map(|v| {
             v.decode(
                 &container,
@@ -557,7 +608,7 @@ fn read_rendition(
             && container
                 .items
                 .iter()
-                .filter(|v| !v.hidden && matches!(&v.kind, b"av01" | b"grid" | b"iden"))
+                .filter(|v| !v.hidden && matches!(&v.kind, b"av01" | b"hvc1" | b"grid" | b"iden"))
                 .filter(|v| {
                     v.id == id
                         || !container.references.iter().any(|r| {
@@ -572,3 +623,6 @@ fn read_rendition(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hevc_tests;

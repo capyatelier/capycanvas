@@ -1,0 +1,574 @@
+--- a/vendor/heif-oxide/Cargo.toml
++++ b/vendor/heif-oxide/Cargo.toml
+@@ -40,10 +40,6 @@
+ name = "heif_oxide"
+ path = "src/lib.rs"
+ 
+-[[example]]
+-name = "decode"
+-path = "examples/decode.rs"
+-
+ [dependencies.rust_h265]
+ version = "0.1"
+ 
+--- a/vendor/heif-oxide/src/hevc.rs
++++ b/vendor/heif-oxide/src/hevc.rs
+@@ -9,6 +9,7 @@
+ //! the decoder over it.
+ 
+ use rust_h265::{parse_annex_b, Decoder, Frame};
++pub use rust_h265::{DecoderLimits, SequenceInfo, PixelData};
+ 
+ use crate::bytes::Reader;
+ use crate::error::HeifError;
+@@ -25,6 +26,7 @@
+ 
+ /// Parse an HEVCDecoderConfigurationRecord.
+ pub fn parse_hvcc(record: &[u8]) -> Result<HvcConfig, HeifError> {
++    if record.len() > 1024 * 1024 {return Err(HeifError::Invalid("hvcC exceeds parameter-set budget".into()));}
+     let mut r = Reader::new(record, "hvcC");
+     // Fixed-layout preamble (ISO 14496-15 §8.3.3.1):
+     //   [0]     configurationVersion (= 1)
+@@ -48,6 +50,7 @@
+         let _type_byte = r.u8()?;
+         let num_nalus = r.u16()?;
+         for _ in 0..num_nalus {
++            if parameter_sets.len() == 64 {return Err(HeifError::Invalid("too many HEVC parameter sets".into()));}
+             let len = r.u16()? as usize;
+             parameter_sets.push(r.bytes(len)?.to_vec());
+         }
+@@ -56,6 +59,36 @@
+         nal_length_size,
+         parameter_sets,
+     })
++}
++
++/// A bounded independently coded still, preserving YUV and source metadata.
++/// Container geometry, ICC transforms, grids and publication belong to callers.
++pub struct CodedImage {
++    pub frame: Frame,
++    pub info: SequenceInfo,
++}
++
++pub fn decode_first_frame_with_limits(
++    annex_b: &[u8], limits: DecoderLimits, cancelled: &dyn Fn() -> bool,
++) -> Result<CodedImage, HeifError> {
++    if cancelled() {return Err(HeifError::Codec("HEVC decode cancelled".into()));}
++    let nals = parse_annex_b(annex_b);
++    if nals.is_empty() || nals.len() > 65536 {return Err(HeifError::Codec("invalid HEVC NAL count".into()));}
++    let mut decoder = Decoder::with_limits(limits);
++    let mut output = None;
++    for nal in &nals {
++        if cancelled() {return Err(HeifError::Codec("HEVC decode cancelled".into()));}
++        if output.is_some() {
++            if nal.nal_unit_type.is_vcl() {return Err(HeifError::Codec("multiple HEVC pictures in one still item".into()));}
++            continue;
++        }
++        if let Some(frame) = decoder.decode_nal_with_cancel(nal,cancelled).map_err(|e| HeifError::Codec(e.to_string()))? {
++            let info = decoder.sequence_info().ok_or_else(|| HeifError::Codec("missing HEVC sequence".into()))?;
++            output = Some(CodedImage {frame,info});
++        }
++    }
++    if cancelled() {return Err(HeifError::Codec("HEVC decode cancelled".into()));}
++    output.ok_or_else(|| HeifError::Codec("incomplete HEVC still picture".into()))
+ }
+ 
+ /// Convert an `hvcC` config + length-prefixed item payload into one Annex B
+--- a/vendor/heif-oxide/src/lib.rs
++++ b/vendor/heif-oxide/src/lib.rs
+@@ -35,7 +35,7 @@
+ mod bytes;
+ mod color;
+ mod error;
+-mod hevc;
++pub mod hevc;
+ #[cfg(test)]
+ pub(crate) mod test_builder;
+ mod transform;
+--- a/vendor/heif-oxide/src/test_builder.rs
++++ b/vendor/heif-oxide/src/test_builder.rs
+@@ -261,7 +261,13 @@
+     }
+     let iref = full_box(b"iref", 0, 0, &iref_children);
+ 
+-    let mut meta_body = pitm;
++    // A picture handler is required for libheif to enumerate the primary item.
++    let mut handler = vec![0; 4];
++    handler.extend_from_slice(b"pict");
++    handler.extend_from_slice(&[0; 12]);
++    handler.push(0);
++    let mut meta_body = full_box(b"hdlr", 0, 0, &handler);
++    meta_body.extend_from_slice(&pitm);
+     meta_body.extend_from_slice(&iinf);
+     meta_body.extend_from_slice(&iloc);
+     meta_body.extend_from_slice(&iprp);
+--- a/vendor/rust_h265/Cargo.toml
++++ b/vendor/rust_h265/Cargo.toml
+@@ -36,26 +36,7 @@
+ name = "rust_h265"
+ path = "src/lib.rs"
+ 
+-[[example]]
+-name = "bench_decode"
+-path = "examples/bench_decode.rs"
+-
+-[[example]]
+-name = "bench_realworld"
+-path = "examples/bench_realworld.rs"
+-
+-[[example]]
+-name = "dump_frames"
+-path = "examples/dump_frames.rs"
+-
+-[[example]]
+-name = "play"
+-path = "examples/play.rs"
+-
+ [dependencies]
+-
+-[dev-dependencies.minifb]
+-version = "0.28"
+ 
+ [dev-dependencies.sha2]
+ version = "0.10"
+--- a/vendor/rust_h265/src/bitstream.rs
++++ b/vendor/rust_h265/src/bitstream.rs
+@@ -1,9 +1,7 @@
+ /// Bitstream reader for parsing H.265 NAL unit RBSP data.
+ /// Reads bits left-to-right (MSB first).
+ ///
+-/// The internal buffer is padded with zero bytes so that `read_bit` can skip
+-/// per-bit bounds checks in the hot path. Only `bits_remaining` and
+-/// `more_rbsp_data` use the true data length.
++/// Peeks can return padded zeros; consuming syntax bits rejects truncation.
+ pub struct BitstreamReader {
+     data: Vec<u8>,
+     data_len: usize, // actual RBSP length (excluding padding)
+@@ -11,9 +9,7 @@
+     bit_offset: u8, // 0-7, bits already consumed in current byte
+ }
+ 
+-/// Number of zero bytes appended after RBSP data.
+-/// Must be large enough that reading past the end during multi-CTU
+-/// end-of-slice detection doesn't cause index-out-of-bounds panics.
++/// Padding retained for non-consuming peeks; syntax reads stop at data_len.
+ const PADDING: usize = 128;
+ 
+ impl BitstreamReader {
+@@ -31,10 +27,10 @@
+     }
+ 
+     /// Read a single bit, returning 0 or 1.
+-    /// Does not bounds-check on every call; relies on padding to avoid
+-    /// out-of-bounds reads. Call `bits_remaining` to check before bulk reads.
++    /// Truncated parameter sets and slice headers must not consume padding.
+     #[inline(always)]
+     pub fn read_bit(&mut self) -> Result<u8, &'static str> {
++        if self.byte_offset >= self.data_len { return Err("truncated HEVC bitstream"); }
+         let bit = (self.data[self.byte_offset] >> (7 - self.bit_offset)) & 1;
+         self.bit_offset += 1;
+         if self.bit_offset == 8 {
+@@ -197,14 +193,15 @@
+     }
+ 
+     #[test]
+-    fn test_padding_allows_overread() {
+-        // After reading all real data, reads return 0 (from padding) rather than panicking
++    fn test_truncated_syntax_does_not_consume_padding() {
+         let data = [0xFF];
+         let mut r = BitstreamReader::new(&data);
+         assert_eq!(r.bits_remaining(), 8);
+         assert_eq!(r.read_bits(8).unwrap(), 0xFF);
+         assert_eq!(r.bits_remaining(), 0);
+-        // Reading into padding returns 0 bits without panic
+-        assert_eq!(r.read_bits(8).unwrap(), 0);
++        assert!(r.read_bits(8).is_err());
++        assert_eq!(r.peek_bits(8),0);
++        r.skip_bits(255);
++        assert!(r.read_bit().is_err());
+     }
+ }
+--- a/vendor/rust_h265/src/decoder.rs
++++ b/vendor/rust_h265/src/decoder.rs
+@@ -53,6 +53,29 @@
+     pub pic_order_cnt: i32,
+     /// Bit depth of the luma (and chroma) samples: 8, 10, or 12.
+     pub bit_depth: u8,
++}
++
++/// Admission for an independently coded still. Checked before picture state
++/// or tile tables are allocated; the caller reserves encoded/container data.
++#[derive(Clone, Copy)]
++pub struct DecoderLimits {
++    pub expected_extent: Option<[u32; 2]>,
++    pub memory_bytes: usize,
++    pub still_only: bool,
++}
++impl Default for DecoderLimits {
++    fn default() -> Self {
++        Self { expected_extent: None, memory_bytes: usize::MAX, still_only: false }
++    }
++}
++
++/// Source color describes encoded YUV, before any display conversion.
++#[derive(Clone, Copy, Debug)]
++pub struct SequenceInfo {
++    pub extent: [u32; 2],
++    pub bit_depth: u8,
++    pub color: Option<([u16; 3], bool)>,
++    pub chroma_location: u32,
+ }
+ 
+ /// Streaming HEVC decoder.
+@@ -241,6 +264,7 @@
+ 
+ #[derive(Default)]
+ pub struct Decoder {
++    limits: DecoderLimits,
+     vps: Option<Vps>,
+     sps: Option<Sps>,
+     pps: Option<Pps>,
+@@ -348,16 +372,48 @@
+         Self::default()
+     }
+ 
++    pub fn with_limits(limits: DecoderLimits) -> Self {
++        Self { limits, ..Self::default() }
++    }
++
++    pub fn sequence_info(&self) -> Option<SequenceInfo> {
++        let s = self.sps.as_ref()?;
++        Some(SequenceInfo { extent: [s.cropped_width(),s.cropped_height()],
++            bit_depth: s.bit_depth_luma, color: s.color, chroma_location: s.chroma_location })
++    }
++
+     /// Feed one NAL unit. Returns `Ok(Some(frame))` when a picture has just
+     /// finished decoding, `Ok(None)` otherwise (e.g. parameter sets, SEI).
+     pub fn decode_nal(&mut self, nal: &NalUnit<'_>) -> Result<Option<Frame>, DecodeError> {
++        self.decode_nal_with_cancel(nal, &|| false)
++    }
++
++    /// Cancellation is borrowed for this call and checked at coding-tree
++    /// boundaries. No callback or host token is retained in decoder state.
++    pub fn decode_nal_with_cancel(&mut self, nal: &NalUnit<'_>, cancelled: &dyn Fn() -> bool) -> Result<Option<Frame>, DecodeError> {
++        if cancelled() { return Err(DecodeError::InvalidSyntax("HEVC decode cancelled")); }
++        if self.current_picture.is_some() && matches!(nal.nal_unit_type,NalUnitType::Vps | NalUnitType::Sps | NalUnitType::Pps) {
++            return Err(DecodeError::InvalidSyntax("parameter sets changed during an incomplete picture"));
++        }
+         match nal.nal_unit_type {
+             NalUnitType::Vps => {
+                 self.vps = Some(parse_vps(&nal.rbsp)?);
+                 Ok(None)
+             }
+             NalUnitType::Sps => {
+-                self.sps = Some(parse_sps(&nal.rbsp)?);
++                let sps = parse_sps(&nal.rbsp)?;
++                let extent = [sps.cropped_width(),sps.cropped_height()];
++                if self.limits.expected_extent.is_some_and(|v| v != extent) {
++                    return Err(DecodeError::InvalidSyntax("HEVC dimensions disagree with the container"));
++                }
++                // Single picture state, filter/DPB copies, output planes,
++                // per-block maps and bounded parameter-set scratch.
++                let needed = u64::from(sps.pic_width_in_luma_samples.div_ceil(64) * 64)
++                    * u64::from(sps.pic_height_in_luma_samples.div_ceil(64) * 64) * 64 + 2 * 1024 * 1024;
++                if needed > self.limits.memory_bytes as u64 {
++                    return Err(DecodeError::InvalidSyntax("HEVC picture exceeds the codec memory budget"));
++                }
++                self.sps = Some(sps);
+                 self.tile_tables = None;
+                 Ok(None)
+             }
+@@ -366,7 +422,12 @@
+                 self.tile_tables = None;
+                 Ok(None)
+             }
+-            t if t.is_vcl() => self.decode_slice(nal, t),
++            t if t.is_vcl() => {
++                if self.limits.still_only && !t.is_irap() {
++                    return Err(DecodeError::Unsupported("HEIF requires an independently coded still picture"));
++                }
++                self.decode_slice(nal, t, cancelled)
++            }
+             _ => Ok(None),
+         }
+     }
+@@ -418,6 +479,7 @@
+         &mut self,
+         nal: &NalUnit<'_>,
+         nut: NalUnitType,
++        cancelled: &dyn Fn() -> bool,
+     ) -> Result<Option<Frame>, DecodeError> {
+         // Phase 3c-2: resolve PPS tile geometry and cache the tile-scan
+         // tables up front. We need `&mut self.pps` for `resolve_tile_geometry`
+@@ -445,6 +507,9 @@
+         let tile_tables = self.tile_tables.as_ref().expect("tile tables built above");
+ 
+         let mut sh = parse_slice_segment_header(&nal.rbsp, nut, sps, pps)?;
++        if self.limits.still_only && sh.slice_type != SliceType::I {
++            return Err(DecodeError::Unsupported("HEIF requires an intra-coded still picture"));
++        }
+         sh.temporal_id = nal.temporal_id;
+ 
+         // Phase 3c-4: a dependent slice segment inherits the slice-header
+@@ -800,6 +865,7 @@
+             let mut substream_idx: u32 = 0;
+ 
+             while more_data && ctb_addr_ts < total_ctbs {
++                if cancelled() { return Err(DecodeError::InvalidSyntax("HEVC decode cancelled")); }
+                 let ctb_addr_rs = tile_tables.ctb_addr_ts_to_rs[ctb_addr_ts as usize];
+                 let col = ctb_addr_rs % pic_width_in_ctbs;
+                 let is_first_ctb_of_slice = ctb_addr_ts == slice_start_ts;
+@@ -906,6 +972,7 @@
+         }
+ 
+         // Picture complete — run in-loop filters and emit the frame.
++        if cancelled() { return Err(DecodeError::InvalidSyntax("HEVC decode cancelled")); }
+         let mut pic = self
+             .current_picture
+             .take()
+@@ -935,7 +1002,9 @@
+             if !deblock_disabled {
+                 crate::deblock::deblock_picture(state, sps, pps, &last_sh_for_filters);
+             }
++            if cancelled() { return Err(DecodeError::InvalidSyntax("HEVC decode cancelled")); }
+             crate::sao::apply_sao_picture(state, sps, &last_sh_for_filters);
++            if cancelled() { return Err(DecodeError::InvalidSyntax("HEVC decode cancelled")); }
+ 
+             crop_frame(
+                 state,
+--- a/vendor/rust_h265/src/lib.rs
++++ b/vendor/rust_h265/src/lib.rs
+@@ -79,7 +79,7 @@
+ pub mod nal;
+ 
+ // --- Top-level re-exports for convenience ---
+-pub use decoder::{Decoder, Frame};
++pub use decoder::{Decoder, DecoderLimits, Frame, SequenceInfo};
+ pub use error::DecodeError;
+ pub use nal::{NalUnit, NalUnitType, parse_annex_b};
+ pub use pixel::{Pixel, PixelData};
+--- a/vendor/rust_h265/src/pps.rs
++++ b/vendor/rust_h265/src/pps.rs
+@@ -176,6 +176,9 @@
+ 
+     let pps_pic_parameter_set_id = r.read_ue()?;
+     let pps_seq_parameter_set_id = r.read_ue()?;
++    if pps_pic_parameter_set_id > 63 || pps_seq_parameter_set_id > 15 {
++        return Err(DecodeError::InvalidSyntax("HEVC PPS id out of range"));
++    }
+     let dependent_slice_segments_enabled_flag = r.read_bit()? == 1;
+     let output_flag_present_flag = r.read_bit()? == 1;
+     let num_extra_slice_header_bits = r.read_bits(3)? as u8;
+@@ -183,6 +186,9 @@
+     let cabac_init_present_flag = r.read_bit()? == 1;
+     let num_ref_idx_l0_default_active_minus1 = r.read_ue()?;
+     let num_ref_idx_l1_default_active_minus1 = r.read_ue()?;
++    if num_ref_idx_l0_default_active_minus1 > 14 || num_ref_idx_l1_default_active_minus1 > 14 {
++        return Err(DecodeError::InvalidSyntax("HEVC default reference count out of range"));
++    }
+     let init_qp_minus26 = r.read_se()?;
+     let init_qp = init_qp_minus26 + 26;
+     let constrained_intra_pred_flag = r.read_bit()? == 1;
+@@ -223,6 +229,9 @@
+     if tiles_enabled_flag {
+         let num_tile_columns_minus1 = r.read_ue()?;
+         let num_tile_rows_minus1 = r.read_ue()?;
++        if num_tile_columns_minus1 >= 20 || num_tile_rows_minus1 >= 22 {
++            return Err(DecodeError::InvalidSyntax("HEVC tile count out of range"));
++        }
+         num_tile_columns = (num_tile_columns_minus1 + 1) as usize;
+         num_tile_rows = (num_tile_rows_minus1 + 1) as usize;
+         uniform_spacing_flag = r.read_bit()? == 1;
+--- a/vendor/rust_h265/src/slice.rs
++++ b/vendor/rust_h265/src/slice.rs
+@@ -914,6 +914,8 @@
+     fn minimal_sps() -> Sps {
+         use crate::profile_tier_level::ProfileTierLevel;
+         Sps {
++            color: None,
++            chroma_location: 0,
+             sps_video_parameter_set_id: 0,
+             sps_max_sub_layers_minus1: 0,
+             sps_temporal_id_nesting_flag: true,
+--- a/vendor/rust_h265/src/sps.rs
++++ b/vendor/rust_h265/src/sps.rs
+@@ -309,6 +309,8 @@
+ 
+ #[derive(Debug, Clone)]
+ pub struct Sps {
++    pub color: Option<([u16; 3], bool)>,
++    pub chroma_location: u32,
+     pub sps_video_parameter_set_id: u8,
+     pub sps_max_sub_layers_minus1: u8,
+     pub sps_temporal_id_nesting_flag: bool,
+@@ -422,6 +424,9 @@
+     let ptl = parse_profile_tier_level(&mut r, sps_max_sub_layers_minus1)?;
+ 
+     let sps_seq_parameter_set_id = r.read_ue()?;
++    if sps_seq_parameter_set_id > 15 {
++        return Err(DecodeError::InvalidSyntax("SPS id out of range"));
++    }
+     let chroma_format_idc = r.read_ue()?;
+     if chroma_format_idc != 1 {
+         return Err(DecodeError::Unsupported(
+@@ -432,6 +437,10 @@
+ 
+     let pic_width_in_luma_samples = r.read_ue()?;
+     let pic_height_in_luma_samples = r.read_ue()?;
++    if pic_width_in_luma_samples == 0 || pic_height_in_luma_samples == 0
++        || pic_width_in_luma_samples > 32768 || pic_height_in_luma_samples > 32768 {
++        return Err(DecodeError::InvalidSyntax("HEVC picture dimensions out of range"));
++    }
+ 
+     let conformance_window_flag = r.read_bit()? == 1;
+     let mut conf_win_left_offset = 0u32;
+@@ -447,10 +456,14 @@
+ 
+     let bit_depth_luma_minus8 = r.read_ue()?;
+     let bit_depth_chroma_minus8 = r.read_ue()?;
++    if !matches!(bit_depth_luma_minus8,0|2|4) || bit_depth_chroma_minus8 != bit_depth_luma_minus8 {
++        return Err(DecodeError::Unsupported("HEVC requires matching 8/10/12-bit planes"));
++    }
+     let bit_depth_luma = 8 + bit_depth_luma_minus8 as u8;
+     let bit_depth_chroma = 8 + bit_depth_chroma_minus8 as u8;
+-    if bit_depth_luma > 16 || bit_depth_chroma > 16 {
+-        return Err(DecodeError::Unsupported("bit depth > 16 not supported"));
++    if (u64::from(conf_win_left_offset) + u64::from(conf_win_right_offset)) * 2 >= u64::from(pic_width_in_luma_samples)
++        || (u64::from(conf_win_top_offset) + u64::from(conf_win_bottom_offset)) * 2 >= u64::from(pic_height_in_luma_samples) {
++        return Err(DecodeError::InvalidSyntax("HEVC conformance window exceeds picture"));
+     }
+ 
+     let log2_max_pic_order_cnt_lsb_minus4 = r.read_ue()?;
+@@ -479,10 +492,16 @@
+         sps_max_dec_pic_buffering_minus1 = r.read_ue()?;
+         sps_max_num_reorder_pics = r.read_ue()?;
+         sps_max_latency_increase_plus1 = r.read_ue()?;
++        if sps_max_dec_pic_buffering_minus1 > 15 || sps_max_num_reorder_pics > sps_max_dec_pic_buffering_minus1 {
++            return Err(DecodeError::InvalidSyntax("HEVC picture buffer count out of range"));
++        }
+     }
+ 
+     let log2_min_luma_coding_block_size_minus3 = r.read_ue()?;
+     let log2_diff_max_min_luma_coding_block_size = r.read_ue()?;
++    if log2_min_luma_coding_block_size_minus3 > 3 || log2_diff_max_min_luma_coding_block_size > 3 {
++        return Err(DecodeError::InvalidSyntax("HEVC coding block size out of range"));
++    }
+     let min_cb_log2_size_y = (log2_min_luma_coding_block_size_minus3 + 3) as u8;
+     let ctb_log2_size_y = min_cb_log2_size_y + log2_diff_max_min_luma_coding_block_size as u8;
+     if !(4..=6).contains(&ctb_log2_size_y) {
+@@ -493,11 +512,22 @@
+ 
+     let log2_min_luma_transform_block_size_minus2 = r.read_ue()?;
+     let log2_diff_max_min_luma_transform_block_size = r.read_ue()?;
++    if log2_min_luma_transform_block_size_minus2 > 3 || log2_diff_max_min_luma_transform_block_size > 3
++        || log2_min_luma_transform_block_size_minus2 + log2_diff_max_min_luma_transform_block_size > 3 {
++        return Err(DecodeError::InvalidSyntax("HEVC transform block size out of range"));
++    }
+     let min_tb_log2_size_y = (log2_min_luma_transform_block_size_minus2 + 2) as u8;
+     let max_tb_log2_size_y = min_tb_log2_size_y + log2_diff_max_min_luma_transform_block_size as u8;
+ 
+     let max_transform_hierarchy_depth_inter = r.read_ue()?;
+     let max_transform_hierarchy_depth_intra = r.read_ue()?;
++    if max_transform_hierarchy_depth_inter > 4 || max_transform_hierarchy_depth_intra > 4 {
++        return Err(DecodeError::InvalidSyntax("HEVC transform hierarchy out of range"));
++    }
++    if pic_width_in_luma_samples % (1 << min_cb_log2_size_y) != 0
++        || pic_height_in_luma_samples % (1 << min_cb_log2_size_y) != 0 {
++        return Err(DecodeError::InvalidSyntax("HEVC coded extent is not coding-block aligned"));
++    }
+ 
+     let scaling_list_enabled_flag = r.read_bit()? == 1;
+     let scaling_list = if scaling_list_enabled_flag {
+@@ -530,8 +560,13 @@
+                 "pcm_sample_bit_depth exceeds bit depth",
+             ));
+         }
+-        let log2_min_pcm_cb_size = (r.read_ue()? + 3) as u8;
+-        let log2_diff_max_min_pcm = r.read_ue()? as u8;
++        let min_pcm_minus3 = r.read_ue()?;
++        let diff_pcm = r.read_ue()?;
++        if min_pcm_minus3 > 2 || diff_pcm > 2 || min_pcm_minus3 + diff_pcm > 2 {
++            return Err(DecodeError::InvalidSyntax("HEVC PCM block size out of range"));
++        }
++        let log2_min_pcm_cb_size = (min_pcm_minus3 + 3) as u8;
++        let log2_diff_max_min_pcm = diff_pcm as u8;
+         let log2_max_pcm_cb_size = log2_min_pcm_cb_size + log2_diff_max_min_pcm;
+         let pcm_loop_filter_disabled = r.read_bit()? == 1;
+         (
+@@ -591,10 +626,11 @@
+     let sps_temporal_mvp_enabled_flag = r.read_bit()? == 1;
+     let strong_intra_smoothing_enabled_flag = r.read_bit()? == 1;
+ 
+-    // VUI and SPS extensions follow but we deliberately stop here — we don't
+-    // need them for Phase 1, and parsing them in full is a separate task.
++    let (color, chroma_location) = parse_vui_color(&mut r)?;
+ 
+     Ok(Sps {
++        color,
++        chroma_location,
+         sps_video_parameter_set_id,
+         sps_max_sub_layers_minus1,
+         sps_temporal_id_nesting_flag,
+@@ -641,9 +677,62 @@
+     })
+ }
+ 
++// Preserve source color and chroma siting before any display conversion.
++// Timing/HRD fields after these do not alter still-picture samples.
++fn parse_vui_color(r: &mut BitstreamReader) -> Result<(Option<([u16;3],bool)>,u32),DecodeError> {
++    let mut color = None;
++    let mut chroma_location = 0;
++    if r.read_bit()? != 0 {
++        if r.read_bit()? != 0 {
++            let aspect_ratio_idc = r.read_bits(8)?;
++            if aspect_ratio_idc == 255 { r.read_bits(16)?; r.read_bits(16)?; }
++        }
++        if r.read_bit()? != 0 { r.read_bit()?; } // overscan
++        if r.read_bit()? != 0 {
++            r.read_bits(3)?; // video format
++            let full_range = r.read_bit()? != 0;
++            let cicp = if r.read_bit()? != 0 {
++                [r.read_bits(8)? as u16,r.read_bits(8)? as u16,r.read_bits(8)? as u16]
++            } else {[2,2,2]};
++            color = Some((cicp,full_range));
++        }
++        if r.read_bit()? != 0 {
++            chroma_location = r.read_ue()?;
++            let bottom = r.read_ue()?;
++            if chroma_location > 5 || bottom > 5 {
++                return Err(DecodeError::InvalidSyntax("HEVC chroma location out of range"));
++            }
++        }
++    }
++
++    Ok((color,chroma_location))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn vui_preserves_color_range_and_chroma_siting() {
++        let pack = |bits: String| {
++            let bits:Vec<u8>=bits.bytes().filter(|c|matches!(c,b'0'|b'1')).collect();
++            let mut bytes=vec![0u8;bits.len().div_ceil(8)];
++            for (i,b) in bits.into_iter().enumerate() {bytes[i/8]|=(b-b'0')<<(7-i%8);}
++            bytes
++        };
++        for transfer in [13,16,18] {for full in [0,1] {
++            // Present VUI, absent aspect/overscan, video format 5, explicit
++            // P3 CICP and top-left chroma (ue(2) for both field positions).
++            let bytes=pack(format!("1 0 0 1 101 {full} 1 00001100 {transfer:08b} 00000001 1 011 011"));
++            let parsed=parse_vui_color(&mut BitstreamReader::new(&bytes)).unwrap();
++            assert_eq!(parsed,(Some(([12,transfer,1],full!=0)),2));
++            assert!(parse_vui_color(&mut BitstreamReader::new(&bytes[..2])).is_err());
++        }}
++        assert_eq!(parse_vui_color(&mut BitstreamReader::new(&[0])).unwrap(),(None,0));
++        // Chroma location 6 is outside the HEVC table (ue(6) = 00111).
++        let invalid=pack("1 0 0 0 1 00111 1".into());
++        assert!(parse_vui_color(&mut BitstreamReader::new(&invalid)).is_err());
++    }
+ 
+     /// Phase 3d-1: parse a hand-built `st_ref_pic_set(0, ...)` describing a
+     /// "single previous reference" set.

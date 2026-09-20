@@ -101,6 +101,32 @@ impl Converter {
                     (v - (1u32 << (p.depth - 1)) as f32) / range_uv
                 }
             };
+            if p.chroma_location != 1 {
+                // HEVC locations 0–5 describe left/center horizontally and
+                // center/top/bottom vertically. AVIF retains its established
+                // centered path below; a grid is joined before interpolation.
+                let [dx, dy] = match p.chroma_location {
+                    0 => [0., 0.5],
+                    2 => [0., 0.],
+                    3 => [0.5, 0.],
+                    4 => [0., 1.],
+                    5 => [0.5, 1.],
+                    _ => unreachable!(),
+                };
+                let axis = |pixel: u32, size: u32, sub: bool, offset: f32| {
+                    let v = if sub {
+                        (pixel as f32 - offset) / 2.
+                    } else {
+                        pixel as f32
+                    };
+                    let v = v.clamp(0., (size - 1) as f32);
+                    (v as u32, (v as u32 + 1).min(size - 1), v - v.floor())
+                };
+                let (x0, x1, fx) = axis(x, w, sub_x, dx);
+                let (y0, y1, fy) = axis(y, h, sub_y, dy);
+                return (sample(x0, y0) * (1. - fx) + sample(x1, y0) * fx) * (1. - fy)
+                    + (sample(x0, y1) * (1. - fx) + sample(x1, y1) * fx) * fy;
+            }
             // Center-sited bilinear upsampling, matching the existing portable
             // import policy; duplicate edge samples give the correct weights.
             sample(xx, yy) * (9. / 16.)

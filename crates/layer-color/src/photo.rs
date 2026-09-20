@@ -28,7 +28,8 @@ pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};
 mod bmp_io;
 mod gif_io;
-#[cfg(all(feature = "heif", target_os = "linux"))]
+// Native HEIF is retained only as an independent interoperability oracle.
+#[cfg(all(test, feature = "heif", target_os = "linux"))]
 mod heif_io;
 mod raster_io;
 mod tiff_io;
@@ -82,7 +83,6 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
         extensions: &["gif"],
         mime_types: &["image/gif"],
     },
-    #[cfg(all(feature = "heif", target_os = "linux"))]
     PhotoFormat {
         name: "HEIF",
         extensions: &["heif", "heic", "hif"],
@@ -95,13 +95,7 @@ pub const PHOTO_FORMATS: &[PhotoFormat] = &[
     },
 ];
 pub fn formats() -> impl Iterator<Item = &'static PhotoFormat> {
-    PHOTO_FORMATS.iter().filter(|_format| {
-        #[cfg(all(feature = "heif", target_os = "linux"))]
-        if _format.name == "HEIF" {
-            return heif_io::available();
-        }
-        true
-    })
+    PHOTO_FORMATS.iter()
 }
 pub fn extensions() -> impl Iterator<Item = &'static str> {
     formats().flat_map(|f| f.extensions.iter().copied())
@@ -175,7 +169,7 @@ pub fn read_photo_detailed(
     read_photo_detailed_with_cancel(input, limits, &std::sync::atomic::AtomicBool::new(false))
 }
 
-/// Native codec callbacks and row packing can acknowledge cancellation even
+/// Codec callbacks and row packing can acknowledge cancellation even
 /// after the encoded file has been read. Hosts still wait for worker completion.
 pub fn read_photo_detailed_with_cancel(
     input: impl BufRead + Seek,
@@ -224,10 +218,7 @@ fn read_photo_impl(
         if avif_io::is_avif(&mut input, _cancelled)? {
             return avif_io::read(input, limits, _cancelled);
         }
-        #[cfg(all(feature = "heif", target_os = "linux"))]
-        return heif_io::read(input, limits, _cancelled);
-        #[cfg(not(all(feature = "heif", target_os = "linux")))]
-        return Err("HEIF decoding is not available on this host".into());
+        return avif_io::read_heif(input, limits, _cancelled);
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;

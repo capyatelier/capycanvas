@@ -5,6 +5,21 @@ accepted = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "CC0-1.0", "B
 targets = ["wasm32-unknown-unknown"]
 ignore-dev-dependencies = true
 
+# Original notices for the patched Rust HEIC decoder and container adapter.
+[heif-oxide.clarify]
+license = "MIT OR Apache-2.0"
+[[heif-oxide.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "8257c25436304c14c39df1a9ac57a5b3fbcbd32378523200fe94ee7f3fae0a7a"
+
+[rust_h265.clarify]
+license = "MIT OR Apache-2.0"
+[[rust_h265.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "d587ec46ffb8dc009e7d278335f44c97b5b8eb8c064e8bedbd8699773fdb00cd"
+
 # The decoder's archive omits LICENSE; use the original at its recorded Git
 # revision, identical to the notice retained with our vendored core/encoder.
 [zrip-decode.clarify]

@@ -82,6 +82,7 @@ impl Geometry {
 pub(super) struct Properties<'a> {
     pub extent: Option<[u32; 2]>,
     pub config: Option<&'a [u8]>,
+    pub hevc: Option<&'a [u8]>,
     pub icc: Option<&'a [u8]>,
     pub color: Option<Color>,
     pub geometry: Geometry,
@@ -120,6 +121,16 @@ impl<'a> Properties<'a> {
                     }
                     r.take(3)?;
                     p.config = Some(view.data);
+                }
+                b"hvcC" => {
+                    if p.hevc.is_some()
+                        || view.data.len() < 23
+                        || view.data.len() > 1024 * 1024
+                        || view.data[0] != 1
+                    {
+                        return Err("Invalid HEIF HEVC configuration".into());
+                    }
+                    p.hevc = Some(view.data);
                 }
                 b"colr" => match r.take(4)? {
                     b"nclx" => {

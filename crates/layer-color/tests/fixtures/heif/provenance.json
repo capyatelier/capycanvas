@@ -1,0 +1,9 @@
+{
+  "codec_source": "heif-oxide 0.1.0 testdata, lossless x265 flat frames",
+  "generator": "photo::avif_io::hevc_tests::rust_heif_write_validation_fixtures",
+  "files": {
+    "flat-red-8bit.heic": "08d273728c6823fdaeaa1782e2d992a10522cd0ba0233dd29c4692ee521ddeb5",
+    "p3-gray-10bit.heic": "22a746a25f3ce16af4b1eef7c2d717f9fed9263c66c781b9999e0dbad17d58b5",
+    "p3-grid-8bit.heic": "1ddcf7972e99ea432e034aec82d205793140418798be12b043b5a27f70569493"
+  }
+}

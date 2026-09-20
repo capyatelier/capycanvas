@@ -233,22 +233,21 @@ fn heif_cancellation_precedes_file_parsing() {
 }
 
 #[test]
-fn heif_missing_bundle_hides_formats_and_reports_error() {
+fn heif_missing_bundle_keeps_portable_formats_available() {
     const CHILD: &str = "CAPY_CODEC_UNAVAILABLE_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        assert!(!available());
-        assert!(!extensions().any(|name| matches!(name, "heif" | "heic")));
+        assert!(extensions().any(|name| name == "heif"));
+        assert!(extensions().any(|name| name == "heic"));
         assert!(extensions().any(|name| name == "avif"));
         assert!(
-            !mime_types().any(|mime| matches!(mime, "image/heif" | "image/heic"))
+            mime_types().any(|mime| matches!(mime, "image/heif" | "image/heic"))
         );
-        let message = read_photo_detailed(
-            Cursor::new(b"\0\0\0\x10ftypheic\0\0\0\0"),
+        let photo = read_photo_detailed(
+            Cursor::new(include_bytes!("../../../tests/fixtures/heif/flat-red-8bit.heic")),
             Default::default(),
         )
-        .err()
         .unwrap();
-        assert!(message.contains("not installed"), "{message}");
+        assert_eq!(photo.source.extent,[64,64]);
         return;
     }
     // The library capability cache is process-wide. Exercise a real fresh
@@ -265,7 +264,7 @@ fn heif_missing_bundle_hides_formats_and_reports_error() {
     let result = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "photo::heif_io::tests::heif_missing_bundle_hides_formats_and_reports_error",
+            "photo::heif_io::tests::heif_missing_bundle_keeps_portable_formats_available",
             "--nocapture",
         ])
         .env(CHILD, "1")
@@ -283,9 +282,8 @@ fn heif_missing_bundle_hides_formats_and_reports_error() {
 }
 
 #[test]
-#[ignore = "requires the pinned codec bundle and its upstream sample files"]
-fn heif_bundled_reference_files_decode() {
-    assert!(available(), "build tools/build/photo-codecs.py first");
+#[ignore = "requires the pinned libheif upstream sample files"]
+fn heif_reference_stills_decode_and_unsupported_alpha_is_explicit() {
     let root = std::env::var_os("LAYER_HEIF_REFERENCES")
         .expect("LAYER_HEIF_REFERENCES is the libheif source directory");
     let root = Path::new(&root);
@@ -297,7 +295,6 @@ fn heif_bundled_reference_files_decode() {
     for name in [
         "examples/example.heic",
         "examples/example.avif",
-        "tests/data/with-alpha-512x512.heic",
     ] {
         let photo = read_photo_detailed(
             BufReader::new(std::fs::File::open(root.join(name)).unwrap()),
@@ -319,14 +316,16 @@ fn heif_bundled_reference_files_decode() {
             }
         }
         assert!(colored);
-        if name.contains("with-alpha") {
-            assert!(transparent);
-        }
         println!(
             "{name}: {:?}, {:?}, alpha={transparent}, primary={}",
             photo.source.extent, photo.source.interpretation.depth, photo.primary_image
         );
     }
+    let error = read_photo_detailed(
+        BufReader::new(std::fs::File::open(root.join("tests/data/with-alpha-512x512.heic")).unwrap()),
+        limits,
+    ).err().expect("unsupported HEIC alpha representation must be reported");
+    assert!(error.contains("chroma_format") || error.contains("channels disagree"),"{error}");
 }
 
 #[test]

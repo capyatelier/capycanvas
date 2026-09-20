@@ -10,14 +10,70 @@ Commit and push significant milestones to `origin/main`.
 
 - Qualify larger JPEG/AVIF images and device latency alongside the remaining
   host work. Both formats now import/export and preview through shared Rust.
-- Replace HEIC import with heif-oxide. Its current fidelity limitations are
-  accepted for the initial integration; retain explicit capability reporting.
-- Finish GTK integration and remove native codec build, bundle discovery and
-  packaging requirements after the remaining format replacements work.
+- Remove the obsolete native codec build, bundle discovery and packaging
+  requirements. GTK now uses shared Rust JPEG/AVIF/HEIC codecs; the packaging
+  recipe still stages the old bundle and its package validation needs updating.
 - Connect Web and Android imports, exports and previews to the shared codecs;
   test real browser/device operation, memory admission and cancellation.
 - Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
   JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+
+## HEIC import milestone — 2026-09-19
+
+HEIC is now an unconditional shared-core import capability. GTK no longer enables
+the `heif` native feature, and neither application decoding nor file-picker
+availability uses a codec bundle. The old bridge is compiled only in optional
+interoperability tests pending separate cleanup of its packaging/build tools.
+
+The application uses heif-oxide 0.1.0's patched low-level HEVC adapter around
+rust_h265 0.1.0. Shared BMFF parsing, sequential grid assembly, source ICC/NCLX,
+orientation, print density and source storage remain in the Rust core. This path
+does not call the convenience API's sRGB conversion or threaded grid decoder.
+VUI color/range and chroma siting survive decoding; container color declarations
+take precedence. Supported auxiliary alpha retains coded coverage values.
+
+The vendor patch adds header/syntax bounds, expected-dimension and working-memory
+admission before picture allocation, independent-still validation, and borrowed
+cancellation checks between NALs, coding-tree blocks and filter stages. The
+adapter preflights length-prefixed NALs, including embedded start-code rejection,
+before Annex B parsing. Individual in-loop filters remain synchronous, and the
+conservative working-set estimate is admission rather than a hard allocator quota.
+
+Initial HEIC limitations remain explicit: sequences, monochrome/4:4:4 HEVC and
+unsupported color/alpha representations report errors. Direct PQ/HLG sources
+still require an SDR conversion. HEIC HDR auxiliary gain maps are not added by
+this milestone. Verification covers 8/10-bit 4:2:0; 12-bit HEVC is not qualified.
+These are the accepted initial HEIC codec limits, not claims of complete HEIF
+format conformance. Larger photographs and real Android device behavior remain
+part of the host/performance work above.
+
+Verification:
+
+- Release shared color/photo suite: 115 passed without native features; 118
+  passed with the optional oracle feature. 14/27 optional tests remain ignored.
+- Vendor suites: 128 HEVC tests and 35 HEIF tests passed, including independent
+  decoder hashes, truncated header reads and VUI source metadata.
+- A 1280×854 photograph matches libde265 exactly across all 1,639,680 YUV samples.
+  The complete importer retains the primary-image disclosure. An unsupported
+  external alpha fixture reports its representation error instead of dropping
+  transparency. Native comparison is isolated in
+  `tools/validation/heif_decode_reference.c`.
+- Application cases cover all quarter turns and mirrors, P3, embedded ICC,
+  10-bit normalization, odd grid edges, alpha, density, memory admission and
+  cancellation/retry. Synthetic fixture provenance lives under
+  `crates/layer-color/tests/fixtures/heif/`.
+- GTK Open/Import/Paste, thumbnails, retained project save/reopen and history
+  passed with an empty codec directory on private Mutter/Wayland and NVIDIA
+  Vulkan. The final three-fixture journey took 9.27 seconds. Captures are under
+  `artifacts/portable-photo/heif-ui/`; the rotated grid was visually checked.
+- Chrome 152 executes three HEIC fixtures alongside the JPEG/ICC/storage and
+  AVIF import/export checks. Its only Wasm host import initializes the bindgen
+  reference table; no host codec provides pixels. Virtual-time timings are not
+  device performance measurements.
+- Android compilation and WebAssembly/Android production codec graphs pass
+  without C codec/build/assembler dependencies. License/source auditing and Web
+  packaging tests pass. The Web notice generator now retains vendored third-party
+  notices as well as registry dependencies, including both original HEIC notices.
 
 ## JPEG milestone — 2026-09-19
 

@@ -1,6 +1,82 @@
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
 
+/// HEIC dispatch, high precision and a rotated partial grid in actual Wasm.
+#[unsafe(no_mangle)]
+pub extern "C" fn portable_heif() -> u32 {
+    use layer_color::photo::{DecodeLimits, read_photo};
+    use std::io::Cursor;
+    for (encoded, extent, depth, profile) in [
+        (
+            include_bytes!("../tests/fixtures/heif/flat-red-8bit.heic").as_slice(),
+            [64, 64],
+            SampleDepth::U8,
+            RgbSpace::Srgb,
+        ),
+        (
+            include_bytes!("../tests/fixtures/heif/p3-grid-8bit.heic").as_slice(),
+            [51, 101],
+            SampleDepth::U8,
+            RgbSpace::DisplayP3,
+        ),
+        (
+            include_bytes!("../tests/fixtures/heif/p3-gray-10bit.heic").as_slice(),
+            [64, 64],
+            SampleDepth::U16,
+            RgbSpace::DisplayP3,
+        ),
+    ] {
+        let limits = DecodeLimits {
+            codec_bytes: 16 * 1024 * 1024,
+            source_bytes: 1024 * 1024,
+            dimension: 128,
+        };
+        assert!(
+            read_photo(
+                Cursor::new(encoded),
+                DecodeLimits {
+                    codec_bytes: 1024 * 1024,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+        let source = read_photo(Cursor::new(encoded), limits).unwrap();
+        assert_eq!(source.extent, extent);
+        assert_eq!(source.interpretation.depth, depth);
+        assert_eq!(
+            source.interpretation.profile,
+            ColorProfile::Builtin(profile)
+        );
+        let mut row = vec![0; source.row_bytes()];
+        let mut rows = source.rows();
+        for y in 0..extent[1] {
+            rows.read(y, &mut row).unwrap();
+            if depth == SampleDepth::U16 {
+                for p in row.chunks_exact(8) {
+                    let value = u16::from_le_bytes([p[0], p[1]]);
+                    assert_eq!(value, 33504);
+                    assert_eq!(&p[0..2], &p[2..4]);
+                    assert_eq!(&p[0..2], &p[4..6]);
+                    assert_eq!(&p[6..8], &[255, 255]);
+                }
+            } else {
+                for p in row.chunks_exact(4) {
+                    assert_eq!(p[3], 255);
+                }
+                if extent == [64, 64] {
+                    assert!(row[0] >= 250 && row[1] <= 2 && row[2] <= 2);
+                } else if y < 35 {
+                    assert!(row[2] >= 250 && row[0] <= 2);
+                } else if y > 40 {
+                    assert!(row[0] >= 250 && row[2] <= 2);
+                }
+            }
+        }
+    }
+    3
+}
+
 /// Execute both lossy-base and lossless AVIF export in actual Wasm. The odd
 /// extent exercises padded grids; decoded HDR and alpha must survive both.
 #[unsafe(no_mangle)]

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const web = dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,9 @@ const page = (title, body) => `<!doctype html><html lang="en"><meta charset="utf
 export function dependencyNotices(licenses) {
   return licenses.map((license) => {
     // Workspace licensing is included separately with the branding exception.
-    let crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source);
+    // Patched third-party crates are local paths too and retain their notices.
+    let crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source
+      || (crate.manifest_path && resolve(crate.manifest_path).startsWith(join(root, "vendor") + sep)));
     let original = "";
     // This published archive has neither notices nor repository metadata, so
     // cargo-about cannot fetch its git clarification. Preserve the exact upstream

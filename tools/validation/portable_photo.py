@@ -36,11 +36,12 @@ const start=performance.now();
 const color=instance.portable_smoke();
 const avif=instance.portable_avif();
 const avifExport=instance.portable_avif_export();
+const heif=instance.portable_heif();
 const imports=WebAssembly.Module.imports(module);
 // Only wasm-bindgen's reference-table initialization is permitted. No browser
 // image decoder, OS codec, clock, filesystem, or other service supplies pixels.
 const allowed=imports.every(i=>i.kind==='function' && i.name==='__wbindgen_init_externref_table');
-document.body.textContent=JSON.stringify({ok:color===1 && avif===3 && avifExport===2 && allowed, color, avif, avifExport,
+document.body.textContent=JSON.stringify({ok:color===1 && avif===3 && avifExport===2 && heif===3 && allowed, color, avif, avifExport, heif,
   imports, ms:performance.now()-start,
   userAgent:navigator.userAgent});
 } catch(e) { document.body.textContent='FAIL '+e.stack; } })();
