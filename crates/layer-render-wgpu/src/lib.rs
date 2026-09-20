@@ -38,7 +38,7 @@ mod brush_tiles;
 mod dry_material;
 mod swept_experiment;
 #[doc(hidden)]
-pub use swept_experiment::{set_swept_brush_experiment_for_test, swept_brush_experiment_counts};
+pub use swept_experiment::{set_swept_brush_experiment_for_test, swept_brush_experiment_counts, swept_brush_experiment_enabled};
 use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;

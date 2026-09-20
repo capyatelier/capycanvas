@@ -3,7 +3,7 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(cfg!(feature = "swept-brush-default"));
 static INPUTS: AtomicU64 = AtomicU64::new(0);
 static SEGMENTS: AtomicU64 = AtomicU64::new(0);
 static BATCHES: AtomicU64 = AtomicU64::new(0);
@@ -21,11 +21,30 @@ pub fn swept_brush_experiment_counts() -> [u64; 3] {
     [&INPUTS, &SEGMENTS, &BATCHES].map(|v| v.load(Ordering::Relaxed))
 }
 
-pub(super) fn active(style: &layer_render::DabStyle) -> bool {
+#[doc(hidden)]
+pub fn swept_brush_experiment_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
+}
+
+fn supported_contact(contact: Option<layer_core::BrushContact>) -> bool {
+    // The installed research build opts in only the tested ink/pencil models.
+    // Calligraphy, rough nibs and the other contact media keep their renderer.
+    let ink = layer_core::BrushContact::default();
+    let pencil = layer_core::BrushContact {
+        paper: 1.,
+        pressure_gain: 0.9,
+        tilt_spread: 2.,
+        tilt_shading: 0.7,
+        ..ink
+    };
+    contact == Some(ink) || contact == Some(pencil)
+}
+
+pub(super) fn active(style: &layer_render::DabStyle) -> bool {
+    swept_brush_experiment_enabled()
         && style.execution == BrushExecution::Dry
         && style.rendering.blend_mode == BrushBlendMode::Normal
-        && style.contact.is_some()
+        && supported_contact(style.contact)
         && style.dual.is_none()
         && !style.rendering.edge_after_stroke
 }
@@ -130,6 +149,20 @@ pub(super) fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installed_experiment_is_limited_to_tested_contact_models() {
+        use layer_core::{DefaultBrushPreset, default_brush};
+        for preset in layer_core::CONTACT_BRUSH_PRESETS {
+            assert_eq!(
+                supported_contact(default_brush(preset).contact),
+                matches!(
+                    preset,
+                    DefaultBrushPreset::GPen | DefaultBrushPreset::Pencil
+                ),
+                "{preset:?}"
+            );
+        }
+    }
     fn contact(x: f32, y: f32, motion: [f32; 2]) -> Dab {
         let mut d = crate::tests::test_dab([x, y], [1.; 4], 1.);
         d.radii = [10.; 2];

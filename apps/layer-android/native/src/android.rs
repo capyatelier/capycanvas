@@ -554,6 +554,12 @@ pub extern "system" fn Java_art_capycanvas_Native_sweptBrushForTest(
     layer_render_wgpu::set_swept_brush_experiment_for_test(enabled != 0);
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sweptBrushEnabledForTest(
+    _: JNIEnv, _: JClass,
+) -> jboolean {
+    layer_render_wgpu::swept_brush_experiment_enabled() as jboolean
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sweptBrushCountsForTest(
     env: JNIEnv, _: JClass,
 ) -> jstring {

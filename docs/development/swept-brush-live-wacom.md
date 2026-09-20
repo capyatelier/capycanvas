@@ -211,3 +211,28 @@ Wacom native test executable:
 `c8c7c24799f14b53ef00d9a015ea1cac42cb28905465f41f50af46179aafcea6`.
 Preserved pre-experiment executable:
 `b284ed1b6cf70f94d2a48a4606ed3a9c25e709567acd9fb8bf1d256a1301e7bf`.
+
+## Installed research build
+
+The subsequent Wacom install uses `-PcapySweptBrush=true`, forwards the
+`swept-brush-default` Cargo feature, and reports version `0.1.0-swept` under
+the primary `art.capycanvas` package. This makes the optimized path active at
+process startup without instrumentation or a session toggle. Ordinary builds
+without this property still default to the existing renderer. Only the tested
+G-Pen/Pencil contact models opt in; other contact media retain their path.
+The experimental pencil appearance and limitations above still apply.
+
+```sh
+ANDROID_HOME=/path/to/Android/Sdk apps/layer-android/gradlew -p apps/layer-android \
+  :app:assembleDebug :app:assembleDebugAndroidTest -PcapyAbi=arm64-v8a -PcapySweptBrush=true
+```
+
+For an installation smoke test, `wideBrushAlgorithm=installed` asserts that
+the runtime already has swept rendering enabled and does not set a test
+override. The test restores the build's default afterward. The instrumentation
+APK is removed after verification so only the primary app remains installed.
+
+Installed optimized-default APK SHA-256:
+`c7233a16a1326b013a777b2bcbd73e020d801ad6f517febb94554a591eb520fd`.
+The APK and installation smoke-test reports are retained locally under
+`artifacts/swept-brush/live-app/`.

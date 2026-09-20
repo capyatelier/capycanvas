@@ -1613,8 +1613,13 @@ class AndroidRasterTest {
     @Test fun largePhotoWideBrushAttribution() {
         val options = InstrumentationRegistry.getArguments()
         Assume.assumeTrue(options.getString("wideBrush") == "true")
-        val swept = options.getString("wideBrushAlgorithm", "existing") == "swept"
-        native { Native.sweptBrushForTest(it, swept) }
+        val algorithm = options.getString("wideBrushAlgorithm", "existing")!!
+        require(algorithm in setOf("existing", "swept", "installed"))
+        val swept = if (algorithm == "installed") Native.sweptBrushEnabledForTest() else algorithm == "swept"
+        if (algorithm == "installed") {
+            assertTrue("This installed build must enable swept brushes without a test override", swept)
+            assertTrue(BuildConfig.SWEPT_BRUSH_DEFAULT)
+        } else { native { Native.sweptBrushForTest(it, swept) } }
         try {
         val photo = File(activity.filesDir, "photo-benchmark.jpg")
         assertTrue("Copy the 61 MP test image into the isolated test app", photo.isFile)
@@ -1675,7 +1680,7 @@ class AndroidRasterTest {
             try { File(activity.getExternalFilesDir(null), "wide-brush-result.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
             finally { shot.recycle() }
         }
-        } finally { native { Native.sweptBrushForTest(it, false) } }
+        } finally { native { Native.sweptBrushForTest(it, BuildConfig.SWEPT_BRUSH_DEFAULT) } }
     }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {

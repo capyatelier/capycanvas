@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 val capyAbis = providers.gradleProperty("capyAbi").getOrElse("arm64-v8a,x86_64").split(",")
+val capySweptBrush = providers.gradleProperty("capySweptBrush").getOrElse("false").toBooleanStrict()
 
 android {
     namespace = "art.capycanvas"
@@ -15,9 +16,10 @@ android {
         minSdk = 29
         targetSdk = 37
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = if (capySweptBrush) "0.1.0-swept" else "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "WORKSPACE_BENCHMARK", "false")
+        buildConfigField("boolean", "SWEPT_BRUSH_DEFAULT", capySweptBrush.toString())
         ndk.abiFilters.addAll(capyAbis)
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -49,12 +51,14 @@ val rustBuild by tasks.registering(Exec::class) {
     workingDir = rootDir.resolve("../..")
     environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
     commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
-        listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android"))
+        listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android") +
+        if (capySweptBrush) listOf("--features", "swept-brush-default") else emptyList())
     inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
     inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
     inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
     inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"))
     inputs.property("abi", capyAbis)
+    inputs.property("sweptBrush", capySweptBrush)
     outputs.dir(out)
 }
 tasks.named("preBuild") { dependsOn(rustBuild) }
