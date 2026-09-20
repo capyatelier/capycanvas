@@ -192,7 +192,7 @@ impl Converter<'_> {
         }
         self.check()?;
         // This runs on a document worker, so favor compact retained backing.
-        let blob = Arc::new(TileBlob::encode_source(descriptor, &encoded)?);
+        let blob = Arc::new(TileBlob::encode(descriptor, &encoded)?);
         self.charge(blob.resident_bytes().saturating_add(128))?;
         self.blobs.insert(key, blob.clone());
         Ok(blob)

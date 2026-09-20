@@ -1366,12 +1366,10 @@ name = "layer-core"
 version = "0.1.0"
 dependencies = [
  "half",
+ "lz4_flex",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "zrip-core",
- "zrip-decode",
- "zrip-encode",
 ]
 
 [[package]]
@@ -1652,6 +1650,12 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
 name = "maybe-rayon"
@@ -3588,26 +3592,6 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[package]]
-name = "zrip-core"
-version = "0.10.1"
-
-[[package]]
-name = "zrip-decode"
-version = "0.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d931c512bc14f368493e91df8570c5da60e2809e1d0c2cab906b6e4babbab84"
-dependencies = [
- "zrip-core",
-]
-
-[[package]]
-name = "zrip-encode"
-version = "0.8.7"
-dependencies = [
- "zrip-core",
-]
 
 [[package]]
 name = "zune-core"

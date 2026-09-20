@@ -59,14 +59,17 @@ live edge settings are committed because they affect composition and later paint
 
 ## Container and validation
 
-The header is the twelve bytes `CAPYRASTER\x04\0`, followed by a little-endian
+The header is the twelve bytes `CAPYRASTER\x06\0`, followed by a little-endian
 u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
 The metadata indexes raster targets, tile coordinates/planes, unique compressed
 blobs, image roles/interpretations and source assets. Payload offsets are relative to the payload start.
-The manifest explicitly declares `tile_codec: "zstd"`. Each tile is an independent
-lossless Zstandard frame (fast level -20); its content digest covers its explicit
-pixel descriptor and exact decoded bytes. Immutable image tiles use level 1;
-integer16 byte-plane shuffling is reversible and digests cover original bytes.
+Version 6 fixes the tile encoding to one lossless LZ4 block per tile, without a
+frame header or prepended size. The pixel descriptor determines the exact decoded
+size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
+and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths.
+There is no native codec, vendor patch, compression-level policy or codec dispatch.
+Multibyte U16/F16/F32 samples use reversible byte-plane shuffling; the SHA-256 tile
+digest covers the descriptor and original decoded bytes, before shuffling.
 Image profiles are binary payloads with independent hashes; builtins are explicit
 identifiers. Packed brush/source assets also have their own digests. There are no
 paths to extract.
@@ -78,8 +81,9 @@ Readers reject malformed/unsupported headers, descriptors, references, duplicate
 keys, noncanonical offsets, truncated or trailing data, integrity failures and
 unused blobs before adopting a candidate. The former `CAPYPROJECT` codec is gone;
 old files, including earlier raster-container versions, produce an unsupported-version
-error. There is no migration reader. Version 4 adds the required image role and
-validates rasterized-image interpretation before reading payloads.
+error. There is no migration reader. Version 6 is the only accepted version, including
+for placed artwork; v4/v5 Zstd files are deliberately unsupported. The project
+format remains subject to further incompatible changes.
 
 Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
 16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references

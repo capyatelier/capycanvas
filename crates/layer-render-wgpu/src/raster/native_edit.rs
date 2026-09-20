@@ -347,7 +347,7 @@ impl WgpuRasterizer {
         for publication in &frame.publications {
             let pending_bytes = publication.data.tiles.values()
                 .filter(|tile| tile.try_backing().is_none())
-                .map(|tile| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64 + 1024)
+                .map(|tile| layer_core::raster::TileBlob::max_compressed_len(tile.descriptor()).unwrap() as u64)
                 .sum::<u64>();
             publication.revision.reserve_pending_bytes(pending_bytes);
         }

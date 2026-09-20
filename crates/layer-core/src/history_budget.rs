@@ -52,10 +52,8 @@ impl Accounting {
                             bytes = bytes.saturating_add(match tile.try_backing() {
                                 Some(Ok(blob)) => blob.resident_bytes(),
                                 _ => {
-                                    tile.descriptor()
-                                        .byte_len([raster::TILE_SIZE; 2])
-                                        .unwrap_or(raster::MAX_TILE_BYTES)
-                                        + 1024
+                                    raster::TileBlob::max_compressed_len(tile.descriptor())
+                                        .unwrap_or(raster::MAX_COMPRESSED_TILE_BYTES)
                                 }
                             });
                         }

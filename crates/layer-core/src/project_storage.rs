@@ -10,16 +10,8 @@ use sources::SourceIndex;
 #[cfg(test)]
 mod native_color;
 
-const MAGIC: &[u8; 12] = b"CAPYRASTER\x04\0";
-// Older readers must reject placed artwork instead of silently ignoring its
-// geometry. Continue writing v4 for documents needing no placement semantics.
-const PLACEMENT_MAGIC: &[u8; 12] = b"CAPYRASTER\x05\0";
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TileCodec {
-    Zstd,
-}
+// Version 6 uses LZ4 blocks for all tiles; earlier versions are unsupported.
+const MAGIC: &[u8; 12] = b"CAPYRASTER\x06\0";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,7 +47,6 @@ struct SourceRecord {
 struct Manifest<D = Document> {
     document: D,
     tile_size: u32,
-    tile_codec: TileCodec,
     rasters: Vec<RasterRecord>,
     blobs: Vec<BlobRecord>,
     sources: Vec<SourceRecord>,
@@ -151,19 +142,13 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
     let manifest = Manifest {
         document: &project.document,
         tile_size: TILE_SIZE,
-        tile_codec: TileCodec::Zstd,
         rasters,
         blobs: records,
         sources,
         tiled_sources,
     };
     let json = metadata(&manifest, limits.metadata_bytes)?;
-    let canvas = [project.document.width, project.document.height];
-    let placed = project.document.layers.iter().any(|l| l.properties.placement != Affine::IDENTITY || l.masks().any(|m| m.placement != Affine::IDENTITY))
-        || manifest.rasters.iter().any(|r| r.tiles.iter().any(|t| {
-            (0..2).any(|i| t.key.coordinate[i] >= canvas[i].div_ceil(TILE_SIZE))
-        }));
-    output.write_all(if placed { PLACEMENT_MAGIC } else { MAGIC }).map_err(io_error)?;
+    output.write_all(MAGIC).map_err(io_error)?;
     output
         .write_all(&(json.len() as u64).to_le_bytes())
         .map_err(io_error)?;
@@ -184,10 +169,8 @@ pub(super) fn write(project: &Project, mut output: impl Write) -> Result<(), Str
 pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Project, String> {
     let mut magic = [0; 12];
     input.read_exact(&mut magic).map_err(io_error)?;
-    if &magic != MAGIC && &magic != PLACEMENT_MAGIC {
-        return Err(
-            "Unsupported Capy Canvas project version; this app opens raster projects only".into(),
-        );
+    if &magic != MAGIC {
+        return Err("Unsupported Capy Canvas project version".into());
     }
     let mut length = [0; 8];
     input.read_exact(&mut length).map_err(io_error)?;
@@ -216,7 +199,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
         blob.descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixel descriptor")?;
-        if blob.offset != offset || blob.size == 0 || blob.size > MAX_TILE_BYTES as u64 + 1024 {
+        if blob.offset != offset || blob.size == 0 || blob.size > MAX_COMPRESSED_TILE_BYTES as u64 {
             return Err("Invalid raster chunk index".into());
         }
         offset = offset
@@ -296,7 +279,7 @@ pub(super) fn read(mut input: impl Read, limits: ProjectLimits) -> Result<Projec
     }
     let mut tiles = Vec::new();
     for blob in manifest.blobs {
-        let bytes = read_block(&mut input, blob.size, MAX_TILE_BYTES as u64 + 1024)?;
+        let bytes = read_block(&mut input, blob.size, MAX_COMPRESSED_TILE_BYTES as u64)?;
         tiles.push(RasterTile::backed(TileBlob::from_compressed(
             blob.descriptor,
             blob.digest,
@@ -434,7 +417,7 @@ mod tests {
         project.document = editor.document().clone();
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
-        assert_eq!(&bytes[..12], PLACEMENT_MAGIC);
+        assert_eq!(&bytes[..12], MAGIC);
         let mut loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(loaded.document.layer(id).unwrap().properties, placed.properties);
         assert_eq!(loaded.document.layers[1].properties.placement, Affine::IDENTITY);
@@ -575,7 +558,7 @@ mod tests {
         project.document.layers[0].source = Some(Arc::new(image.clone()));
         let mut bytes = Vec::new();
         project.write(&mut bytes).unwrap();
-        assert_eq!(&bytes[..12], b"CAPYRASTER\x04\0");
+        assert_eq!(&bytes[..12], MAGIC);
         let loaded = Project::read(bytes.as_slice(), Default::default()).unwrap();
         assert_eq!(loaded.document.layers[0].source.as_deref(), Some(&image));
         assert!(loaded.document.layers[1].source.as_ref().unwrap().is_original());
@@ -586,8 +569,10 @@ mod tests {
         assert!(Project::read(&invalid[..52 + length], Default::default()).unwrap_err().contains("interpretation differs"));
         let invalid = rewrite_manifest(&bytes, |v| v["tiled_sources"]["images"][0]["depth"] = "U8".into());
         assert!(Project::read(invalid.as_slice(), Default::default()).unwrap_err().contains("interpretation differs"));
-        let mut obsolete = bytes.clone(); obsolete[10] = 3;
-        assert!(Project::read(obsolete.as_slice(), Default::default()).unwrap_err().contains("Unsupported"));
+        for version in [0, 1, 2, 3, 4, 5, 7, 255] {
+            let mut obsolete = bytes.clone(); obsolete[10] = version;
+            assert!(Project::read(obsolete.as_slice(), Default::default()).unwrap_err().contains("Unsupported"));
+        }
     }
 
     #[test]

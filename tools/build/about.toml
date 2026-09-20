@@ -28,15 +28,6 @@ path = "LICENSE-MIT"
 license = "MIT"
 checksum = "d587ec46ffb8dc009e7d278335f44c97b5b8eb8c064e8bedbd8699773fdb00cd"
 
-# The decoder's archive omits LICENSE; use the original at its recorded Git
-# revision, identical to the notice retained with our vendored core/encoder.
-[zrip-decode.clarify]
-license = "MIT"
-[[zrip-decode.clarify.git]]
-path = "LICENSE"
-license = "MIT"
-checksum = "c401ab3834bcd60cfaf717b5977d9ba89199f86e111375e0e268878fbb1cb221"
-
 # exr ships both its own and the format project's original BSD notices in one
 # file. Pin that complete file instead of substituting a generic license text.
 [exr.clarify]

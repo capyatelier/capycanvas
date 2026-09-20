@@ -164,8 +164,8 @@ mod tests {
                     .flat_map(u16::to_le_bytes)
             })
             .collect();
-        let good = Arc::new(TileBlob::encode_source(color.paint_descriptor(), &bytes).unwrap());
-        let mut bad = TileBlob::encode_source(color.paint_descriptor(), &bytes).unwrap();
+        let good = Arc::new(TileBlob::encode(color.paint_descriptor(), &bytes).unwrap());
+        let mut bad = TileBlob::encode(color.paint_descriptor(), &bytes).unwrap();
         bad.digest[0] ^= 1;
         let cache = DecodedTileCache::new(bytes.len());
         assert_eq!(cache.decode(&good).unwrap().as_slice(), bytes);
