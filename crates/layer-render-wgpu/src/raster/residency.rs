@@ -144,7 +144,11 @@ impl WgpuRasterizer {
                         return;
                     }
                     if !destinations.contains(&(layer.id, page.coordinate)) {
-                        bytes -= page.discard_inactive();
+                        let released = page.discard_inactive();
+                        bytes -= released;
+                        if released != 0 && let Some(coverage) = layer.coverage_pages.iter().find(|p| p.coordinate == page.coordinate) {
+                            coverage.release_color_bindings();
+                        }
                     }
                 }
             }
@@ -171,6 +175,11 @@ impl WgpuRasterizer {
                         })
                         .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))));
                     if ready {
+                        // Stroke coverage outlives disposable color residency;
+                        // its reusable bindings must not pin retired textures.
+                        if let Some(coverage) = layer.coverage_pages.iter().find(|p| p.coordinate == page.coordinate) {
+                            coverage.release_color_bindings();
+                        }
                         bytes -= color_page_bytes(page);
                     }
                     !ready

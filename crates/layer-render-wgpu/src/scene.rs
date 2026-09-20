@@ -414,22 +414,20 @@ impl Scene {
     }
     fn source_tile(&mut self, r: &WgpuRasterizer, layer: &Layer, coordinate: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
         let _trace = crate::performance_trace::Span::new(c"capy.source_tile");
-        if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
+        let (tile, pending) = if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
             let space = r.document_color().space;
-            let (tile, pending) = self.source_tiles.plan_raster(r, &blob, space, space)?;
-            if let Some(pending) = pending { self.enqueue_source_decode(pending); }
-            return Ok(Some(tile.view));
-        }
-        let Some(source) = &layer.source else { return Ok(None); };
-        if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
-            return Ok(None);
-        }
-        {
-            let (tile, pending) = self.source_tiles.plan(r, source, coordinate)?;
-            if let Some(pending) = pending { self.enqueue_source_decode(pending); }
-            Ok(Some(tile.view))
-        }
+            self.source_tiles.plan_raster(r, &blob, space, space)?
+        } else {
+            let Some(source) = &layer.source else { return Ok(None); };
+            if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
+                return Ok(None);
+            }
+            self.source_tiles.plan(r, source, coordinate)?
+        };
+        if let Some(pending) = pending { self.enqueue_source_decode(pending); }
+        Ok(Some(tile.view))
     }
+
     /// Consume a bounded group before gathering the next one: these textures
     /// belong to the fixed, queue-ordered source cache.
     pub fn source_tile_for_query(
@@ -529,10 +527,7 @@ impl Scene {
                 let neighbor = [x as u32, y as u32];
                 let predicted = preview
                     .then(|| {
-                        r.preview_pages.iter().find(|p| {
-                            p.coordinate == neighbor
-                                && !r.preview_damage.intersect(page_rect(neighbor)).is_empty()
-                        })
+                        r.preview_page(neighbor)
                     })
                     .flatten();
                 view = predicted
@@ -899,7 +894,7 @@ impl Scene {
                     } else {
                         let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
                         let predicted = if preview {
-                            r.preview_pages.iter().find(|p| p.coordinate == c)
+                            r.preview_page(c)
                         } else {
                             None
                         };
@@ -1182,9 +1177,8 @@ impl Scene {
         // Destination-reading previews already contain the complete layer
         // tile. Composite them directly just like persistent paint, instead
         // of allocating a scratch layer and blending it in another pass.
-        let predicted = (r.preview_layer_id == Some(layer.id)
-            && !r.preview_damage.intersect(page_rect(tile)).is_empty())
-            .then(|| r.preview_pages.iter().find(|p| p.coordinate == tile))
+        let predicted = (r.preview_layer_id == Some(layer.id))
+            .then(|| r.preview_page(tile))
             .flatten();
         let view = if let Some(page) = predicted.or_else(|| stored.pages.iter().find(|p| p.coordinate == tile)) {
             page.active().view.clone()

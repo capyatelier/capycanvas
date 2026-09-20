@@ -8,6 +8,16 @@ pub(super) struct RawTile {
 }
 
 impl WgpuRasterizer {
+    /// Pooled prediction surfaces can outlive their current footprint. Every
+    /// reader must use membership as well as coordinates to avoid stale paint.
+    pub(super) fn preview_page(&self, coordinate: [u32; 2]) -> Option<&LayerPage> {
+        if self.preview_damage.intersect(page_rect(coordinate)).is_empty()
+            || self.preview_contact_tiles.as_ref().is_some_and(|set| !set.contains(&coordinate)) {
+            return None;
+        }
+        self.preview_pages.iter().find(|p| p.coordinate == coordinate)
+    }
+
     /// Prepare at most one job's neighborhood before borrowing its views.
     /// Ordinary paint has no source preparation or resource-handle cloning.
     pub(super) fn prepare_raw_neighborhood<const N: usize>(
@@ -28,12 +38,7 @@ impl WgpuRasterizer {
                 continue;
             }
             let neighbor = [x as u32, y as u32];
-            if preview
-                && !self
-                    .preview_damage
-                    .intersect(page_rect(neighbor))
-                    .is_empty()
-                && self.preview_pages.iter().any(|p| p.coordinate == neighbor)
+            if preview && self.preview_page(neighbor).is_some()
             {
                 continue;
             }
@@ -58,13 +63,8 @@ impl WgpuRasterizer {
                 return &self.empty_view;
             }
             let neighbor = [x as u32, y as u32];
-            let predicted = if preview
-                && !self
-                    .preview_damage
-                    .intersect(page_rect(neighbor))
-                    .is_empty()
-            {
-                self.preview_pages.iter().find(|p| p.coordinate == neighbor)
+            let predicted = if preview {
+                self.preview_page(neighbor)
             } else {
                 None
             };

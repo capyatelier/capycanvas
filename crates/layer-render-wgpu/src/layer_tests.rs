@@ -3069,13 +3069,25 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
         render(&mut r, &[base], &[base_batch], true);
         stroke.kind = DabBatchKind::Preview;
         stroke.stroke_end = false;
-        render(&mut r, &[first, last], &[stroke], false);
+        render(&mut r, &[first, last], &[stroke.clone()], false);
         let predicted = r.readback_srgb_rgba8().unwrap();
         let maximum = predicted.iter().zip(&committed).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
         assert!(maximum <= 1, "{preset:?}: predicted vs committed maximum error {maximum}");
         for (x,y) in [(512,512), (100,100), (950,950)] {
             let i = (y*1024+x)*4;
             assert_eq!(&predicted[i..i+4], &original[i..i+4], "{preset:?}: untouched ({x}, {y})");
+        }
+        // Reuse the prediction pool with the opposite diagonal. The old
+        // contacts remain inside the bounding rectangle but outside the new
+        // sparse plan; they must resolve to persistent paint, not pooled pixels.
+        first.center.y = 790.;
+        last.center.y = 255.;
+        stroke.damage = first.bounds().union(last.bounds());
+        render(&mut r, &[first, last], &[stroke], false);
+        let moved = r.readback_srgb_rgba8().unwrap();
+        for (x, y) in [(260, 255), (770, 790)] {
+            let i = (y * 1024 + x) * 4;
+            assert_eq!(&moved[i..i+4], &original[i..i+4], "{preset:?}: retired prediction ({x}, {y})");
         }
         render(&mut r, &[], &[], false);
         assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?}: cancel restores pixels");
@@ -3115,6 +3127,9 @@ fn constant_backdrop_sparse_updates_match_tiled_float_composition() {
             if let Some(scene) = &mut r.scene { scene.set_tiled_composition(false); }
             r.submit(packet).unwrap();
             let sparse = page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            // A blendable Float32 device may use the simple compositor for
+            // the unmasked case. Instantiate the reference scene explicitly.
+            if r.scene.is_none() { r.scene = Some(scene::Scene::new(&r)); }
             r.scene.as_mut().unwrap().set_tiled_composition(true);
             r.submit(FramePacket { dabs: &[], dab_batches: &[], reset_layers: false,
                 composite_all: true, ..packet }).unwrap();

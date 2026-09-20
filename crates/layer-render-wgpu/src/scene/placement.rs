@@ -196,7 +196,7 @@ impl Scene {
         } else {
             let persistent = stored.and_then(|s| s.pages.iter().find(|p| p.coordinate == c));
             let predicted = if preview {
-                r.preview_pages.iter().find(|p| p.coordinate == c)
+                r.preview_page(c)
             } else {
                 None
             };

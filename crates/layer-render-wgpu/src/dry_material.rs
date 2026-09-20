@@ -2,7 +2,7 @@
 //! evaluator together instead of opening a render pass for every page.
 use super::*;
 
-pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool);
+pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 2],
@@ -86,8 +86,8 @@ impl Pipelines {
     pub fn output(
         &self,
         r: &WgpuRasterizer,
-        color: &wgpu::TextureView,
-        coverage: Option<&wgpu::TextureView>,
+        color: &PageSurface,
+        coverage: Option<&PageSurface>,
     ) -> wgpu::BindGroup {
         let entries = [
             wgpu::BindGroupEntry {
@@ -100,18 +100,27 @@ impl Pipelines {
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(color),
+                resource: wgpu::BindingResource::TextureView(&color.view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(coverage.unwrap_or(color)),
+                resource: wgpu::BindingResource::TextureView(&coverage.unwrap_or(color).view),
             },
         ];
-        r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("dry material page output"),
-            layout: &self.layouts[usize::from(coverage.is_some())],
-            entries: &entries[..2 + usize::from(coverage.is_some())],
-        })
+        coverage.unwrap_or(color).material_output.get(
+            (
+                r.style_buffer.clone(),
+                color.view.clone(),
+                coverage.map(|p| p.view.clone()),
+            ),
+            || {
+                r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("dry material page output"),
+                    layout: &self.layouts[usize::from(coverage.is_some())],
+                    entries: &entries[..2 + usize::from(coverage.is_some())],
+                })
+            },
+        )
     }
 }
 
@@ -147,18 +156,22 @@ impl WgpuRasterizer {
             label: Some("dry material pages"),
             timestamp_writes: None,
         });
-        for (output, source, coordinate, coverage) in jobs {
+        pass.set_bind_group(3, &textures.bind_group, &[]);
+        let mut active_coverage = None;
+        for (output, source, coordinate, coverage, record_offset) in jobs {
             let pipeline = &self.pipelines.dry_material.as_ref().unwrap().kernels
                 [operation as usize * 2 + usize::from(*coverage)];
-            pass.set_pipeline(pipeline);
+            if active_coverage != Some(*coverage) {
+                pass.set_pipeline(pipeline);
+                active_coverage = Some(*coverage);
+            }
             pass.set_bind_group(0, output, &[batch_index as u32 * self.style_stride as u32]);
             pass.set_bind_group(
                 1,
                 self.paint_target_binding(&batch.style),
                 &[self.layer_target_offset(batch.layer_id, *coordinate)],
             );
-            pass.set_bind_group(2, source, &[]);
-            pass.set_bind_group(3, &textures.bind_group, &[]);
+            pass.set_bind_group(2, source, &[*record_offset]);
             pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
         }
     }

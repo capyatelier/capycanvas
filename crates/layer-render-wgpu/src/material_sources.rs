@@ -16,10 +16,12 @@ pub(super) struct DryRecords {
 impl DryRecords {
     pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
 
-    pub fn binding(&self, index: usize) -> wgpu::BufferBinding<'_> {
+    pub fn offset(&self, index: usize) -> u32 { (index as u64 * self.stride) as u32 }
+
+    pub fn binding(&self) -> wgpu::BufferBinding<'_> {
         wgpu::BufferBinding {
             buffer: self.buffer.as_ref().expect("dry tile records prepared before encoding"),
-            offset: index as u64 * self.stride,
+            offset: 0,
             size: NonZeroU64::new(160),
         }
     }
@@ -325,7 +327,6 @@ impl WgpuRasterizer {
         batch: &DabBatch,
         dabs: &[Dab],
         coordinate: [u32; 2],
-        record_index: usize,
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
@@ -353,8 +354,7 @@ impl WgpuRasterizer {
         self.metrics.material_cpu_ms[0] += elapsed(started);
         if !distant {
             let started = timing.then(web_time::Instant::now);
-            let metadata = (batch.style.execution == BrushExecution::Dry).then_some(record_index);
-            let result = self.material_bind_group(batch, coordinate, preview, None, metadata, encoder);
+            let result = self.material_bind_group(batch, coordinate, preview, None, encoder);
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }
@@ -458,7 +458,7 @@ impl WgpuRasterizer {
                 self.paint_target_binding(&batch.style),
                 &[self.layer_target_offset(batch.layer_id, coordinate)],
             );
-            pass.set_bind_group(2, &binding, &[]);
+            pass.set_bind_group(2, &binding, &[0]);
             pass.set_bind_group(3, &textures.bind_group, &[]);
             pass.draw(0..3, 0..1);
             drop(pass);
@@ -473,7 +473,6 @@ impl WgpuRasterizer {
             coordinate,
             preview,
             Some((&samples, &meta)),
-            None,
             encoder,
         );
         self.metrics.material_cpu_ms[4] += elapsed(started);

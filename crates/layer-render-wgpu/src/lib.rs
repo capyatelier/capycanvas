@@ -36,6 +36,8 @@ mod source_access;
 mod material_sources;
 mod brush_tiles;
 mod dry_material;
+mod material_tiles;
+mod bindings;
 use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
@@ -569,6 +571,13 @@ struct StrokeCoveragePage {
 }
 
 impl StrokeCoveragePage {
+    fn release_color_bindings(&self) {
+        for surface in [&self.primary, &self.secondary] {
+            surface.material_input.clear();
+            surface.material_output.clear();
+        }
+    }
+
     fn active(&self) -> &PageSurface {
         if self.active_secondary {
             &self.secondary
@@ -652,7 +661,9 @@ struct MaterialJob {
     local: PixelRect,
     destination_secondary: bool,
     coverage_destination_secondary: Option<bool>,
-    has_scalar_state: bool,
+    dabs: std::ops::Range<u32>,
+    page_index: usize,
+    coverage_index: Option<usize>,
 }
 
 struct LayerPage {
@@ -669,6 +680,8 @@ struct PageSurface {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
+    material_input: bindings::MaterialInput,
+    material_output: bindings::MaterialOutput,
 }
 
 fn texture_bytes(texture: &wgpu::Texture) -> u64 {
@@ -881,6 +894,7 @@ pub struct WgpuRasterizer {
     advanced_texture_layout: wgpu::BindGroupLayout,
     target_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
+    empty_material_input: bindings::MaterialInput,
     material_source_meta: wgpu::Buffer,
     dry_records: material_sources::DryRecords,
     material_jobs: Vec<MaterialJob>,
@@ -1256,6 +1270,7 @@ impl WgpuRasterizer {
             advanced_texture_layout,
             target_layout,
             material_layout,
+            empty_material_input: Default::default(),
             material_source_meta,
             dry_records: Default::default(),
             material_jobs: Vec::new(),
@@ -1786,7 +1801,6 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         preview: bool,
         gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
-        metadata: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
@@ -1806,7 +1820,7 @@ impl WgpuRasterizer {
             .find(|layer| layer.id == batch.layer_id)
             .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
         let views = self.raw_layer_neighborhood(layer, coordinate, offsets, preview);
-        let coverage = if preview {
+        let coverage_page = if preview {
             self.preview_coverage_pages
                 .iter()
                 .find(|p| p.coordinate == coordinate)
@@ -1819,8 +1833,8 @@ impl WgpuRasterizer {
                 .iter()
                 .find(|p| p.coordinate == coordinate && p.owner == Some(batch.stroke_id))
         })
-        .map(|p| &p.active().view)
-        .unwrap_or(&self.empty_scalar_view);
+        .map(|p| p.active());
+        let coverage = coverage_page.map_or(&self.empty_scalar_view, |p| &p.view);
         let auxiliary = if BrushPassPlan::for_device(&batch.style, &self.device).state.watercolor_wetness {
             let pages = if preview {
                 &self.preview_watercolor_wetness_pages
@@ -1833,20 +1847,33 @@ impl WgpuRasterizer {
                 .expect("watercolor wetness page is prepared before binding")
                 .active()
                 .view
+        } else if batch.style.execution == BrushExecution::Dry {
+            &self.empty_view
         } else {
             &self.reservoir.active().view
         };
-        Ok(create_material_bind_group(
+        let create = || create_material_bind_group(
             &self.device,
             &self.material_layout,
             &views,
             &self.dab_buffer,
             coverage,
             gathered.map_or(auxiliary, |g| g.0),
-            metadata.map_or_else(
-                || gathered.map_or(&self.material_source_meta, |g| g.1).as_entire_binding(),
-                |index| wgpu::BindingResource::Buffer(self.dry_records.binding(index))),
-        ))
+            if batch.style.execution == BrushExecution::Dry {
+                wgpu::BindingResource::Buffer(self.dry_records.binding())
+            } else { gathered.map_or(&self.material_source_meta, |g| g.1).as_entire_binding() },
+        );
+        if batch.style.execution == BrushExecution::Dry {
+            // Coverage owns state-dependent bindings, so ending a stroke can
+            // release both coverage textures even while color pages survive.
+            let color_page = if preview { self.preview_page(coordinate) } else { None }
+                .or_else(|| layer.pages.iter().find(|p| p.coordinate == coordinate));
+            let cache = coverage_page.map(|p| &p.material_input)
+                .or_else(|| color_page.map(|p| &p.active().material_input))
+                .unwrap_or(&self.empty_material_input);
+            Ok(cache.get(([self.dab_buffer.clone(), self.dry_records.binding().buffer.clone()],
+                [views[4].clone(), coverage.clone()]), create))
+        } else { Ok(create()) }
     }
 
     fn ensure_preview_destination_companions(&mut self, batches: &[DabBatch]) {
@@ -1977,11 +2004,11 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn ensure_preview_pages(&mut self, damage: PixelRect) {
+    fn ensure_preview_pages(&mut self, damage: PixelRect, sparse: Option<&std::collections::BTreeSet<[u32; 2]>>) {
         if damage.is_empty() {
             return;
         }
-        for coordinate in page_coordinates(damage) {
+        for coordinate in page_coordinates(damage).filter(|c| sparse.is_none_or(|set| set.contains(c))) {
             if self
                 .preview_pages
                 .iter()
@@ -1990,7 +2017,7 @@ impl WgpuRasterizer {
                 if let Some(page) = self
                     .preview_pages
                     .iter_mut()
-                    .find(|page| page_rect(page.coordinate).intersect(damage).is_empty())
+                    .find(|page| sparse.map_or_else(|| page_rect(page.coordinate).intersect(damage).is_empty(), |set| !set.contains(&page.coordinate)))
                 {
                     // Old prediction pixels are never persistent input. Rebind
                     // an off-tail page to the new coordinate; the preview path
@@ -2324,13 +2351,7 @@ impl WgpuRasterizer {
                 let neighbor = [x as u32, y as u32];
                 let preview_page = preview
                     .then(|| {
-                        self.preview_pages.iter().find(|page| {
-                            page.coordinate == neighbor
-                                && !self
-                                    .preview_damage
-                                    .intersect(page_rect(neighbor))
-                                    .is_empty()
-                        })
+                        self.preview_page(neighbor)
                     })
                     .flatten();
                 let page = preview_page
@@ -2606,33 +2627,7 @@ impl WgpuRasterizer {
                     preview,
                 )?;
             }
-            match context.target {
-                BrushEncodingTarget::Persistent => {
-                    let start = batch.first_dab as usize;
-                    let end = start + batch.dab_count as usize;
-                    self.encode_material_batch(
-                        encoder,
-                        batch_index,
-                        batch,
-                        context.tiles,
-                        &context.dabs[start..end],
-                    )?;
-                }
-                BrushEncodingTarget::Preview {
-                    from_persistent: true,
-                } => self.encode_preview_material_from_persistent(
-                    encoder,
-                    batch_index,
-                    batch,
-                    damage,
-                    context.tiles,
-                    &context.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize],
-                )?,
-                BrushEncodingTarget::Preview {
-                    from_persistent: false,
-                } => self.encode_preview_material_batch(encoder, batch_index, batch, context.tiles,
-                    &context.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize])?,
-            }
+            self.encode_material_batch(encoder, batch_index, batch, context)?;
             if watercolor_last {
                 let damages = watercolor_damages
                     .as_deref()
@@ -2742,324 +2737,6 @@ impl WgpuRasterizer {
                 .find(|page| page.coordinate == coordinate)
                 .expect("watercolor update page remains live at commit");
             page.active_secondary = !page.active_secondary;
-        }
-        Ok(())
-    }
-
-    fn encode_material_batch(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        batch_index: usize,
-        batch: &DabBatch,
-        tiles: &[BrushTile],
-        batch_dabs: &[Dab],
-    ) -> Result<(), GpuRasterError> {
-        self.prepare_dry_records(batch, tiles.iter().map(|tile| (tile.local, tile.dabs.clone())), encoder)?;
-        let plan = BrushPassPlan::for_device(&batch.style, &self.device);
-        let writes_full_page = batch.style.execution == BrushExecution::Dry;
-        let layer_index = self
-            .paint_layers
-            .iter()
-            .position(|layer| layer.id == batch.layer_id)
-            .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-        if batch.stroke_start
-            && plan.reservoir
-            && let Some(first) = batch_dabs.first()
-        {
-            let amount = batch.style.wet_mix.amount_of_paint * first.material[2];
-            let color = first.color_rgba_linear;
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer initialize brush reservoir"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.reservoir.active().view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: color[0] as f64,
-                            g: color[1] as f64,
-                            b: color[2] as f64,
-                            a: amount as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-
-        // Full-page dry evaluation writes the new coverage page too. An old
-        // owner binds the shared zero scalar as its source, so no clear pass is
-        // needed before the first contact of a stroke reaches this tile.
-        if plan.state.coverage && !writes_full_page {
-            for tile in tiles {
-                let coordinate = tile.coordinate;
-                let page = self.paint_layers[layer_index]
-                    .coverage_pages
-                    .iter_mut()
-                    .find(|page| page.coordinate == coordinate)
-                    .expect("stroke coverage page is prepared before encoding");
-                if page.owner != Some(batch.stroke_id) {
-                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("layer reset stroke coverage page"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &page.active().view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    page.owner = Some(batch.stroke_id);
-                }
-            }
-        }
-
-        let mut jobs = mem::take(&mut self.material_jobs);
-        for tile in tiles {
-            let coordinate = tile.coordinate;
-            let local = tile.local;
-            let page = self.paint_layers[layer_index]
-                .pages
-                .iter()
-                .find(|page| page.coordinate == coordinate)
-                .expect("destination page is prepared before encoding");
-            let coverage = self.paint_layers[layer_index]
-                .coverage_pages
-                .iter()
-                .find(|page| page.coordinate == coordinate && plan.state.coverage
-                    && (writes_full_page || page.owner == Some(batch.stroke_id)));
-            // Nonlocal brushes preserve old generations before any tile draws.
-            // Dry draws preserve untouched pixels while writing the new page.
-            if !writes_full_page {
-                page.active().copy_to(page.surface(!page.active_secondary), encoder);
-            }
-            if let Some(coverage) = coverage.filter(|_| !writes_full_page) {
-                let destination = if coverage.active_secondary {
-                    &coverage.primary
-                } else {
-                    &coverage.secondary
-                };
-                coverage.active().copy_to(destination, encoder);
-            }
-            jobs.push(MaterialJob {
-                coordinate,
-                local,
-                destination_secondary: !page.active_secondary,
-                coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
-                has_scalar_state: if plan.state.watercolor_wetness {
-                    self.paint_layers[layer_index]
-                        .watercolor_wetness_pages
-                        .iter()
-                        .any(|page| page.coordinate == coordinate)
-                } else {
-                    self.paint_layers[layer_index]
-                        .material_pages
-                        .iter()
-                        .any(|page| page.coordinate == coordinate)
-                },
-            });
-        }
-        let texture_key = Self::texture_set_key(&batch.style);
-        let mut compute_jobs = mem::take(&mut self.dry_jobs);
-        for (record_index, job) in jobs.iter().enumerate() {
-            let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, record_index, false, encoder,
-            )?;
-            let page = self.paint_layers[layer_index]
-                .pages
-                .iter()
-                .find(|page| page.coordinate == job.coordinate)
-                .expect("destination page remains live while encoding");
-            let destination = page.surface(job.destination_secondary);
-            // Dry paint copies untouched pixels in its existing draw.
-            let local = if writes_full_page {
-                PixelRect::full([PAGE_SIZE; 2])
-            } else {
-                job.local
-            };
-            let color_load = if writes_full_page {
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-            } else {
-                wgpu::LoadOp::Load
-            };
-            let texture_set = self
-                .texture_sets
-                .iter()
-                .find(|set| set.key == texture_key)
-                .expect("material brush textures are prepared before encoding");
-            let coverage_view = job.coverage_destination_secondary.map(|secondary| {
-                let coverage = self.paint_layers[layer_index]
-                    .coverage_pages
-                    .iter()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("stroke coverage page remains live while encoding");
-                if secondary {
-                    &coverage.secondary.view
-                } else {
-                    &coverage.primary.view
-                }
-            });
-            if self.compute_dry_material(batch) {
-                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &destination.view, coverage_view);
-                compute_jobs.push((output, source_bind_group, job.coordinate, coverage_view.is_some()));
-                if compute_jobs.len() == SOURCE_SLOTS {
-                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
-                    compute_jobs.clear();
-                }
-                continue;
-            }
-            let scalar_state_view = job.has_scalar_state.then(|| {
-                if plan.state.watercolor_wetness {
-                    let page = self.paint_layers[layer_index]
-                        .watercolor_wetness_pages
-                        .iter()
-                        .find(|page| page.coordinate == job.coordinate)
-                        .expect("watercolor wetness page remains live while encoding");
-                    &page.inactive().view
-                } else {
-                    &self.paint_layers[layer_index]
-                        .material_pages
-                        .iter()
-                        .find(|page| page.coordinate == job.coordinate)
-                        .expect("canvas material page remains live while encoding")
-                        .wetness
-                        .view
-                }
-            });
-            let portable_scalar = if self.device.portable_blend() { scalar_state_view.map(|view| self.portable_blend.source(&self.device,view,wgpu::TextureFormat::R32Float)) } else { None };
-            let color_attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &destination.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: color_load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                coverage_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: color_load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                scalar_state_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view: portable_scalar.as_ref().unwrap_or(view),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: if portable_scalar.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-            ];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer destination brush page"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
-            let pipeline = self.pipelines.material(
-                plan.material,
-                plan.state.watercolor_wetness,
-                coverage_view.is_some(),
-                scalar_state_view.is_some(),
-            );
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(
-                0,
-                &self.style_bind_group,
-                &[batch_index as u32 * self.style_stride as u32],
-            );
-            pass.set_bind_group(
-                1,
-                self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, job.coordinate)],
-            );
-            pass.set_bind_group(2, &source_bind_group, &[]);
-            pass.set_bind_group(3, &texture_set.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-            drop(pass);
-            if let Some(source) = portable_scalar {
-                self.portable_blend.apply(&self.device,encoder,&source,scalar_state_view.unwrap(),local,2);
-            }
-        }
-
-        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
-        compute_jobs.clear();
-        self.dry_jobs = compute_jobs;
-
-        // Reservoir exchange samples the immutable pre-batch canvas. Keep a
-        // bind group to that generation before the page ping-pong state flips.
-        let reservoir_exchange = if plan.reservoir {
-            batch_dabs
-                .last()
-                .map(|last| {
-                    let center = batch.style.brush_to_layer.map(last.center);
-                    let coordinate = [
-                        (center.x.max(0.0) as u32 / PAGE_SIZE)
-                            .min(self.target_extent(batch.layer_id)[0].saturating_sub(1) / PAGE_SIZE),
-                        (center.y.max(0.0) as u32 / PAGE_SIZE)
-                            .min(self.target_extent(batch.layer_id)[1].saturating_sub(1) / PAGE_SIZE),
-                    ];
-                    self.material_bind_group(
-                        batch,
-                        coordinate,
-                        false,
-                        None,
-                        None,
-                        encoder,
-                    )
-                    .map(|bind_group| (coordinate, bind_group))
-                })
-                .transpose()?
-        } else {
-            None
-        };
-
-        for job in &jobs {
-            let page = self.paint_layers[layer_index]
-                .pages
-                .iter_mut()
-                .find(|page| page.coordinate == job.coordinate)
-                .expect("destination page remains live after encoding");
-            page.active_secondary = job.destination_secondary;
-            if let Some(destination_secondary) = job.coverage_destination_secondary {
-                let coverage = self.paint_layers[layer_index]
-                    .coverage_pages
-                    .iter_mut()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("stroke coverage page remains live after encoding");
-                coverage.active_secondary = destination_secondary;
-                coverage.owner = Some(batch.stroke_id);
-            }
-        }
-        jobs.clear();
-        self.material_jobs = jobs;
-        if let Some((coordinate, source_bind_group)) = reservoir_exchange {
-            self.encode_reservoir_update(
-                encoder,
-                batch_index,
-                batch,
-                coordinate,
-                &source_bind_group,
-            )?;
         }
         Ok(())
     }
@@ -3367,7 +3044,7 @@ impl WgpuRasterizer {
                 self.paint_target_binding(&batch.style),
                 &[self.layer_target_offset(batch.layer_id, coordinate)],
             );
-            pass.set_bind_group(2, source_bind_group, &[]);
+            pass.set_bind_group(2, source_bind_group, &[0]);
             pass.set_bind_group(3, &texture_set.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -3487,278 +3164,6 @@ impl WgpuRasterizer {
                 .expect("edge paint page remains live after encoding")
                 .active_secondary = job.destination_secondary;
         }
-        Ok(())
-    }
-
-    fn encode_preview_material_batch(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        batch_index: usize,
-        batch: &DabBatch,
-        tiles: &[BrushTile],
-        batch_dabs: &[Dab],
-    ) -> Result<(), GpuRasterError> {
-        self.prepare_dry_records(batch, tiles.iter().map(|tile| (tile.local, tile.dabs.clone())), encoder)?;
-        let plan = BrushPassPlan::for_device(&batch.style, &self.device);
-        let mut jobs = mem::take(&mut self.material_jobs);
-        for tile in tiles {
-            let coordinate = tile.coordinate;
-            let local = tile.local;
-            let page = self
-                .preview_pages
-                .iter()
-                .find(|page| page.coordinate == coordinate)
-                .expect("preview destination page is prepared before encoding");
-            let coverage = plan.state.coverage.then(|| {
-                self.preview_coverage_pages
-                    .iter()
-                    .find(|page| page.coordinate == coordinate)
-                    .expect("preview coverage page is prepared before encoding")
-            });
-            // Preserve this batch's old generations together, before any tile
-            // draws. Source neighborhoods remain consumed one draw at a time.
-            page.active().copy_to(page.surface(!page.active_secondary), encoder);
-            if let Some(coverage) = coverage {
-                let destination = if coverage.active_secondary {
-                    &coverage.primary
-                } else {
-                    &coverage.secondary
-                };
-                coverage.active().copy_to(destination, encoder);
-            }
-            jobs.push(MaterialJob {
-                coordinate,
-                local,
-                destination_secondary: !page.active_secondary,
-                coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
-                has_scalar_state: plan.state.watercolor_wetness,
-            });
-        }
-
-        let texture_key = Self::texture_set_key(&batch.style);
-        for (record_index, job) in jobs.iter().enumerate() {
-            let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, record_index, true, encoder,
-            )?;
-            let page = self
-                .preview_pages
-                .iter()
-                .find(|page| page.coordinate == job.coordinate)
-                .expect("preview destination page remains live while encoding");
-            let destination = page.surface(job.destination_secondary);
-            // The preview update uses the same one-snapshot contract as
-            // persistent watercolor. Initialization happens once before its
-            // first microbatch.
-            let local = job.local;
-            let texture_set = self
-                .texture_sets
-                .iter()
-                .find(|set| set.key == texture_key)
-                .expect("preview material textures are prepared before encoding");
-            let coverage_view = job.coverage_destination_secondary.map(|secondary| {
-                let coverage = self
-                    .preview_coverage_pages
-                    .iter()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("preview coverage page remains live while encoding");
-                if secondary {
-                    &coverage.secondary.view
-                } else {
-                    &coverage.primary.view
-                }
-            });
-            let watercolor_wetness_view = job.has_scalar_state.then(|| {
-                let page = self
-                    .preview_watercolor_wetness_pages
-                    .iter()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("preview watercolor wetness page remains live while encoding");
-                &page.inactive().view
-            });
-            let portable_scalar = if self.device.portable_blend() { watercolor_wetness_view.map(|view| self.portable_blend.source(&self.device,view,wgpu::TextureFormat::R32Float)) } else { None };
-            let color_attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &destination.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                coverage_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                watercolor_wetness_view.map(|view| wgpu::RenderPassColorAttachment {
-                    view: portable_scalar.as_ref().unwrap_or(view),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: if portable_scalar.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-            ];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer predicted destination brush page"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
-            let pipeline = self.pipelines.material(
-                plan.material,
-                plan.state.watercolor_wetness,
-                coverage_view.is_some(),
-                watercolor_wetness_view.is_some(),
-            );
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(
-                0,
-                &self.style_bind_group,
-                &[batch_index as u32 * self.style_stride as u32],
-            );
-            pass.set_bind_group(
-                1,
-                self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, job.coordinate)],
-            );
-            pass.set_bind_group(2, &source_bind_group, &[]);
-            pass.set_bind_group(3, &texture_set.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-            drop(pass);
-            if let Some(source) = portable_scalar {
-                self.portable_blend.apply(&self.device,encoder,&source,watercolor_wetness_view.unwrap(),local,2);
-            }
-        }
-
-        for job in &jobs {
-            self.preview_pages
-                .iter_mut()
-                .find(|page| page.coordinate == job.coordinate)
-                .expect("preview destination page remains live after encoding")
-                .active_secondary = job.destination_secondary;
-            if let Some(destination_secondary) = job.coverage_destination_secondary {
-                self.preview_coverage_pages
-                    .iter_mut()
-                    .find(|page| page.coordinate == job.coordinate)
-                    .expect("preview coverage page remains live after encoding")
-                    .active_secondary = destination_secondary;
-            }
-        }
-        jobs.clear();
-        self.material_jobs = jobs;
-        Ok(())
-    }
-
-    /// The common predictive destination path has one batch. It can read the
-    /// just-updated committed layer directly and fully write preview damage,
-    /// avoiding both committed-to-preview and preview ping-pong copies.
-    fn encode_preview_material_from_persistent(
-        &mut self,
-        encoder: &mut crate::submission::CommandEncoder,
-        batch_index: usize,
-        batch: &DabBatch,
-        damage: PixelRect,
-        tiles: &[BrushTile],
-        batch_dabs: &[Dab],
-    ) -> Result<(), GpuRasterError> {
-        let plan = BrushPassPlan::for_device(&batch.style, &self.device);
-        let texture_key = Self::texture_set_key(&batch.style);
-        let damage = damage.intersect(self.preview_damage);
-        self.prepare_dry_records(batch, page_coordinates(damage).map(|coordinate| {
-            let tile = tiles.iter().find(|tile| tile.coordinate == coordinate);
-            let range = tile.map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
-            // Full preview pages still preserve committed pixels, but only the
-            // planned contact footprint needs the ordered contact evaluator.
-            let local = if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some() {
-                tile.map_or(PixelRect::EMPTY, |tile| tile.local)
-            } else { PixelRect::full([PAGE_SIZE; 2]) };
-            (local, range)
-        }), encoder)?;
-        let mut compute_jobs = mem::take(&mut self.dry_jobs);
-        for (record_index, coordinate) in page_coordinates(damage).enumerate() {
-            let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, coordinate, record_index, false, encoder,
-            )?;
-            let page = self
-                .preview_pages
-                .iter()
-                .find(|page| page.coordinate == coordinate)
-                .expect("preview page is prepared before encoding");
-            let local = if self.preview_full_pages {
-                // Destination brushes retain committed color outside their
-                // contacts. Writing the complete page replaces separate source
-                // initialization and prevents holes in scene/capture consumers.
-                page_rect(coordinate).page_local(coordinate)
-            } else {
-                damage.intersect(page_rect(coordinate)).page_local(coordinate)
-            };
-            if local.is_empty() {
-                continue;
-            }
-            if self.compute_dry_material(batch) && self.preview_full_pages {
-                let output = self.pipelines.dry_material.as_ref().unwrap().output(self, &page.primary.view, None);
-                compute_jobs.push((output, source_bind_group, coordinate, false));
-                if compute_jobs.len() == SOURCE_SLOTS {
-                    self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
-                    compute_jobs.clear();
-                }
-                continue;
-            }
-            let texture_set = self
-                .texture_sets
-                .iter()
-                .find(|set| set.key == texture_key)
-                .expect("preview material textures are prepared before encoding");
-            let color_attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &page.primary.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                None,
-                None,
-            ];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("layer direct predicted destination page"),
-                color_attachments: &color_attachments,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_scissor_rect(local.min_x(), local.min_y(), local.width(), local.height());
-            pass.set_pipeline(self.pipelines.material(plan.material, false, false, false));
-            pass.set_bind_group(
-                0,
-                &self.style_bind_group,
-                &[batch_index as u32 * self.style_stride as u32],
-            );
-            pass.set_bind_group(
-                1,
-                self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, coordinate)],
-            );
-            pass.set_bind_group(2, &source_bind_group, &[]);
-            pass.set_bind_group(3, &texture_set.bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
-        compute_jobs.clear();
-        self.dry_jobs = compute_jobs;
         Ok(())
     }
 
@@ -4398,7 +3803,7 @@ impl CanvasRenderer for WgpuRasterizer {
         } else if new_preview_direct_to_composite {
             self.preview_pages.clear();
         } else {
-            self.ensure_preview_pages(new_preview_damage);
+            self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref().filter(|_| new_preview_from_persistent));
             self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
             if new_preview_from_persistent {
                 // This pass reads committed coverage directly and writes only
@@ -5200,9 +4605,7 @@ impl CanvasRenderer for WgpuRasterizer {
                             .intersect(page_rect(coordinate))
                             .is_empty();
                     let preview = if use_preview {
-                        self.preview_pages
-                            .iter()
-                            .find(|page| page.coordinate == coordinate)
+                        self.preview_page(coordinate)
                     } else {
                         None
                     };
@@ -5835,7 +5238,7 @@ fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: 12, visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false, min_binding_size: NonZeroU64::new(160) }, count: None,
+            has_dynamic_offset: true, min_binding_size: NonZeroU64::new(160) }, count: None,
     });
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("layer material source neighborhood layout"),
@@ -6028,7 +5431,7 @@ fn create_advanced_texture_bind_group(
 }
 
 fn create_material_bind_group(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::BindGroupLayout,
     views: &[&wgpu::TextureView],
     dabs: &wgpu::Buffer,
@@ -6196,6 +5599,8 @@ fn create_page_surface(
         texture,
         view,
         texture_bind_group,
+        material_input: Default::default(),
+        material_output: Default::default(),
     }
 }
 

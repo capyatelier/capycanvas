@@ -415,7 +415,8 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
 
 #[test]
 fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges() {
-    for depth in [SampleDepth::U8, SampleDepth::U16] {
+    for (depth, execution) in [SampleDepth::U8, SampleDepth::U16].into_iter()
+        .flat_map(|depth| [BrushExecution::Dry, BrushExecution::Wet].map(|execution| (depth, execution))) {
         let mut a = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
         let mut b = a.clone();
         let id = a.document.layers[0].id;
@@ -427,7 +428,7 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         // but not for scratch retained at the distant previous mark.
         bounded.native_edit.as_mut().unwrap().color_cache_bytes =
             (page_count as u64 + 4) * 256 * 256 * 16;
-        let mut style = test_style(BrushExecution::Wet);
+        let mut style = test_style(execution);
         style.wet_mix.wetness = 0.8;
         style.rendering.accumulation = BrushAccumulation::Uniform;
         style.rendering.edge_after_stroke = true;
