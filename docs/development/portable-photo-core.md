@@ -6,12 +6,102 @@ first, then Web and Android. Apple and Windows host integration is separate
 future work. Platform UI and GPU APIs are outside the codec dependency removal.
 Commit and push significant milestones to `origin/main`.
 
-## Remaining work
+## Current status
 
-- Qualify larger JPEG/AVIF images and device latency alongside the remaining
-  host work. Both formats now import/export and preview through shared Rust.
-- Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
-  JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+GTK, Web and Android use the shared Rust photo/storage core. JPEG and AVIF
+gain-map export and encoded previews are built in. Native codec bundles,
+availability gates, unreachable fallback choices, vendored Zrip and old `.capy`
+readers are removed. `.capy` v6 uses one unmodified `lz4_flex` block codec.
+The remaining codec vendor patches are necessary portability, source metadata,
+memory admission and cancellation fixes, documented in [vendor/README.md](../../vendor/README.md).
+
+The final Linux, WebAssembly and Android production photo/storage graphs,
+including all features, contain no C codec, C build/assembly tool, dynamic loader,
+Zstd or Zrip dependency. Existing PNG/PQ PNG, TIFF, SDR JPEG, WebP, GIF, BMP, EXR
+and ICC regression tests pass in the 116-test shared color suite. Independent
+native codecs remain available only as explicitly selected test references.
+Platform UI/GPU libraries and the native workspace database are separate from
+photo/storage codec dependencies.
+
+Initial HEIC support and HDR representation limits are recorded below; this
+migration does not add HEIC export or direct PQ/HLG HEIC/AVIF import. Apple and
+Windows host integration remains separate future work. Large AVIF output still
+has substantial latency, especially on Android; measured results follow.
+Earlier milestone entries describe the state at their respective commits.
+
+## AVIF performance and final qualification — 2026-09-19
+
+Lossless alpha/gain encoding now uses the pinned oxideav encoder's cheaper
+heuristic rate model, retaining quantizer zero and exact 12-bit samples. Balanced
+grid cells avoid encoding nearly empty padded strips along short final rows and
+columns. Maximum cell size, memory admission and cancellation boundaries remain
+bounded. There is one implementation per encoding mode, with no new dependency,
+vendored source, alternate fast mode or compatibility branch.
+
+Stage profiling attributed over 12 of 13.7 seconds to lossless alpha/gain encoding
+for a 1031×1037 synthetic HDR image. The completed release round trip now takes
+5.65 seconds versus 13.15 seconds before this change; runtime peak RSS falls from
+42,576 to 37,676 KiB. The file grows from 444,218 to 461,823 bytes (4%). A
+2031×2037 image passes the same partial-grid/alpha/HDR checks: 16.89 seconds to
+encode, 1.03 seconds to decode, 1,127,798 bytes. These are individual host runs,
+excluding compilation, not general photographic throughput guarantees.
+
+The 1 MP fixture also passes full-size host preview, export and HDR reopen while
+preserving the master. Quality is 90, with white JPEG flattening and AVIF alpha:
+
+| Host / format | Preview | Export | Reopen |
+| --- | ---: | ---: | ---: |
+| Chrome 152 / JPEG | 1.91 s | 1.26 s | 0.52 s |
+| Chrome 152 / AVIF | 7.66 s | 6.94 s | 0.71 s |
+| Huion KP1202 / JPEG | 5.51 s | 3.09 s | 2.06 s |
+| Huion KP1202 / AVIF | 27.55 s | 24.03 s | 2.47 s |
+
+Android's observed peak process PSS is 918 MiB across this complete instrumented
+journey, including GPU resources, imported sources, project save/reopen and both
+exports; it is not an isolated codec allocation measurement. No physical HDR
+display or larger Android photo throughput claim follows from these runs.
+
+Validation after the optimization:
+
+- Shared color suite: 116 passed, 14 optional tests ignored; both separately
+  selected 1 MP and 4 MP grid checks pass.
+- Nine independent libavif comparisons at quality 25/90/100 pass, with maximum
+  HDR sample difference 0.00390625. Independent libavif also decodes the full
+  1 MP file, including its 12-bit base, alpha, gain map and density metadata.
+- The actual GTK JPEG/AVIF choice, preview, flattening, save and HDR reopen
+  journey passes with an empty codec directory on private Wayland/Vulkan.
+- The production PWA passes the existing small-fixture journey and optional
+  1 MP journey. Independent browser SDR decoding agrees within 1 visible byte
+  code for JPEG and 2.08 for AVIF. Cancellation/retry and OPFS cleanup pass.
+- The isolated Android APK passes its real export UI, preview switching, OS
+  chooser MIME/name, HDR reopen, preset and cancellation/retry journey on Huion;
+  cancellation drains in 979 ms. The separate 1 MP test passes as above.
+- Release WebAssembly execution, GTK build, Android APK build and production
+  PWA packaging pass with the optimized encoder.
+
+Reproduce larger checks without committing generated fixtures:
+
+```sh
+LAYER_AVIF_OUTPUT=/tmp/capy-photo-fixtures cargo test --offline --locked --release \
+  -p layer-color avif_grid_preserves_partial_cells_alpha_and_gain_samples \
+  -- --ignored --nocapture
+# Optionally set LAYER_AVIF_GRID_EXTENT='[2031,2037]'.
+LAYER_PHOTO_BENCH_FILE=/tmp/capy-photo-fixtures/1031x1037-q90.avif \
+  node apps/layer-web/test.mjs --package --portable-photo
+```
+
+On an isolated Android test application, push the fixture under
+`/data/local/tmp/`, then select `AndroidRasterTest#portablePhotoLargeDelivery`
+with instrumentation argument `-e photoFile /data/local/tmp/large-hdr.avif`.
+The external-files `portable-large-report.json` records timing, extent and peak
+process PSS. `photoQuality` optionally selects quality. Device test setup is the
+same as `portablePhotoGainmapDelivery`.
+
+Local evidence: `artifacts/portable-photo/web-optimized/report.json`,
+`/tmp/capy-avif-large-android-report.json`, `/tmp/capy-avif-optimized-runtime.log`,
+`/tmp/capy-avif-optimized-4mp.log`, `/tmp/capy-avif-optimized-interoperability.log`,
+`/tmp/capy-avif-optimized-gtk-ui.log`, and
+`/tmp/capy-portable-final-{linux,web,android}-graph.txt`.
 
 ## Availability cleanup — 2026-09-19
 
@@ -30,8 +120,8 @@ The separately selected 1031×1037 AVIF grid regression passes across partial
 cells, alpha and gain-map boundaries. Running the release test binary directly,
 excluding compilation, takes 13.15 seconds and peaks at 42,576 KiB RSS on this
 Linux host (`/tmp/capy-portable-avif-grid-runtime.log`). This small working set
-does not offset the slow encode/reopen time; stage profiling and larger-photo
-latency remain open work.
+does not offset the slow encode/reopen time. The later performance milestone
+above records the profiling, optimization and host measurements.
 
 ## Android host milestone — 2026-09-19
 

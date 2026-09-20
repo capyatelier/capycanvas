@@ -44,8 +44,12 @@ impl Layout {
         let needs_grid = extent.iter().any(|n| *n > side || n % 8 != 0);
         // MIAF requires both coded tile dimensions to be at least 64, even
         // for a one-cell grid used only to trim alignment padding.
-        let tile =
-            extent.map(|n| (n.min(side).div_ceil(8) * 8).max(if needs_grid { 64 } else { 8 }));
+        // Balance cells so a short final strip does not encode a mostly padded
+        // full-size cell in every row/column. Keep the same maximum cell size.
+        let tile = extent.map(|n| {
+            let cells = n.div_ceil(side);
+            (n.div_ceil(cells).div_ceil(8) * 8).max(if needs_grid { 64 } else { 8 })
+        });
         Ok(Self {
             extent,
             tile,

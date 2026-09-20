@@ -329,6 +329,69 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
 
+    @Test fun portablePhotoLargeDelivery() {
+        val arguments=InstrumentationRegistry.getArguments()
+        val path=requireNotNull(arguments.getString("photoFile")){"Supply -e photoFile with an HDR photo"}
+        require(Regex("/data/local/tmp/[A-Za-z0-9_./-]+").matches(path))
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"large-photo.avif").apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $path")).use{it.readBytes()})
+        }
+        val quality=arguments.getString("photoQuality")?.toInt()?:90
+        val report=obj("model" to android.os.Build.MODEL,"input" to path,"quality" to quality,"exports" to org.json.JSONArray())
+        val output=File(activity.getExternalFilesDir(null),"portable-large-report.json")
+        val watching=java.util.concurrent.atomic.AtomicBoolean(true)
+        val peak=java.util.concurrent.atomic.AtomicLong()
+        val sampler=Thread{while(watching.get()){peak.accumulateAndGet(android.os.Debug.getPss().toLong()*1024,::maxOf);SystemClock.sleep(250)}}.apply{start()}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun histogram():JSONObject {
+            val c=Native.captureControl()
+            try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}
+            finally{Native.captureFree(c)}
+        }
+        try {
+            val started=SystemClock.uptimeMillis();open(input);refresh()
+            report.put("open_ms",SystemClock.uptimeMillis()-started)
+            val master=save("large-master.capy")
+            val document=manifest(master).getJSONObject("document")
+            val extent=listOf(document.getInt("width"),document.getInt("height"))
+            report.put("extent",org.json.JSONArray(extent))
+            val original=histogram()
+            assertEquals("F16",original.getJSONObject("color").getString("depth"))
+            assertTrue(original.getJSONArray("channels").objects().any{it.getLong("above")>0})
+            for((format,extension) in listOf("JpegHdrMapped" to "jpg","AvifHdrMapped" to "avif")) {
+                open(File(files,"large-master.capy"));refresh()
+                val recipe=native{h->
+                    val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)
+                    JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to format)).toString())).getJSONObject("recipe")
+                }.put("jpeg_quality",quality).put("background",if(extension=="jpg")"White" else "Preserve")
+                val entry=obj("format" to format);report.getJSONArray("exports").put(entry)
+                val c=Native.captureControl();val previewStart=SystemClock.uptimeMillis()
+                try {
+                    val preview=Native.inspectionOutput(native{Native.inspectionTask(it,c)},recipe.toString())
+                    entry.put("preview_ms",SystemClock.uptimeMillis()-previewStart)
+                    assertEquals(4,preview.size)
+                    assertEquals(extent,JSONObject(preview[0] as String).getJSONArray("extent").values())
+                }finally{Native.captureFree(c)}
+                val encodeStart=SystemClock.uptimeMillis()
+                val bytes=png("large-delivery.$extension",recipe)
+                entry.put("export_ms",SystemClock.uptimeMillis()-encodeStart).put("bytes",bytes.size)
+                assertArrayEquals(master,save("large-unchanged.capy"))
+                assertEquals(original.toString(),histogram().toString())
+                val reopened=SystemClock.uptimeMillis();open(File(files,"large-delivery.$extension"));refresh()
+                entry.put("reopen_ms",SystemClock.uptimeMillis()-reopened)
+                val color=histogram()
+                assertEquals("F16",color.getJSONObject("color").getString("depth"))
+                assertTrue(color.getJSONArray("channels").objects().any{it.getLong("above")>0})
+                val restored=manifest(save("large-reopened.capy")).getJSONObject("document")
+                assertEquals(extent,listOf(restored.getInt("width"),restored.getInt("height")))
+                output.writeText(report.toString(2))
+            }
+            assertNull(host.failure)
+        }catch(e:Throwable){report.put("error",e.toString());throw e}
+        finally{watching.set(false);sampler.join(2000);report.put("peak_process_pss_bytes",peak.get());output.writeText(report.toString(2))}
+    }
+
     @Test fun hdrBlackIntensityMarkerVisible() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
         requireNotNull(sourcePath){"Supply -e hdrFile"}

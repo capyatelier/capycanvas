@@ -71,7 +71,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
       const hdr=await outputPixels();await set('Preview rendition','sdr');const sdr=await outputPixels();
       await set('Preview rendition','hdr');assert.deepEqual(await outputPixels(),hdr,'Switching views reuses the completed encoding');
       if(await evaluate(`Array.from(document.querySelectorAll('dialog[open] button')).find(b=>b.textContent==='Choose File…').disabled`)) {
-        await evaluate(`const n=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');n.checked=true;n.dispatchEvent(new Event('change',{bubbles:true}))`);
+        await evaluate(`(()=>{const n=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');n.checked=true;n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
         await preview();await set('Preview rendition','sdr');
       } else await set('Preview rendition','sdr');
       const encodedSdr=await outputPixels();
@@ -128,6 +128,34 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     assert.ok(cancellation.milliseconds<3000,`Worker cancellation took ${cancellation.milliseconds}ms`);
     results.cancellation=cancellation;
     await preview();await close();
+    // Optional full-size qualification reuses the production UI and workers.
+    // Supply an HDR file; generated large fixtures stay outside the repository.
+    if(process.env.LAYER_PHOTO_BENCH_FILE) {
+      const bytes=await readFile(process.env.LAYER_PHOTO_BENCH_FILE);
+      await evaluate(`portablePhoto.files.set('large-input.avif',Uint8Array.from(atob(${JSON.stringify(bytes.toString('base64'))}),c=>c.charCodeAt(0)))`);
+      results.large=[];
+      for(const range of ['jpeg','avif']) {
+        const start=performance.now();await open('large-input.avif');
+        const entry={format:range,openMs:performance.now()-start};results.large.push(entry);
+        const before=await state(),master=await histogram();
+        entry.extent=await evaluate('layerApp.app.export_form().extent');
+        assert.ok(master.channels.some(c=>c.above>0));
+        await begin(range);await set('Quality',90);await set('Pixel size','Original');
+        if(range==='jpeg')await set('Transparency','White');
+        await evaluate(`(()=>{const n=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');n.checked=true;n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+        const previewStart=performance.now();await preview();entry.previewMs=performance.now()-previewStart;
+        const name=`large-hdr.${range==='jpeg'?'jpg':'avif'}`,encodeStart=performance.now();
+        const file=await save(name);entry.exportMs=performance.now()-encodeStart;entry.bytes=file.bytes.length;
+        assert.deepEqual(await state(),before);assert.deepEqual(await histogram(),master);
+        const decoded=await evaluate(`(async()=>{const image=await createImageBitmap(new Blob([portablePhoto.files.get(${JSON.stringify(name)})],{type:${JSON.stringify('image/'+range)}}));try{return [image.width,image.height]}finally{image.close()}})()`);
+        assert.deepEqual(decoded,entry.extent,'Independent browser decoder retains full dimensions');
+        const reopenStart=performance.now();await open(name);entry.reopenMs=performance.now()-reopenStart;
+        assert.deepEqual(await evaluate('layerApp.app.export_form().extent'),entry.extent);
+        const restored=await histogram();assert.equal(restored.color.depth,'F16');
+        assert.ok(restored.channels.some(c=>c.above>0));
+        console.log(`Large portable photo: ${JSON.stringify(entry)}`);
+      }
+    }
     const jobs=await evaluate(`(async()=>{const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-output');const names=[];for await(const n of root.keys())names.push(n);return names})()`);
     assert.deepEqual(jobs,[],'Successful, preview and cancelled outputs release their temporary files');
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);
