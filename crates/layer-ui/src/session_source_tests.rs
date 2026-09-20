@@ -4,7 +4,7 @@ fn image_placement_touch_claims_photo_handles_but_preserves_camera_contacts_outs
     let mut builder = SourceBuilder::new([20, 10], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
-    }, 1024).unwrap();
+    }, 1024 * 1024).unwrap();
     for _ in 0..10 { builder.push_row(&[255; 80]).unwrap(); }
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new("touch placement", 200, 150), [800, 600]).unwrap();
@@ -128,7 +128,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
-    }, 1024).unwrap();
+    }, 1024 * 1024).unwrap();
     builder.push_row(&[255; 8]).unwrap();
     let source = builder.finish().unwrap();
     assert_eq!(session.image_layer_drop_hint(group_id.0, 0.5), Some(LayerDropPosition::Into));
@@ -171,7 +171,7 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::U8,
         profile: Default::default(), profile_assumed: false,
-    }, 1024).unwrap();
+    }, 1024 * 1024).unwrap();
     builder.push_row(&[255; 8]).unwrap();
     let mut doc = Document::new("locked photo", 200, 150);
     doc.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
@@ -262,7 +262,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
             profile: ColorProfile::Builtin(RgbSpace::DisplayP3),
             profile_assumed: false,
         },
-        1024,
+        1024 * 1024,
     )
     .unwrap();
     let row: Vec<u8> = [
@@ -400,7 +400,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits_on(platform: Platform
             profile: ColorProfile::Builtin(RgbSpace::Srgb),
             profile_assumed: true,
         },
-        1024,
+        1024 * 1024,
     )
     .unwrap();
     let samples: Vec<u8> = [65535u16, 12345, 54321, 1]
@@ -701,7 +701,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
         let mut builder = SourceBuilder::new([2, 1], SourceInterpretation {
             channels: SourceChannels::Rgba, depth: SampleDepth::U16,
             profile: ColorProfile::Builtin(RgbSpace::ProPhoto), profile_assumed: true,
-        }, 1024).unwrap();
+        }, 1024 * 1024).unwrap();
         builder.push_row(&[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]).unwrap();
         let source = std::sync::Arc::new(builder.finish().unwrap());
         let mut document = Document::new("retained", 20, 20);
@@ -754,7 +754,7 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
         let mut builder = SourceBuilder::new([1, 1], SourceInterpretation {
             channels: SourceChannels::Rgba, depth: Default::default(),
             profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
-        }, 1024).unwrap();
+        }, 1024 * 1024).unwrap();
         builder.push_row(&[32, 64, 96, 255]).unwrap();
         let mut document = Document::new("painted source", 20, 20);
         document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
