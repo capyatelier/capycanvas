@@ -1,0 +1,748 @@
+{
+  "date": "2026-09-20",
+  "current_commit": "ac47268e",
+  "pre_optimization_commit": "df3940d5",
+  "device": "5ll21u1002931",
+  "package": "art.capycanvas",
+  "canvas": [
+    9504,
+    6336
+  ],
+  "brush": "G-Pen",
+  "brush_px": 2048,
+  "zoom_percent": 17.164,
+  "input": "Both injected Android stylus MotionEvents and four physical stylus strokes in the primary app; physical kernel pressure/position capture",
+  "device_replays": {
+    "gradual": {
+      "duration_ms": 1200,
+      "hz": 200,
+      "taper_start": 0.55,
+      "hold_before_up_ms": 3000
+    },
+    "fast": {
+      "duration_ms": 200,
+      "hz": 200,
+      "taper_start": 0.75,
+      "hold_before_up_ms": 0
+    },
+    "brief": {
+      "duration_ms": 200,
+      "hz": 200,
+      "taper_start": 0.95,
+      "hold_before_up_ms": 0
+    },
+    "fast_live": {
+      "duration_ms": 200,
+      "hz": 200,
+      "taper_start": 0.75,
+      "hold_before_up_ms": 3000
+    }
+  },
+  "host_probe": {
+    "renderer": "current layer-render-wgpu held fixed",
+    "extent": [
+      1024,
+      256
+    ],
+    "generators": [
+      "df3940d5",
+      "39e9cba3/current"
+    ],
+    "geometric_comparison": {
+      "gradual": {
+        "maximum_upper_edge_difference_px": 0.9655307481394431,
+        "at_x": 586,
+        "old_edge_y": 71.009009009009,
+        "current_edge_y": 70.04347826086956,
+        "pixels_with_rgb_difference_over_8": 832
+      },
+      "fast": {
+        "maximum_upper_edge_difference_px": 1.4249999999999972,
+        "at_x": 753,
+        "old_edge_y": 71.9875,
+        "current_edge_y": 70.5625,
+        "pixels_with_rgb_difference_over_8": 726
+      },
+      "brief": {
+        "maximum_upper_edge_difference_px": 23.934392987964415,
+        "at_x": 915,
+        "old_edge_y": 72.3173076923077,
+        "current_edge_y": 96.25170068027211,
+        "pixels_with_rgb_difference_over_8": 3158
+      },
+      "small": {
+        "maximum_upper_edge_difference_px": 0.028167210805960963,
+        "at_x": 555,
+        "old_edge_y": 119.13385826771653,
+        "current_edge_y": 119.10569105691057,
+        "pixels_with_rgb_difference_over_8": 0
+      },
+      "sparse": {
+        "maximum_upper_edge_difference_px": 0.9504740717198956,
+        "at_x": 889,
+        "old_edge_y": 121.40860215053763,
+        "current_edge_y": 120.45812807881774,
+        "pixels_with_rgb_difference_over_8": 1286
+      },
+      "linear": {
+        "maximum_upper_edge_difference_px": 3.7917425622343757,
+        "at_x": 644,
+        "old_edge_y": 78.39344262295081,
+        "current_edge_y": 82.18518518518519,
+        "pixels_with_rgb_difference_over_8": 934
+      }
+    },
+    "diagnostic_pressure_retention": {
+      "gradual": {
+        "maximum_upper_edge_difference_px": 0.9655307481394431,
+        "at_x": 586,
+        "old_edge_y": 71.009009009009,
+        "current_edge_y": 70.04347826086956,
+        "pixels_with_rgb_difference_over_8": 880
+      },
+      "fast": {
+        "maximum_upper_edge_difference_px": 1.4249999999999972,
+        "at_x": 753,
+        "old_edge_y": 71.9875,
+        "current_edge_y": 70.5625,
+        "pixels_with_rgb_difference_over_8": 726
+      },
+      "brief": {
+        "maximum_upper_edge_difference_px": 11.769181585677757,
+        "at_x": 943,
+        "old_edge_y": 93.82352941176471,
+        "current_edge_y": 82.05434782608695,
+        "pixels_with_rgb_difference_over_8": 1750
+      },
+      "small": {
+        "maximum_upper_edge_difference_px": 0.028167210805960963,
+        "at_x": 555,
+        "old_edge_y": 119.13385826771653,
+        "current_edge_y": 119.10569105691057,
+        "pixels_with_rgb_difference_over_8": 0
+      },
+      "sparse": {
+        "maximum_upper_edge_difference_px": 0.9504740717198956,
+        "at_x": 889,
+        "old_edge_y": 121.40860215053763,
+        "current_edge_y": 120.45812807881774,
+        "pixels_with_rgb_difference_over_8": 1286
+      },
+      "linear": {
+        "maximum_upper_edge_difference_px": 3.7917425622343757,
+        "at_x": 644,
+        "old_edge_y": 78.39344262295081,
+        "current_edge_y": 82.18518518518519,
+        "pixels_with_rgb_difference_over_8": 934
+      }
+    },
+    "frame_grouping_comparison": {
+      "rapid": {
+        "false-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        }
+      },
+      "jump": {
+        "false-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        }
+      },
+      "low_plateau": {
+        "false-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        }
+      },
+      "zero_plateau": {
+        "false-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        }
+      },
+      "moving_up": {
+        "false-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "false-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-1": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-4": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        },
+        "true-64": {
+          "max_channel_delta": 0,
+          "pixels_delta_over_1": 0
+        }
+      }
+    },
+    "geometric_comparison_method": "Upper-edge gray-128 crossing interpolated on white at x=500..943; RGB pixel difference count over entire image. Linear fixture is manual 64 subdivisions versus one span."
+  },
+  "runtime_changed": false,
+  "apk_sha256": {
+    "artifacts/wacom-30fps-20260920/final.apk": "ca51c74d20d31517969798ad15e42dd3394b4530aadbb9bea549f48aa94c107d",
+    "artifacts/wacom-tile-executor-20260920/integrated.apk": "c29efdf9e2dd469ee2ab26b21e036c7f44f16f32409e7977c874907328a84ade",
+    "artifacts/wacom-gpen-taper-20260920/input-log.apk": "36a28d6a74b5f7844b8198d617f0b17224a3bce8ac95fef87e7f0df6e91c769a"
+  },
+  "source_sha256": {
+    "crates/layer-engine/src/brush.rs": "6c697b13ad1791806dfecd1e3b724ba28633fcfd333136158618b8d4ec626355",
+    "crates/layer-render-wgpu/src/contact.wgsl": "087b456c36716442642ddd2364e9c5e1e36598e199a11128d9cf8996a2ed7847"
+  },
+  "geometry_change_commit": "39e9cba3",
+  "persistent_thin_tail_introduction": "Not dated; reproduces with pre-39e9cba3 generator as well",
+  "physical_capture": {
+    "strokes": 4,
+    "raw_strokes_file": "artifacts/wacom-gpen-taper-20260920/physical-strokes.json",
+    "last_repeat_pressure_motion_surface_px": [
+      70.9671608231548,
+      90.94231752098884,
+      79.23557397974487,
+      78.5272921268959
+    ],
+    "up_repeats_last_position": true,
+    "kernel_up_pressure": 0,
+    "app_motion_event_capture": "Confirmed: every captured physical ACTION_UP repeats preceding move position and nonzero pressure; separate synthetic logger control excluded",
+    "source_based_android_up_pressure": "AOSP dispatches preceding cooked pointer data, including pressure",
+    "replay_results": {
+      "0": {
+        "old": {
+          "contacts": 26,
+          "last_radius_render_px": 1.0780312,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        },
+        "current": {
+          "contacts": 24,
+          "last_radius_render_px": 1.0780312,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        },
+        "android_old": {
+          "contacts": 26,
+          "last_radius_render_px": 34.51709,
+          "last_pressure": 0.37992918,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        },
+        "android_up": {
+          "contacts": 24,
+          "last_radius_render_px": 34.51709,
+          "last_pressure": 0.37992918,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        },
+        "release8": {
+          "contacts": 24,
+          "last_radius_render_px": 1.0780312,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        },
+        "release16": {
+          "contacts": 25,
+          "last_radius_render_px": 1.0780312,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 852.1969,
+            "y": 163.80312
+          }
+        }
+      },
+      "1": {
+        "old": {
+          "contacts": 41,
+          "last_radius_render_px": 1.0905838,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        },
+        "current": {
+          "contacts": 14,
+          "last_radius_render_px": 1.0905838,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        },
+        "android_old": {
+          "contacts": 41,
+          "last_radius_render_px": 9.04866,
+          "last_pressure": 0.11292882,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        },
+        "android_up": {
+          "contacts": 14,
+          "last_radius_render_px": 9.04866,
+          "last_pressure": 0.11292882,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        },
+        "release8": {
+          "contacts": 14,
+          "last_radius_render_px": 1.0905838,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        },
+        "release16": {
+          "contacts": 15,
+          "last_radius_render_px": 1.0905838,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 850.94165,
+            "y": 165.05838
+          }
+        }
+      },
+      "2": {
+        "old": {
+          "contacts": 30,
+          "last_radius_render_px": 1.0687187,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        },
+        "current": {
+          "contacts": 15,
+          "last_radius_render_px": 1.0687187,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        },
+        "android_old": {
+          "contacts": 30,
+          "last_radius_render_px": 22.633121,
+          "last_pressure": 0.26565742,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        },
+        "android_up": {
+          "contacts": 15,
+          "last_radius_render_px": 22.633121,
+          "last_pressure": 0.26565742,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        },
+        "release8": {
+          "contacts": 16,
+          "last_radius_render_px": 1.0687187,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        },
+        "release16": {
+          "contacts": 16,
+          "last_radius_render_px": 1.0687187,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 853.1281,
+            "y": 162.87187
+          }
+        }
+      },
+      "3": {
+        "old": {
+          "contacts": 16,
+          "last_radius_render_px": 0.7691812,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        },
+        "current": {
+          "contacts": 11,
+          "last_radius_render_px": 0.7691812,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        },
+        "android_old": {
+          "contacts": 16,
+          "last_radius_render_px": 37.77351,
+          "last_pressure": 0.54791844,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        },
+        "android_up": {
+          "contacts": 11,
+          "last_radius_render_px": 37.77351,
+          "last_pressure": 0.54791844,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        },
+        "release8": {
+          "contacts": 11,
+          "last_radius_render_px": 0.7691812,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        },
+        "release16": {
+          "contacts": 11,
+          "last_radius_render_px": 0.7691812,
+          "last_pressure": 0.0,
+          "last_contact": {
+            "x": 139.84119,
+            "y": 379.08188
+          }
+        }
+      }
+    },
+    "app_stroke_summary": [
+      {
+        "stroke": 0,
+        "samples": 35,
+        "last_move": {
+          "phase": 2,
+          "timestamp_ns": 338586386012000,
+          "x": 2043.2802734375,
+          "y": 1237.052734375,
+          "pressure": 0.41801977157592773
+        },
+        "up": {
+          "phase": 3,
+          "timestamp_ns": 338586388912000,
+          "x": 2043.2802734375,
+          "y": 1237.052734375,
+          "pressure": 0.41801977157592773
+        },
+        "up_equals_last_position_and_pressure": true,
+        "last_moving_segment_surface_px": 36.751200974232134,
+        "last_segment_pressure_equal": true
+      },
+      {
+        "stroke": 1,
+        "samples": 15,
+        "last_move": {
+          "phase": 2,
+          "timestamp_ns": 338587100133000,
+          "x": 1805.2119140625,
+          "y": 1070.83984375,
+          "pressure": 0.43779757618904114
+        },
+        "up": {
+          "phase": 3,
+          "timestamp_ns": 338587102958000,
+          "x": 1805.2119140625,
+          "y": 1070.83984375,
+          "pressure": 0.43779757618904114
+        },
+        "up_equals_last_position_and_pressure": true,
+        "last_moving_segment_surface_px": 62.23139063417076,
+        "last_segment_pressure_equal": true
+      },
+      {
+        "stroke": 2,
+        "samples": 21,
+        "last_move": {
+          "phase": 2,
+          "timestamp_ns": 338587818002000,
+          "x": 1579.9306640625,
+          "y": 1069.6953125,
+          "pressure": 0.5919911861419678
+        },
+        "up": {
+          "phase": 3,
+          "timestamp_ns": 338587821870000,
+          "x": 1579.9306640625,
+          "y": 1069.6953125,
+          "pressure": 0.5919911861419678
+        },
+        "up_equals_last_position_and_pressure": true,
+        "last_moving_segment_surface_px": 78.41277553364601,
+        "last_segment_pressure_equal": true
+      },
+      {
+        "stroke": 3,
+        "samples": 17,
+        "last_move": {
+          "phase": 2,
+          "timestamp_ns": 338588793921000,
+          "x": 1718.859375,
+          "y": 1344.39453125,
+          "pressure": 0.5744109153747559
+        },
+        "up": {
+          "phase": 3,
+          "timestamp_ns": 338588797135000,
+          "x": 1718.859375,
+          "y": 1344.39453125,
+          "pressure": 0.5744109153747559
+        },
+        "up_equals_last_position_and_pressure": true,
+        "last_moving_segment_surface_px": 83.09710295225838,
+        "last_segment_pressure_equal": true
+      },
+      {
+        "stroke": 4,
+        "samples": 15,
+        "last_move": {
+          "phase": 2,
+          "timestamp_ns": 338590072092000,
+          "x": 1220.9677734375,
+          "y": 1186.3876953125,
+          "pressure": 0.42607739567756653
+        },
+        "up": {
+          "phase": 3,
+          "timestamp_ns": 338590075953000,
+          "x": 1220.9677734375,
+          "y": 1186.3876953125,
+          "pressure": 0.42607739567756653
+        },
+        "up_equals_last_position_and_pressure": true,
+        "last_moving_segment_surface_px": 68.27293855899708,
+        "last_segment_pressure_equal": true
+      }
+    ],
+    "actual_app_release_envelope_results": [
+      {
+        "old": {
+          "contacts": 22,
+          "last_pressure": 0.41801977,
+          "last_radius_render_px": 23.435997
+        },
+        "current": {
+          "contacts": 19,
+          "last_pressure": 0.41801977,
+          "last_radius_render_px": 23.435997
+        },
+        "release8": {
+          "contacts": 19,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.6550051
+        },
+        "release16": {
+          "contacts": 19,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.6550051
+        }
+      },
+      {
+        "old": {
+          "contacts": 14,
+          "last_pressure": 0.43779758,
+          "last_radius_render_px": 34.954655
+        },
+        "current": {
+          "contacts": 8,
+          "last_pressure": 0.43779758,
+          "last_radius_render_px": 34.954655
+        },
+        "release8": {
+          "contacts": 8,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.9255271
+        },
+        "release16": {
+          "contacts": 8,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.9255271
+        }
+      },
+      {
+        "old": {
+          "contacts": 15,
+          "last_pressure": 0.5919912,
+          "last_radius_render_px": 45.30376
+        },
+        "current": {
+          "contacts": 9,
+          "last_pressure": 0.5919912,
+          "last_radius_render_px": 45.30376
+        },
+        "release8": {
+          "contacts": 9,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.8423608
+        },
+        "release16": {
+          "contacts": 10,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 0.8423608
+        }
+      },
+      {
+        "old": {
+          "contacts": 19,
+          "last_pressure": 0.5744109,
+          "last_radius_render_px": 90.51339
+        },
+        "current": {
+          "contacts": 10,
+          "last_pressure": 0.5744109,
+          "last_radius_render_px": 90.51339
+        },
+        "release8": {
+          "contacts": 10,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 1.743398
+        },
+        "release16": {
+          "contacts": 11,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 1.743398
+        }
+      },
+      {
+        "old": {
+          "contacts": 17,
+          "last_pressure": 0.4260774,
+          "last_radius_render_px": 54.222412
+        },
+        "current": {
+          "contacts": 7,
+          "last_pressure": 0.4260774,
+          "last_radius_render_px": 54.222412
+        },
+        "release8": {
+          "contacts": 7,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 1.4819093
+        },
+        "release16": {
+          "contacts": 9,
+          "last_pressure": 0.0,
+          "last_radius_render_px": 1.4819093
+        }
+      }
+    ]
+  },
+  "release_envelope_status": "Offline diagnostic only; no runtime fix or artistic acceptance; 8/16 ms before final moving point, previous anchor at/before cutoff",
+  "device_currently_installed": "artifacts/wacom-tile-executor-20260920/integrated.apk",
+  "release_restore_apk": "artifacts/wacom-tile-executor-20260920/integrated.apk",
+  "diagnostic_native_library_sha256": "c40a5f0a6fb292ff6595a9b2cf61b8514e219358044536178b5bff6165bfa413"
+}
