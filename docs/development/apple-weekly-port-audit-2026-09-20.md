@@ -1,5 +1,7 @@
 # macOS and iPadOS weekly port audit — 2026-09-20
 
+Implementation follow-up: [Apple weekly feature port](apple-weekly-port-completion-2026-09-20.md). This audit preserves the original findings and checkout state.
+
 ## Scope and checkout state
 
 Audited the seven-day change inventory starting **2026-09-12 23:53:27 America/Los_Angeles**, through fetched `origin/main` **`5004f1bead31f9b3359b34b5713919fdedcd73ff`** (2026-09-19 23:37:10 PDT). This includes 564 commits with merges, **478 non-merge commits**, and **232 non-merge commits touching GTK, Android, or Web**. Shared Rust changes and Apple follow-up commits were included when determining whether a feature needed a host port.

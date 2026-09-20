@@ -44,9 +44,13 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 impl MetalHost {
+    pub(crate) fn document_changed(&mut self) {
+        self.local_tone.clear(); self.proof=Default::default();
+        self.cursor=Default::default(); self.blank_presented=false; self.timing=None;
+    }
     pub(crate) fn set_headroom(&mut self,host:&mut NativeHost,headroom:f32)->Result<(),String>{
         if !headroom.is_finite() || !(1. ..=100.).contains(&headroom){return Err("Invalid display headroom".into());}
-        if self.headroom!=headroom {
+        if self.headroom!=headroom || host.session.state().hdr_display_available != (headroom>1.) {
             self.headroom=headroom;host.session.set_hdr_display_available(headroom>1.);
             host.invalidate_snapshot();host.dirty=true;
         }
@@ -54,8 +58,20 @@ impl MetalHost {
     }
     pub(crate) fn poll_color(&mut self,host:&mut NativeHost)->Result<bool,String>{
         let changed=self.local_tone.tick(host)?;
-        if changed {host.dirty=true;}
+        if changed {host.dirty=true; host.invalidate_snapshot();}
         Ok(changed)
+    }
+    pub(crate) fn display_status(&self, host: &NativeHost) -> serde_json::Value {
+        let s = &host.session;
+        let hdr = s.engine().document().color.depth.is_float();
+        let hdr_output = hdr && self.surface.is_some() && self.headroom > 1.
+            && !s.state().preview_sdr && !s.state().soft_proof && !s.state().gamut_warning;
+        let retained = self.local_tone.current(host).is_some();
+        let label = if hdr_output { "HDR" } else if self.local_tone.error.is_some() { "SDR preview unavailable" }
+            else if !retained { "Preparing SDR…" } else if s.state().soft_proof { "Print proof" }
+            else if self.headroom > 1. { "SDR preview" } else { "Showing SDR" };
+        serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"label":label,"headroom":self.headroom.max(1.),
+            "retained":retained,"error":self.local_tone.error,"reference_white":203})
     }
     fn encoding(color:layer_core::color::DocumentColor)->SdrSurfaceColor {
         if color.depth.is_float(){SdrSurfaceColor::ExtendedLinearSrgb}else{SdrSurfaceColor::DisplayP3}
@@ -351,6 +367,7 @@ impl MetalHost {
         let (proof_enabled, gamut) = (host.session.state().soft_proof, host.session.state().gamut_warning);
         let rendition=host.session.engine().document().color.depth.is_float().then(||host.session.effective_sdr_rendition());
         let headroom=if host.session.state().preview_sdr || proof_enabled || gamut {1.} else {self.headroom.max(1.)};
+        let tone_guide = self.local_tone.current(host);
         let surface = self.surface.as_mut().unwrap();
         let gpu = host
             .session
@@ -367,7 +384,7 @@ impl MetalHost {
             surface.working_color = gpu.document_color();
         }
         surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
-        surface.presenter.set_local_tone_guide(gpu,self.local_tone.guide.clone()).map_err(error)?;
+        surface.presenter.set_gpu_local_tone_guide(gpu,tone_guide).map_err(error)?;
         if [view.width_px, view.height_px] != [surface.config.width, surface.config.height] {
             surface.config.width = view.width_px;
             surface.config.height = view.height_px;

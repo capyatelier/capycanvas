@@ -7,7 +7,7 @@ use super::*;
 pub enum ColorUiRequest {
     ProofGeometry { size: f32 },
     PrintRecipe { settings: crate::proof_panel::PrintProofSettings },
-    IntensityArc { size:f32, stops:f32, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
+    IntensityArc { size:f32, stops:f32, #[serde(default)] depth:Option<layer_core::color::SampleDepth>, base:RgbColor, document_space:RgbSpace, recipe:layer_core::color::hdr::SdrRendition, headroom:f32 },
     IntensityPoint {size:f32, point:[f32;2], minimum:f32, maximum:f32},
     ProofMarkers { size: f32, recipe: layer_core::color::hdr::SdrRendition },
     PickerLayout { size: f32, #[serde(default)] hdr: bool },
@@ -40,17 +40,17 @@ pub fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> {
     let value = match request {
         ColorUiRequest::PrintRecipe {settings} => return Ok(serde_json::json!(settings.recipe()?)),
         ColorUiRequest::IntensityPoint {size,point,minimum,maximum} => {
-            if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -16. || maximum>65504f32.log2() {return Err("Invalid intensity range".into());}
+            if !point.iter().all(|v|v.is_finite()) || !minimum.is_finite() || !maximum.is_finite() || minimum>=maximum || minimum < -149. || maximum>128. {return Err("Invalid intensity range".into());}
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
             return Ok(serde_json::json!(minimum+a.fraction(point)*(maximum-minimum)));
         },
-        ColorUiRequest::IntensityArc {size,stops,base,document_space,recipe,headroom} => {
+        ColorUiRequest::IntensityArc {size,stops,depth,base,document_space,recipe,headroom} => {
             super::hdr_picker::HdrPaint::validate_stops(stops)?;
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
-            let minimum=(-2f32).min(stops.floor());let maximum=6f32.max(stops.ceil()).min(65504f32.log2());
+            let minimum=(-2f32).min(stops.floor()); let limit=if depth==Some(layer_core::color::SampleDepth::F32) {128.} else {65504f32.log2()}; let maximum=6f32.max(stops.ceil()).min(limit);
             let samples=(0..=80).map(|i|{
-                let t=i as f32/80.;let mut p=base.linear_in(document_space)?;let gain=(minimum+t*(maximum-minimum)).exp2();
-                for c in &mut p[..3]{*c*=gain;}
+                let t=i as f32/80.;let mut p=base.linear_in(document_space)?;let gain=f64::from(minimum+t*(maximum-minimum)).exp2();
+                for c in &mut p[..3]{*c=(f64::from(*c)*gain).clamp(-f64::from(f32::MAX),f64::from(f32::MAX)) as f32;}
                 let color=RgbColor::from_linear(document_space,p)?;
                 Ok(crate::color_management::picker_preview(color,document_space,recipe,headroom)?)
             }).collect::<Result<Vec<_>,String>>()?;

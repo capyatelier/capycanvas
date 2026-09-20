@@ -186,7 +186,7 @@ extension XCTestCase {
         let photo = root.appendingPathComponent("Clipboard blue.png")
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch(); capturePaintEditor(in: app)
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
         let size = extent.components(separatedBy: " × ").compactMap(Int.init)
         XCTAssertEqual(size.count, 2)
@@ -315,7 +315,7 @@ extension XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         func titleText() -> String { title.value as? String ?? title.label }
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         func command(_ id: String, _ label: String) {
@@ -401,7 +401,7 @@ extension XCTestCase {
         let url = root.appendingPathComponent("Imported blue.png")
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch(); capturePaintEditor(in: app)
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
         let size = extent.components(separatedBy: " × ").compactMap(Int.init)
         XCTAssertEqual(size.count, 2)
@@ -484,7 +484,7 @@ extension XCTestCase {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         func titleText() -> String { title.value as? String ?? title.label }
         let extent = titleText().components(separatedBy: " · ").last!
         let dimensions = extent.components(separatedBy: " × ").compactMap(Int.init)
@@ -610,7 +610,7 @@ extension XCTestCase {
         // after dismissal settles, activate Create with the pad out of the way.
         if !create.waitForNonExistence(timeout: 2) { activate(create) }
         #endif
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Untitled · 63 × 47", "Untitled · 63 × 47"), evaluatedWith: title)
         waitForExpectations(timeout: 30)
         #if os(macOS)

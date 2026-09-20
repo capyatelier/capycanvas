@@ -75,7 +75,7 @@ struct NewDrawingForm: View {
                         ForEach(spec["creation"]["spaces"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-space")
                     FormPicker("Bit depth", selection: color("depth")) {
-                        Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16"); Text("16-bit float HDR").tag("F16")
+                        Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16"); Text("16-bit float HDR").tag("F16"); Text("32-bit float HDR").tag("F32")
                     }.accessibilityIdentifier("new-document-depth")
                     if options["color"]["space"].string == "ProPhoto" && options["color"]["depth"].string == "U8" {
                         Text("16-bit is recommended for ProPhoto's wider color range.").font(.caption)

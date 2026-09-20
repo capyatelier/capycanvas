@@ -7,13 +7,19 @@ struct ProofPanel: View {
     private var model: JSON { store.snapshot["proof_panel"] }
     var body: some View {
         VStack(spacing: 6) {
-            Picker("Proof", selection: Binding(get: { model["mode"].string }, set: {
-                controller.close(); controller.action(["type": "mode", "mode": $0])
-            })) {
-                Text("Off").tag("off")
-                Text("SDR").tag("sdr").disabled(!model["hdr"].bool)
-                Text("Print").tag("print")
-            }.pickerStyle(.segmented).accessibilityIdentifier("proof-mode")
+            HStack(spacing: 2) {
+                ForEach(["off", "sdr", "print"], id: \.self) { mode in
+                    Button {
+                        controller.close(); controller.action(["type": "mode", "mode": mode])
+                    } label: {
+                        Text(mode == "sdr" ? "SDR" : mode.capitalized).frame(maxWidth: .infinity).padding(.vertical, 5)
+                            .background(model["mode"].string == mode ? Color.primary.opacity(0.12) : .clear,
+                                in: RoundedRectangle(cornerRadius: 5))
+                    }.buttonStyle(.plain).disabled(mode == "sdr" && !model["hdr"].bool)
+                        .accessibilityIdentifier("proof-mode-" + mode)
+                        .accessibilityAddTraits(model["mode"].string == mode ? .isSelected : [])
+                }
+            }.accessibilityElement(children: .contain)
             if model["mode"].string == "sdr" {
                 ProofDial(store: store, controller: controller)
             } else if model["mode"].string == "print" {

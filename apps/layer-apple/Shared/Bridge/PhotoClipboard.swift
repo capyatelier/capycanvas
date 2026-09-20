@@ -25,9 +25,11 @@ import UIKit
         }
         return .file(url)
     }
-    static func provider(_ provider: NSItemProvider) -> PhotoItem? {
+    static func provider(_ provider: NSItemProvider) -> PhotoItem? { makeProvider(provider, types: UTType.capyPhotoTypes) }
+    static func drawingProvider(_ provider: NSItemProvider) -> PhotoItem? { makeProvider(provider, types: [.capyProject] + UTType.capyPhotoTypes) }
+    private static func makeProvider(_ provider: NSItemProvider, types: [UTType]) -> PhotoItem? {
         let file = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-        let type = file ? UTType.fileURL : UTType.capyPhotoTypes.first { provider.hasItemConformingToTypeIdentifier($0.identifier) }
+        let type = file ? UTType.fileURL : types.first { provider.hasItemConformingToTypeIdentifier($0.identifier) }
         guard let type else { return nil }
         return PhotoItem(name: provider.suggestedName ?? "Imported image") { done in
             provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in

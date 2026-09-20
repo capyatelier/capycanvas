@@ -16,7 +16,7 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: layers)
             waitForExpectations(timeout: 10)
             workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)).click()
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
             editorHistory("Redo", in: app)
             expectation(for: NSPredicate(format: "count == %d", count + 1), evaluatedWith: layers)
             waitForExpectations(timeout: 10)
@@ -65,7 +65,7 @@ extension XCTestCase {
         let end = viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.55))
         #if os(macOS)
         start.click(forDuration: 0.05, thenDragTo: end)
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         #else
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
         #endif
@@ -107,7 +107,7 @@ extension XCTestCase {
         }
         func pick(_ x: Double, expected: [Double]) {
             viewport.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.55)).click()
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
             expectation(for: NSPredicate { _, _ in
                 let actual = color()
                 return actual.count == 4 && zip(actual, expected).allSatisfy { abs($0.0 - $0.1) < 0.01 }

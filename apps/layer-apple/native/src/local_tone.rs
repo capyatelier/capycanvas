@@ -1,11 +1,8 @@
-//! One bounded, superseding analysis worker. Camera and recipe edits reuse the
-//! full-image guide; immutable snapshots and cancellation belong to Rust.
-use layer_core::{
-    Layer,
-    color::{DocumentColor, hdr::LocalToneGuide},
-};
+//! One bounded, superseding GPU analysis worker. Compatible completed guides
+//! stay visible while drawing; new guides publish only at an idle boundary.
 use layer_host::NativeHost;
-use layer_render_wgpu::snapshot::CaptureControl;
+use layer_render_wgpu::{local_tone::GpuToneGuide, snapshot::CaptureControl};
+use layer_ui::proof_workflow::ToneKey;
 use std::{
     sync::{Arc, mpsc},
     time::{Duration, Instant},
@@ -13,18 +10,14 @@ use std::{
 
 #[derive(Clone, PartialEq)]
 struct Key {
-    epoch: u64,
+    tone: ToneKey,
     device: wgpu::Device,
-    color: DocumentColor,
-    extent: [u32; 2],
-    background: [f32; 4],
-    layers: Vec<Layer>,
 }
 struct Pending {
     key: Key,
     time: f32,
     control: CaptureControl,
-    receiver: mpsc::Receiver<Result<Arc<LocalToneGuide>, String>>,
+    receiver: mpsc::Receiver<Result<Arc<GpuToneGuide>, String>>,
 }
 #[derive(Default)]
 pub(crate) struct LocalTone {
@@ -35,7 +28,7 @@ pub(crate) struct LocalTone {
     changed: Option<Instant>,
     last_start: Option<Instant>,
     sampled_time: f32,
-    pub guide: Option<Arc<LocalToneGuide>>,
+    pub guide: Option<Arc<GpuToneGuide>>,
     pub error: Option<String>,
     pub completed: u64,
 }
@@ -45,6 +38,13 @@ impl LocalTone {
             p.control.cancel();
         }
         *self = Self::default();
+    }
+    pub fn current(&self, host: &NativeHost) -> Option<Arc<GpuToneGuide>> {
+        let key = self.published.as_ref()?;
+        let gpu = host.session.engine().backend().0.as_ref()?;
+        (key.device == *gpu.device() && key.tone.can_preview_current(&host.session))
+            .then(|| self.guide.clone())
+            .flatten()
     }
     pub fn tick(&mut self, host: &mut NativeHost) -> Result<bool, String> {
         let s = &host.session;
@@ -56,10 +56,11 @@ impl LocalTone {
             .as_ref()
             .filter(|_| d.color.depth.is_float() && !s.rendering_suspended())
         else {
-            let changed = self.guide.is_some();
+            let changed = self.guide.is_some() || self.error.is_some();
             self.clear();
             return Ok(changed);
         };
+        let mut changed = false;
         let stamp = (
             s.state().document_file.epoch,
             d.revision,
@@ -67,32 +68,41 @@ impl LocalTone {
         );
         if self.stamp.as_ref() != Some(&stamp) {
             let key = Key {
-                epoch: stamp.0,
+                tone: ToneKey::current(s).ok_or("HDR analysis is unavailable")?,
                 device: stamp.2.clone(),
-                color: d.color,
-                extent: [d.width, d.height],
-                background: s.engine().view().background_rgba_linear,
-                layers: d.layers.iter().map(Layer::composite_snapshot).collect(),
             };
             if self.wanted.as_ref() != Some(&key) {
                 if let Some(p) = &self.pending {
                     p.control.cancel();
                 }
+                if !self
+                    .published
+                    .as_ref()
+                    .is_some_and(|old| old.device == key.device && old.tone.can_preview(&key.tone))
+                {
+                    self.published = None;
+                    self.guide = None;
+                }
                 self.wanted = Some(key);
-                self.published = None;
-                self.guide = None;
                 self.error = None;
                 self.changed = Some(Instant::now());
+                changed = true;
             }
             self.stamp = Some(stamp);
         }
-        let mut changed = false;
+        let idle = s.require_document_snapshot_idle().is_ok();
+        if !idle {
+            if let Some(p) = &self.pending {
+                p.control.cancel();
+            }
+            self.changed = Some(Instant::now());
+        }
         if let Some(p) = &self.pending {
             match p.receiver.try_recv() {
                 Err(mpsc::TryRecvError::Empty) => (),
                 result => {
                     let p = self.pending.take().unwrap();
-                    if !p.control.is_cancelled() && self.wanted.as_ref() == Some(&p.key) {
+                    if idle && !p.control.is_cancelled() && self.wanted.as_ref() == Some(&p.key) {
                         self.published = Some(p.key);
                         self.sampled_time = p.time;
                         self.completed += 1;
@@ -117,17 +127,17 @@ impl LocalTone {
             && self
                 .last_start
                 .is_none_or(|v| v.elapsed() >= Duration::from_millis(500));
-        if self.pending.is_none()
+        if idle
+            && self.pending.is_none()
             && (self.wanted != self.published || refresh)
             && self
                 .changed
                 .is_none_or(|v| v.elapsed() >= Duration::from_millis(180))
-            && s.require_document_snapshot_idle().is_ok()
         {
             let project = s.capture_project_recovery()?;
             let gpu = gpu.snapshot_gpu();
             let key = self.wanted.clone().unwrap();
-            let background = key.background;
+            let background = key.tone.background();
             let control = CaptureControl::default();
             let c = control.clone();
             let (sender, receiver) = mpsc::channel();
@@ -137,7 +147,7 @@ impl LocalTone {
                     let result = gpu
                         .capture(project, background, time, Default::default(), c)
                         .map_err(|e| e.to_string())
-                        .and_then(|mut snapshot| snapshot.local_tone_guide());
+                        .and_then(|mut snapshot| snapshot.gpu_local_tone_guide());
                     let _ = sender.send(result);
                 })
                 .map_err(|e| e.to_string())?;

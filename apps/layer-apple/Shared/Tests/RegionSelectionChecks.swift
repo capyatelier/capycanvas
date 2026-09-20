@@ -20,7 +20,7 @@ extension XCTestCase {
         XCTAssertTrue(app.buttons["new-document-create"].waitForNonExistence(timeout: 15))
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         let accept = app.windows.buttons["OKButton"].firstMatch
         func goTo(_ url: URL) {
             app.typeKey("g", modifierFlags: [.command, .shift]); app.typeText(url.path + "\n")
@@ -160,7 +160,7 @@ extension XCTestCase {
         editorChoice("Rectangle", group: true, in: app); editorChoice("Outline", in: app)
         coordinate(CGPoint(x: 0.44, y: 0.42)).click(forDuration: 0.05,
             thenDragTo: coordinate(CGPoint(x: 0.62, y: 0.68)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-Use selected layers as references"])
         XCTAssertTrue(app.buttons["layer-Stop using this layer as a reference"].isSelected)
         workspaceActivate(app.buttons["layer-New layer"])
@@ -168,7 +168,7 @@ extension XCTestCase {
         editorChoice("Line", group: true, in: app)
         coordinate(CGPoint(x: 0.53, y: 0.42)).click(forDuration: 0.05,
             thenDragTo: coordinate(CGPoint(x: 0.53, y: 0.68)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         workspaceActivate(app.buttons["layer-New layer"])
         workspaceActivate(app.buttons["color-swap"])
         let blank = samples()
@@ -200,7 +200,7 @@ extension XCTestCase {
                 }
                 XCTAssertEqual(app.buttons["number-value-tool-opacity"].exists, tool == "Fill")
                 #if os(macOS)
-                coordinate(center).click(); app.staticTexts["document-title"].hover()
+                coordinate(center).click(); editorDocumentTitle(in: app).hover()
                 if tool == "Auto select" {
                     let select = app.menuBars.menuBarItems["Select"]
                     workspaceActivate(select)

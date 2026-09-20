@@ -131,9 +131,9 @@ import SwiftUI
                 if preview || recipe["format"].string.contains("Hdr") { try task.compare() }
                 let details = try task.details()
                 if !preview && details["range_blocked"].bool {
-                    throw HostFailure(message: "Some colors exceed the PQ output range. Enable Clip to output HDR range, or choose SDR output.")
+                    throw HostFailure(message: "Some colors exceed the selected HDR output range. Enable Clip to output HDR range, or choose SDR output.")
                 }
-                let images = preview ? try [task.comparison(after: false), task.comparison(after: true)] : []
+                let images = preview ? try (0..<(details["has_sdr_preview"].bool ? 3 : 2)).map { try task.comparison(index: UInt32($0)) } : []
                 let draft = try preferences.exportDraft(recipe: recipe)
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }

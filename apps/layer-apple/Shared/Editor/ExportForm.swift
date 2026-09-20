@@ -10,6 +10,10 @@ struct ExportForm: View {
     @State private var ppi = "300"
     @State private var quality = "90"
     @State private var presetName = ""
+    @State private var showSDRBase = false
+    private var format: String { editor.draft["format"].string }
+    private var gainmap: Bool { format.hasPrefix("JpegHdr") || format.hasPrefix("AvifHdr") }
+    private var floating: Bool { ["F16", "F32"].contains(editor.details["color"]["depth"].string) }
     @State private var readingProfile = false
     private var hdr: Bool { editor.draft["hdr"].bool }
     private var draft: [String] { [String(fit), String(enlarge), width, height, resolution, ppi, quality] }
@@ -25,18 +29,29 @@ struct ExportForm: View {
                             .disabled(editor.busy || readingProfile).accessibilityIdentifier("export-preview")
                     }
                     if editor.busy { ProgressView("Preparing export…") }
-                    ForEach(Array(editor.previews.enumerated()), id: \.offset) { index, image in
-                        Text(hdr ? (index == 0 ? "Artwork · SDR preview" : "HDR output · SDR preview") : (index == 0 ? "Artwork" : "Output")).font(.headline)
-                        Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity, maxHeight: 180)
+                    if editor.previews.count == 3 {
+                        FormPicker("Preview rendition", selection: $showSDRBase) {
+                            Text("HDR reconstruction · SDR preview").tag(false)
+                            Text("Encoded SDR base").tag(true)
+                        }.accessibilityIdentifier("export-preview-rendition")
+                    }
+                    ForEach(0..<min(2, editor.previews.count), id: \.self) { index in
+                        Text(index == 0 ? (hdr ? "Artwork · SDR preview" : "Artwork") :
+                            gainmap ? (showSDRBase ? "Encoded SDR base" : "HDR reconstruction · SDR preview") :
+                            hdr ? "HDR output · SDR preview" : "Output").font(.headline)
+                        Image(decorative: editor.previews[index == 1 && showSDRBase && editor.previews.count == 3 ? 2 : index], scale: 1)
+                            .resizable().aspectRatio(contentMode: .fit).frame(maxWidth: .infinity, maxHeight: 180)
                             .accessibilityLabel(index == 0 ? "Artwork preview" : "Output preview")
                     }
                     if !editor.previews.isEmpty {
-                        Text(hdr ? "SDR display preview of PQ output, including its encoded precision and range. The file retains HDR." : "Display P3 preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
+                        Text(gainmap ? "Preview decoded from the encoded delivery, including compression. Switch between HDR reconstruction and the SDR base." :
+                            format == "Exr" ? "SDR display preview. OpenEXR preserves document-linear 32-bit float RGB and alpha." :
+                            hdr ? "SDR display preview of PQ output, including its encoded precision and range. The file retains HDR." :
+                            "Display P3 preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
                         Text("Output: \(editor.details["output_extent"][0].uint) × \(editor.details["output_extent"][1].uint) pixels")
                             .accessibilityIdentifier("export-output-size")
                     }
-                    if editor.clipped > 0 { Text(editor.details["range_blocked"].bool ? "Some colors exceed the PQ output range. Enable clipping or choose SDR output." : "Some colors exceed the output gamut and will be clipped.") }
+                    if editor.clipped > 0 { Text(editor.details["range_blocked"].bool ? "Some colors exceed the selected HDR output range. Enable clipping or choose SDR output." : "Some colors exceed the output gamut and will be clipped.") }
                     if let error = editor.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("export-error") }
                     if !editor.loaded && !editor.busy {
                         Button("Retry") { editor.load() }
@@ -62,20 +77,32 @@ struct ExportForm: View {
             })) {
                 ForEach(editor.names.indices, id: \.self) { Text(editor.names[$0]).tag($0) }
             }.accessibilityIdentifier("export-destination")
-            if editor.details["color"]["depth"].string == "F16" {
-                Picker("Output range", selection: Binding(get: { hdr }, set: { value in
-                    // AppKit updates the segmented control during this callback.
-                    // Publish its enabled/content changes after that update returns.
-                    DispatchQueue.main.async { editor.change("format", JSON(value ? "PngHdr" : "Png")) }
+            if floating {
+                FormPicker("Dynamic range", selection: Binding(get: { hdr ? format : "sdr" }, set: {
+                    editor.change("format", JSON($0 == "sdr" ? "Png" : $0))
                 })) {
-                    Text("SDR").tag(false); Text("HDR").tag(true)
-                }.pickerStyle(.segmented).accessibilityIdentifier("export-range")
+                    Text("SDR rendition").tag("sdr")
+                    Text("HDR JPEG · gain map").tag("JpegHdr")
+                    Text("HDR AVIF · gain map with transparency").tag("AvifHdr")
+                    Text("HDR PNG · BT.2020 PQ").tag("PngHdr")
+                    Text("OpenEXR · 32-bit float").tag("Exr")
+                }.accessibilityIdentifier("export-range")
             }
-            FormPicker("Format", selection: Binding(get: { editor.draft["format"].string }, set: { editor.change("format", JSON($0)) })) {
-                options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG", "PngHdr": "HDR PNG · BT.2020 PQ"])
+            if !hdr {
+                FormPicker("Format", selection: Binding(get: { format }, set: { editor.change("format", JSON($0)) })) {
+                    options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG"])
+                }.accessibilityIdentifier("export-format")
             }
-                .accessibilityIdentifier("export-format")
-            if hdr { Text("BT.2020 PQ · 16-bit · Transparency preserved").font(.caption) }
+            if hdr {
+                Text(format == "Exr" ? "Document-linear RGB · 32-bit float · Transparency preserved" :
+                    gainmap ? "SDR base with HDR gain map. The editable HDR drawing is preserved." :
+                    "BT.2020 PQ · 16-bit · Transparency preserved").font(.caption)
+                if format == "JpegHdr" {
+                    FormPicker("Transparency", selection: choice("background")) {
+                        options("backgrounds", labels: ["Preserve": "Separate alpha", "White": "White background", "Black": "Black background"])
+                    }.accessibilityIdentifier("export-background")
+                }
+            }
             else {
             FormPicker("Output profile", selection: Binding(get: { editor.profileIndex }, set: editor.selectProfile)) {
                 ForEach(editor.profiles.indices, id: \.self) { Text(editor.profiles[$0]["name"].string).tag($0) }
@@ -88,7 +115,7 @@ struct ExportForm: View {
                 options("backgrounds", labels: ["Preserve": "Preserve", "White": "White background", "Black": "Black background"])
             }.accessibilityIdentifier("export-background")
             }
-            if editor.recipe["format"].string == "Jpeg" { number("JPEG quality (1–100)", $quality, id: "export-quality") }
+            if format == "Jpeg" || gainmap { number("Quality (1–100)", $quality, id: "export-quality") }
             Toggle("Fit within pixel size", isOn: $fit).accessibilityIdentifier("export-fit")
             if fit {
                 number("Maximum width", $width, id: "export-width")
@@ -97,7 +124,7 @@ struct ExportForm: View {
             }
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: 12) {
-                    if hdr {
+                    if hdr && format != "Exr" {
                         Toggle("Clip to output HDR range", isOn: Binding(get: { editor.draft["clip_hdr_range"].bool }, set: { editor.change("clip_hdr_range", JSON($0)) }))
                             .accessibilityIdentifier("export-hdr-clip")
                     }
@@ -163,7 +190,7 @@ struct ExportForm: View {
             }
             return value
         }
-        return try editor.recipe.replacing("jpeg_quality", with: editor.recipe["format"].string == "Jpeg"
+        return try editor.recipe.replacing("jpeg_quality", with: (format == "Jpeg" || gainmap)
                 ? JSON(integer(quality, "JPEG quality")) : editor.recipe["jpeg_quality"])
             .replacing("size", with: fit ? JSON(["Fit": ["bounds": [integer(width, "width"), integer(height, "height")], "enlarge": enlarge]]) : JSON("Original"))
             .replacing("resolution", with: resolution == "Ppi" ? JSON(["Ppi": integer(ppi, "resolution")]) : JSON(resolution))

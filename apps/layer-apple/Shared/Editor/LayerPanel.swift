@@ -175,7 +175,7 @@ private struct LayerRow: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var id: UInt64 { layer["id"].uint }
     private var metadata: String {
-        var parts: [String] = []
+        var parts: [String] = layer["editable"].bool ? [] : ["Protected"]
         if layer["blend"].uint != 0 { parts.append(layer["blend_label"].string) }
         if layer["opacity"].number < 1 { parts.append("\(Int((layer["opacity"].number * 100).rounded()))%") }
         return parts.joined(separator: " · ")
@@ -223,7 +223,7 @@ private struct LayerRow: View {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
                 })
             .accessibilityElement(children: .contain)
-            .accessibilityValue(layer["mask_selected"].bool ? "Editing mask" : layer["editing"].bool ? "Drawing target" : layer["selected"].bool ? "Selected" : "")
+            .accessibilityValue(!layer["editable"].bool ? "Paper is protected; select a paint layer to draw" : layer["mask_selected"].bool ? "Editing mask" : layer["editing"].bool ? "Drawing target" : layer["selected"].bool ? "Selected" : "")
             .accessibilityIdentifier("layer-row-\(id)")
     }
     private func thumbnail(mask: Bool) -> some View {
@@ -247,7 +247,7 @@ private struct LayerRow: View {
                 // Bound the hit region as well as the drawing. Without this,
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : "Edit layer content")
+        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : !layer["editable"].bool ? "Paper is protected; select a paint layer to draw" : "Edit layer content")
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
@@ -293,7 +293,7 @@ private struct LayerName: View {
                 TextField("Layer name", text: $name).textFieldStyle(.plain).focused($focused)
                     .onSubmit { finish() }.onKeyPress(.escape) { finish(cancel: true); return .handled }
             } else {
-                Text(layer["label"].string).lineLimit(1).help(layer["label"].string)
+                Text(layer["label"].string).lineLimit(1).help(layer["editable"].bool ? layer["label"].string : "Paper is protected; select a paint layer to draw")
                     .onTapGesture(count: 2) {
                         if allowsAction(), layer["editable"].bool && !layer["locked"].bool { store.layer(["op": "begin_rename", "id": layer["id"].raw]) }
                     }

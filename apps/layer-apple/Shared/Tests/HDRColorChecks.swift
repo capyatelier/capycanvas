@@ -70,15 +70,14 @@ extension XCTestCase {
         workspaceActivate(app.buttons["proof-reset"])
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         // Exercise the native print-mode control while the proof surface is retained.
-        let mode = app.descendants(matching: .any)["proof-mode"].firstMatch
-        workspaceActivate(mode.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Print")).firstMatch)
+        workspaceActivate(app.buttons["proof-mode-print"])
         XCTAssertTrue(app.descendants(matching: .any)["proof-profile"].firstMatch.waitForExistence(timeout: 15))
         attachEditor(in: app, name: "hdr-print-panel")
-        workspaceActivate(mode.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Off")).firstMatch)
+        workspaceActivate(app.buttons["proof-mode-off"])
         command("Export…")
         let range = app.descendants(matching: .any)["export-range"].firstMatch
         XCTAssertTrue(range.waitForExistence(timeout: 30))
-        workspaceActivate(range.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "HDR")).firstMatch)
+        choose("export-range", "HDR PNG · BT.2020 PQ")
         XCTAssertTrue(app.staticTexts["BT.2020 PQ · 16-bit · Transparency preserved"].waitForExistence(timeout: 15))
         workspaceActivate(app.buttons["export-preview"])
         XCTAssertTrue(app.staticTexts["HDR output · SDR preview"].waitForExistence(timeout: 60))

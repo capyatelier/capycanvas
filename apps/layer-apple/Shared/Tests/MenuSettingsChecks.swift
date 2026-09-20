@@ -510,7 +510,7 @@ extension XCTestCase {
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 10))
         activate(app.buttons["shortcut-editor-done"])
         activate(app.buttons["settings-done"])
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         XCTAssertTrue(title.waitForExistence(timeout: 10))
         app.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(title.waitForNonExistence(timeout: 10), "The new shortcut must execute Zen after the editor closes")

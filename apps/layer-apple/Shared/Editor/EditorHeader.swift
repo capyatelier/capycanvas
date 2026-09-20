@@ -34,7 +34,7 @@ import SwiftUI
                 || kind == "battery" && status.battery == nil)
             var width = tile, compact = tile
             switch kind {
-            case "document_title": width = 180; compact = 80
+            case "document_title": width = max(180, min(600, Double(store.snapshot["document_tabs"]["tabs"].array.count) * 180)); compact = 80
             case "workspaces":
                 width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaceLibrary?.status["switcher_display"].array ?? [], textSize: 44.0 / 3))
                 compact = 144
@@ -275,11 +275,8 @@ private struct HeaderItemControl: View {
                     WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette, maximumWidth: width)
                 } else { Text("Workspaces").lineLimit(1) }
             case "document_title":
-                let tab = store.state["tabs"][0]
-                Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
-                    .fontWeight(.semibold).lineLimit(1).padding(.horizontal, 6).accessibilityIdentifier("document-title")
+                DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width)
                     .modifier(HeaderControlMeasurement(id: "document-title"))
-                    .modifier(HeaderCaption(enabled: !editing))
             case "clock":
                 Text(editing && !store.state["fullscreen"].bool ? "Clock" : status.time).monospacedDigit().lineLimit(1)
                     .accessibilityIdentifier("system-clock").modifier(HeaderCaption(enabled: !editing))

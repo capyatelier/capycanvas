@@ -31,7 +31,12 @@ import UIKit
     private var approved: (UInt64, UInt64)?
     // Keep the native picker's URL, including its security scope. The shared
     // location string identifies the document but cannot recreate file access.
-    private var destination: URL?
+    private var destinations: [UInt64: URL] = [:]
+    private var destination: URL? {
+        get { destinations[store?.snapshot["document_tabs"]["selected"].uint ?? 1] }
+        set { destinations[store?.snapshot["document_tabs"]["selected"].uint ?? 1] = newValue }
+    }
+    private var queuedOpens: [PhotoItem] = []
     #if os(macOS)
     weak var presentationWindow: NSWindow?
     #endif
@@ -41,7 +46,7 @@ import UIKit
     private var pickerCompletion: (([URL]) -> Void)?
     private var cancelled = false
     private var finishing = false
-    private var externalOpen: (url: URL, submitted: Bool)?
+    private var externalOpen: (item: PhotoItem, submitted: Bool)?
     private var droppedPhotos: (items: [PhotoItem], placement: JSON)?
     private var loadingPhoto = false
     private var recovering: RecoveryRecord?
@@ -69,14 +74,15 @@ import UIKit
         let name = store?.state["document_file"]["location"]["name"].string ?? ""
         return name.isEmpty ? "Untitled" : name
     }
+    func forgetDocument(_ id: UInt64) { destinations.removeValue(forKey: id) }
     func receive(_ state: JSON) {
         submitExternalOpen()
         let file = state["document_file"]
         if !busy { blocksEditor = file["close_ready"].bool }
         if !file["close_ready"].bool { handledClose = false }
-        if file["close_ready"].bool && !handledClose {
+        if file["close_ready"].bool && !handledClose && requestID == nil {
             handledClose = true
-            if closeCompletion != nil { finishClose(true) } else { closeWindow?() }
+            if closeCompletion != nil { finishClose(true) } else if store?.drawingTabs.confirmingWindow != true { store?.drawingTabs.closeApproved() }
         }
         guard requestID == nil, !finishing,
             let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "document" }) else { return }
@@ -98,10 +104,10 @@ import UIKit
             else { creationError = nil; creationCompletion = completed; creating = true }
         case "export": beginExport(name: document["name"].string)
         case "open":
-            if let url = externalOpen?.url { externalOpen = nil; open(url) }
+            if let item = externalOpen?.item { externalOpen = nil; openItem(item) }
             else { chooseOpen { [weak self] urls in
                 guard let self else { return }
-                if let url = urls.first { open(url) } else { finish() }
+                if let url = urls.first { queuedOpens.append(contentsOf: urls.dropFirst().map(PhotoItem.init(fileURL:))); open(url) } else { finish() }
             } }
         case "place":
             let drop = droppedPhotos; droppedPhotos = nil
@@ -138,16 +144,16 @@ import UIKit
         default: fail("This document service is not available yet")
         }
     }
-    func openURL(_ url: URL) {
-        // Native URL delivery can repeat before the owner publishes its request.
-        // Keep the first destination reserved during that interval as well.
-        guard !busy, externalOpen == nil else { error = "Finish the current document operation first"; return }
-        guard let store else { error = "The canvas session is unavailable"; return }
-        if store.snapshot["shaders_ready"].bool && store.workspaceLibrary?.ready != false
-            && !store.command("open_document")["enabled"].bool {
-            error = "Finish the canvas interaction before opening a drawing"; return
-        }
-        externalOpen = (url, false)
+    func openURLs(_ urls: [URL]) { openItems(urls.map(PhotoItem.init(fileURL:))) }
+    func openItems(_ items: [PhotoItem]) {
+        guard !items.isEmpty else { return }
+        queuedOpens.append(contentsOf: items)
+        submitQueuedOpen()
+    }
+    func openURL(_ url: URL) { openItems([PhotoItem(fileURL: url)]) }
+    private func submitQueuedOpen() {
+        guard !busy, externalOpen == nil, !queuedOpens.isEmpty else { return }
+        externalOpen = (queuedOpens.removeFirst(), false)
         submitExternalOpen()
     }
     func submitExternalOpen() {
@@ -159,9 +165,12 @@ import UIKit
             store.workspaceLibrary?.ready != false, store.snapshot["shaders_ready"].bool,
             store.command("open_document")["enabled"].bool else { return }
         externalOpen?.submitted = true
-        store.edit(["type": "invoke", "command": "open_document"]) { [weak self] error in
-            guard let self, let error else { return }
-            externalOpen = nil; recovering = nil; self.error = error
+        // Admission and command dispatch share the serial owner. A New/Open
+        // queued ahead of this URL must leave it waiting, not lose the URL.
+        store.query(["type": "document_tabs", "op": "open"]) { [weak self] accepted in
+            guard let self, !accepted.bool else { return }
+            externalOpen?.submitted = false
+            submitExternalOpen()
         }
     }
     func recover(_ record: RecoveryRecord) {
@@ -172,6 +181,10 @@ import UIKit
         recovering = record; openURL(url)
     }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
+        guard let store else { completion(false); return }
+        store.drawingTabs.confirmWindowClose(completion)
+    }
+    func confirmCurrentClose(_ completion: @escaping (Bool) -> Void) {
         guard !busy, externalOpen == nil, let native = store?.native else { completion(false); return }
         busy = true; blocksEditor = true; closeCompletion = completion
         native.documentRequest(closeDecision: 0) { [weak self] error in
@@ -208,6 +221,7 @@ import UIKit
     func cancel() {
         if let colorEditor { colorEditor.cancel(); return }
         if let exportEditor { exportEditor.cancel(); return }
+        queuedOpens.removeAll()
         cancelled = true; cancelling = true; activeTask?.cancel()
         // Provider delivery can take arbitrarily long. Its late callback is
         // rejected by request ID; cancellation need not wait for that callback.
@@ -262,8 +276,8 @@ import UIKit
             self.exportEditor = nil
             guard let task else { self.finish(); return }
             self.activeTask = task
-            let type: UTType = recipe["format"].string == "Tiff" ? .tiff : recipe["format"].string == "Jpeg" ? .jpeg : .png
-            let filename = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent + "." + (type.preferredFilenameExtension ?? "png")
+            let type = Self.exportType(recipe["format"].string)
+            let filename = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent + "." + Self.exportExtension(recipe["format"].string)
             self.exportDelivery = { [weak self] in
                 guard let self else { return }
                 if self.cancelled { self.finish(); return }
@@ -318,7 +332,8 @@ import UIKit
         } else {
             NativeProjectTask.io.async { [weak self] in
                 do {
-                    let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .capyProject ? "capy" : type.preferredFilenameExtension ?? "png")
+                    let suffix = URL(fileURLWithPath: name).pathExtension
+                    let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .capyProject ? "capy" : suffix.isEmpty ? type.preferredFilenameExtension ?? "png" : suffix)
                     do { try task.write(to: staging) }
                     catch { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()); throw error }
                     DispatchQueue.main.async {
@@ -390,8 +405,38 @@ import UIKit
             }
         }
     }
+    private func openItem(_ item: PhotoItem) {
+        let recovery = recovering
+        store?.recovery.flush { [weak self] saved in
+            guard let self else { return }
+            guard saved else { fail("Could not preserve the current drawing for recovery"); return }
+            task(opening: true) { [weak self] task in
+                guard let self else { return }
+                let id = requestID; loadingPhoto = true
+                item.load { [weak self, weak task] result in
+                    guard let self, let task, requestID == id, !finishing else { return }
+                    loadingPhoto = false
+                    if cancelled { finish(); return }
+                    do {
+                        switch try result.get() {
+                        case .file(let url): prepare(task, url: url, recovery: recovery) { try task.read(from: url) }
+                        case .image(let data): prepare(task, url: nil, recovery: recovery) { try task.read(image: data, name: item.name) }
+                        }
+                    } catch { fail(error.localizedDescription) }
+                }
+            }
+        }
+    }
     private func open(_ url: URL?, options: JSON? = nil) {
         let recovery = recovering
+        // Preserve the outgoing drawing's checkpoint before it becomes inactive.
+        store?.recovery.flush { [weak self] saved in
+            guard let self else { return }
+            guard saved else { fail("Could not preserve the current drawing for recovery"); return }
+            beginOpen(url, options: options, recovery: recovery)
+        }
+    }
+    private func beginOpen(_ url: URL?, options: JSON?, recovery: RecoveryRecord?) {
         task(opening: true) { [weak self] task in
             self?.prepare(task, url: url, recovery: recovery) { try task.read(from: url, options: options) }
         }
@@ -473,19 +518,33 @@ import UIKit
         if let state = store?.state.json {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
-            if requestID == nil { recovering = nil; externalOpen = nil }
+            if requestID == nil {
+                recovering = nil
+                if !cancelled { submitQueuedOpen() }
+            }
         }
     }
     private func chooseOpen(photosOnly: Bool = false, _ completion: @escaping ([URL]) -> Void) {
         if let dialogs { dialogs.open(photosOnly, completion); return }
         #if os(macOS)
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = photosOnly
+        panel.allowedContentTypes = (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes; panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         present(panel) { response in completion(response == .OK ? panel.urls : []) }
         #else
-        pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes, multiple: photosOnly)
+        pickerCompletion = completion; picker = Picker(export: nil, types: (photosOnly ? [] : [.capyProject]) + UTType.capyPhotoTypes, multiple: true)
         #endif
+    }
+    static func exportType(_ format: String) -> UTType {
+        if format.hasPrefix("Jpeg") { return .jpeg }
+        if format.hasPrefix("Avif") { return UTType(filenameExtension: "avif") ?? UTType("public.avif") ?? .data }
+        if format == "Exr" { return UTType(filenameExtension: "exr") ?? UTType(exportedAs: "art.capycanvas.openexr", conformingTo: .image) }
+        return format == "Tiff" ? .tiff : .png
+    }
+    static func exportExtension(_ format: String) -> String {
+        if format.hasPrefix("Jpeg") { return "jpg" }
+        if format.hasPrefix("Avif") { return "avif" }
+        return format == "Exr" ? "exr" : format == "Tiff" ? "tiff" : "png"
     }
     private func chooseSave(name: String, type: UTType, _ completion: @escaping (URL?) -> Void) {
         if let dialogs { dialogs.save(name, type, completion); return }

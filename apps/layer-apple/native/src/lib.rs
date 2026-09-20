@@ -2,6 +2,8 @@
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
 mod local_tone;
+mod document_tabs;
+pub use document_tabs::*;
 
 /// SDR viewing contract shared by canvas, UI values and image transports.
 /// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
@@ -21,6 +23,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
+    documents: document_tabs::Sessions,
+    document_gpu: Option<document_tabs::Context>,
     error: Option<CString>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
@@ -69,9 +73,11 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
         })
         .ok()?;
-        host.session.set_document_replacement(true);
+        host.session.set_document_replacement(false);
         Some(Box::into_raw(Box::new(CapyApple {
             host,
+            documents: Default::default(),
+            document_gpu: None,
             metal: metal::MetalHost::default(),
             error: None,
             chrome_facts: Default::default(),
@@ -261,7 +267,10 @@ pub unsafe extern "C" fn capy_apple_request(
             return snapshot
                 .map_err(|e| e.to_string())?
                 .map(|bytes| {
-                    CString::new(bytes)
+                    let mut snapshot: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    snapshot["display_status"] = a.metal.display_status(&a.host);
+                    snapshot["document_tabs"] = a.tabs_view(a.host.logical[0]);
+                    CString::new(snapshot.to_string())
                         .map(CString::into_raw)
                         .map_err(|e| e.to_string())
                 })
@@ -301,6 +310,7 @@ pub unsafe extern "C" fn capy_apple_request(
                     a.metal.set_headroom(&mut a.host,headroom)?;
                     serde_json::Value::Null
                 },
+                Some("document_tabs") => a.tabs_request(value)?,
                 Some("proof_form") => layer_ui::proof_workflow::proof_form(&a.host.session),
                 Some("proof_status") => serde_json::to_value(a.metal.proof.observe(&a.host.session)).map_err(|e| e.to_string())?,
                 _ => a.host.query(value)?,

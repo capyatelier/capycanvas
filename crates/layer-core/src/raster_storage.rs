@@ -663,10 +663,9 @@ mod tests {
         assert!(
             spill_tiles(
                 &[blob.clone()],
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .open("/dev/full")
-                    .unwrap()
+                // A read-only descriptor rejects writes on every Unix host;
+                // macOS does not provide Linux's /dev/full device.
+                std::fs::File::open("/dev/null").unwrap()
             )
             .is_err()
         );

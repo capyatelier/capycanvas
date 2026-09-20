@@ -58,7 +58,7 @@ extension XCTestCase {
         if !create.waitForNonExistence(timeout: 2) { workspaceActivate(create) }
         #endif
         XCTAssertTrue(create.waitForNonExistence(timeout: 30))
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Untitled · 79 × 53", "Untitled · 79 × 53"), evaluatedWith: title)
         waitForExpectations(timeout: 30)
         workspaceActivate(app.buttons["paint-edit-color"].firstMatch)

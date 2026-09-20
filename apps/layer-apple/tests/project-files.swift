@@ -4,10 +4,12 @@ import QuartzCore
 import ImageIO
 
 @main struct ProjectFileChecks {
+    @MainActor static var prepareFrame: (() async throws -> Void)?
     @MainActor static func wait(_ description: String, _ condition: () -> Bool) async throws {
         let end = Date().addingTimeInterval(45)
         while !condition() {
             precondition(Date() < end, description)
+            if let prepareFrame { try await prepareFrame() }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -49,6 +51,8 @@ import ImageIO
         for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform,
                 persistence: EditorPersistence(root: root.appendingPathComponent("files-\(platform)")), managedWorkspaces: false)
+            prepareFrame = { try await startupFrame(store) }
+            defer { prepareFrame = nil }
             let target = root.appendingPathComponent("drawing-\(platform).capy")
             let invalid = root.appendingPathComponent("invalid-\(platform).capy")
             try Data("incomplete".utf8).write(to: invalid)
@@ -122,9 +126,6 @@ import ImageIO
                 if let error = cold.projectFiles.error {
                     throw HostFailure(message: "Startup Open rejected the supplied file: \(error)")
                 }
-                cold.projectFiles.openURL(invalid)
-                precondition(cold.projectFiles.error == "Finish the current document operation first")
-                cold.projectFiles.error = nil
                 let surface = CAMetalLayer(); surface.bounds = layer.bounds
                 cold.native!.attach(surface, width: 128, height: 128, scale: 1)
                 if published {
@@ -160,55 +161,32 @@ import ImageIO
                 withExtendedLifetime(surface) {}
             }
             print("Startup Open passes for Apple platform \(platform)")
-            // OS Open URL delivery can arrive twice before the shared request
-            // publishes busy state. The second URL must not replace the first.
-            for duplicate in [true, false] {
+            // Sequential external delivery opens independent drawings without
+            // a location picker. Concurrent delivery is covered by drawing-tabs.swift.
+            for _ in 0..<2 {
                 let epoch = store.state["document_file"]["epoch"].uint
                 let originalChoices = choices
                 store.projectFiles.openURL(target)
-                if duplicate {
-                    var closeAllowed: Bool?
-                    store.projectFiles.confirmClose { closeAllowed = $0 }
-                    precondition(closeAllowed == false, "Window close must not overtake a pending external Open")
-                    store.projectFiles.openURL(invalid)
-                }
-                _ = await withCheckedContinuation { continuation in
-                    store.native!.submit(2, JSON(["type": "catalog"])) { continuation.resume(returning: $0 != nil) }
-                }
                 try await wait("External Open did not settle") {
-                    !store.projectFiles.busy && store.state["requests"].array.isEmpty
+                    store.state["document_file"]["epoch"].uint == epoch + 1 && !store.projectFiles.busy
                 }
-                guard store.state["document_file"]["epoch"].uint == epoch + 1,
-                    store.state["document_file"]["location"]["name"].string == target.lastPathComponent else {
-                    throw HostFailure(message: "External Open must preserve the first URL: \(store.projectFiles.error ?? store.failure ?? "No document replacement")")
-                }
-                precondition(choices == originalChoices && store.failure == nil)
-                precondition(store.projectFiles.error == (duplicate ? "Finish the current document operation first" : nil),
-                    "Reject an overlapping URL without leaving a stale reservation after completion")
-                store.projectFiles.error = nil
+                precondition(store.state["document_file"]["location"]["name"].string == target.lastPathComponent)
+                precondition(choices == originalChoices && store.failure == nil && store.projectFiles.error == nil)
             }
-            // A command queued ahead of URL delivery may make Open unavailable
-            // before its request reaches Rust. Reject it as a document operation
-            // and retire the URL reservation so the next Open remains usable.
+            // A URL arriving alongside a cancelled New request waits for the
+            // first file operation, then opens its own drawing.
             let extent = creationOptions
             creationOptions = nil
+            let queuedEpoch = store.state["document_file"]["epoch"].uint
             store.invoke("new_document")
             store.projectFiles.openURL(target)
-            _ = await withCheckedContinuation { continuation in
-                store.native!.submit(2, JSON(["type": "catalog"])) { continuation.resume(returning: $0 != nil) }
-            }
-            try await wait("Rejected external Open did not settle") {
-                !store.projectFiles.busy && store.state["requests"].array.isEmpty
-            }
-            precondition(store.failure == nil && store.projectFiles.error?.contains("unavailable during this interaction") == true,
-                "A rejected external Open belongs to the document alert, not a canvas failure")
-            creationOptions = extent; store.projectFiles.error = nil
-            let retryEpoch = store.state["document_file"]["epoch"].uint
-            store.projectFiles.openURL(target)
-            try await wait("External Open reservation survived a rejected command") {
-                store.state["document_file"]["epoch"].uint == retryEpoch + 1 && !store.projectFiles.busy
+            let queuedDeadline = Date().addingTimeInterval(45)
+            while store.state["document_file"]["epoch"].uint != queuedEpoch + 1 || store.projectFiles.busy {
+                guard Date() < queuedDeadline else { throw HostFailure(message: "Queued Open: epoch=\(store.state["document_file"]["epoch"].uint), expected=\(queuedEpoch + 1), busy=\(store.projectFiles.busy), ready=\(store.snapshot["shaders_ready"].bool), error=\(store.projectFiles.error ?? store.failure ?? "none")") }
+                try await startupFrame(store)
             }
             precondition(store.projectFiles.error == nil && store.failure == nil)
+            creationOptions = extent
             print("External Open admission passes for Apple platform \(platform)")
             saveLocation = nil
             try await invoke("save_document_as")
@@ -227,15 +205,12 @@ import ImageIO
             store.invoke("add_layer")
             try await wait("Unsaved edit not applied") { store.state["layers"].array.count == 4 }
             let epoch = store.state["document_file"]["epoch"].uint
-            store.invoke("new_document")
-            try await wait("Unsaved prompt missing") { store.projectFiles.confirming }
-            store.projectFiles.choose("cancel")
-            try await wait("Cancel not acknowledged") { !store.projectFiles.busy }
+            let newOptions = creationOptions
+            creationOptions = nil
+            try await invoke("new_document")
             precondition(store.state["document_file"]["epoch"].uint == epoch && store.state["layers"].array.count == 4)
-            store.invoke("new_document")
-            try await wait("Discard prompt missing") { store.projectFiles.confirming }
-            store.projectFiles.choose("discard")
-            try await wait("New drawing failed") { !store.projectFiles.busy }
+            creationOptions = newOptions
+            try await invoke("new_document")
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(store.state["layers"].array.count == 2 && store.state["document_file"]["epoch"].uint == epoch + 1)
             let createdEpoch = store.state["document_file"]["epoch"].uint
@@ -266,57 +241,49 @@ import ImageIO
             let unsavedLayers = store.state["layers"].stableKey
             let unsavedFile = store.state["document_file"].stableKey
             store.invoke("open_document")
-            try await wait("Unsaved Open must request confirmation") { store.projectFiles.confirming }
-            store.projectFiles.choose("discard")
             try await wait("Invalid replacement must finish with an error") {
                 !store.projectFiles.busy && store.projectFiles.error != nil && store.state["requests"].array.isEmpty
             }
             precondition(store.state["layers"].stableKey == unsavedLayers
                 && store.state["document_file"].stableKey == unsavedFile,
-                "Failed Open must retain the original unsaved drawing even after Discard approval")
+                "Failed Open must retain the original unsaved tab")
             store.projectFiles.error = nil
             store.invoke("undo")
             try await wait("Failed Open must retain Undo") { store.state["layers"].array.count == 2 }
             store.invoke("redo")
             try await wait("Failed Open must retain Redo") { store.state["layers"].stableKey == unsavedLayers }
-            store.invoke("open_document")
-            try await wait("Failed replacement must not mark the original drawing saved") { store.projectFiles.confirming }
-            store.projectFiles.choose("cancel")
-            try await wait("Retry cancellation must release the file operation") { !store.projectFiles.busy }
+            openLocation = nil
+            try await invoke("open_document")
             precondition(store.state["document_file"]["modified"].bool
                 && store.state["layers"].stableKey == unsavedLayers)
             store.invoke("undo")
             try await wait("Restore the clean fixture before the queued-edit check") {
                 store.state["layers"].array.count == 2 && !store.state["document_file"]["modified"].bool
             }
-            print("PASS platform \(platform): failed Open after Discard preserves unsaved drawing, history and retry cancellation")
+            print("PASS platform \(platform): failed Open preserves unsaved drawing, history and retry cancellation")
             store.projectFiles.error = nil; openLocation = target
             beforeOpen = { store.invoke("add_layer") }
             try await invoke("open_document")
             precondition(store.projectFiles.error != nil, "An edit queued before capture must prevent replacement")
             precondition(store.state["layers"].array.count == 3)
             beforeOpen = nil; store.projectFiles.error = nil
-            store.invoke("open_document")
-            try await wait("Intervening changes must prompt") { store.projectFiles.confirming }
-            store.projectFiles.choose("discard")
-            try await wait("Confirmed open did not settle") { !store.projectFiles.busy }
+            try await invoke("open_document")
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(store.state["layers"].array.contains { $0["label"].string == savedLayerName })
             precondition(!store.state["document_file"]["modified"].bool)
             store.invoke("add_layer")
             var closed: Bool?
-            store.projectFiles.confirmClose { closed = $0 }
+            store.projectFiles.confirmCurrentClose { closed = $0 }
             try await wait("Close prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("cancel")
             try await wait("Close cancellation did not settle") { closed != nil }
             precondition(closed == false)
             closed = nil
-            store.projectFiles.confirmClose { closed = $0 }
+            store.projectFiles.confirmCurrentClose { closed = $0 }
             try await wait("Save on close prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("save")
             try await wait("Save on close did not finish") { closed != nil }
             precondition(closed == true && !store.state["document_file"]["modified"].bool)
-            precondition(choices == 8, "Each user request must present at most one location choice")
             withExtendedLifetime(layer) {}
             print("Project files pass for Apple platform \(platform)")
         }

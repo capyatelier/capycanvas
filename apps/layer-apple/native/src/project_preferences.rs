@@ -28,7 +28,7 @@ pub unsafe extern "C" fn capy_export_draft(recipe: *const c_char, action: *const
     let result = (|| -> Result<serde_json::Value, String> {
         let recipe: layer_ui::ExportRecipe = serde_json::from_str(unsafe { read_title(recipe) }?).map_err(|e| e.to_string())?;
         let action = serde_json::from_str(unsafe { read_title(action) }?).map_err(|e| e.to_string())?;
-        let mut draft=recipe.draft(action);
+        let draft=recipe.draft(action);
         serde_json::to_value(draft).map_err(|e| e.to_string())
     })();
     CString::new(result.unwrap_or_else(|error| serde_json::json!({"error":error})).to_string()).unwrap().into_raw()

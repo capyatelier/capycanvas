@@ -98,7 +98,7 @@ private struct PropertyField: View {
             }
         case "color":
             ManagedColorButton(label: label, identifier: "property-" + key, value: value,
-                documentSpace: store.state["colors"]["rgb_space"].string) { change($0.raw, revision: revision) }
+                documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) { change($0.raw, revision: revision) }
         case "gradient":
             GradientProperty(store: store, control: control, effect: {
                 effect($0, revision: revision, phase: $1, completion: $2)
@@ -326,7 +326,7 @@ private struct GradientProperty: View {
                         change($0, index: index, revision: revision, completion: $1)
                     }.disabled(!removable)
                     ManagedColorButton(label: "Color", identifier: "gradient-stop", value: stops[index]["color"],
-                        documentSpace: store.state["colors"]["rgb_space"].string) {
+                        documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) {
                         change(stops[index]["position"].number, index: index, color: $0.raw, revision: revision)
                     }
                     NumberControl(store: store, label: "Opacity", value: stops[index]["color"]["rgba"][3].number,

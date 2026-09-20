@@ -65,7 +65,7 @@ extension XCTestCase {
             item.click()
             // Clock visibility follows the actual native transition callback.
             XCTAssertTrue(enter ? clock.waitForExistence(timeout: 15) : clock.waitForNonExistence(timeout: 15))
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
         }
         func expectLayout() {
             XCTAssertEqual(canvas.frame, window.frame, "Metal must extend behind the editor header")
@@ -94,7 +94,7 @@ extension XCTestCase {
         let blank = editorPixels(in: app, at: samplePoint)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
             thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         expectation(for: NSPredicate { _, _ in
             let sample = self.editorPixels(in: app, at: samplePoint)
             return stride(from: 0, to: sample.count, by: 4).contains { Int(sample[$0 + 2]) > Int(sample[$0]) + 50 }
@@ -197,7 +197,7 @@ extension XCTestCase {
             }
             expectation(for: NSPredicate { _, _ in window.isHittable }, evaluatedWith: window)
             waitForExpectations(timeout: 10)
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
             XCTAssertEqual(scenes.count, 1); XCTAssertEqual(scenes.firstMatch.identifier, sceneID)
             XCTAssertEqual(canvas.frame, window.frame)
             XCTAssertTrue(app.buttons["workspace-switch-builtin:workspace:illustrator"].isSelected)
@@ -209,7 +209,7 @@ extension XCTestCase {
             }
             window.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
                 thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
             expectation(for: NSPredicate { _, _ in pixels() != paper }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
             let stroke = pixels()

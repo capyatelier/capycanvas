@@ -152,7 +152,7 @@ extension XCTestCase {
                 let before = pixels()
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.44, dy: 0.55)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.55)))
-                app.staticTexts["document-title"].hover()
+                editorDocumentTitle(in: app).hover()
                 expectation(for: NSPredicate { _, _ in
                     let sample = pixels()
                     guard sample != before else { return false }
@@ -192,7 +192,7 @@ extension XCTestCase {
         editorTool("Figure", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
         viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.38, dy: 0.43)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.67)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         expectation(for: NSPredicate { _, _ in
             let samples = self.editorPixelSamples(in: app, at: [CGPoint(x: 0.48, y: 0.55), CGPoint(x: 0.58, y: 0.55)], size: 8)
             return Int(samples[0][0]) > Int(samples[0][2]) + 80 && Int(samples[1][2]) > Int(samples[1][0]) + 50
@@ -219,7 +219,7 @@ extension XCTestCase {
                 expectPixels(baseline)
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.55)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.55)))
-                app.staticTexts["document-title"].hover()
+                editorDocumentTitle(in: app).hover()
                 expectation(for: NSPredicate { _, _ in pixels() != baseline }, evaluatedWith: app)
                 waitForExpectations(timeout: 10)
                 let changed = pixels()
@@ -258,7 +258,7 @@ extension XCTestCase {
         func drag(_ a: CGPoint, _ b: CGPoint) {
             viewport.coordinate(withNormalizedOffset: CGVector(dx: a.x, dy: a.y)).click(forDuration: 0.05,
                 thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: b.x, dy: b.y)))
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
         }
         func samples(_ points: [CGPoint]) -> [Data] { editorPixelSamples(in: app, at: points, size: 4) }
         func waitPixels(_ expected: [Data], _ points: [CGPoint]) {
@@ -363,7 +363,7 @@ extension XCTestCase {
             func drag(_ a: CGPoint, _ b: CGPoint) {
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: a.x, dy: a.y)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: b.x, dy: b.y)))
-                app.staticTexts["document-title"].hover()
+                editorDocumentTitle(in: app).hover()
             }
             drag(start, end)
             waitGuides(true); XCTAssertTrue(delete.isEnabled)

@@ -68,7 +68,7 @@ extension XCTestCase {
         activate(app.menuItems["Enter Full Screen"])
         #endif
         XCTAssertTrue(clock.waitForExistence(timeout: 15), "Cancel restores the fullscreen Clock item")
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         XCTAssertTrue(title.exists)
         XCTAssertLessThanOrEqual(abs(clock.frame.midY - title.frame.midY), 1)
         #if os(macOS)
@@ -129,7 +129,7 @@ extension XCTestCase {
         #endif
         workspaceActivate(app.buttons["header-done"])
         XCTAssertTrue(app.buttons["header-done"].waitForNonExistence(timeout: 10))
-        let documentTitle = app.staticTexts["document-title"]
+        let documentTitle = editorDocumentTitle(in: app)
         #if os(macOS)
         documentTitle.rightClick()
         let customize = app.menuItems.matching(identifier: "invokeMenuItem:")

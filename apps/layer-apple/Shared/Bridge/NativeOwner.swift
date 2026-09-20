@@ -24,6 +24,7 @@ final class NativeOwner: @unchecked Sendable {
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
     private var gpuHealth: DispatchSourceTimer?
     private var hdrDocument = false
+    private var selectedDocument: UInt64 = 1
     /// Returning from occlusion/suspension needs a fresh frame even when the
     /// document has no further edits.
     func displayHeadroom(_ value: Double) {
@@ -126,6 +127,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func publish() throws {
         if let snapshot = try request(7) {
+            if !snapshot["document_tabs"].isNull { selectedDocument = snapshot["document_tabs"]["selected"].uint }
             if !snapshot["proof_panel"].isNull {
                 let hdr = snapshot["proof_panel"]["hdr"].bool
                 if hdr != hdrDocument {
@@ -274,14 +276,15 @@ final class NativeOwner: @unchecked Sendable {
     }
     /// Capture only a committed raster boundary. Active ink may continue; its
     /// preceding committed pixels remain recoverable until the next pen-up.
-    func recoveryTask(expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+    func recoveryTask(document: UInt64? = nil, expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
         queue.async { [self] in
             defer { try? publish() }
-            let ready = capy_apple_prepare_recovery(handle, FrameTrace.now())
+            let id = document ?? selectedDocument
+            let ready = id == selectedDocument ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : 0
             guard ready == 0 else {
                 completion(nil, ready < 0 ? capy_apple_error(handle).map(String.init(cString:)) : nil); return
             }
-            guard let pointer = capy_apple_project_task(handle, 2, nil) else {
+            guard let pointer = capy_apple_document_recovery(handle, id) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:))); return
             }
             let task = NativeProjectTask(pointer)
@@ -305,8 +308,15 @@ final class NativeOwner: @unchecked Sendable {
     }
     func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?, recovered: Bool = false,
         completion: @escaping @Sendable (String?) -> Void) {
-        queue.async { [self] in
+        let deadline = DispatchTime.now() + .seconds(15)
+        @Sendable func attempt() {
             do {
+                let ready = opening ? capy_apple_project_prepare_adopt(handle, task.handle, FrameTrace.now()) : 0
+                if ready == 1 {
+                    guard DispatchTime.now() < deadline else { throw HostFailure(message: "Drawing capture did not finish") }
+                    queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: attempt); return
+                }
+                try check(ready)
                 try title.withCString { name in
                     try (url?.absoluteString ?? "").withCString { uri in
                         try check(recovered ? capy_apple_project_recover(handle, task.handle)
@@ -315,7 +325,44 @@ final class NativeOwner: @unchecked Sendable {
                     }
                 }
                 try publish(); completion(nil)
+                if opening { documentStorage() }
             } catch { completion(error.localizedDescription) }
+        }
+        queue.async(execute: attempt)
+    }
+    private final class DocumentJob: @unchecked Sendable {
+        let handle: OpaquePointer
+        init(_ handle: OpaquePointer) { self.handle = handle }
+        deinit { let pointer = handle; NativeProjectTask.io.async { capy_document_free(pointer) } }
+    }
+    func switchDocument(_ id: UInt64, closing: Bool = false, completion: @escaping @Sendable (String?) -> Void) {
+        let deadline = DispatchTime.now() + .seconds(15)
+        @Sendable func attempt() {
+            do {
+                let ready = capy_apple_document_prepare_switch(handle, FrameTrace.now())
+                if ready == 1 {
+                    guard DispatchTime.now() < deadline else { throw HostFailure(message: "Drawing capture did not finish") }
+                    queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: attempt); return
+                }
+                try check(ready)
+                guard let task = capy_apple_document_switch(handle, id, closing) else { try check(-1); return }
+                runDocumentJob(DocumentJob(task), completion: completion)
+            } catch { completion(error.localizedDescription) }
+        }
+        queue.async(execute: attempt)
+    }
+    private func documentStorage() {
+        guard let task = capy_apple_document_storage(handle) else { return }
+        runDocumentJob(DocumentJob(task)) { [weak self] error in if let error { self?.receive(nil, error) } }
+    }
+    private func runDocumentJob(_ job: DocumentJob, completion: @escaping @Sendable (String?) -> Void) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-apple-drawing-tiles", isDirectory: true)
+        NativeProjectTask.io.async { [self, job] in
+            _ = directory.path.withCString { capy_document_prepare(job.handle, $0) }
+            queue.async { [self, job] in
+                do { try check(capy_apple_document_resume(handle, job.handle)); try publish(); completion(nil) }
+                catch { try? publish(); completion(error.localizedDescription) }
+            }
         }
     }
     func proofTask(id: UInt64, recipe: JSON?, completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {

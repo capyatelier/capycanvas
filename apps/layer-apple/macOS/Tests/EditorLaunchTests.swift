@@ -19,6 +19,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkNativeSourceEditing(in: editorCaptureApplication())
     }
 
+    @MainActor func testNativeDrawingTabs() throws {
+        try checkNativeDrawingTabs(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeHDRColor() throws {
         try checkNativeHDRColor(in: editorCaptureApplication())
     }
@@ -181,11 +185,11 @@ final class EditorLaunchTests: XCTestCase {
         let canvas = app.windows.firstMatch.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["document-title"].exists)
+        XCTAssertFalse(editorDocumentTitle(in: app).exists)
         XCTAssertFalse(app.buttons["zen-button"].exists)
         app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["document-title"].exists)
+        XCTAssertTrue(editorDocumentTitle(in: app).exists)
         XCTAssertTrue(app.buttons["zen-button"].exists)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }

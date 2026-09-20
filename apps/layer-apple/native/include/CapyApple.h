@@ -22,7 +22,16 @@ typedef struct CapyWorkspaceLibrary CapyWorkspaceLibrary;
 CapyWorkspaceLibrary *capy_workspace_library_create(uint32_t platform, const char *directory, const char *resume_key);
 char *capy_workspace_library_request(CapyWorkspaceLibrary *library, const char *json);
 void capy_workspace_library_destroy(CapyWorkspaceLibrary *library);
+typedef struct CapyDocumentTask CapyDocumentTask;
+CapyDocumentTask *capy_apple_document_switch(CapyApple *app, uint64_t id, bool closing);
+int32_t capy_apple_document_prepare_switch(CapyApple *app, uint64_t now);
+CapyDocumentTask *capy_apple_document_storage(CapyApple *app);
+int32_t capy_document_prepare(CapyDocumentTask *task, const char *directory);
+int32_t capy_apple_document_resume(CapyApple *app, CapyDocumentTask *task);
+void capy_document_free(CapyDocumentTask *task);
 typedef struct CapyProjectTask CapyProjectTask;
+int32_t capy_apple_project_prepare_adopt(CapyApple *app, const CapyProjectTask *task, uint64_t now);
+CapyProjectTask *capy_apple_document_recovery(CapyApple *app, uint64_t id);
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
 /* kind: 0 save, 1 open, 2 recovery, 3 Place/Paste, 4 color/history, 5 properties, 6 source, 7 histogram. */
@@ -56,6 +65,7 @@ char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker o
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
 /* Worker only; borrowed straight Display P3 RGBA8 until the next mutation/free. */
 int32_t capy_project_preview(const CapyProjectTask *task, bool after, CapyProjectPreview *output);
+int32_t capy_project_preview_at(const CapyProjectTask *task, uint32_t index, CapyProjectPreview *output);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
 int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */

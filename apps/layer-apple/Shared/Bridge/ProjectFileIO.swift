@@ -78,8 +78,11 @@ final class NativeProjectTask: @unchecked Sendable {
         return try JSON.decode(String(cString: text))
     }
     func comparison(after: Bool) throws -> CGImage {
+        try comparison(index: after ? 1 : 0)
+    }
+    func comparison(index: UInt32) throws -> CGImage {
         var preview = CapyProjectPreview()
-        guard capy_project_preview(handle, after, &preview) == 0, let pixels = preview.pixels,
+        guard capy_project_preview_at(handle, index, &preview) == 0, let pixels = preview.pixels,
             preview.width > 0, preview.height > 0, preview.width <= 512, preview.height <= 384,
             preview.count == Int(preview.width * preview.height * 4),
             let space = CGColorSpace(name: CGColorSpace.displayP3),

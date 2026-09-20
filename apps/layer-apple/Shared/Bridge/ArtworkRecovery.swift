@@ -13,6 +13,7 @@ import SwiftUI
     private static let owners = NSHashTable<ArtworkRecovery>.weakObjects()
     let files: RecoveryFiles
     private let identity = UUID()
+    private let document: UInt64
     private weak var store: EditorStore?
     private var file = JSON()
     private var policy = ""
@@ -32,7 +33,8 @@ import SwiftUI
         return messages.isEmpty ? nil : messages.joined(separator: "\n")
     }
 
-    init(store: EditorStore) {
+    init(store: EditorStore, document: UInt64 = 1) {
+        self.document = document
         self.store = store; files = RecoveryFiles(root: store.native?.persistenceRoot)
         Self.owners.add(self)
         refresh(offer: true)
@@ -113,7 +115,7 @@ import SwiftUI
         }
         guard let native = store?.native else { finish("The drawing owner is unavailable"); return }
         saving = true
-        native.submit(2, JSON(["type": "recovery_document"])) { [weak self] document in
+        native.submit(2, JSON(["type": "document_tabs", "op": "recovery", "id": document])) { [weak self] document in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.saving = false
@@ -152,7 +154,7 @@ import SwiftUI
             }
             let document = work["document"], identity = identity
             let title = file["location"]["name"].string
-            native.recoveryTask(expected: (document["epoch"].uint, document["revision"].uint)) { [weak self] task, failure in
+            native.recoveryTask(document: self.document, expected: (document["epoch"].uint, document["revision"].uint)) { [weak self] task, failure in
                 guard let task else {
                     DispatchQueue.main.async { self?.completed(work, success: false, failure: failure) }; return
                 }

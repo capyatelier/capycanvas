@@ -191,7 +191,7 @@ extension XCTestCase {
         }
         #if os(macOS)
         let window = app.windows.firstMatch
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         let viewport = window.frame
         #else
         let viewport = app.frame

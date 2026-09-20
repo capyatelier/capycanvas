@@ -48,11 +48,21 @@ impl Task {
         let recipe = self.recipe.clone();
         let renderer = self.renderer(control)?;
         let before = renderer.preview_document([512, 384], crate::DISPLAY_SPACE)?;
-        let (after, statistics) = if recipe.format.is_hdr() {
-            renderer.preview_hdr_output([512,384],crate::DISPLAY_SPACE,1.)?
-        } else { renderer.preview_output([512, 384], crate::DISPLAY_SPACE,
-            &recipe.interpretation(), recipe.encoding, recipe.background.matte())? };
-        self.previews = [before, after].into_iter().map(|p| {
+        let (after, base, statistics) = if let Some(format) = recipe.format.gainmap() {
+            let (hdr, sdr, stats) = renderer.preview_gainmap_output([512,384], crate::DISPLAY_SPACE,
+                1., format, recipe.jpeg_quality, recipe.background.matte())?;
+            (hdr, Some(sdr), stats)
+        } else if recipe.format == ExportFormat::Exr {
+            (renderer.preview_document([512,384], crate::DISPLAY_SPACE)?, None, Default::default())
+        } else if recipe.format.is_hdr() {
+            let (image, stats) = renderer.preview_hdr_output([512,384],crate::DISPLAY_SPACE,1.)?;
+            (image, None, stats)
+        } else {
+            let (image, stats) = renderer.preview_output([512, 384], crate::DISPLAY_SPACE,
+                &recipe.interpretation(), recipe.encoding, recipe.background.matte())?;
+            (image, None, stats)
+        };
+        self.previews = [before, after].into_iter().chain(base).map(|p| {
             Ok(color::Preview { extent: p.extent, pixels: p.encoded_bytes(crate::DISPLAY_SPACE)? })
         }).collect::<Result<_, String>>()?;
         self.clipped = statistics.clipped_channels;
@@ -64,7 +74,8 @@ impl Task {
         Ok(serde_json::json!({"color":document.color,"extent":extent,
             "resolution":document.resolution,"recipe":self.recipe,"form":layer_ui::ExportForm::new(document),
             "output_extent":self.recipe.size.extent(extent)?,"clipped_channels":self.clipped,
-            "range_blocked":self.recipe.format.is_hdr() && !self.recipe.format.maps_hdr_range() && self.clipped>0,
+            "has_sdr_preview":self.previews.len() == 3,
+            "range_blocked":self.recipe.format.is_hdr() && self.recipe.format != ExportFormat::Exr && !self.recipe.format.maps_hdr_range() && self.clipped>0,
             "sampled_time":document.has_animated_effects().then_some(self.original.time)}))
     }
     pub(super) fn write(&mut self, stream: impl Write + Seek, control: CaptureControl) -> Result<(), String> {

@@ -40,14 +40,27 @@ import SwiftUI
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     lazy var windowPresentation = WindowPresentation(store: self)
-    lazy var recovery = ArtworkRecovery(store: self)
+    private var recoveries: [UInt64: ArtworkRecovery] = [:]
+    lazy var drawingTabs = DrawingTabsController(store: self)
+    var recovery: ArtworkRecovery {
+        let id = snapshot["document_tabs"]["selected"].uint == 0 ? 1 : snapshot["document_tabs"]["selected"].uint
+        if let value = recoveries[id] { return value }
+        let value = ArtworkRecovery(store: self, document: id); recoveries[id] = value; return value
+    }
+    func forgetRecovery(_ id: UInt64) { recoveries.removeValue(forKey: id); projectFiles.forgetDocument(id) }
+    func closeRecoveries(_ completion: @escaping (Bool) -> Void) {
+        let values = Array(recoveries.values)
+        guard !values.isEmpty else { completion(true); return }
+        var remaining = values.count, success = true
+        for value in values { value.close { ok in success = success && ok; remaining -= 1; if remaining == 0 { completion(success) } } }
+    }
     lazy var histogram = HistogramController(store: self)
     lazy var proof = ProofController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
     var colorViewing: JSON {
         JSON(["document_space": state["colors"]["rgb_space"].raw, "recipe": snapshot["proof_panel"]["recipe"].raw,
-              "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
+              "document_depth": snapshot["proof_panel"]["depth"].raw, "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
     }
     var paintPreview: JSON {
         snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()
@@ -109,6 +122,7 @@ import SwiftUI
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 histogram.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
+                drawingTabs.receive()
                 projectFiles.receive(state.json)
                 windowPresentation.receive(state.json)
                 recovery.observe(state["document_file"])
@@ -190,7 +204,7 @@ import SwiftUI
         next()
     }
     static func resetCloseApprovals() {
-        for live in instances.allObjects { live.native?.documentRequest(closeDecision: 4) { _ in } }
+        for live in instances.allObjects { live.query(["type": "document_tabs", "op": "reset_close"]) { _ in } }
     }
     static func workspaceOwner(id: String, owner: String) -> EditorStore? {
         instances.allObjects.first {
@@ -235,7 +249,7 @@ import SwiftUI
             Task { @MainActor in
                 do { try await workspaceLibrary?.close() }
                 catch { workspaceLibrary?.error = error.localizedDescription; completion(false); return }
-                recovery.close { [self] saved in
+                closeRecoveries { [self] saved in
                     if saved { completion(true) }
                     else { cancelPreparedClose { completion(false) } }
                 }
@@ -244,7 +258,7 @@ import SwiftUI
     }
     func cancelPreparedClose(_ completion: @escaping @MainActor () -> Void = {}) {
         native?.documentRequest(closeDecision: 4) { _ in }
-        recovery.resume()
+        for value in recoveries.values { value.resume() }
         Task { @MainActor in
             do { try await workspaceLibrary?.reopenAfterCancelledClose() }
             catch { workspaceLibrary?.error = error.localizedDescription }

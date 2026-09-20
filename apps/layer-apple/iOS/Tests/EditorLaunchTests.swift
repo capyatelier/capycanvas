@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNativeDrawingTabs() throws {
+        try checkNativeDrawingTabs(in: editorCaptureApplication())
+    }
+
     @MainActor func testNativeHDRColor() throws {
         try checkNativeHDRColor(in: editorCaptureApplication())
     }
@@ -442,11 +446,11 @@ final class EditorLaunchTests: XCTestCase {
         let canvas = app.otherElements["canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["document-title"].exists)
+        XCTAssertFalse(editorDocumentTitle(in: app).exists)
         XCTAssertFalse(app.buttons["zen-button"].exists)
         app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
         XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["document-title"].exists)
+        XCTAssertTrue(editorDocumentTitle(in: app).exists)
         XCTAssertTrue(app.buttons["zen-button"].exists)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
@@ -684,7 +688,7 @@ extension EditorLaunchTests {
             workspaceActivate(app.cells[folder + ", Folder"])
             XCTAssertTrue(folderTitle(folder).waitForExistence(timeout: 10))
         }
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         let save = app.navigationBars.buttons["Save"].firstMatch
         let name = app.textFields["DOCPicker.filenameTextField"]

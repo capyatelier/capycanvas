@@ -21,7 +21,7 @@ extension XCTestCase {
         actions.append(["type":"customize","action":["type":"confirm_tools"]])
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"]=String(data:try JSONSerialization.data(withJSONObject:actions),encoding:.utf8)!
         app.launch();capturePaintEditor(in:app)
-        let title=app.staticTexts["document-title"]
+        let title=editorDocumentTitle(in: app)
         let size=(title.value as? String ?? title.label).components(separatedBy:" · ").last!.components(separatedBy:" × ").compactMap(Int.init)
         XCTAssertEqual(size.count,2)
         let context=try XCTUnwrap(CGContext(data:nil,width:size[0],height:size[1],bitsPerComponent:8,bytesPerRow:size[0]*4,

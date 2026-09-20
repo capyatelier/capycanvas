@@ -33,7 +33,7 @@ struct HistogramPresentation: View {
                         DisclosureGroup("Details") {
                         if !histogram.isNull {
                             let color = histogram["color"]
-                            Text("\(color["space"].string) · \(color["depth"].string == "F16" ? "16-bit float HDR" : color["depth"].string == "U16" ? "16-bit" : "8-bit") · \(histogram["pixels"].uint) nontransparent pixels")
+                            Text("\(color["space"].string) · \(color["depth"].string == "F32" ? "32-bit float HDR" : color["depth"].string == "F16" ? "16-bit float HDR" : color["depth"].string == "U16" ? "16-bit" : "8-bit") · \(histogram["pixels"].uint) nontransparent pixels")
                                 .accessibilityIdentifier("histogram-summary")
                             ForEach(indices, id: \.self) { i in
                                 let c = histogram["channels"][i]

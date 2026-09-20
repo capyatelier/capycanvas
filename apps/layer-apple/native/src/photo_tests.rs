@@ -94,8 +94,13 @@ fn read_bytes(job: &ProjectJob, name: &str, bytes: &[u8]) {
     assert_eq!(unsafe { capy_project_read_bytes(job.0, bytes.as_ptr(), bytes.len(), name.as_ptr()) }, 0, "{:?}", job.error());
 }
 fn adopt(app: &App, job: &ProjectJob, opened: bool) {
+    for request in app.state()["requests"].as_array().unwrap().clone() {
+        if request["kind"]["type"] == "save_settings" {
+            app.action(json!({"type":"complete_request","id":request["id"],"error":null}));
+        }
+    }
     assert_eq!(unsafe { capy_apple_project_adopt(app.0, job.0, c"Photo.tiff".as_ptr(),
-        if opened { c"file:///source/Photo.tiff".as_ptr() } else { c"".as_ptr() }) }, 0, "{:?}", job.error());
+        if opened { c"file:///source/Photo.tiff".as_ptr() } else { c"".as_ptr() }) }, 0, "{:?} / {:?}", job.error(), unsafe { &*app.0 }.error);
     app.draw_until_prepared(true);
 }
 fn source(space: RgbSpace, depth: SampleDepth) -> SourceImage {

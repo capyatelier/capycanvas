@@ -72,8 +72,31 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.set_viewport(logical, previous.state.camera.viewport)?;
         }
         self.sync_work_area();
+        // A window can still have queued native input from the previous tab.
+        // Preserve each drawing's camera while retiring that input generation.
+        self.state.camera.revision = self.state.camera.revision.max(previous.state.camera.revision)
+            .checked_add(1).ok_or("Camera generation exhausted")?;
+        self.sync_camera();
         self.refresh_commands();
         Ok(self.changed(regions::ALL, true))
+    }
+
+    /// Initialize a newly opened drawing from the current painting tools. Do
+    /// not call when reactivating a parked drawing: it owns its existing tools.
+    pub fn inherit_initial_drawing_tools(&mut self, previous: &Self) -> Result<(), String> {
+        let destination = self.engine.document().color.space;
+        let transform = previous.engine.document().color.space.linear_transform(destination);
+        let mut brush = previous.engine.configured_brush().clone();
+        brush.color_rgba_linear = previous.state.colors.definition().linear_in(destination)?;
+        let secondary = &mut brush.color_dynamics.secondary_color_rgba_linear;
+        let rgb = layer_core::color::rgb::apply(transform, [secondary[0],secondary[1],secondary[2]].map(f64::from));
+        secondary[..3].copy_from_slice(&rgb.map(|v|v as f32));
+        self.engine.set_brush(brush).map_err(error)?;
+        self.state.brush = previous.state.brush.clone();
+        self.state.colors = previous.state.colors.clone();
+        self.state.colors.set_rgb_space(destination)?;
+        self.state.colors.set_document_depth(self.engine.document().color.depth)?;
+        self.apply_brush()
     }
 
     pub fn rendering_suspended(&self) -> bool {

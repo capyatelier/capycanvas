@@ -36,6 +36,7 @@ mod proof;
 pub use proof::*;
 
 struct Environment {
+    admission: layer_ui::DocumentAdmission,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -68,7 +69,7 @@ enum Payload {
     },
     Export(Box<export::Task>),
     Retired {
-        _session: Box<UiSession<Renderer>>,
+        _renderer: Option<WgpuRasterizer>,
     },
 }
 struct State {
@@ -156,6 +157,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
     };
     app.perform(|app| {
         if opening != 3 && !placement.is_null() { return Err("Only image placement accepts a drop target".into()); }
+        let admission = app.documents.admission(&app.host.session.retained_document_tiles());
         let session = &mut app.host.session;
         let epoch = session.state().document_file.epoch;
         let mut save_request = None;
@@ -230,6 +232,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 .ok_or("Wait for the canvas to finish starting")?;
             Payload::Open {
                 environment: Some(Environment {
+                    admission,
                     adapter: gpu.adapter().clone(),
                     device: gpu.device().clone(),
                     queue: gpu.queue().clone(),
@@ -253,6 +256,18 @@ pub unsafe extern "C" fn capy_apple_project_task(
         ))
     })
     .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// Serial owner only. Captures an inactive drawing without activating its renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_recovery(app:*mut CapyApple,id:u64)->*mut CapyProjectTask {
+    let Some(app)=(unsafe {app.as_mut()}) else {return std::ptr::null_mut()};
+    app.perform(|a| {
+        let s=a.document_session(id)?;
+        Ok(CapyProjectTask::new(Payload::Save {snapshot:Some(s.capture_project_recovery()?),project:None},
+            s.state().document_file.epoch,s.engine().document().revision,None))
+    }).unwrap_or(std::ptr::null_mut())
 }
 
 struct Stream<'a> {
@@ -509,6 +524,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         let ready = imported.as_ref().ok_or("Document preparation is incomplete")?;
         if ready.interpretation_required(context.photo_policy).is_some() { return Ok(()); }
         ready.project.validate(limits)?;
+        context.admission.admit(&ready.project)?;
         *source = ready.source;
         let project = imported.take().unwrap().project;
         let environment = environment.take().unwrap();
@@ -566,6 +582,18 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
 /// Session owner only, after a successful worker read. Failure preserves the
 /// original editor. Success retains the retired editor in the task for worker
 /// destruction, avoiding document/resource teardown on the drawing queue.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_project_prepare_adopt(app:*mut CapyApple,task:*const CapyProjectTask,now:u64)->i32 {
+    let (Some(a),Some(t))=(unsafe{app.as_mut()},unsafe{task.as_ref()}) else{return -1};
+    let opening=matches!(t.state.lock().unwrap_or_else(|e|e.into_inner()).payload,Payload::Open{..});
+    if !opening {return 0;}
+    if a.host.session.state().document_file.epoch!=t.epoch || a.host.session.engine().document().revision!=t.revision {return 0;}
+    let ready=unsafe{capy_apple_prepare_recovery(app,now)};
+    if ready!=0 {return ready;}
+    a.perform(|a|Ok(i32::from(a.host.session.retained_document_tiles().try_blobs()?.is_none()))).unwrap_or(-1)
+}
+/// # Safety
+/// Serial owner, after worker preparation and outgoing backing completion.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_project_adopt(
     app: *mut CapyApple,
@@ -644,30 +672,29 @@ unsafe fn adopt_project(
             != app.host.session.engine().backend().0.as_ref().map(|gpu| gpu.device()) {
             return Err("The canvas changed while preparing this drawing; open it again".into());
         }
-        let prepared = candidate
-            .take()
-            .ok_or("Project preparation is incomplete")?;
-        if unsafe { capy_project_begin_commit(task) } < 0 {
-            *candidate = Some(prepared);
-            return Err("Document operation cancelled".into());
+        if app.host.session.state().document_file.epoch != task.epoch || app.host.session.engine().document().revision != task.revision {
+            return Err("The drawing changed while opening; try again".into());
         }
-        let result = if recovered {
-            app.host
-                .session
-                .adopt_recovered_project(prepared, task.epoch, task.revision)
-        } else {
-            app.host
-                .session
-                .adopt_project(prepared, task.epoch, task.revision, location)
-        };
-        match result {
-            Ok(retired) => state.payload = Payload::Retired { _session: retired },
-            Err((error, prepared)) => {
-                *candidate = Some(prepared);
-                return Err(error);
-            }
-        }
-        app.host.document_adopted();
+        let next=candidate.as_mut().ok_or("Project preparation is incomplete")?;
+        app.documents.admit(&app.host.session.retained_document_tiles(), &next.capture_project_recovery()?)?;
+        next.initialize_document_location(location)?;
+        if recovered { next.mark_recovered(); }
+        next.set_document_replacement(false);
+        next.inherit_window_state(&app.host.session)?;
+        next.inherit_initial_drawing_tools(&app.host.session)?;
+        // Ready immutable backing is required before changing request ownership.
+        if app.host.session.retained_document_tiles().try_blobs()?.is_none() { return Err("Wait for drawing capture before opening".into()); }
+        if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
+        let requests: Vec<_> = app.host.session.state().requests.iter().filter_map(|r| matches!(r.kind,
+            HostRequestKind::Document {request:DocumentRequest::Open | DocumentRequest::New}).then_some(r.id)).collect();
+        for id in requests { app.host.session.complete_document_request(id, Ok(true))?; }
+        let tiles=app.host.session.park_document()?;
+        let retired=app.retire_document_gpu();
+        let mut outgoing=candidate.take().unwrap();
+        std::mem::swap(&mut app.host.session,outgoing.as_mut());
+        app.documents.append(outgoing,tiles);
+        state.payload=Payload::Retired {_renderer:retired};
+        app.tabs_changed();
         Ok(())
     })
     .map_or(-1, |_| 0)
@@ -717,7 +744,7 @@ pub unsafe extern "C" fn capy_apple_project_saved(
     })
     .map_or(-1, |_| 0)
 }
-unsafe fn read_title<'a>(title: *const c_char) -> Result<&'a str, String> {
+pub(crate) unsafe fn read_title<'a>(title: *const c_char) -> Result<&'a str, String> {
     if title.is_null() {
         return Err("Missing document title".into());
     }

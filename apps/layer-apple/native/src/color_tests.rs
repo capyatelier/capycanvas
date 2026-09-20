@@ -17,9 +17,17 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
         };
         app.action(json!({"type":"new_document_settings","settings":{"defaults":defaults,"presets":[]}}));
         let adopt = |job: &ProjectJob, options: NewDocumentOptions| {
+            // NativeOwner durably completes settings requests before a window
+            // parks its active session; mirror that host boundary here.
+            for request in app.state()["requests"].as_array().unwrap().clone() {
+                if request["kind"]["type"] == "save_settings" {
+                    app.action(json!({"type":"complete_request","id":request["id"],"error":null}));
+                }
+            }
             assert_eq!(unsafe {
                 capy_apple_project_adopt(app.0, job.0, c"New drawing".as_ptr(), c"".as_ptr())
-            }, 0, "{:?}", job.error());
+            }, 0, "{:?} / {:?}, requests={}, idle={:?}, engine_idle={}", job.error(), unsafe { &*app.0 }.error,
+                app.state()["requests"],unsafe { &*app.0 }.host.session.require_document_idle(),unsafe { &*app.0 }.host.session.engine().can_park());
             app.draw_until_idle();
             let document = unsafe { &*app.0 }.host.session.engine().document();
             assert_eq!(document.color, options.color);

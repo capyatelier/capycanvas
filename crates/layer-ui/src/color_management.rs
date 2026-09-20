@@ -12,7 +12,7 @@ pub fn enabled(platform: Platform) -> bool {
 pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {
     let document = session.engine().document();
     let recipe = session.effective_sdr_rendition();
-    json!({"mode":session.proof_panel_mode(), "hdr":document.color.depth.is_float(),
+    json!({"mode":session.proof_panel_mode(), "hdr":document.color.depth.is_float(), "depth":document.color.depth,
         "recipe":recipe, "pad":crate::proof_panel::sdr_pad_values(recipe),
         "readouts":[format!("{:.0}%",recipe.contrast*100.), format!("{:+.0}%",recipe.balance*100.),
             format!("{:+.0}%",recipe.exposure*25.),format!("{:.0}%",recipe.highlight_color*100.)],
@@ -313,7 +313,7 @@ impl PickerField {
         if !self.headroom.is_finite()
             || !(1. ..=100.).contains(&self.headroom)
             || !self.stops.is_finite()
-            || !(-16. ..=65504f32.log2()).contains(&self.stops)
+            || !(-149. ..=128.).contains(&self.stops)
         {
             return Err("Invalid HDR field viewing conditions".into());
         }
@@ -323,10 +323,10 @@ impl PickerField {
         let matrix = self
             .space
             .linear_transform(layer_core::color::RgbSpace::Srgb);
-        let gain = self.stops.exp2();
+        let gain = f64::from(self.stops).exp2();
         for p in pixels {
             for c in &mut p[..3] {
-                *c *= gain;
+                *c = (f64::from(*c) * gain).clamp(-(f32::MAX as f64),f32::MAX as f64) as f32;
             }
             let rgb = if self.headroom > 1. {
                 let m = layer_core::color::hdr::map_display_premultiplied(*p, self.headroom);

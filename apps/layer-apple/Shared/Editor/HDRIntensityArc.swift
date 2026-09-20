@@ -13,7 +13,7 @@ struct HDRIntensityArc: View {
         let viewing = store.colorViewing
         let arc = ColorUI.resolve(["type": "intensity_arc", "size": size, "stops": model["intensity"].number,
             "base": model["base"].raw, "document_space": model["rgb_space"].raw,
-            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number])
+            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number, "depth": model["document_depth"].raw])
         ZStack(alignment: .topLeading) {
             Canvas(colorMode: .extendedLinear) { graphics, _ in
                 let points = geometry["points"].array, colors = arc["colors"].array
@@ -51,7 +51,7 @@ struct HDRIntensityArc: View {
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
                 .popover(isPresented: $editing) {
                     let draft = ColorUI.resolve(["type": "form", "request": ["color": model["definition"].raw,
-                        "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "change_intensity": input]])
+                        "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "document_depth": model["document_depth"].raw, "change_intensity_text": input]])
                     VStack(spacing: 12) {
                         Text("Intensity (EV)").font(.headline)
                         TextField("Intensity (EV)", text: $input).textFieldStyle(.roundedBorder)

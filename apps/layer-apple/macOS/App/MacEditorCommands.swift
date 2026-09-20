@@ -49,7 +49,12 @@ struct MacEditorCommands: Commands {
             if let store { CatalogMenuItems(store: store, id: "view", excluding: ["fullscreen"]) }
         }
         CommandGroup(after: .windowArrangement) {
-            if let store { CatalogMenuItems(store: store, id: "window") }
+            if let store {
+                CatalogMenuItems(store: store, id: "window")
+                Divider()
+                Button("Next Drawing") { store.drawingTabs.adjacent(true) }.keyboardShortcut(.tab, modifiers: [.control])
+                Button("Previous Drawing") { store.drawingTabs.adjacent(false) }.keyboardShortcut(.tab, modifiers: [.control, .shift])
+            }
         }
     }
 }

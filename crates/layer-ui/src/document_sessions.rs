@@ -130,10 +130,15 @@ impl<T> DocumentSessions<T> {
         active: &mut T,
         tiles: RetainedTiles,
     ) -> Result<(), String> {
+        self.exchange_with(id, tiles, |incoming| std::mem::swap(active, incoming))
+    }
+    /// Swap a host slot through its owner's representation (for example a
+    /// boxed editor), without moving large sessions through collection frames.
+    pub fn exchange_with(&mut self, id:u64, tiles:RetainedTiles, swap:impl FnOnce(&mut T)) -> Result<(),String> {
         let Some(mut incoming) = self.parked.remove(&id) else {
             return Err("Drawing tab is no longer open".into());
         };
-        std::mem::swap(active, &mut incoming.owner);
+        swap(&mut incoming.owner);
         self.park(self.selected(), incoming.owner, tiles);
         self.tabs.select(id);
         Ok(())

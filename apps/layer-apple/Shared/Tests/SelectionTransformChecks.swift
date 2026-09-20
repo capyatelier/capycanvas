@@ -211,7 +211,7 @@ extension XCTestCase {
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: start.x, dy: start.y)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: end.x, dy: end.y)))
             }
-            app.staticTexts["document-title"].hover()
+            editorDocumentTitle(in: app).hover()
         }
         func near(_ id: String, _ expected: Double, tolerance: Double = 1) {
             let control = app.buttons["number-value-tool-transform_" + id]
@@ -234,7 +234,7 @@ extension XCTestCase {
         }
         // Every corner must use the visible handle and keep the opposite
         // corner fixed. Sample all four quadrants independently of the fields.
-        let title = app.staticTexts["document-title"]
+        let title = editorDocumentTitle(in: app)
         let extent = (title.value as? String ?? title.label).components(separatedBy: " · ").last!
         let dimensions = extent.components(separatedBy: " × ").compactMap(Double.init)
         XCTAssertEqual(dimensions.count, 2)
@@ -698,7 +698,7 @@ extension XCTestCase {
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX, dy: bounds.midY)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(
                         dx: bounds.midX + bounds.width * 0.25, dy: bounds.midY)))
-                app.staticTexts["document-title"].hover()
+                editorDocumentTitle(in: app).hover()
                 expectInk(moved); attachEditor(in: app, name: "move-" + name); history()
                 #endif
                 XCTAssertEqual(viewport.frame, frame)
@@ -772,7 +772,7 @@ extension XCTestCase {
         #if os(macOS)
         viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX, dy: bounds.midY)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX + bounds.width * 0.125, dy: bounds.midY)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         let moved = [false, true, false, false, true]
         expectInk(moved); attachEditor(in: app, name: "group-move-released")
         editorHistory("Undo", in: app); expectInk(baseline)
@@ -821,7 +821,7 @@ extension XCTestCase {
         viewport.coordinate(withNormalizedOffset: CGVector(dx: center.x, dy: center.y)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(
                 dx: center.x + bounds.width * 0.25, dy: center.y + bounds.height * 0.2)))
-        app.staticTexts["document-title"].hover()
+        editorDocumentTitle(in: app).hover()
         let baseline = [false, false, true, true, true], previous = filled
         expectInk(baseline); attachEditor(in: app, name: "move-layer-released")
         editorHistory("Undo", in: app); expectInk(previous)
