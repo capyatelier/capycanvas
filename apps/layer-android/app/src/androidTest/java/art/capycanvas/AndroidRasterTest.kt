@@ -194,11 +194,203 @@ class AndroidRasterTest {
     }
     private fun manifest(bytes: ByteArray): JSONObject {
         assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() in 4..5 && bytes[11].toInt() == 0)
+        assertTrue("Native archive version", bytes[10].toInt() == 6 && bytes[11].toInt() == 0)
         val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
         return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
+
+    @Test fun portablePhotoGainmapDelivery() {
+        val root=requireNotNull(InstrumentationRegistry.getArguments().getString("photoDirectory")){"Supply -e photoDirectory with the portable photo fixtures"}
+        require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val automation=instrumentation.uiAutomation
+        fun fixture(name:String)=File(files,name).apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $root/$name")).use{it.readBytes()})
+            assertTrue("Fixture $name",length()>0)
+        }
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
+        fun histogram():JSONObject {val c=Native.captureControl();try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}finally{Native.captureFree(c)}}
+        fun choice(label:String,text:String){
+            compose.waitUntil(30_000){compose.onAllNodes(hasTestTag("color-choice-$label") and isEnabled()).fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("color-choice-$label").performScrollTo().performClick()
+            compose.onNodeWithText(text).performClick();compose.waitForIdle()
+        }
+        val report=obj("model" to android.os.Build.MODEL,"imports" to org.json.JSONArray(),"exports" to org.json.JSONArray())
+        for((name,depth) in listOf("p3-grid-8bit.heic" to "U8","p3-gray-10bit.heic" to "U16","p3-12bit.avif" to "U16","web-hdr.jpg" to "F16","web-hdr.avif" to "F16")) {
+            open(fixture(name));refresh()
+            assertEquals(name,depth,native{JSONObject(Native.query(it,obj("type" to "document_color").toString())).getString("depth")})
+            report.getJSONArray("imports").put(name)
+        }
+        val original=fixture("web-hdr.avif")
+        for((format,label,extension,mime) in listOf(
+            listOf("JpegHdr","HDR JPEG · gain map","jpg","image/jpeg"),
+            listOf("AvifHdr","HDR AVIF · gain map with transparency","avif","image/avif")
+        )) {
+            open(original);refresh()
+            val master=save("portable-master.capy");val before=histogram()
+            assertTrue(before.getJSONArray("channels").objects().any{it.getLong("above")>0})
+            val savedName="capy-portable-${System.nanoTime()}.$extension"
+            val uri=activity.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,savedName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE,mime)
+            })!!
+            val picked=java.util.concurrent.atomic.AtomicReference<android.content.Intent>()
+            // Supply only the OS chooser's result; the real dialog, controller,
+            // JNI capture/encoder and temporary-file publication all execute.
+            val monitor=object:android.app.Instrumentation.ActivityMonitor() {
+                override fun onStartActivity(intent:android.content.Intent):android.app.Instrumentation.ActivityResult? {
+                    if(intent.action!=android.content.Intent.ACTION_CREATE_DOCUMENT)return null
+                    picked.set(android.content.Intent(intent))
+                    return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,android.content.Intent().setData(uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+                }
+            }
+            instrumentation.addMonitor(monitor)
+            try {
+                DocumentController.nativeFileJobsForTest=false
+                compose.runOnUiThread{host.invoke("export_document")}
+                choice("Dynamic range",label)
+                if(format=="JpegHdr")choice("Transparency","White background")
+                compose.onNodeWithText("Preview Output").performScrollTo().performClick()
+                compose.waitUntil(120_000){compose.onAllNodesWithContentDescription("Output preview").fetchSemanticsNodes().isNotEmpty()}
+                choice("Preview rendition","Encoded SDR base")
+                val sdr=compose.onNodeWithContentDescription("Output preview").performScrollTo().captureToImage()
+                assertTrue(sdr.width>0&&sdr.height>0)
+                choice("Preview rendition","HDR reconstruction · SDR preview")
+                choice("Preview rendition","Encoded SDR base")
+                compose.onNodeWithContentDescription("Output preview").performScrollTo()
+                val output=File(activity.getExternalFilesDir(null),"portable-$extension.png")
+                automation.takeScreenshot()?.let{shot->output.outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+                compose.onNodeWithTag("export-choose-file").performClick()
+                compose.waitUntil(120_000){picked.get()!=null&&!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}}
+                assertEquals(mime,picked.get().type)
+                assertTrue(picked.get().getStringExtra(android.content.Intent.EXTRA_TITLE)!!.endsWith(".$extension"))
+                assertEquals(mime,host.documents.exportMime())
+                assertNull(native{state(it)}.opt("host_error").takeUnless{it==JSONObject.NULL})
+                assertNull(host.actionError)
+                DocumentController.nativeFileJobsForTest=true
+                assertEquals(before.toString(),histogram().toString())
+                assertArrayEquals(master,save("portable-unchanged.capy"))
+                val bytes=activity.contentResolver.openInputStream(uri)!!.use{it.readBytes()}
+                assertTrue(bytes.size>100)
+                val delivery=File(activity.getExternalFilesDir(null),"portable-hdr.$extension").apply{writeBytes(bytes)}
+                open(delivery);refresh()
+                val restored=histogram()
+                assertEquals("F16",restored.getJSONObject("color").getString("depth"))
+                assertTrue(restored.getJSONArray("channels").objects().any{it.getLong("above")>0})
+                if(format=="JpegHdr")assertEquals(0L,restored.getLong("transparent"))
+                else assertTrue(restored.getLong("transparent")>0)
+                report.getJSONArray("exports").put(obj("format" to format,"bytes" to bytes.size,"mime" to mime))
+            } finally {
+                instrumentation.removeMonitor(monitor)
+                activity.contentResolver.delete(uri,null,null)
+                DocumentController.nativeFileJobsForTest=true
+            }
+        }
+        open(original);refresh()
+        val initial=native{JSONObject(Native.query(it,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)}
+        val recipe=native{JSONObject(Native.query(it,obj("type" to "export_draft","recipe" to initial,"action" to obj("type" to "format","value" to "AvifHdrMapped")).toString())).getJSONObject("recipe")}
+        val color=native{JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+        val preset=runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Portable HDR","recipe" to recipe))}
+        DocumentController.nativeFileJobsForTest=false
+        compose.runOnUiThread{host.invoke("export_document")}
+        choice("Destination","Portable HDR")
+        compose.onNodeWithTag("color-choice-Dynamic range").assertTextContains("HDR AVIF · gain map with transparency")
+        compose.onNodeWithText("Cancel").performClick();idle();DocumentController.nativeFileJobsForTest=true
+        assertEquals("AvifHdrMapped",runBlocking{ColorPreferencesStore.presets(activity,color,obj("type" to "get","index" to preset.getInt("index")))}.getJSONObject("recipe").getString("format"))
+        // Cancel an admitted export while its independent worker is active.
+        recipe.put("size",obj("Fit" to obj("bounds" to org.json.JSONArray(listOf(1024,1024)),"enlarge" to true)))
+        val c=Native.captureControl();val id=native{request(it,"export_document").first}
+        val task=native{Native.projectExportTask(it,id,System.nanoTime(),c)}
+        assertNotEquals(0L,task);Native.projectExportOptions(task,recipe.toString())
+        val output=File(files,"portable-cancelled.avif")
+        val pool=java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val entered=java.util.concurrent.CountDownLatch(1)
+            val result=pool.submit<String> {
+                entered.countDown()
+                try {Native.projectWork(task,ParcelFileDescriptor.open(output,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0);"completed"}
+                catch(e:Exception){e.message.orEmpty()}
+            }
+            assertTrue(entered.await(10,java.util.concurrent.TimeUnit.SECONDS));SystemClock.sleep(50)
+            val started=SystemClock.uptimeMillis();Native.captureCancel(c)
+            assertTrue(result.get(10,java.util.concurrent.TimeUnit.SECONDS).contains("cancel",ignoreCase=true))
+            report.put("cancel_ms",SystemClock.uptimeMillis()-started)
+            assertEquals(0L,output.length())
+            native{Native.documentComplete(it,id,false,"null")}
+        } finally {pool.shutdown();check(pool.awaitTermination(30,java.util.concurrent.TimeUnit.SECONDS)){"Export worker failed to drain"};Native.projectFree(task);Native.captureFree(c)}
+        recipe.put("size","Original")
+        val flag=Native.captureControl()
+        try {val preview=Native.inspectionOutput(native{Native.inspectionTask(it,flag)},recipe.toString());assertEquals(4,preview.size);assertFalse((preview[2] as ByteArray).contentEquals(preview[3] as ByteArray))}
+        finally{Native.captureFree(flag)}
+        assertTrue(files.listFiles().orEmpty().none{it.name.startsWith("capy-save-")})
+        File(activity.getExternalFilesDir(null),"portable-photo-report.json").writeText(report.toString(2))
+        assertNull(host.failure)
+    }
+
+    @Test fun portablePhotoLargeDelivery() {
+        val arguments=InstrumentationRegistry.getArguments()
+        val path=requireNotNull(arguments.getString("photoFile")){"Supply -e photoFile with an HDR photo"}
+        require(Regex("/data/local/tmp/[A-Za-z0-9_./-]+").matches(path))
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"large-photo.avif").apply {
+            writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $path")).use{it.readBytes()})
+        }
+        val quality=arguments.getString("photoQuality")?.toInt()?:90
+        val report=obj("model" to android.os.Build.MODEL,"input" to path,"quality" to quality,"exports" to org.json.JSONArray())
+        val output=File(activity.getExternalFilesDir(null),"portable-large-report.json")
+        val watching=java.util.concurrent.atomic.AtomicBoolean(true)
+        val peak=java.util.concurrent.atomic.AtomicLong()
+        val sampler=Thread{while(watching.get()){peak.accumulateAndGet(android.os.Debug.getPss().toLong()*1024,::maxOf);SystemClock.sleep(250)}}.apply{start()}
+        fun refresh(){tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()}
+        fun histogram():JSONObject {
+            val c=Native.captureControl()
+            try{return JSONObject(Native.inspectionHistogram(native{Native.inspectionTask(it,c)})).getJSONObject("histogram")}
+            finally{Native.captureFree(c)}
+        }
+        try {
+            val started=SystemClock.uptimeMillis();open(input);refresh()
+            report.put("open_ms",SystemClock.uptimeMillis()-started)
+            val master=save("large-master.capy")
+            val document=manifest(master).getJSONObject("document")
+            val extent=listOf(document.getInt("width"),document.getInt("height"))
+            report.put("extent",org.json.JSONArray(extent))
+            val original=histogram()
+            assertEquals("F16",original.getJSONObject("color").getString("depth"))
+            assertTrue(original.getJSONArray("channels").objects().any{it.getLong("above")>0})
+            for((format,extension) in listOf("JpegHdrMapped" to "jpg","AvifHdrMapped" to "avif")) {
+                open(File(files,"large-master.capy"));refresh()
+                val recipe=native{h->
+                    val basic=JSONObject(Native.query(h,obj("type" to "export_form").toString())).getJSONArray("recipes").getJSONArray(0).getJSONObject(1)
+                    JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to basic,"action" to obj("type" to "format","value" to format)).toString())).getJSONObject("recipe")
+                }.put("jpeg_quality",quality).put("background",if(extension=="jpg")"White" else "Preserve")
+                val entry=obj("format" to format);report.getJSONArray("exports").put(entry)
+                val c=Native.captureControl();val previewStart=SystemClock.uptimeMillis()
+                try {
+                    val preview=Native.inspectionOutput(native{Native.inspectionTask(it,c)},recipe.toString())
+                    entry.put("preview_ms",SystemClock.uptimeMillis()-previewStart)
+                    assertEquals(4,preview.size)
+                    assertEquals(extent,JSONObject(preview[0] as String).getJSONArray("extent").values())
+                }finally{Native.captureFree(c)}
+                val encodeStart=SystemClock.uptimeMillis()
+                val bytes=png("large-delivery.$extension",recipe)
+                entry.put("export_ms",SystemClock.uptimeMillis()-encodeStart).put("bytes",bytes.size)
+                assertArrayEquals(master,save("large-unchanged.capy"))
+                assertEquals(original.toString(),histogram().toString())
+                val reopened=SystemClock.uptimeMillis();open(File(files,"large-delivery.$extension"));refresh()
+                entry.put("reopen_ms",SystemClock.uptimeMillis()-reopened)
+                val color=histogram()
+                assertEquals("F16",color.getJSONObject("color").getString("depth"))
+                assertTrue(color.getJSONArray("channels").objects().any{it.getLong("above")>0})
+                val restored=manifest(save("large-reopened.capy")).getJSONObject("document")
+                assertEquals(extent,listOf(restored.getInt("width"),restored.getInt("height")))
+                output.writeText(report.toString(2))
+            }
+            assertNull(host.failure)
+        }catch(e:Throwable){report.put("error",e.toString());throw e}
+        finally{watching.set(false);sampler.join(2000);report.put("peak_process_pss_bytes",peak.get());output.writeText(report.toString(2))}
+    }
 
     @Test fun hdrBlackIntensityMarkerVisible() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")

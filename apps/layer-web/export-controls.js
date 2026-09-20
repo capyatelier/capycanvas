@@ -10,8 +10,7 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const number=(label,value,min,max)=>{const node=element("input");Object.assign(node,{type:"number",value,min,max,step:1});return field(label,node);};
     form.append(element("p","","Export a profiled copy. The editable drawing stays unchanged."));
     const destination=select("Destination",library.names.map((name,i)=>[i,name]));
-    const range=select("Dynamic range",["F16","F32"].includes(app.document_color().depth)?[["sdr","SDR rendition"],["hdr","HDR PNG · BT.2020 PQ"],["exr","OpenEXR · 32-bit float"],["unsupported","Gain-map preset unavailable"]]:[["sdr","SDR"]]);
-    if(range.querySelector('[value="unsupported"]'))range.querySelector('[value="unsupported"]').disabled=true;
+    const range=select("Dynamic range",["F16","F32"].includes(app.document_color().depth)?[["sdr","SDR rendition"],["jpeg","HDR JPEG · gain map"],["avif","HDR AVIF · gain map with transparency"],["hdr","HDR PNG · BT.2020 PQ"],["exr","OpenEXR · 32-bit float"]]:[["sdr","SDR"]]);
     const clip=field("Clip out-of-range HDR colors",element("input"));clip.type="checkbox";
     const format=select("Format",[["Png","PNG"],["Tiff","TIFF"],["Jpeg","JPEG"]]);
     const profile=select("Output profile",model.profiles.map((p,i)=>[i,p.name]));
@@ -19,14 +18,15 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
     const background=select("Transparency",[["Preserve","Preserve"],["White","White background"],["Black","Black background"]]);
     const intent=select("Rendering intent",[["RelativeColorimetric","Relative colorimetric"],["Perceptual","Perceptual"],["Saturation","Saturation"],["AbsoluteColorimetric","Absolute colorimetric"]]);
     const dither=select("Dither",[["None","None"],["Stochastic8","Stochastic (8-bit output)"]]);
-    const quality=number("JPEG quality",90,1,100);
+    const quality=number("Quality",90,1,100);
     const size=select("Pixel size",[["Original","Original"],["Fit","Fit within bounds"]]);
     const width=number("Maximum width",2048,1,32768),height=number("Maximum height",2048,1,32768);
     const resolution=select("Resolution metadata",[["Master","Keep original"],["Ppi","Pixels per inch"],["Omit","Omit"]]),ppi=number("Pixels per inch",300,1,65535);
-    const visible=()=>{const hdr=range.value!=="sdr";clip.closest("label").hidden=range.value!=="hdr";for(const n of[format,profile,depth,background,intent,dither])n.closest("label").hidden=hdr;quality.closest("label").hidden=format.value!=="Jpeg";for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
+    const rangeFormat=()=>range.value==="exr"?"Exr":range.value==="sdr"?format.value:({hdr:"PngHdr",jpeg:"JpegHdr",avif:"AvifHdr"}[range.value]+(clip.checked?"Mapped":""));
+    const visible=()=>{const hdr=range.value!=="sdr";clip.closest("label").hidden=!["hdr","jpeg","avif"].includes(range.value);for(const n of[format,profile,depth,intent,dither])n.closest("label").hidden=hdr;background.closest("label").hidden=hdr&&range.value!=="jpeg";quality.closest("label").hidden=!["jpeg","avif"].includes(range.value)&&!(range.value==="sdr"&&format.value==="Jpeg");for(const f of[width,height])f.closest("label").hidden=size.value!=="Fit";ppi.closest("label").hidden=resolution.value!=="Ppi";};
     const load=()=>{
       if(!model.profiles.some(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))){model.profiles.push(recipe.profile);const option=element("option","",recipe.profile.name);option.value=model.profiles.length-1;profile.append(option);}
-      range.value=recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.includes("Hdr")?"unsupported":"sdr";clip.checked=recipe.format==="PngHdrMapped";format.value=range.value!=="sdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
+      range.value=recipe.format==="Exr"?"exr":recipe.format.startsWith("PngHdr")?"hdr":recipe.format.startsWith("JpegHdr")?"jpeg":recipe.format.startsWith("AvifHdr")?"avif":"sdr";clip.checked=recipe.format.endsWith("Mapped");format.value=range.value!=="sdr"?"Png":recipe.format;profile.value=String(Math.max(0,model.profiles.findIndex(p=>p.name===recipe.profile.name&&JSON.stringify(p.profile)===JSON.stringify(recipe.profile.profile))));depth.value=recipe.depth;background.value=recipe.background;
       intent.value=recipe.encoding.conversion.intent;dither.value=recipe.encoding.dither;quality.value=recipe.jpeg_quality;size.value=recipe.size.Fit?"Fit":"Original";
       if(recipe.size.Fit)[width.value,height.value]=recipe.size.Fit.bounds;resolution.value=recipe.resolution.Ppi?"Ppi":recipe.resolution;if(recipe.resolution.Ppi)ppi.value=recipe.resolution.Ppi;visible();
     };
@@ -38,8 +38,8 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       }
       load();
     };
-    range.onchange=()=>updateDraft({type:"format",value:range.value==="exr"?"Exr":range.value==="hdr"?(clip.checked?"PngHdrMapped":"PngHdr"):"Png"});
-    clip.onchange=()=>updateDraft({type:"format",value:clip.checked?"PngHdrMapped":"PngHdr"});
+    range.onchange=()=>updateDraft({type:"format",value:rangeFormat()});
+    clip.onchange=()=>updateDraft({type:"format",value:rangeFormat()});
     format.onchange=()=>updateDraft({type:"format",value:format.value});
     profile.onchange=()=>updateDraft({type:"profile",value:model.profiles[Number(profile.value)]});
     depth.onchange=()=>updateDraft({type:"depth",value:depth.value});
@@ -51,11 +51,11 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       catch(e){error.textContent=String(e);}
     }));
     form.append(button("Saved Profiles…",async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);const option=element("option","",imported.name);option.value=model.profiles.length-1;profile.append(option);profile.value=option.value;updateDraft({type:"profile",value:imported});invalidate();}catch(e){error.textContent=String(e);}}));
-    const readRecipe=()=>({format:range.value==="exr"?"Exr":range.value==="unsupported"?recipe.format:range.value==="hdr"?(clip.checked?"PngHdrMapped":"PngHdr"):format.value,profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
+    const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:Number(quality.value),
       size:size.value==="Original"?"Original":{Fit:{bounds:[Number(width.value),Number(height.value)],enlarge:recipe.size.Fit?.enlarge??false}},
       resolution:resolution.value==="Ppi"?{Ppi:Number(ppi.value)}:resolution.value});
-    const selected=()=>{if(range.value==="unsupported")throw Error("Gain-map delivery is unavailable on Web; choose HDR PNG or OpenEXR");return app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);};
+    const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
     const presetName=field("Preset name",element("input"));presetName.maxLength=80;
     const presetButtons=element("div","document-size");
@@ -73,9 +73,22 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
       catch(e){destination.value=String(currentPreset);error.textContent=String(e);}finally{preferenceBusy=false;inputs.forEach(n=>n.disabled=false);presetAvailability();}
     }
     const comparison=element("div","color-comparison"),status=element("p"),footer=element("footer");
-    let rangeBlocked=false;
-    const invalidate=()=>{comparison.replaceChildren();status.textContent="";rangeBlocked=false;choose.disabled=false;};
-    form.addEventListener("input",invalidate,true);form.addEventListener("change",invalidate,true);
+    const previewMode=select("Preview rendition",[["hdr","HDR reconstruction · SDR preview"],["sdr","Encoded SDR base"]]);previewMode.closest("label").hidden=true;
+    let rangeBlocked=false,completed;
+    const invalidate=()=>{completed=null;comparison.replaceChildren();previewMode.closest("label").hidden=true;status.textContent="";rangeBlocked=false;choose.disabled=false;};
+    const invalidateInput=e=>{if(e.target!==previewMode)invalidate();};
+    form.addEventListener("input",invalidateInput,true);form.addEventListener("change",invalidateInput,true);
+    const drawComparison=()=>{
+      const output=completed;comparison.replaceChildren();
+      const images=[output.previews[0],output.sdr_preview&&previewMode.value==="sdr"?output.sdr_preview:output.previews[1]];
+      images.forEach((image,index)=>{const figure=element("figure"),canvas=element("canvas");[canvas.width,canvas.height]=image.extent;
+        // These bounded previews already arrive as CPU pixels. Keep their 2D
+        // storage on CPU, including while the scrollable comparison is offscreen.
+        canvas.getContext("2d",{willReadFrequently:true}).putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?"Output preview":"Artwork preview");
+        const caption=index?(output.sdr_preview?(previewMode.value==="sdr"?"Encoded SDR base":"HDR reconstruction · SDR preview"):"Output"):"Artwork";
+        figure.append(canvas,element("figcaption","",caption));comparison.append(figure);});
+    };
+    previewMode.onchange=()=>{if(completed)drawComparison();};
     const cancel=button("Cancel",()=>{control?.cancel();finish(null);});
     const choose=button("Choose File…",()=>{if(!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){error.textContent=String(e);}},"suggested-action");
     const preview=button("Preview Output",()=>{
@@ -87,11 +100,9 @@ export async function chooseExport({app,dialog,element,button,gpuOperation,id}) 
         try{
           const output=await gpuOperation(()=>app.export_image(id,recipe,control,true));
           if(closed||control.cancelled())return;
-          output.previews.forEach((image,index)=>{const figure=element("figure"),canvas=element("canvas");[canvas.width,canvas.height]=image.extent;
-            canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(image.pixels),...image.extent),0,0);canvas.setAttribute("aria-label",index?"Output preview":"Artwork preview");
-            figure.append(canvas,element("figcaption","",index?"Output":"Artwork"));comparison.append(figure);});
-          rangeBlocked=recipe.format==="PngHdr"&&output.clipped_channels>0;
-          status.textContent=(recipe.format==="Exr"?"Mapped SDR preview of lossless Float32 OpenEXR delivery.":recipe.format.startsWith("PngHdr")?"Mapped SDR preview of PQ delivery. Native HDR display and gain-map delivery are unavailable on Web.":"sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")+(rangeBlocked?" Some colors exceed PQ range. Enable Clip out-of-range HDR colors or choose OpenEXR.":output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
+          completed=output;previewMode.closest("label").hidden=!output.sdr_preview;drawComparison();
+          rangeBlocked=["PngHdr","JpegHdr","AvifHdr"].includes(recipe.format)&&output.clipped_channels>0;
+          status.textContent=(output.sdr_preview?"Decoded JPEG/AVIF output, including compression and the encoded SDR base. HDR reconstruction is mapped for this SDR preview.":recipe.format==="Exr"?"Mapped SDR preview of lossless Float32 OpenEXR delivery.":recipe.format.startsWith("PngHdr")?"Mapped SDR preview of PQ delivery.":"sRGB display preview · includes output size, profile, depth, transparency and dither; excludes JPEG compression artifacts.")+(rangeBlocked?" Some colors exceed the delivery range. Enable Clip out-of-range HDR colors or choose OpenEXR.":output.clipped_channels>0?" Some colors exceed the output gamut and will be clipped.":"");
         }catch(e){if(!closed&&!control.cancelled())error.textContent=String(e);}
         finally{running=null;if(!closed){inputs.forEach(node=>node.disabled=false);choose.disabled=rangeBlocked;presetAvailability();}}
       })();

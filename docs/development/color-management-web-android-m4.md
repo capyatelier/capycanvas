@@ -83,7 +83,9 @@ including the original OpenEXR BSD notices and pinned upstream Zlib notice.
   and authored SDR PNG/TIFF/JPEG use output copies. Gain-map JPEG/AVIF and physical
   HDR surfaces were unavailable in this first integration. Subsequent Android
   PQ and Web extended-canvas milestones below supersede that display limit;
-  gain-map delivery remains unavailable.
+  [portable photo core](portable-photo-core.md#web-host-milestone--2026-09-19)
+  now supplies Web JPEG/AVIF gain-map delivery and encoded previews. Android
+  gain-map host integration remains pending.
 - Bounded worker capture, generation/stale-result checks, atomic cancellation
   and worker teardown. Web admits at most **12,000,000 HDR pixels**, with an
   actionable rejection preserving the existing master. It never reduces HDR
@@ -253,7 +255,9 @@ pixel-oracle results. Browser checks read one actual submitted swapchain row per
 surface with temporary test-only copy usage, verifying above-white output and
 standard SDR proofing. Screenshots are SDR captures and do not measure physical
 HDR luminance. The picker, layer thumbnails and export comparison canvases remain
-SDR previews; the 12 MP browser admission limit and gain-map output limits remain.
+SDR previews; the 12 MP browser admission limit remains. Web gain-map output
+is now supplied by the [portable photo core](portable-photo-core.md); Android
+gain-map output still awaits host integration.
 
 The Web encoding follows [WebGPU canvas color management](https://gpuweb.github.io/gpuweb/#canvas-color-management)
 and [Chrome's extended canvas configuration](https://developer.chrome.com/blog/new-in-webgpu-129).

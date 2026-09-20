@@ -8,7 +8,7 @@ a `SurfaceView`.
 
 ## Prerequisites
 
-Install Java 17 or newer, Rust, Android Studio or the Android command-line tools,
+Install Java 17 or newer, Node.js, Rust, Android Studio or the Android command-line tools,
 and these SDK packages:
 
 - Android SDK platform 37 and Build Tools 37.0.0.
@@ -25,7 +25,14 @@ Prepare the Rust targets and JNI build tool:
 ```bash
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk --locked
+cargo install cargo-about --version 0.9.2 --locked
+rustup component add rust-docs
 ```
+
+Every APK includes the selected Rust targets' original dependency and toolchain
+notices in `assets/licenses`. `LAYER_CARGO_ABOUT` can select the notice generator
+executable. Photo codecs compile into the shared Rust library; no codec bundle
+or helper executable is required.
 
 For emulator use, create a tablet AVD named `medium_tablet` in Device Manager,
 or select another existing name with `CAPY_ANDROID_AVD`. Enable hardware graphics.
@@ -88,6 +95,15 @@ adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.And
 ```
 
 Use `ClassName#methodName` in the fully qualified test selector for one regression.
+`AndroidRasterTest#portablePhotoGainmapDelivery` takes
+`-e photoDirectory /data/local/tmp/capy-portable-photo`. Push the shared
+`p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures, plus
+`web-hdr.jpg` and `web-hdr.avif` produced by Web's `--portable-photo` test, into
+that directory. It checks the real gain-map export dialog, preview switching,
+provider save, HDR reopen, unchanged master, presets and cancellation. For an
+isolated installation, build with `-PcapyApplicationId=art.capycanvas.portablephoto`
+and use `art.capycanvas.portablephoto.test` as the instrumentation package.
+
 [`AndroidTitleBarTest`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidTitleBarTest.kt)
 covers the shared title-bar editor, compact menus, native input and keyboard
 focus, Sketch drawers, feedback and persistence. It isolates workspace and

@@ -56,6 +56,7 @@ fn encode(
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
     clip: bool,
+    budget: PhotoMemoryBudget,
     cancel: &AtomicBool,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(Vec<u8>, crate::OutputStatistics), String> {
@@ -67,7 +68,6 @@ fn encode(
     if matte.is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v))) {
         return Err("Invalid HDR background".into());
     }
-    let budget = PhotoMemoryBudget::current();
     let count = admit(extent, 0, budget.encode_bytes)?;
     let profile = crate::icc::nclx_profile(
         [0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290],
@@ -233,15 +233,16 @@ pub(super) fn write(
     space: RgbSpace,
     rendition: SdrRendition,
     guide: Option<&hdr::LocalToneGuide>,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
     clip: bool,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
+    let options = options.into();
     let (bytes, stats) = encode(
-        extent, space, rendition, guide, quality, resolution, matte, clip, cancel, read,
+        extent, space, rendition, guide, options.quality, resolution, matte, clip, options.memory, cancel, read,
     )?;
     for chunk in bytes.chunks(65536) {
         check(cancel)?;
@@ -397,7 +398,7 @@ pub(super) fn preview(
     space: RgbSpace,
     rendition: SdrRendition,
     guide: Option<&hdr::LocalToneGuide>,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
@@ -410,10 +411,20 @@ pub(super) fn preview(
     ),
     String,
 > {
+    if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
+        return Err("Invalid preview dimensions".into());
+    }
+    let options = options.into();
     let (bytes, stats) = encode(
-        extent, space, rendition, guide, quality, None, matte, true, cancel, read,
+        extent, space, rendition, guide, options.quality, None, matte, true, options.memory, cancel, read,
     )?;
-    let pair = Pair::new(&bytes, bytes.capacity(), Default::default(), cancel)?;
+    let mut limits = DecodeLimits::from_memory_budget(options.memory);
+    // Both rendition accumulators and their finished outputs coexist with the
+    // decoded pair. Reserve their bounded storage before admitting that pair.
+    let scratch = u64::from(bounds[0]) * u64::from(bounds[1]) * 128 + 4 * 1024 * 1024;
+    limits.codec_bytes = limits.codec_bytes.checked_sub(usize::try_from(scratch).map_err(err)?)
+        .ok_or(jpeg_codec::MEMORY_ERROR)?;
+    let pair = Pair::new(&bytes, bytes.capacity(), limits, cancel)?;
     let mut hdr_preview = crate::AreaPreview::new(extent, bounds)?;
     let mut sdr_preview = crate::AreaPreview::new(extent, bounds)?;
     let mut hdr = vec![[0.; 4]; extent[0] as usize];
@@ -503,7 +514,6 @@ mod tests {
     }
     #[test]
     fn jpeg_hdr_and_authored_sdr_roundtrip_without_native_features() {
-        assert!(gainmap_format_available(GainMapFormat::Jpeg));
         for quality in [35, 90, 100] {
             for exposure in [0., -2.] {
                 let bytes = encoded(quality, exposure);

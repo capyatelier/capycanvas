@@ -44,8 +44,12 @@ impl Layout {
         let needs_grid = extent.iter().any(|n| *n > side || n % 8 != 0);
         // MIAF requires both coded tile dimensions to be at least 64, even
         // for a one-cell grid used only to trim alignment padding.
-        let tile =
-            extent.map(|n| (n.min(side).div_ceil(8) * 8).max(if needs_grid { 64 } else { 8 }));
+        // Balance cells so a short final strip does not encode a mostly padded
+        // full-size cell in every row/column. Keep the same maximum cell size.
+        let tile = extent.map(|n| {
+            let cells = n.div_ceil(side);
+            (n.div_ceil(cells).div_ceil(8) * 8).max(if needs_grid { 64 } else { 8 })
+        });
         Ok(Self {
             extent,
             tile,
@@ -318,23 +322,24 @@ pub(in crate::photo) fn write(
     space: RgbSpace,
     rendition: hdr::SdrRendition,
     guide: Option<&hdr::LocalToneGuide>,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
     clip: bool,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
+    let options = options.into();
     let (bytes, stats) = encode(
         extent,
         space,
         rendition,
         guide,
-        quality,
+        options.quality,
         resolution,
         matte,
         clip,
-        PhotoMemoryBudget::current().encode_bytes,
+        options.memory.encode_bytes,
         cancel,
         read,
     )?;
@@ -352,9 +357,10 @@ fn preview_rendition(
     bounds: [u32; 2],
     hdr: bool,
     retained: usize,
+    budget: PhotoMemoryBudget,
     cancel: &AtomicBool,
 ) -> Result<([u32; 2], Vec<[f32; 4]>), String> {
-    let mut limits = DecodeLimits::default();
+    let mut limits = DecodeLimits::from_memory_budget(budget);
     // Both AreaPreview's f64 accumulation and its finished f32 output can
     // coexist, as can the previously generated rendition and encoded file.
     let scratch = u64::from(bounds[0]) * u64::from(bounds[1]) * 64 + 4 * 1024 * 1024;
@@ -390,7 +396,7 @@ pub(in crate::photo) fn preview(
     space: RgbSpace,
     rendition: hdr::SdrRendition,
     guide: Option<&hdr::LocalToneGuide>,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     matte: Option<[f32; 3]>,
     cancel: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
@@ -403,6 +409,7 @@ pub(in crate::photo) fn preview(
     ),
     String,
 > {
+    let options = options.into();
     if bounds.into_iter().any(|n| !(1..=1024).contains(&n)) {
         return Err("Invalid preview dimensions".into());
     }
@@ -411,20 +418,21 @@ pub(in crate::photo) fn preview(
         space,
         rendition,
         guide,
-        quality,
+        options.quality,
         None,
         matte,
         true,
-        PhotoMemoryBudget::current().encode_bytes,
+        options.memory.encode_bytes,
         cancel,
         read,
     )?;
-    let (preview_extent, hdr) = preview_rendition(&bytes, bounds, true, bytes.capacity(), cancel)?;
+    let (preview_extent, hdr) = preview_rendition(&bytes, bounds, true, bytes.capacity(), options.memory, cancel)?;
     let (_, sdr) = preview_rendition(
         &bytes,
         bounds,
         false,
         bytes.capacity() + hdr.capacity() * 16,
+        options.memory,
         cancel,
     )?;
     Ok((preview_extent, hdr, sdr, stats))

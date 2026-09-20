@@ -26,7 +26,10 @@ pub(super) fn encode(
         return Err("AVIF encoder exceeds the codec budget".into());
     }
     if quality == 100 {
-        use oxideav_av1::encoder::{ChromaFormat, YuvFrame, encode_key_frame_yuv};
+        use oxideav_av1::encoder::{
+            ChromaFormat, RateModel, YuvFrame, encode_gop_yuv_seg_extras_tuned,
+            inter_frame::GopTuning,
+        };
         if extent.into_iter().any(|n| n % 8 != 0) {
             return Err("Lossless AVIF cells require 8-pixel alignment".into());
         }
@@ -59,7 +62,24 @@ pub(super) fn encode(
                 }
             }
         }
-        let mut encoded = encode_key_frame_yuv(&frame).map_err(err)?;
+        // The pinned library exposes its cheaper rate model through the GOP
+        // API. One frame runs the same still encoder, with quantizer zero for
+        // exact samples. Skip the default entropy-cost search: it dominates
+        // alpha/gain encoding without improving their reconstruction.
+        let mut encoded = encode_gop_yuv_seg_extras_tuned(
+            std::slice::from_ref(&frame),
+            0,
+            &[],
+            &[],
+            false,
+            None,
+            GopTuning {
+                model: RateModel::Heuristic,
+                ..Default::default()
+            },
+        )
+        .map_err(err)?
+        .gop;
         codec::check(cancel)?;
         // The general YUV encoder defaults to limited range and unspecified
         // CICP. Full-range alpha must also be declared in the AV1 sequence;
@@ -79,7 +99,10 @@ pub(super) fn encode(
         };
         use oxideav_av1::obu::{ObuIter, ObuType};
         let mut frames = Vec::new();
-        for obu in ObuIter::new(&encoded.temporal_unit_bytes) {
+        if encoded.temporal_units.len() != 1 {
+            return Err("Unexpected lossless AVIF encoder temporal units".into());
+        }
+        for obu in ObuIter::new(&encoded.temporal_units[0]) {
             let obu = obu.map_err(err)?;
             if obu.obu_type == ObuType::Frame {
                 frames.push(ObuFrame::new(ObuType::Frame, obu.payload.to_vec()));

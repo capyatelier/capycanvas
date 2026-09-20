@@ -14,6 +14,14 @@ export function dependencyNotices(licenses) {
     let crates = license.used_by.map((used) => used.crate).filter((crate) => crate.source
       || (crate.manifest_path && resolve(crate.manifest_path).startsWith(join(root, "vendor") + sep)));
     let original = "";
+    // cesu8 keeps its additional author attribution in the source header. Its
+    // full COPYRIGHT-RUST.txt (selected in about.toml) supplies the license terms.
+    for (const crate of crates.filter(crate => crate.name === "cesu8")) {
+      if (crate.version !== "1.1.0" || !crate.manifest_path)
+        throw new Error("Revalidate the original cesu8 source notice for this release");
+      const notice = readFileSync(join(dirname(crate.manifest_path), "src/lib.rs"), "utf8").split("\n\n", 1)[0];
+      original += `<section><h2>cesu8 ${escape(crate.version)} copyright</h2><pre>${escape(notice)}</pre></section>`;
+    }
     // This published archive has neither notices nor repository metadata, so
     // cargo-about cannot fetch its git clarification. Preserve the exact upstream
     // Zlib alternative, checked against the recorded publication revision.

@@ -1,6 +1,7 @@
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
+import {checkPortablePhoto} from "./portable-photo.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -148,7 +149,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof"].includes(x)) ? 180000 : 30000);
+    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -240,6 +241,8 @@ try {
     await checkDrawingTabRecovery({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--drawing-tabs")) {
     await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--portable-photo")) {
+    await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--gainmap-interchange")) {
     await checkGainmapInterchange({evaluate});
   } else if (process.argv.includes("--hdr-performance")) {

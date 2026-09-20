@@ -10,6 +10,24 @@ pub enum GainMapFormat {
     Jpeg,
     Avif,
 }
+
+/// Per-operation codec allowance. Hosts may supply a smaller process/device
+/// policy; the default snapshots the same memory budget as ordinary photo IO.
+#[derive(Clone, Copy, Debug)]
+pub struct GainMapEncodeOptions {
+    pub quality: u8,
+    pub memory: PhotoMemoryBudget,
+}
+impl GainMapEncodeOptions {
+    pub fn from_memory_budget(quality: u8, memory: PhotoMemoryBudget) -> Self {
+        Self { quality, memory }
+    }
+}
+impl From<u8> for GainMapEncodeOptions {
+    fn from(quality: u8) -> Self {
+        Self::from_memory_budget(quality, PhotoMemoryBudget::current())
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct GainMapMetadata {
     pub min_log2: f32,
@@ -33,14 +51,6 @@ mod jpeg;
 mod jpeg_container;
 mod metadata;
 pub(super) use metadata::Metadata;
-pub fn gainmap_available() -> bool {
-    true
-}
-pub fn gainmap_format_available(_format: GainMapFormat) -> bool {
-    true
-}
-
-#[allow(unused_variables)]
 pub fn write_gainmap_rows(
     output: impl Write,
     extent: [u32; 2],
@@ -59,7 +69,6 @@ pub fn write_gainmap_rows(
         cancelled, read,
     )
 }
-#[allow(unused_variables)]
 pub fn write_gainmap_rows_with_guide(
     output: impl Write,
     extent: [u32; 2],
@@ -67,21 +76,21 @@ pub fn write_gainmap_rows_with_guide(
     rendition: SdrRendition,
     guide: Option<&layer_core::color::hdr::LocalToneGuide>,
     format: GainMapFormat,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     resolution: Option<layer_core::ImageResolution>,
     matte: Option<[f32; 3]>,
     clip: bool,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
+    let options = options.into();
     if format == GainMapFormat::Jpeg {
-        return jpeg::write(output, extent, space, rendition, guide, quality, resolution, matte, clip, cancelled, read);
+        return jpeg::write(output, extent, space, rendition, guide, options, resolution, matte, clip, cancelled, read);
     }
-    super::avif_io::write(output, extent, space, rendition, guide, quality, resolution, matte,
+    super::avif_io::write(output, extent, space, rendition, guide, options, resolution, matte,
         clip, cancelled, read)
 }
 
-#[allow(unused_variables)]
 pub fn preview_gainmap_rows(
     extent: [u32; 2],
     bounds: [u32; 2],
@@ -105,7 +114,6 @@ pub fn preview_gainmap_rows(
         extent, bounds, space, rendition, None, format, quality, matte, cancelled, read,
     )
 }
-#[allow(unused_variables)]
 pub fn preview_gainmap_rows_with_guide(
     extent: [u32; 2],
     bounds: [u32; 2],
@@ -113,7 +121,7 @@ pub fn preview_gainmap_rows_with_guide(
     rendition: SdrRendition,
     guide: Option<&layer_core::color::hdr::LocalToneGuide>,
     format: GainMapFormat,
-    quality: u8,
+    options: impl Into<GainMapEncodeOptions>,
     matte: Option<[f32; 3]>,
     cancelled: &AtomicBool,
     read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
@@ -126,10 +134,11 @@ pub fn preview_gainmap_rows_with_guide(
     ),
     String,
 > {
+    let options = options.into();
     if format == GainMapFormat::Jpeg {
-        return jpeg::preview(extent, bounds, space, rendition, guide, quality, matte, cancelled, read);
+        return jpeg::preview(extent, bounds, space, rendition, guide, options, matte, cancelled, read);
     }
-    super::avif_io::preview(extent, bounds, space, rendition, guide, quality, matte, cancelled, read)
+    super::avif_io::preview(extent, bounds, space, rendition, guide, options, matte, cancelled, read)
 }
 
 pub(super) fn read_gainmap(input: impl Read + Seek, format: GainMapFormat, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<SourceImage, String> {
@@ -141,28 +150,71 @@ pub(super) fn read_gainmap(input: impl Read + Seek, format: GainMapFormat, limit
 mod tests {
     use super::*;
     #[test]
+    fn gainmap_host_budgets_cover_encoding_and_preview_decoding() {
+        let extent = [16, 16];
+        let cancel = AtomicBool::new(false);
+        for format in [GainMapFormat::Jpeg, GainMapFormat::Avif] {
+            let memory = PhotoMemoryBudget { source_bytes: 0, decode_bytes: 0, encode_bytes: 0 };
+            let mut reads = 0;
+            let result = write_gainmap_rows_with_guide(
+                Vec::new(), extent, RgbSpace::Srgb, Default::default(), None, format,
+                GainMapEncodeOptions::from_memory_budget(90, memory), None, None, false,
+                &cancel, |_, row| { reads += 1; row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+            );
+            assert!(result.unwrap_err().contains("memory budget"));
+            assert_eq!(reads, 0, "Reject before consuming the captured image");
+            let options = GainMapEncodeOptions::from_memory_budget(90,
+                PhotoMemoryBudget { encode_bytes: 128 * 1024 * 1024, ..memory });
+            let result = preview_gainmap_rows_with_guide(
+                extent, [8, 8], RgbSpace::Srgb, Default::default(), None, format,
+                options, None, &cancel, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+            );
+            assert!(result.unwrap_err().contains("memory budget"),
+                "Preview decoding must not replace the host's zero allowance with a default");
+            let options = GainMapEncodeOptions::from_memory_budget(90,
+                PhotoMemoryBudget::from_available_memory(512 * 1024 * 1024));
+            let (_, hdr, _, _) = preview_gainmap_rows_with_guide(
+                extent, [8, 8], RgbSpace::Srgb, Default::default(), None, format,
+                options, None, &cancel, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) },
+            ).unwrap();
+            assert!(hdr.iter().all(|p| p[0] > 1.9), "A later admitted preview retains HDR");
+        }
+    }
+    #[test]
     #[ignore = "large AVIF grid qualification; run in release mode"]
     fn avif_grid_preserves_partial_cells_alpha_and_gain_samples() {
-        let extent = [1031, 1037];
+        let started = std::time::Instant::now();
+        let extent: [u32; 2] = std::env::var("LAYER_AVIF_GRID_EXTENT")
+            .map(|s| serde_json::from_str(&s).unwrap()).unwrap_or([1031, 1037]);
+        assert!(extent.into_iter().all(|n| (1024..=16384).contains(&n)));
         let cancel = AtomicBool::new(false);
         let pixel = |x: u32, y: u32| {
-            let a = 0.25 + 0.75 * x as f32 / 1030.;
-            let v = if x < 516 { 0.125 } else { 4. };
-            [v*a, (0.1+y as f32/1036.)*a, 0.2*a, a]
+            let a = 0.25 + 0.75 * x as f32 / (extent[0] - 1) as f32;
+            let v = if x < extent[0].div_ceil(2) { 0.125 } else { 4. };
+            [v*a, (0.1+y as f32/(extent[1] - 1) as f32)*a, 0.2*a, a]
         };
         let read = |y, row: &mut [[f32; 4]]| { for (x,p) in row.iter_mut().enumerate() { *p = pixel(x as u32,y); } Ok(()) };
         let mut encoded = Vec::new();
         write_gainmap_rows(&mut encoded, extent, RgbSpace::Srgb, SdrRendition::default(),
             GainMapFormat::Avif, 90, Some(layer_core::ImageResolution::ppi(300)), None, false, &cancel, read).unwrap();
+        let encode_time = started.elapsed();
+        let encoded_bytes = encoded.len();
+        if let Some(directory) = std::env::var_os("LAYER_AVIF_OUTPUT") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join(format!("{}x{}-q90.avif", extent[0], extent[1])), &encoded).unwrap();
+        }
+        let started = std::time::Instant::now();
         let source = read_photo(std::io::Cursor::new(encoded), Default::default()).unwrap();
+        let decode_time = started.elapsed();
         assert_eq!(source.extent, extent);
         assert_eq!(source.interpretation.depth, SampleDepth::F16);
         assert!(source.resolution.is_some());
         let mut rows = source.rows();
         let mut row = vec![0; source.row_bytes()];
-        for y in [0, 517, 518, 519, 520, 1036] {
+        for y in [0, 207, 208, 209, 255, 256, 257, 415, 416, 417, extent[1] - 1] {
             rows.read(y, &mut row).unwrap();
-            for x in [0, 514, 515, 516, 517, 1030] {
+            for x in [0, 207, 208, 209, 255, 256, 257, 415, 416, 417, extent[0]/2, extent[0]/2+1, extent[0] - 1] {
                 let at = x as usize*8;
                 let p = layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| u16::from_le_bytes([row[at+c*2], row[at+c*2+1]]))).unwrap();
                 let expected = pixel(x,y);
@@ -170,6 +222,7 @@ mod tests {
                 assert!((p[3]-expected[3]).abs() < 0.001);
             }
         }
+        eprintln!("AVIF grid {extent:?}: {encoded_bytes} bytes, encode {encode_time:?}, decode {decode_time:?}");
     }
     #[test]
     fn unified_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
@@ -414,7 +467,6 @@ mod tests {
     #[test]
     fn gainmap_jpeg_and_transparent_avif_roundtrip_edited_hdr_and_authored_sdr() {
         use std::{io::Cursor, sync::atomic::AtomicBool};
-        assert!(gainmap_available());
         let extent = [64, 48];
         let row = |y: u32, row: &mut [[f32; 4]], transparent: bool| {
             for (x, p) in row.iter_mut().enumerate() {
