@@ -1,0 +1,6 @@
+
+running 2 tests
+test raster::native_edit::tests::native_gpen_batch_edges_do_not_darken_opaque_source_pixels ... ok
+test raster::native_edit::tests::native_gpen_keeps_original_photo_pixels_in_touched_tiles ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 89.61s

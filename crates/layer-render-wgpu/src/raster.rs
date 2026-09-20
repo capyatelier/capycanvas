@@ -1034,6 +1034,47 @@ impl WgpuRasterizer {
         prepare_capture(&self.device, &self.raster_buffers, encoder, copies, status)
     }
 
+    /// Batch only already-decoded color tiles. Cold decodes retain their early
+    /// submission: delaying those uploads increases staging pressure and was
+    /// slower on Adreno even when it reduced the number of command buffers.
+    fn restore_native_color_tile(
+        &mut self,
+        batch: &mut Vec<(Arc<TileBlob>, wgpu::Texture)>,
+        blob: Arc<TileBlob>,
+        texture: wgpu::Texture,
+    ) -> Result<(), GpuRasterError> {
+        let space = self.document_color().space;
+        if self.scene.as_ref().is_some_and(|scene| scene.prepared_raster_view(&blob, space).is_some()) {
+            if batch.capacity() == 0 { batch.reserve_exact(crate::native_tiles::MAX_BATCH_TILES); }
+            batch.push((blob, texture));
+            if batch.len() == crate::native_tiles::MAX_BATCH_TILES { self.restore_native_raster_batch(batch)?; }
+        } else {
+            // Flush cached views before a cold decode can reuse their slots.
+            self.restore_native_raster_batch(batch)?;
+            self.restore_native_tiles(&[crate::native_tiles::NativeTileRestore {
+                blob: &blob, space, destination: space, working: &texture,
+            }])?;
+        }
+        Ok(())
+    }
+
+    /// Submit cached copies into private candidates, without another heap
+    /// allocation for the request metadata. Only the live prefix is encoded.
+    fn restore_native_raster_batch(
+        &mut self,
+        batch: &mut Vec<(Arc<TileBlob>, wgpu::Texture)>,
+    ) -> Result<(), GpuRasterError> {
+        if batch.is_empty() { return Ok(()); }
+        let space = self.document_color().space;
+        let requests: [_; crate::native_tiles::MAX_BATCH_TILES] = std::array::from_fn(|i| {
+            let (blob, working) = batch.get(i).unwrap_or(&batch[0]);
+            crate::native_tiles::NativeTileRestore { blob, space, destination: space, working }
+        });
+        self.restore_native_tiles(&requests[..batch.len()])?;
+        batch.clear();
+        Ok(())
+    }
+
     /// Restore changed pages only, from exact backing. Called on the GPU owner
     /// after backing is ready; no historical dabs are generated.
     pub fn restore_raster(
@@ -1056,6 +1097,7 @@ impl WgpuRasterizer {
             Watercolor(WatercolorWetnessPage),
         }
         let mut replacements = Vec::new();
+        let mut native_batch = Vec::new();
         for (key, tile) in &data.tiles {
             if previous
                 .tiles
@@ -1112,21 +1154,13 @@ impl WgpuRasterizer {
                 }
             };
             if self.native_edit.is_some() {
-                let color = self.document_color();
                 if key.plane == RasterPlane::Color {
-                    self.restore_native_tiles(&[crate::native_tiles::NativeTileRestore {
-                        blob: &blob,
-                        space: color.space,
-                        destination: color.space,
-                        working: &texture,
-                    }])?;
+                    self.restore_native_color_tile(&mut native_batch, blob, texture)?;
                 } else {
-                    self.restore_native_scalars(&[
-                        crate::native_tiles::scalar::NativeScalarRestore {
-                            blob: &blob,
-                            working: &texture,
-                        },
-                    ])?;
+                    self.restore_native_raster_batch(&mut native_batch)?;
+                    self.restore_native_scalars(&[crate::native_tiles::scalar::NativeScalarRestore {
+                        blob: &blob, working: &texture,
+                    }])?;
                 }
                 replacements.push(replacement);
                 continue;
@@ -1154,6 +1188,7 @@ impl WgpuRasterizer {
             );
             replacements.push(replacement);
         }
+        self.restore_native_raster_batch(&mut native_batch)?;
         if let Some(index) = index {
             let layer = &mut self.paint_layers[index];
             layer.pages.retain(|p| {
@@ -1228,6 +1263,9 @@ impl WgpuRasterizer {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod native_tests;
+
+#[cfg(test)]
+mod restore_tests;
 
 pub(super) mod native_edit;
 mod residency;

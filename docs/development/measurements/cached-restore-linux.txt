@@ -1,0 +1,30 @@
+
+running 1 test
+test raster::restore_tests::native_restore_submission_latency ... restore_adapter GpuAdapterInfo { name: "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition", backend: 1, device_type: 2, vendor_id: 4318, device_id: 11188 }
+restore_result round=0 tiles=1 batch=1 submissions=1 samples=120 cpu_ms=[0.0070, 0.0082, 0.0103] completed_ms=[0.0297, 0.0312, 0.0333] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=1 batch=16 submissions=1 samples=120 cpu_ms=[0.0070, 0.0074, 0.0157] completed_ms=[0.0296, 0.0318, 0.2614] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=1 batch=0 submissions=1 samples=120 cpu_ms=[0.0071, 0.0075, 0.0091] completed_ms=[0.0295, 0.0313, 0.0417] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=4 batch=1 submissions=4 samples=120 cpu_ms=[0.0296, 0.0332, 0.1392] completed_ms=[0.0528, 0.0695, 0.2921] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=4 batch=16 submissions=1 samples=120 cpu_ms=[0.0105, 0.0112, 0.0150] completed_ms=[0.0421, 0.0432, 0.0467] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=4 batch=0 submissions=1 samples=120 cpu_ms=[0.0107, 0.0110, 0.0118] completed_ms=[0.0421, 0.0438, 0.0846] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=1 submissions=64 samples=120 cpu_ms=[0.5043, 2.4869, 2.5961] completed_ms=[0.6005, 2.5460, 2.7528] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=16 submissions=4 samples=120 cpu_ms=[0.0971, 0.1421, 0.4292] completed_ms=[0.2562, 0.2908, 0.5388] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=0 submissions=4 samples=120 cpu_ms=[0.1009, 0.1091, 0.1728] completed_ms=[0.2566, 0.2798, 0.5531] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=128 batch=1 submissions=128 samples=120 cpu_ms=[5.5697, 7.7708, 8.2654] completed_ms=[5.6129, 7.8127, 8.3073] upload_drains=Some(0)..Some(0) upload_peak_bytes=4194304
+restore_result round=0 tiles=128 batch=16 submissions=8 samples=120 cpu_ms=[5.5902, 6.8479, 8.0254] completed_ms=[5.6319, 6.8881, 8.2066] upload_drains=Some(4)..Some(4) upload_peak_bytes=16252928
+restore_result round=0 tiles=128 batch=0 submissions=128 samples=120 cpu_ms=[5.3225, 7.5153, 8.4413] completed_ms=[5.3799, 7.5525, 8.4798] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=0 submissions=1 samples=120 cpu_ms=[0.0059, 0.0065, 0.0087] completed_ms=[0.0276, 0.0282, 0.0307] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=16 submissions=1 samples=120 cpu_ms=[0.0060, 0.0095, 0.0132] completed_ms=[0.0280, 0.0372, 0.2553] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=1 submissions=1 samples=120 cpu_ms=[0.0058, 0.0066, 0.0327] completed_ms=[0.0279, 0.0335, 0.0612] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=0 submissions=1 samples=120 cpu_ms=[0.0087, 0.0091, 0.0094] completed_ms=[0.0390, 0.0398, 0.0439] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=16 submissions=1 samples=120 cpu_ms=[0.0086, 0.0091, 0.0119] completed_ms=[0.0389, 0.0426, 0.2636] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=1 submissions=4 samples=120 cpu_ms=[0.0239, 0.0418, 0.0456] completed_ms=[0.0575, 0.0631, 0.2866] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=0 submissions=4 samples=120 cpu_ms=[0.0828, 0.1380, 0.2908] completed_ms=[0.2515, 0.3113, 0.5640] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=16 submissions=4 samples=120 cpu_ms=[0.0811, 0.1139, 0.4251] completed_ms=[0.2520, 0.5080, 0.7133] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=1 submissions=64 samples=120 cpu_ms=[0.4280, 2.4388, 2.8986] completed_ms=[0.6055, 2.6031, 3.0039] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=0 submissions=128 samples=120 cpu_ms=[5.0494, 7.3285, 8.2733] completed_ms=[5.0902, 7.3865, 8.3098] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=16 submissions=8 samples=120 cpu_ms=[5.4367, 6.7964, 7.6222] completed_ms=[5.4868, 6.8346, 7.6623] upload_drains=Some(4)..Some(4) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=1 submissions=128 samples=120 cpu_ms=[5.0125, 7.3483, 8.2521] completed_ms=[5.0778, 7.3872, 8.2980] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 6.64s

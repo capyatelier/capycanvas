@@ -1,0 +1,30 @@
+
+running 1 test
+test raster::restore_tests::native_restore_submission_latency ... restore_adapter GpuAdapterInfo { name: "Adreno (TM) 735", backend: 1, device_type: 1, vendor_id: 20803, device_id: 1124272896 }
+restore_result round=0 tiles=1 batch=1 submissions=1 samples=120 cpu_ms=[0.2712, 0.4539, 0.6201] completed_ms=[1.0933, 1.2992, 1.9380] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=1 batch=16 submissions=1 samples=120 cpu_ms=[0.2688, 0.4007, 0.4856] completed_ms=[1.0477, 1.2499, 2.6793] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=1 batch=0 submissions=1 samples=120 cpu_ms=[0.2742, 0.3746, 0.4148] completed_ms=[1.0959, 1.3018, 1.5390] upload_drains=Some(0)..Some(0) upload_peak_bytes=524288
+restore_result round=0 tiles=4 batch=1 submissions=4 samples=120 cpu_ms=[0.7806, 1.0430, 1.4776] completed_ms=[1.3603, 1.7589, 2.6503] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=4 batch=16 submissions=1 samples=120 cpu_ms=[0.3035, 0.4086, 0.4865] completed_ms=[1.2116, 1.4664, 1.7382] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=4 batch=0 submissions=1 samples=120 cpu_ms=[0.3140, 0.4111, 0.9354] completed_ms=[1.2246, 1.4563, 2.4578] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=1 submissions=64 samples=120 cpu_ms=[6.0103, 6.9568, 7.7362] completed_ms=[8.0952, 9.2343, 10.6578] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=16 submissions=4 samples=120 cpu_ms=[1.9777, 2.4467, 3.9099] completed_ms=[3.6658, 4.6734, 5.6586] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=64 batch=0 submissions=4 samples=120 cpu_ms=[2.0204, 2.2452, 2.5211] completed_ms=[3.6446, 4.0169, 5.3405] upload_drains=Some(0)..Some(0) upload_peak_bytes=1048576
+restore_result round=0 tiles=128 batch=1 submissions=128 samples=120 cpu_ms=[18.4682, 20.4382, 21.5726] completed_ms=[18.9434, 21.0240, 22.2412] upload_drains=Some(0)..Some(0) upload_peak_bytes=6291456
+restore_result round=0 tiles=128 batch=16 submissions=8 samples=120 cpu_ms=[44.5325, 48.0623, 52.5044] completed_ms=[45.4497, 48.9166, 53.3897] upload_drains=Some(4)..Some(4) upload_peak_bytes=16252928
+restore_result round=0 tiles=128 batch=0 submissions=128 samples=120 cpu_ms=[17.6471, 20.3185, 21.9302] completed_ms=[18.0249, 20.6407, 22.5188] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=0 submissions=1 samples=120 cpu_ms=[0.2582, 0.3578, 0.5459] completed_ms=[0.9778, 1.1948, 1.3776] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=16 submissions=1 samples=120 cpu_ms=[0.2428, 0.4795, 0.6230] completed_ms=[1.0090, 1.3468, 1.9785] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=1 batch=1 submissions=1 samples=120 cpu_ms=[0.2774, 0.3858, 0.5849] completed_ms=[1.0835, 1.2289, 1.6032] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=0 submissions=1 samples=120 cpu_ms=[0.3242, 0.4403, 0.5701] completed_ms=[1.2317, 1.4283, 2.2966] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=16 submissions=1 samples=120 cpu_ms=[0.3272, 0.4342, 0.6092] completed_ms=[1.2406, 1.5099, 1.7764] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=4 batch=1 submissions=4 samples=120 cpu_ms=[0.8247, 1.2103, 1.6433] completed_ms=[1.3811, 1.7506, 1.9991] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=0 submissions=4 samples=120 cpu_ms=[2.0593, 2.3987, 3.1356] completed_ms=[3.6957, 4.4607, 5.2409] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=16 submissions=4 samples=120 cpu_ms=[1.9754, 2.2992, 2.8465] completed_ms=[3.6587, 4.1922, 5.1787] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=64 batch=1 submissions=64 samples=120 cpu_ms=[6.0265, 6.8093, 7.7382] completed_ms=[8.0660, 8.6223, 11.1003] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=0 submissions=128 samples=120 cpu_ms=[18.5271, 20.9339, 21.9267] completed_ms=[19.0388, 21.3956, 22.3663] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=16 submissions=8 samples=120 cpu_ms=[44.5773, 49.0355, 52.8341] completed_ms=[45.4705, 50.4885, 53.9278] upload_drains=Some(4)..Some(4) upload_peak_bytes=16252928
+restore_result round=1 tiles=128 batch=1 submissions=128 samples=120 cpu_ms=[17.5752, 20.6028, 21.8016] completed_ms=[17.9151, 20.9797, 22.1013] upload_drains=Some(0)..Some(0) upload_peak_bytes=16252928
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 41.92s

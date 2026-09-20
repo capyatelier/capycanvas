@@ -263,6 +263,9 @@ pub struct GpuRasterMetrics {
     /// Completed intermediate display batches; the final batch stays in the
     /// ordinary frame submission so presentation does not wait on the CPU.
     pub display_composition_submissions: u64,
+    /// Successful final submissions of native color/scalar restore batches.
+    /// Upload-ceiling drains are counted separately in source_upload_submissions.
+    pub native_restore_submissions: u64,
     /// Native physical-filter window execution, separate from source uploads.
     /// Pixel caches include clipping uniforms here, but exclude tile scratch,
     /// paint, the full composite and driver allocations.

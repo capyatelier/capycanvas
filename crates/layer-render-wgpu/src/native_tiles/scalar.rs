@@ -52,6 +52,7 @@ impl crate::WgpuRasterizer {
         self.uploads.finish(&encoder);
         if result.is_ok() {
             self.last_submission = Some(encoder.submit(&self.queue));
+            self.metrics.native_restore_submissions += 1;
         }
         result
     }

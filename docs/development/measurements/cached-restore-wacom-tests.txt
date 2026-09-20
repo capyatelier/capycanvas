@@ -1,0 +1,8 @@
+
+running 4 tests
+test raster::restore_tests::cached_restore_prefix_is_copied_before_cold_decodes_reuse_slots ... ok
+test raster::restore_tests::native_mask_restoration_keeps_existing_scalar_path ... ok
+test raster::restore_tests::native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity ... ok
+test raster::restore_tests::native_restore_submission_latency ... ignored, paired physical GPU restore benchmark; release and serial
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 337 filtered out; finished in 44.75s

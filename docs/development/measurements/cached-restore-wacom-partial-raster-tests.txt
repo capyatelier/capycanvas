@@ -1,0 +1,21 @@
+
+running 36 tests
+test layer_tests::affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask ... FAILED
+test layer_tests::placement::retained_placement_samples_full_source_across_tiles_without_creating_raster ... ok
+test layer_tests::raster::device_loss_preserves_backed_checkpoint_and_rejects_unpublished_capture ... ok
+test layer_tests::raster::failed_restore_keeps_live_pages_after_staging_a_replacement ... ok
+test layer_tests::raster::opaque_srgb_import_preserves_all_shadow_and_full_ramp_codes ... ok
+test layer_tests::raster::raster_capture_undo_redo_and_continued_paint_are_exact ... ok
+test layer_tests::raster::raster_mask_capture_and_restore_preserve_exact_coverage ... ok
+test layer_tests::raster::source_tiles_preserve_opaque_codes_across_upload_chunks_and_partial_edges ... ok
+test layer_tests::selection_raster_latency ... ignored, hardware GPU latency benchmark; run serially in release mode
+test layer_tests::transforms::original_photo_transforms_stream_tiles_cancel_and_restore_exact_raster_history ... ok
+test raster::native_edit::tests::abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits ... ok
+test raster::native_edit::tests::batched_validation_scans_every_texture_slot_and_partial_tail ... ok
+test raster::native_edit::tests::deferred_native_outputs_preserve_versions_and_status_during_following_frames ... ok
+test raster::native_edit::tests::device_loss_before_deferred_native_backing_keeps_the_last_checkpoint ... ok
+test raster::native_edit::tests::invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adoption ... ok
+test raster::native_edit::tests::native_60mp_linked_mask_transform_commits_and_preserves_history ... ignored, 60 MP linked color/mask publication; run alone
+test raster::native_edit::tests::native_60mp_source_transform_commits_and_preserves_history ... ignored, 60 MP GPU publication, exact save/history and device replacement; run alone
+test raster::native_edit::tests::native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changing_codes ... ok
+test raster::native_edit::tests::native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_samples ... Terminated

@@ -1,0 +1,14 @@
+
+running 1 test
+test layer_tests::affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask ...
+thread 'layer_tests::affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask' (25307) panicked at crates/layer-render-wgpu/src/layer_tests.rs:977:21:
+Affine([1.0, 0.0, 0.0, 1.0, 30.5, 41.25]), inverted=false, 32,41
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    layer_tests::affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 340 filtered out; finished in 9.27s
