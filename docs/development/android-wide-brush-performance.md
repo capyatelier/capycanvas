@@ -738,3 +738,51 @@ failures in the checks above. Shared optimizations and the shader correction
 benefit all hosts using this renderer, while physical Apple/GTK/Web performance
 and complete behavior qualification remain unmeasured. No merge, commit or
 push was performed, and brush-algorithm redesign remains paused.
+
+## Follow-up: 2048 px, 2 Hz execution attribution
+
+On Wacom `5ll21u1002931` (DTHA140), the isolated
+`art.capycanvas.penverify` package reproduced device loss with the same 61 MP
+photo, a 2048 px G-Pen, 2 Hz motion, and 8 ms prediction. This package was
+used so the installed artist application was not replaced. The host timing
+records CPU phase boundaries and whole-submission GPU timestamps; it does not
+yet expose per-pass GPU timestamps.
+
+The failed run had four rendering callbacks. Their total callback times were
+131.8, 545.0, 1333.2, and 2864.2 ms. On the fourth callback the CPU owner used
+only 44.8 ms while composition/present blocked for 2847.7 ms. The preceding
+third callback spent 499.3 ms in preparation and 818.6 ms in composition.
+This is a growing GPU queue/backlog, not CPU saturation or a long CPU-only
+brush loop. Android exposes no usable Adreno per-pass counter through `dumpsys
+gpu`; whole-frame timestamps and the host phase boundaries are the available
+GPU attribution on this device.
+
+Setting the prediction horizon to zero reproduced the same fourth-callback
+device loss (124.4, 447.5, 997.6, and 1932.7 ms), including a final 1914.5 ms
+composition/present block. Therefore the look-ahead distance is not the cause.
+A 1024 px, otherwise identical 2 Hz control completed: CPU p50/p95/p99
+14.91/23.03/26.80 ms and GPU p50/p95/p99 33.49/40.17/41.22 ms over 120
+timestamped updates. Doubling diameter quadruples the local pixel field and
+crosses a device-specific GPU work/backlog limit.
+
+After the Multiply routing change, the rebuilt isolated package also completed
+the 2048 px, 1 Hz, 16 ms control: CPU p50/p95/p99 17.88/28.33/30.10 ms and GPU
+p50/p95/p99 48.58/58.30/58.74 ms over 120 timestamped updates. This checks the
+unchanged normal G-Pen compute route; it is not a hardware qualification of the
+Multiply fallback.
+
+`simpleperf` hardware counters during the failed 2 Hz attempt reported 1.35
+GHz and IPC 1.03 over its ten-second app-wide interval; this interval includes
+startup and is not a paint-only comparison. It is nevertheless inconsistent
+with a CPU-core saturation explanation. A successful 1 Hz control recorded
+substantial Vulkan descriptor activity in the app-wide profile, but cannot
+separate driver work from paint shader execution. These are diagnostic results,
+not a claimed performance improvement.
+
+The dry-material path dispatches each affected 256x256 page independently.
+Within each pixel invocation it evaluates its ordered dab range, so the
+unavoidable work is proportional to covered pixels times contacts per pixel;
+pages parallelize that work but do not remove it. A work-budget/backpressure
+policy would cap the amount submitted before the GPU queue grows without bound.
+Changing that bound is scheduling, not a brush-algorithm redesign; making the
+brush approximation cheaper would alter brush behavior and is out of scope.
