@@ -1,5 +1,10 @@
 # Wacom tile overhead: simplify first, then reuse
 
+Implemented results and the qualified scope are recorded in the
+[shared material executor report](android-pen-tile-executor-20260920.md).
+The approximately 39/s estimate below is the original conditional forecast;
+the measured implementation did not reach it.
+
 Source: `51e2b005`, whose renderer remains `39e9cba3`. This follows the
 [CPU/tile analysis](android-pen-cpu-composition-tiles-20260920.md) and responds to
 the user's priorities: retain 256 px tiles, reduce code/algorithm complexity,
