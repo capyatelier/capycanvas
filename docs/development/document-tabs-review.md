@@ -11,10 +11,14 @@ Device: Huion KP1202 / Kamvas Pad 12, serial `G7DL2S300241`.
 
 - **Android:** open **Capy Tabs Test**, isolated package `art.capycanvas.tabtest`.
   The APK is `apps/layer-android/app/build/outputs/apk/debug/app-debug.apk`.
-  The existing production installation and its drawings were preserved.
+  Two drawings are left open. The existing production installation and its
+  drawings were preserved.
 - **Web:** open **http://127.0.0.1:8162/** in Huion Chrome. This serves the complete
   production PWA from `dist/capycanvas`, including fingerprinted modules, Wasm,
   filters, icons and dependency notices. Test origins use separate ports.
+  Its complete offline cache is installed and tested: cold reload, visible pen
+  ink and switching away/back all passed with uncached network requests blocked.
+  Two drawings are left open for review; the first contains a sample stroke.
 
 The initial load and updates use USB forwarding to this workstation. The review
 server is bound only to localhost. To restore the connection after reconnecting
@@ -30,6 +34,13 @@ adb -s G7DL2S300241 shell am start -a android.intent.action.VIEW -d http://127.0
 Both builds include upstream `a23c627a`, merged in `3a710bd6`. Each implementation
 milestone fetched/merged `origin/main`; the final check was already up to date.
 Later Web-only input and harness changes do not alter the installed Android APK.
+
+Review build identities:
+
+- Android APK SHA-256:
+  `536b25551691f927c236da70476dc72d1536a4ae54ac5779471100d169e0dec2`.
+- Web implementation commit: `4be6cf2c`; PWA version:
+  `3a65a6cfb49d6b6e890639fd80cd2531c16a0288a487a94c6ad4315c9ea5316a`.
 
 ## Shared ownership
 
@@ -96,6 +107,13 @@ Original recovery files survive until the replacement checkpoint is durable.
     drawings after successful placement; cancellation prevents subsequent opens.
 
 ## Validation boundaries
+
+Passing checks include 106 core, 63 engine, 497 UI and 28 native-host Rust tests;
+GTK GPU tab lifecycle/storage/close, immediate input/undo and native pointer
+regressions; four Android tab journeys plus the existing place/paste/details
+journey on the Huion; Web Huion lifecycle, multiple recovery and final packaged
+offline presentation; and all 14 packaging tests. The progress log distinguishes
+failed harness attempts, fixes and successful reruns.
 
 Automated Huion input uses typed native mouse, stylus and touch events through
 real native views. It validates device-specific UI arbitration and Vulkan/WebGPU

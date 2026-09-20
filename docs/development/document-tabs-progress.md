@@ -1,8 +1,9 @@
 # Unified drawing tabs implementation
 
-Active goal: implement Web, then Android, with one shared Rust drawing-tab model
-and resource lifecycle; preserve/test GTK and deploy both ports on the attached
-Huion. Acceptance inventory: [assessment](document-tabs-web-android-assessment.md).
+Completed: Web, then Android, with one shared Rust drawing-tab model and resource
+lifecycle; GTK migrated/tested and both ports deployed on the attached Huion.
+Acceptance inventory: [assessment](document-tabs-web-android-assessment.md).
+Deployment and verification: [review guide](document-tabs-review.md).
 
 ## Milestones
 
@@ -268,3 +269,32 @@ M3 final reruns:
   interrupted/uncontrolled offline attempts are not counted as passes.
 - The final packaged Huion lifecycle, including the new selector row gestures,
   passes with zero unexpected browser errors (`m4-huion-final-tabs.log`).
+- Committed the final Web input fixes, harness and review guide in `4be6cf2c`.
+  Fetch/merge after that commit again reported already up to date at `a23c627a`.
+- The corrected offline navigation reached the ready canvas, but Android Chrome
+  resets `navigator.onLine` to true after navigation even while CDP still blocks
+  requests. A direct uncached fetch confirmed `TypeError: Failed to fetch` in that
+  state. Replaced the unreliable status assertion with an uncached request probe;
+  its one expected network error is identified by its unique URL, while all
+  other browser errors still fail the run. This only changes the test harness.
+- Final offline Huion run passes (`m4-huion-final-offline-probe.log`): cached PWA
+  cold navigation with HTTP cache disabled, a failed uncached network probe,
+  actual pen ink (50,400 to 48,810 white pixels in the sampled area), new drawing,
+  and exact displayed ink after GPU retirement/restoration. No unexpected browser
+  errors. Networking and HTTP-cache settings were restored in `finally`.
+  Screenshot inspected: `web/huion-packaged-offline-tabs.png`.
+- Closed only completed task-owned browser test pages to release their GPU
+  resources; preserved the review page and unrelated user pages. The final review
+  origin is `http://127.0.0.1:8162/`, backed by the packaged local server. Android
+  is installed as **Capy Tabs Test** (`art.capycanvas.tabtest`).
+- Final native visual check passed: launched the installed review app, created a
+  second drawing through its production New dialog, and inspected
+  `huion-native-review-tabs.png`. Both titles are centered; selected fill and close
+  controls render without the removed hairline border. Left Android in the
+  foreground with two clean drawings, and Chrome's review page with two drawings
+  and its sample ink. No production app/browser data was cleared.
+- Chrome accepted the optional Web Install action, but no separate WebAPK was
+  observed at handoff; the verified Web review entry point is the cached Chrome
+  URL documented above. Standalone launcher installation is not claimed.
+- All implementation, GTK/shared qualification and Huion review deployment work
+  is complete. The two unrelated color-management handoff edits remain untouched.

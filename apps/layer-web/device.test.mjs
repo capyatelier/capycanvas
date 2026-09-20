@@ -38,7 +38,7 @@ socket.onmessage=event=>{
   else if(m.method==="Page.loadEventFired"){onLoad?.();onLoad=null;}
   else if(m.method==="Page.javascriptDialogOpening" && m.params.type==="beforeunload"){call("Page.handleJavaScriptDialog",{accept:true}).catch(()=>{});}
   else if(m.method==="Runtime.exceptionThrown")errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);
-  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error")errors.push(m.params.entry.text);
+  else if(m.method==="Log.entryAdded"&&m.params.entry.level==="error"&&!(process.argv.includes('--drawing-tabs-offline')&&m.params.entry.url?.includes('/__capy-tabs-offline-probe?')))errors.push(m.params.entry.text);
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{

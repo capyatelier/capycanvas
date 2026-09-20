@@ -29,7 +29,11 @@ export async function checkDrawingTabsOffline({call,evaluate,settle}) {
     }
     await ready();
     console.log('Offline check: cold canvas is ready');
-    assert.equal(await evaluate('navigator.onLine'),false);
+    // Android Chrome can reset navigator.onLine on navigation while CDP still
+    // blocks requests. Prove the network restriction with an uncached URL that
+    // the service worker deliberately does not handle (including a 404 would
+    // count as online). Only this expected request error is exempted by the host.
+    assert.equal(await evaluate(`fetch('./__capy-tabs-offline-probe?'+Date.now(),{cache:'no-store'}).then(()=>false,()=>true)`),true,'Uncached requests must fail after offline navigation');
     await evaluate("layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'set_theme',theme:'light'})");
     await invoke('fit_canvas');await ready();await settle();
     const first=await evaluate('Number(layerApp.app.document_tabs(0).selected)');
