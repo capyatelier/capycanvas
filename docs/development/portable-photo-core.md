@@ -29,6 +29,66 @@ Windows host integration remains separate future work. Large AVIF output still
 has substantial latency, especially on Android; measured results follow.
 Earlier milestone entries describe the state at their respective commits.
 
+## Gain-map quality follows AVIF delivery quality — 2026-09-19
+
+AVIF qualities 1–99 now use lossy compression for both the SDR base and RGB gain
+map through the existing Rust rav1e encoder. Gain-map quality is
+`100 - ceil((100 - quality) / 4)`: delivery quality 90 uses gain quality 97,
+and 99 uses 99. Quality 100 retains lossless encoding of both sets of 12-bit
+samples. Alpha stays lossless. Full resolution, channel precision, metadata,
+and the existing single quality control are retained; no dependency, vendored
+source, alternate export mode or platform-specific codec is added.
+
+Using exactly the same numeric quality for both images produced large HDR
+errors on sharp saturated details at low quality. The chosen mapping gives the
+gain map more precision because its log-domain errors multiply into brightness.
+It remains lossy at every delivery quality below 100. The gain map still derives
+from the decoded compressed SDR base, so it accounts for the delivered base's
+actual samples.
+
+Before/after quality-90 benchmarks against `8789c04c`, using release builds:
+
+| Case | Encode/export before | After | File bytes before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Shared core, 1031×1037 | 4.262 s | 2.895 s | 461,823 | 61,819 |
+| Shared core, 2031×2037 | 17.855 s | 10.054 s | 1,127,798 | 183,981 |
+| Chrome 152, 1031×1037 | 6.936 s | 4.379 s | 503,981 | 64,233 |
+| Huion KP1202, 1031×1037 | 21.113 s | 11.551 s | 503,983 | 64,240 |
+
+The core 1 MP times are medians of three alternating baseline/current runs,
+excluding compilation. The other entries are single runs; Chrome's baseline
+is the earlier production-PWA qualification. Inputs are fixed synthetic HDR
+edges/gradients with transparency, not a photographic corpus. Host exports start
+from the same imported fixture; their source quantization differs from the core
+test's generated float rows. Savings are 32–45% in time and 84–87% in file size
+for these cases. Tiny images can grow slightly; no second encoding is attempted
+just to choose the smaller file.
+
+At quality 90, full-image linear-sRGB HDR RMSE rises from 0.000121 to 0.000779
+for the 1 MP fixture, and from 0.000111 to 0.000682 at 4 MP. Maximum channel
+errors are 0.013672 and 0.015625 respectively. A sharper 263×65 saturated pattern
+has RMSE 0.002789 and maximum error 0.029297. These units use SDR reference white
+1 and fixture peak 4. Low quality deliberately permits larger visible errors;
+the tests cover qualities 1, 25, 60, 90, 99 and 100 with explicit error budgets.
+All 18 decoded SDR-base comparisons and three quality-100 AVIF byte comparisons
+remain identical to the baseline. Coded alpha remains exact at 12-bit precision.
+
+The shared color suite passes all 116 tests (14 optional checks ignored), and
+the separately selected 1 MP/4 MP checks pass. Independent libavif comparisons
+pass for nine files across qualities 25/90/100, including alpha and metadata.
+Actual GTK, production Web and Android export/preview/HDR-reopen journeys pass.
+The Wasm smoke check retains strict quality-100 precision and uses explicit
+lossy error bounds at quality 30.
+
+The existing reproduction commands below apply. `LAYER_AVIF_GRID_QUALITY`
+optionally selects quality for the large grid test; it now checks every pixel
+and reports encoding/decoding time, file bytes, HDR RMSE and maximum error.
+The small quality sweep is
+`cargo test --offline --locked --release -p layer-color rust_avif_export_reconstructs_compressed_base_and_preserves_alpha -- --nocapture`.
+Local raw results: `artifacts/portable-photo/avif-gainmap-quality/report.json`,
+`artifacts/portable-photo/web-gainmap-quality/report.json`, and
+`/tmp/capy-gainmap-quality/`.
+
 ## AVIF performance and final qualification — 2026-09-19
 
 Lossless alpha/gain encoding now uses the pinned oxideav encoder's cheaper

@@ -77,7 +77,7 @@ pub extern "C" fn portable_heif() -> u32 {
     3
 }
 
-/// Execute both lossy-base and lossless AVIF export in actual Wasm. The odd
+/// Execute both lossy and lossless AVIF export in actual Wasm. The odd
 /// extent exercises padded grids; decoded HDR and alpha must survive both.
 #[unsafe(no_mangle)]
 pub extern "C" fn portable_avif_export() -> u32 {
@@ -126,7 +126,8 @@ pub extern "C" fn portable_avif_export() -> u32 {
                     if x < 11 { 0.375 } else { 1. },
                 ];
                 for c in 0..3 {
-                    assert!((pixel[c] - expected[c]).abs() < 0.01);
+                    let tolerance = if quality == 100 { 0.01 } else { 0.03 + 0.04 * expected[c] };
+                    assert!((pixel[c] - expected[c]).abs() < tolerance);
                 }
                 assert!((pixel[3] - expected[3]).abs() < 0.0003);
             }

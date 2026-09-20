@@ -15,6 +15,8 @@ pub enum GainMapFormat {
 /// policy; the default snapshots the same memory budget as ordinary photo IO.
 #[derive(Clone, Copy, Debug)]
 pub struct GainMapEncodeOptions {
+    /// Delivery quality in 1..=100. AVIF derives gain-map compression from
+    /// this control too; 100 preserves both encoded images' 12-bit samples.
     pub quality: u8,
     pub memory: PhotoMemoryBudget,
 }
@@ -187,6 +189,8 @@ mod tests {
         let extent: [u32; 2] = std::env::var("LAYER_AVIF_GRID_EXTENT")
             .map(|s| serde_json::from_str(&s).unwrap()).unwrap_or([1031, 1037]);
         assert!(extent.into_iter().all(|n| (1024..=16384).contains(&n)));
+        let quality = std::env::var("LAYER_AVIF_GRID_QUALITY")
+            .map(|s| s.parse::<u8>().unwrap()).unwrap_or(90);
         let cancel = AtomicBool::new(false);
         let pixel = |x: u32, y: u32| {
             let a = 0.25 + 0.75 * x as f32 / (extent[0] - 1) as f32;
@@ -196,13 +200,13 @@ mod tests {
         let read = |y, row: &mut [[f32; 4]]| { for (x,p) in row.iter_mut().enumerate() { *p = pixel(x as u32,y); } Ok(()) };
         let mut encoded = Vec::new();
         write_gainmap_rows(&mut encoded, extent, RgbSpace::Srgb, SdrRendition::default(),
-            GainMapFormat::Avif, 90, Some(layer_core::ImageResolution::ppi(300)), None, false, &cancel, read).unwrap();
+            GainMapFormat::Avif, quality, Some(layer_core::ImageResolution::ppi(300)), None, false, &cancel, read).unwrap();
         let encode_time = started.elapsed();
         let encoded_bytes = encoded.len();
         if let Some(directory) = std::env::var_os("LAYER_AVIF_OUTPUT") {
             let directory = std::path::PathBuf::from(directory);
             std::fs::create_dir_all(&directory).unwrap();
-            std::fs::write(directory.join(format!("{}x{}-q90.avif", extent[0], extent[1])), &encoded).unwrap();
+            std::fs::write(directory.join(format!("{}x{}-q{quality}.avif", extent[0], extent[1])), &encoded).unwrap();
         }
         let started = std::time::Instant::now();
         let source = read_photo(std::io::Cursor::new(encoded), Default::default()).unwrap();
@@ -212,17 +216,27 @@ mod tests {
         assert!(source.resolution.is_some());
         let mut rows = source.rows();
         let mut row = vec![0; source.row_bytes()];
-        for y in [0, 207, 208, 209, 255, 256, 257, 415, 416, 417, extent[1] - 1] {
+        let mut squared = 0f64;
+        let mut maximum = 0f32;
+        for y in 0..extent[1] {
             rows.read(y, &mut row).unwrap();
-            for x in [0, 207, 208, 209, 255, 256, 257, 415, 416, 417, extent[0]/2, extent[0]/2+1, extent[0] - 1] {
+            for x in 0..extent[0] {
                 let at = x as usize*8;
                 let p = layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| u16::from_le_bytes([row[at+c*2], row[at+c*2+1]]))).unwrap();
                 let expected = pixel(x,y);
-                for c in 0..3 { assert!((p[c]-expected[c]/expected[3]).abs() < 0.03+0.04*expected[c]/expected[3], "grid ({x},{y}) channel {c}: {p:?} != {expected:?}"); }
+                for c in 0..3 {
+                    let error = (p[c]-expected[c]/expected[3]).abs();
+                    maximum = maximum.max(error);
+                    squared += f64::from(error).powi(2);
+                    assert!(error < 0.03+0.04*expected[c]/expected[3], "grid ({x},{y}) channel {c}: {p:?} != {expected:?}");
+                }
                 assert!((p[3]-expected[3]).abs() < 0.001);
             }
         }
-        eprintln!("AVIF grid {extent:?}: {encoded_bytes} bytes, encode {encode_time:?}, decode {decode_time:?}");
+        eprintln!("AVIF grid: {}", serde_json::json!({"extent": extent, "quality": quality,
+            "bytes": encoded_bytes, "encode_ms": encode_time.as_secs_f64()*1000.,
+            "decode_ms": decode_time.as_secs_f64()*1000., "hdr_max_abs": maximum,
+            "hdr_rmse": (squared / (f64::from(extent[0])*f64::from(extent[1])*3.)).sqrt()}));
     }
     #[test]
     fn unified_white_fallback_reconstructs_saturated_hdr_in_both_formats() {
