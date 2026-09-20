@@ -305,3 +305,72 @@ M3 final reruns:
   this branch. No deployed application code changed or needed rebuilding.
   All three GTK packaging tests pass (`m4-final-gtk-package-tests.log`), as do
   syntax checks for the changed package generator and PKGBUILD.
+
+## Android close regression follow-up
+
+- The user's Huion report was reproduced manually by tapping × on a newly
+  created clean tab: `The coroutine scope left the composition`
+  (`huion-close-error.txt`). The earlier Compose-clock tests could observe the
+  correct tab membership before a later composition frame reported the error;
+  they did not adequately qualify the production close path.
+- Added `AndroidDrawingTabsUiTest`, using production Choreographer timing,
+  InputDispatcher taps and real document controllers, including the system Save
+  picker. Its initial run against the previous app failed with that exact error
+  (`close-baseline-real-ui.log`). Tests use a separate package,
+  `art.capycanvas.tabclosetest`, preserving the user's review installation.
+- Approved close previously ran inside a `LaunchedEffect` keyed on its own
+  `switching` state. Publishing the transition cancelled its coroutine. Approved
+  retirement now belongs to the retained window ViewModel; coroutine cancellation
+  is not converted into a drawing/storage error. Final finish targets the
+  currently attached Activity, including after configuration recreation.
+- Intermediate real-input runs exposed harness assumptions: tapping a dropdown
+  during its entry animation hit Drawings instead of Close, and the first Back
+  correctly dismissed an open drawer. The harness now waits for settled targets
+  and checks drawer dismissal before final Back. Neither failure is counted as a
+  passing close test. Final-close assertions also wait through Activity
+  destruction and subsequent frames for late errors.
+- Those stricter destruction checks caught a second real defect
+  (`close-destroy-real-ui.log`): UI disposal could dispatch into the already
+  retired final editor and report that painting was unavailable. Action-level
+  diagnostics identified `measure_header`, which shared Rust incorrectly required
+  a renderer for. The new Rust regression failed with that exact error
+  (`close-shared-header-baseline.log`); layout measurements now remain permitted
+  while editing stays disabled. Final retirement also keeps document input blocked
+  through workspace flush and Activity finish, and ordinary recovery polling
+  cancellation is not an application error.
+- The destroyed Compose view can retain the `busy` bit from workspace lease
+  release: native shutdown drains storage without further UI publication. Removed
+  the invalid post-destruction UI-busy assertion (`close-core-final-real-ui.log`),
+  retaining destruction, empty membership, clean workspace and later error checks.
+- Milestone fetch/merge confirmed `origin/main` remains `54ca69cc`, already
+  incorporated. All 498 shared UI tests pass (`close-shared-ui.log`), including
+  the new retired-header regression. Rebuilt GTK and its native GPU tab
+  history/storage/close regression passes in 9.99 s (`close-core-gtk-history.log`).
+  The Web package was rebuilt with the same shared core (282 precached files,
+  `close-core-web-package-retry.log`). The first packaging invocation lacked the
+  installed `resvg` tool in PATH; rerunning with the documented tool path passed.
+- Final production-timing close suite passes all five cases. In the combined
+  ten-case Huion run, nine passed and the older native history/storage test
+  assumed an unsaved-changes request existed immediately after its synthetic
+  stroke (`close-final-huion-qualification.log`). Its readiness check waited for
+  parking but not brush warmup; the host defers contacts begun during warmup.
+  The test now waits for the restored brush, asserts committed ink/dirty state,
+  and includes diagnostic state if a decision is missing. Its targeted rerun
+  passes in 19.87 s (`close-history-ready-ui.log`). Together, the ten qualified
+  journeys include native mouse/pen/touch input, per-drawing recovery, duplicate/
+  corrupt file batches, retained photo placement/paste, exact history/spill and
+  the five new close journeys. No application changes followed this test-only
+  readiness correction.
+- The refreshed packaged Web tab lifecycle passes (`close-core-web-tabs.log`).
+  This desktop run retains the previously documented headless presentation
+  limitation; no new Huion Web presentation claim is made. The updated package
+  is served at the existing review URL without reloading the user's open page.
+- Final Android review build/lint passes (`close-review-deploy-build.log`),
+  installed over **Capy Tabs Test** without clearing app data. Backed up private
+  recovery/preferences first. Manually created disposable drawings and closed
+  the background drawing through the compact selector's ×, then the selected
+  drawing through the title-bar ×; both completed without an error. Left two
+  clean drawings open and inspected `huion-close-fixed-review.png`. The installed
+  APK hash matches the build recorded in the review guide
+  (`close-review-deployment.txt`). Final milestone fetch/merge again reported
+  already up to date at `54ca69cc`.

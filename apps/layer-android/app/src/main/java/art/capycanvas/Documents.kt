@@ -344,7 +344,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             try { launcher.launch(intent) } catch (e: Exception) { controller.pickerFailed(e) }
         }
     }
-    LaunchedEffect(file.optLong("epoch"), file.optBoolean("close_ready"), host.drawingTabs.switching, controller.working) { if (file.optBoolean("close_ready") && !host.drawingTabs.switching && !controller.working && !DocumentController.nativeFileJobsForTest) host.drawingTabs.acceptClose { activity?.finish() } }
+    LaunchedEffect(file.optLong("epoch"), file.optBoolean("close_ready"), host.drawingTabs.switching, controller.working) { if (file.optBoolean("close_ready") && !host.drawingTabs.switching && !controller.working && !DocumentController.nativeFileJobsForTest) host.drawingTabs.acceptClose() }
     DrawingSelector(host)
     val drawingsRequest=state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type")=="drawings" }
     LaunchedEffect(drawingsRequest?.getInt("id")) { if(drawingsRequest!=null) { host.drawingTabs.selector=true; host.dispatch(obj("type" to "complete_request","id" to drawingsRequest.getInt("id"))) } }

@@ -60,6 +60,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
         if(started||closed)return;started=true
         polling=scope.launch {
             try {ensureOwners();capture()?.join();offerNext();while(!closed){delay(15_000);capture()?.join()}}
+            catch(e:CancellationException){throw e}
             catch(e:Exception){host.reportActionError("Recovery unavailable: ${e.message}")}
         }
     }

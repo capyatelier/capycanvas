@@ -73,7 +73,25 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         updateWorkspaceManager(request); refreshChrome(); publish(true); wake()
     }
     private var closingWorkspaceWindow = false
-    internal fun closeWorkspaceWindow(complete: () -> Unit) = post {
+    // Main-thread window attachment survives the gap during configuration
+    // recreation without retaining or finishing a retired Activity.
+    private var attachedWindow = java.lang.ref.WeakReference<MainActivity>(null)
+    private var finishWindowPending = false
+    internal fun attachWindow(activity: MainActivity) {
+        attachedWindow = java.lang.ref.WeakReference(activity)
+        finishAttachedWindow()
+    }
+    internal fun detachWindow(activity: MainActivity) {
+        if(attachedWindow.get() === activity) attachedWindow.clear()
+    }
+    private fun finishAttachedWindow() {
+        val activity = attachedWindow.get() ?: return
+        if(finishWindowPending && !activity.isChangingConfigurations && !activity.isDestroyed) {
+            finishWindowPending = false
+            activity.finish()
+        }
+    }
+    internal fun closeWorkspaceWindow() = post {
         if (closingWorkspaceWindow) return@post
         closingWorkspaceWindow = true
         updateWorkspaceManager(obj("type" to "suspend"))
@@ -85,7 +103,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     val view = workspaceManagerKey?.let(::JSONObject)
                     if (view?.optBoolean("busy") == true) { worker.postDelayed(this, 20); return@attempt }
                     closingWorkspaceWindow = false
-                    if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post(complete)
+                    if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post {
+                        finishWindowPending = true
+                        finishAttachedWindow()
+                    }
                 }
             }
         }

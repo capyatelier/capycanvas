@@ -2207,7 +2207,18 @@ class AndroidRasterTest {
     @Test fun drawingTabsKeepHistorySpillAndLifecycle() {
         fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
         fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
-        fun ready() {compose.waitUntil(120_000){tick();native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}}
+        fun closeDecision(label:String)=native { handle ->
+            val state=state(handle)
+            state.array("requests").objects().firstOrNull{r->r.getJSONObject("kind").optString("type")=="document"}?.getInt("id")
+                ?: error("Missing $label: file=${state.getJSONObject("document_file")}; requests=${state.array("requests")}")
+        }
+        // Parking readiness does not mean the restored brush is ready for a
+        // new contact: the host deliberately defers contacts during warmup.
+        fun ready() {compose.waitUntil(120_000){tick();native {
+            val parked=JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")
+            Native.dispatch(it,obj("type" to "close_settings").toString())
+            parked && JSONObject(Native.snapshot(it)!!).getBoolean("brush_ready")
+        }}}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
         fun fresh():Long {
             val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
@@ -2247,11 +2258,12 @@ class AndroidRasterTest {
         try{assertTrue(runCatching{Native.projectWork(refused.first,-1,64,64)}.isFailure);assertEquals(3,ids().size)}finally{Native.projectFree(refused.first);native{Native.documentComplete(it,refused.second,false,"null")}}
         native{Native.documentTabs(it,obj("op" to "storage","error" to null).toString())}
         select(second);stroke(80.0);ready()
+        assertTrue("The close fixture must contain committed ink",native{state(it).getJSONObject("document_file").getBoolean("modified")})
         action("close_document")
-        val close=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+        val close=closeDecision("cancel decision")
         native{Native.documentClose(it,close,"\"cancel\"")};assertEquals(3,ids().size)
         action("close_document")
-        val discard=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+        val discard=closeDecision("discard decision")
         native{Native.documentClose(it,discard,"\"discard\"")};select(second,true)
         assertEquals(first,tabs().getLong("selected"));assertEquals(listOf(third,first),ids())
         assertFalse(tabs().getBoolean("can_undo"))
@@ -2259,7 +2271,7 @@ class AndroidRasterTest {
             action("close_document")
             val file=native{state(it).getJSONObject("document_file")}
             if(!file.getBoolean("close_ready")) {
-                val request=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+                val request=closeDecision("final decision")
                 native{Native.documentClose(it,request,"\"discard\"")}
             }
             select(tabs().getLong("selected"),true)

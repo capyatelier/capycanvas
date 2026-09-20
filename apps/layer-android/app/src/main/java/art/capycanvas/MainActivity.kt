@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         windows.add(WeakReference(this))
+        host.attachWindow(this)
+        if(isFinishing)return
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { host.drawingTabs.closeWindow() }
         })
@@ -87,6 +89,7 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
     override fun onDestroy() {
+        host.detachWindow(this)
         windows.removeAll { it.get() == null || it.get() === this }
         super.onDestroy()
     }

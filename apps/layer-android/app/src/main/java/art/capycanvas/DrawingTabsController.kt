@@ -14,7 +14,12 @@ internal class DrawingTabsController(private val host: CanvasHost) {
     var view by mutableStateOf(JSONObject()); private set
     var selector by mutableStateOf(false)
     var switching by mutableStateOf(false); private set
-    private fun transition(value:Boolean){switching=value;host.documentInputBlocked=value}
+    private fun transition(value:Boolean) {
+        switching=value
+        // Final close has retired the editor. Keep late UI disposal/input from
+        // reaching it while workspace persistence and Activity finish drain.
+        host.documentInputBlocked=value || selected==0L
+    }
     var closingWindow = false; private set
     private var refreshing = false
     private val storage = Mutex()
@@ -49,7 +54,8 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                 withContext(NonCancellable + Dispatchers.IO) { Native.documentSpillWork(task) }
             }
             query(obj("op" to "storage", "error" to null))
-        } catch(e:Exception) {
+        } catch(e:CancellationException) { throw e }
+        catch(e:Exception) {
             query(obj("op" to "storage", "error" to (e.message ?: "Drawing cache failed")))
             host.reportActionError("Drawing cache unavailable; open drawings are retained: ${e.message}")
         }
@@ -65,7 +71,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             host.recovery.capture()?.join()
         } catch(e:Exception) { afterAdopt(); throw e }
     }
-    suspend fun afterAdopt() { try { trim(); host.recovery.ensureOwners() } catch(e:Exception){host.reportActionError("Recovery unavailable: ${e.message}")} finally {transition(false);resume()} }
+    suspend fun afterAdopt() { try { trim(); host.recovery.ensureOwners() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError("Recovery unavailable: ${e.message}")} finally {transition(false);if(currentCoroutineContext().isActive)resume()} }
     private suspend fun activate(id: Long, close: Boolean = false) {
         var task=0L
         try {
@@ -75,7 +81,8 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                 host.withNative { Native.documentResume(it,task) }
                 host.documentCanvasFailure(null)
             }
-        } catch(e:Exception) { if(task!=0L)host.documentCanvasFailure(e.message ?: "Drawing renderer unavailable");throw e }
+        } catch(e:CancellationException) { throw e }
+        catch(e:Exception) { if(task!=0L)host.documentCanvasFailure(e.message ?: "Drawing renderer unavailable");throw e }
         finally { withContext(NonCancellable+Dispatchers.IO) { if(task!=0L) Native.documentResumeFree(task) } }
     }
     fun select(id:Long, close:Boolean=false) {
@@ -97,26 +104,34 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                 activate(id); selector=false
                 trim(); refresh()
                 if(close) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
-            } catch(e:Exception) { host.reportActionError(e.message ?: "Could not switch drawings") }
-            finally { transition(false); resume() }
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { host.reportActionError(e.message ?: "Could not switch drawings") }
+            finally { transition(false); if(currentCoroutineContext().isActive)resume() }
         }
     }
-    fun closeSelected() { if(!blocked) select(selected,true) }
+    fun closeSelected() { if(!blocked) { if(selected==0L)host.closeWorkspaceWindow() else select(selected,true) } }
     fun closeWindow() { if(!blocked) { closingWindow=true; closeSelected() } }
     fun cancelClose() { closingWindow=false }
-    suspend fun acceptClose(finish:()->Unit) {
-        if(switching) return
+    /** Approval is published by Compose, but the transaction belongs to the
+     * window's ViewModel. Its own switching/epoch publications recompose the UI;
+     * neither those publications nor Activity recreation may cancel retirement.
+     */
+    fun acceptClose() {
+        if(switching || selected==0L) return
         transition(true)
-        try {
-            if(!JSONObject(query(obj("op" to "ready"))).optBoolean("approved"))return
-            val closingId=JSONObject(query(obj("op" to "view"))).getLong("selected")
-            drain(); waitReady(); host.recovery.retire(closingId,closedTab=true)?.join()
-            activate(closingId,true); trim()
-            val next=JSONObject(query(obj("op" to "view"))); view=next
-            if(next.array("tabs").length()==0) host.closeWorkspaceWindow(finish)
-            else if(closingWindow) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
-        } catch(e:Exception) { closingWindow=false; host.reportActionError(e.message ?: "Could not close drawing") }
-        finally { transition(false); resume() }
+        host.viewModelScope.launch {
+            try {
+                if(!JSONObject(query(obj("op" to "ready"))).optBoolean("approved"))return@launch
+                val closingId=JSONObject(query(obj("op" to "view"))).getLong("selected")
+                drain(); waitReady(); host.recovery.retire(closingId,closedTab=true)?.join()
+                activate(closingId,true); trim()
+                val next=JSONObject(query(obj("op" to "view"))); view=next
+                if(next.array("tabs").length()==0) host.closeWorkspaceWindow()
+                else if(closingWindow) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { closingWindow=false; host.reportActionError(e.message ?: "Could not close drawing") }
+            finally { transition(false); if(currentCoroutineContext().isActive && selected!=0L)resume() }
+        }
     }
     fun order(request:JSONObject) {
         if(blocked) return

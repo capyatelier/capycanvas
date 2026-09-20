@@ -11,8 +11,9 @@ Device: Huion KP1202 / Kamvas Pad 12, serial `G7DL2S300241`.
 
 - **Android:** open **Capy Tabs Test**, isolated package `art.capycanvas.tabtest`.
   The APK is `apps/layer-android/app/build/outputs/apk/debug/app-debug.apk`.
-  Two drawings are left open. The existing production installation and its
-  drawings were preserved.
+  The existing production installation and its drawings were preserved.
+  The close-regression follow-up updates this same review package without
+  clearing its data; automated tests use a separate disposable package.
 - **Web:** open **http://127.0.0.1:8162/** in Huion Chrome. This serves the complete
   production PWA from `dist/capycanvas`, including fingerprinted modules, Wasm,
   filters, icons and dependency notices. Test origins use separate ports.
@@ -35,14 +36,17 @@ Both builds include upstream `a23c627a`, merged in `3a710bd6`. Each implementati
 milestone fetched/merged `origin/main`. The final deployment milestone also merged
 `54ca69cc` in `1ff4f67a`; its additional changes on this branch affect only GTK/Arch
 packaging, so the deployed app code is unchanged. Later Web-only input and harness
-changes do not alter the installed Android APK.
+changes did not alter that original Android APK. The Android close follow-up
+rebuilds both apps with the shared header-retirement correction and retains this
+same upstream revision.
 
 Review build identities:
 
 - Android APK SHA-256:
-  `536b25551691f927c236da70476dc72d1536a4ae54ac5779471100d169e0dec2`.
-- Web implementation commit: `4be6cf2c`; PWA version:
-  `3a65a6cfb49d6b6e890639fd80cd2531c16a0288a487a94c6ad4315c9ea5316a`.
+  `4788fe3045952740564f39fe3bc33e6abf7ba5a066862ade2d07f80f75073fe6`.
+- Web implementation commit: `4be6cf2c`, rebuilt with the shared header-retirement
+  correction; PWA version:
+  `c3c42ee55bd3a8d4e3f66c4a9e047d85acdc6a0ea16d19386bad77abdc392f1d`.
 
 ## Shared ownership
 
@@ -110,7 +114,7 @@ Original recovery files survive until the replacement checkpoint is durable.
 
 ## Validation boundaries
 
-Passing checks include 106 core, 63 engine, 497 UI and 28 native-host Rust tests;
+Passing checks include 106 core, 63 engine, 498 UI and 28 native-host Rust tests;
 GTK GPU tab lifecycle/storage/close, immediate input/undo and native pointer
 regressions; four Android tab journeys plus the existing place/paste/details
 journey on the Huion; Web Huion lifecycle, multiple recovery and final packaged
@@ -125,3 +129,13 @@ explicit offscreen test mode qualifies drawing data and lifecycle because of an
 existing headless Dawn presentation warning; Huion browser presentation is
 checked separately. External application file associations remain dependent on
 OS/browser capabilities, while the shared file-open path is tested directly.
+
+The Android close regression was reproduced manually on the Huion and by a new
+test against the previous app. Earlier Compose-clock checks could miss an error
+posted after tab removal. The new suite uses production frame timing and real
+InputDispatcher taps, and checks errors through Activity destruction. It covers
+selected/background ×, File → Close, dirty Cancel/Discard, the actual Save picker
+and its cancellation, successful and failed saves, Back after drawer dismissal,
+repeated close while draining, sequential window-close decisions, and Activity
+recreation during both nonfinal and final retirement. See the progress log for
+the baseline failures, harness corrections and final qualification results.

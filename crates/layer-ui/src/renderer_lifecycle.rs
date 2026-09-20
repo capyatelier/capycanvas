@@ -113,6 +113,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | UiAction::WindowFullscreen { .. }
             | UiAction::MeasurePanels { .. }
             | UiAction::MeasureTitlebar { .. }
+            | UiAction::MeasureHeader { .. }
             | UiAction::MeasureWorkspaceBottom { .. }
             | UiAction::MeasureColumnDrawers { .. }
             | UiAction::MeasureDrawerTiles { .. }
@@ -208,6 +209,23 @@ mod tests {
     use layer_core::{AssetId, ProjectAsset};
     use layer_render::{BackendError, FramePacket, HostImage, ReadbackImage};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn header_layout_remains_publishable_after_final_document_retirement() {
+        let mut session = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        session.set_platform(Platform::Android);
+        session.frame(0, 0).unwrap();
+        session.dispatch(UiAction::Invoke { command: CommandId::CloseDocument }).unwrap();
+        assert!(session.state().document_file.close_ready);
+        session.park_document().unwrap();
+        let document = session.engine().document().clone();
+        session.dispatch(UiAction::MeasureHeader { height: 48., items: vec![] }).unwrap();
+        assert_eq!(session.state().workspace.layout.header_presentation.height, 48.);
+        assert_eq!(session.engine().document(), &document);
+        assert!(session.state().document_file.close_ready);
+        assert!(session.rendering_suspended());
+        assert!(session.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).is_err());
+    }
 
     #[test]
     fn parked_editor_inherits_window_viewport_without_losing_its_history() {
