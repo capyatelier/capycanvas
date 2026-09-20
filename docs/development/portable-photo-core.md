@@ -29,6 +29,46 @@ Windows host integration remains separate future work. Large AVIF output still
 has substantial latency, especially on Android; measured results follow.
 Earlier milestone entries describe the state at their respective commits.
 
+## Vendor cleanup without native dependencies — 2026-09-20
+
+The production HEIC adapter now calls the same patched `rust_h265` decoder
+directly. hvcC parsing uses the existing bounded BMFF reader, borrows parameter
+sets, and admits the Annex B allocation before copying. Still completeness,
+source YUV/VUI metadata, expected extent, memory admission and block/filter
+cancellation remain unchanged. `heif-oxide` is removed from Cargo manifests and
+the lockfile. Its independent box writer and four unchanged synthetic streams
+remain in `vendor/heif-test-support/` with original licenses, provenance and the
+existing picture-handler patch; they are test-only.
+
+The rav1d snapshot omits all 91 unused `.asm`/`.S` files (7.94 MiB) and the C/assembly
+build implementation/dependencies. Its defaults select both portable Rust
+bit-depths. Accidentally enabling `asm` or an alias produces an explicit build
+error. The Rust AV1 algorithm is unchanged. Six production crate snapshots
+remain; all vendor material, including the small test extract and patches, falls
+from about 16.16 MiB to 8.12 MiB. The existing Metal sRGB patch is now recorded
+separately so provenance describes the actual source.
+
+Validation: 118 shared color tests passed (14 optional checks ignored), including
+all supported HEVC NAL length widths, truncated/malformed hvcC records, excess
+parameter sets, multiple-picture rejection, and cancellation/retry. The isolated
+AV1 native test passed exact 8/10/12-bit planes. The production photo Wasm module
+passed Chrome HEIC, AVIF, AVIF export, ICC and storage checks; its only host import
+initializes the wasm-bindgen reference table, with no host codec services.
+Android `layer-color` compilation passed. All-feature normal/build dependency
+graphs for Linux, Wasm and Android contain no native codec, C/assembly build tool,
+or dynamic loader; rav1d resolves only the two bit-depth features. The explicit
+assembly rejection and Web packaging notice tests also passed.
+The retained HEIC writer regenerates all three committed container fixtures
+byte for byte. Vendor patches reconstruct every retained rav1d/rust_h265 source
+file from their verified registry archives; the test extract likewise matches
+upstream plus the recorded picture-handler patch.
+
+This cleanup adds no system codec requirement and changes no supported product
+behavior. The optional native reference tools remain independent validation
+oracles. Platform GTK/GPU APIs and the native workspace database are separate.
+The [vendor audit](vendored-code-audit.md) records the retained fixes and why
+removing them requires upstream support or a product compromise.
+
 ## Gain-map quality follows AVIF delivery quality — 2026-09-19
 
 AVIF qualities 1–99 now use lossy compression for both the SDR base and RGB gain

@@ -2,7 +2,7 @@
 
 These containers wrap lossless x265 codestreams from the published
 `heif-oxide` 0.1.0 test data. The upstream MIT OR Apache-2.0 licenses and original
-notices are retained under `vendor/heif-oxide/`; there are no photographic assets
+notices are retained under `vendor/heif-test-support/`; there are no photographic assets
 in these committed fixtures. Archive and revision provenance is in
 `vendor/README.md`, and fixture hashes are in `provenance.json`.
 
@@ -12,7 +12,8 @@ in these committed fixtures. Archive and revision provenance is in
 - `p3-grid-8bit.heic`: red/blue 64×64 tiles in a 101×51 partial grid, P3 NCLX,
   then a counterclockwise quarter turn and horizontal output mirror (51×101).
 
-The test-only upstream box writer is independent of our BMFF reader. Its local
+The test-only upstream box writer is retained in `vendor/heif-test-support/`
+independently of the removed heif-oxide runtime crate and our BMFF reader. Its local
 patch adds a `pict` handler so libheif can enumerate the containers. The matching
 test constructs further ICC, geometry, auxiliary-alpha, density, malformed-input
 and cancellation cases. Regenerate these files using an **absolute** output path:

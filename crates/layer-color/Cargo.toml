@@ -16,7 +16,7 @@ libjpeg-turbo-rs = "=0.8.0"
 rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 rav1e = { version = "=0.8.1", default-features = false }
 oxideav-av1 = "=0.1.16"
-heif-oxide = "=0.1.0"
+rust_h265 = "=0.1.0"
 quick-xml = "=0.41.0"
 moxcms = { version = "=0.9.1", features = ["extended_range", "options"] }
 png = "=0.18.1"

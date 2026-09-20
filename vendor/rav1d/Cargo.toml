@@ -39,17 +39,14 @@ license = "BSD-2-Clause"
 repository = "https://github.com/memorysafety/rav1d"
 
 [features]
-asm = ["dep:cc", "dep:nasm-rs"]
+# Assembly sources are intentionally omitted; build.rs rejects this feature.
+asm = []
 asm_arm64_dotprod = ["asm"]
 asm_arm64_i8mm = ["asm"]
 asm_arm64_sve2 = ["asm"]
 bitdepth_16 = []
 bitdepth_8 = []
 default = [
-    "asm",
-    "asm_arm64_dotprod",
-    "asm_arm64_i8mm",
-    "asm_arm64_sve2",
     "bitdepth_8",
     "bitdepth_16",
 ]
@@ -97,15 +94,6 @@ version = "1.1.0"
 [dependencies.zerocopy]
 version = "0.7.32"
 features = ["derive"]
-
-[build-dependencies.cc]
-optional = true
-version = "1.0.79"
-
-[build-dependencies.nasm-rs]
-optional = true
-version = "0.3"
-features = ["parallel"]
 
 [profile.checked-release]
 opt-level = 2

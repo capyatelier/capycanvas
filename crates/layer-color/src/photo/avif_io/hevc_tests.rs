@@ -6,12 +6,12 @@ const RED: &[u8] = include_bytes!("../../../tests/fixtures/heif/flat-red-8bit.he
 // Upstream's test-only ISO box writer is independent of our BMFF parser.
 // Codestreams were encoded losslessly by x265, not by the decoder under test.
 #[allow(dead_code)]
-#[path = "../../../../../vendor/heif-oxide/src/test_builder.rs"]
+#[path = "../../../../../vendor/heif-test-support/test_builder.rs"]
 mod tb;
 
 fn item(id: u32, name: &str) -> tb::TestItem {
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/heif-oxide/testdata");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vendor/heif-test-support/testdata");
     let (config, payload) =
         tb::annex_b_to_item(&std::fs::read(root.join(format!("{name}.h265"))).unwrap());
     tb::TestItem {
@@ -173,6 +173,83 @@ fn rust_heif_rejects_hdr_sequences_and_invalid_coded_extent() {
 }
 
 #[test]
+fn rust_heif_preserves_pixels_with_all_supported_nal_length_prefixes() {
+    let original = item(1, "flat_red_64");
+    let expected = read(&tb::make_heic(&[item(1, "flat_red_64")], 1, &[]))
+        .unwrap()
+        .source;
+    let mut nals = Vec::new();
+    let mut payload = original.payload.as_slice();
+    while !payload.is_empty() {
+        let length = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+        let nal = &payload[4..4 + length];
+        // Encoder text SEI can exceed a one-byte length. It does not supply
+        // picture samples; keep the slice NALs for this container framing test.
+        if (nal[0] >> 1) & 0x3f < 32 {
+            nals.push(nal);
+        }
+        payload = &payload[4 + length..];
+    }
+    assert!(!nals.is_empty());
+    for length_size in [1usize, 2, 4] {
+        let mut tile = item(1, "flat_red_64");
+        tile.props[0].1[8 + 21] = 0xfc | (length_size as u8 - 1);
+        tile.payload.clear();
+        for nal in &nals {
+            assert!(nal.len() < 256);
+            tile.payload
+                .extend_from_slice(&(nal.len() as u32).to_be_bytes()[4 - length_size..]);
+            tile.payload.extend_from_slice(nal);
+        }
+        let actual = read(&tb::make_heic(&[tile], 1, &[])).unwrap().source;
+        for y in 0..64 {
+            for x in 0..64 {
+                assert_eq!(rgba8(&actual, x, y), rgba8(&expected, x, y));
+            }
+        }
+    }
+}
+
+#[test]
+fn rust_heif_rejects_malformed_configuration_and_multiple_pictures() {
+    let original = item(1, "flat_red_64").props[0].1[8..].to_vec();
+    for end in 0..original.len() {
+        let mut tile = item(1, "flat_red_64");
+        tile.props[0].1 = tb::plain_box(b"hvcC", &original[..end]);
+        assert!(
+            read(&tb::make_heic(&[tile], 1, &[])).is_err(),
+            "hvcC length {end}"
+        );
+    }
+    for (index, value) in [(0, 2), (21, 0xfe)] {
+        let mut tile = item(1, "flat_red_64");
+        tile.props[0].1[8 + index] = value;
+        assert!(read(&tb::make_heic(&[tile], 1, &[])).is_err());
+    }
+    let mut tile = item(1, "flat_red_64");
+    tile.props[0].1 = tb::hvcc(&vec![(32, &[0x40, 1][..]); 65], 4);
+    assert!(
+        read(&tb::make_heic(&[tile], 1, &[]))
+            .err()
+            .unwrap()
+            .contains("Too many HEVC parameter sets")
+    );
+    let mut tile = item(1, "flat_red_64");
+    let mut record = original;
+    record.resize(1024 * 1024 + 1, 0);
+    tile.props[0].1 = tb::plain_box(b"hvcC", &record);
+    assert!(read(&tb::make_heic(&[tile], 1, &[])).is_err());
+    let mut tile = item(1, "flat_red_64");
+    tile.payload.extend_from_within(..);
+    assert!(
+        read(&tb::make_heic(&[tile], 1, &[]))
+            .err()
+            .unwrap()
+            .contains("Multiple HEVC pictures")
+    );
+}
+
+#[test]
 fn rust_heif_retains_print_density_and_applies_container_rotation_once() {
     use layer_core::{ImageResolution, ResolutionUnit};
     let density = ImageResolution {
@@ -220,19 +297,16 @@ fn rust_heif_retains_supported_auxiliary_alpha() {
 
 #[test]
 fn rust_heif_cancels_during_coding_blocks_and_retries() {
-    use heif_oxide::hevc::{
-        DecoderLimits, build_annex_b, decode_first_frame_with_limits, parse_hvcc,
-    };
-    let tile = item(1, "flat_red_64");
-    let config = parse_hvcc(&tile.props[0].1[8..]).unwrap();
-    let annex = build_annex_b(&config, &tile.payload).unwrap();
+    use hevc::decode_still;
+    use rust_h265::DecoderLimits;
+    let annex = include_bytes!("../../../../../vendor/heif-test-support/testdata/flat_red_64.h265");
     let limits = DecoderLimits {
         expected_extent: Some([64, 64]),
         memory_bytes: 8 * 1024 * 1024,
         still_only: true,
     };
     let count = std::cell::Cell::new(0);
-    decode_first_frame_with_limits(&annex, limits, &|| {
+    decode_still(annex, limits, &|| {
         count.set(count.get() + 1);
         false
     })
@@ -241,16 +315,13 @@ fn rust_heif_cancels_during_coding_blocks_and_retries() {
     assert!(total > 12);
     for stop in 1..total {
         count.set(0);
-        let result = decode_first_frame_with_limits(&annex, limits, &|| {
+        let result = decode_still(annex, limits, &|| {
             count.set(count.get() + 1);
             count.get() >= stop
         });
-        assert!(
-            result.err().unwrap().to_string().contains("cancelled"),
-            "check {stop}"
-        );
+        assert!(result.err().unwrap().contains("cancelled"), "check {stop}");
     }
-    decode_first_frame_with_limits(&annex, limits, &|| false).unwrap();
+    decode_still(annex, limits, &|| false).unwrap();
 }
 
 #[test]
