@@ -65,6 +65,7 @@ internal class ProofController(private val host: CanvasHost) {
         if(control!=0L)Native.captureCancel(control)
     }
     fun pause() { paused=true;cancel() }
+    suspend fun pauseAndDrain() { finishPending(); pause(); running?.join() }
     fun resume() { paused=false;sync() }
     fun action(value:JSONObject) { host.viewModelScope.launch {
         try { host.withNative{Native.proofControl(it,value.toString())};host.documentChanged();sync() }

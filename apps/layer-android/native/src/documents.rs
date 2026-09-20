@@ -19,6 +19,7 @@ use std::{
 };
 
 struct Environment {
+    admission: layer_ui::DocumentAdmission,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -48,10 +49,11 @@ enum Payload {
         name: String,
     },
     Retired {
-        _session: Box<UiSession<Renderer>>,
+        _renderer: Option<WgpuRasterizer>,
     },
 }
 struct Task {
+    owner: u64,
     epoch: u64,
     revision: u64,
     request: u32,
@@ -78,6 +80,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
 ) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
+        let admission = a.documents.admission(&a.host.session.retained_document_tiles());
         let session = &mut a.host.session;
         let request = session
             .state()
@@ -114,6 +117,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                     .ok_or("Wait for the canvas to finish starting")?;
                 Payload::Open {
                     environment: Some(Environment {
+                        admission,
                         adapter: gpu.adapter().clone(),
                         device: gpu.device().clone(),
                         queue: gpu.queue().clone(),
@@ -137,6 +141,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             _ => return Err("This request does not transfer a project".into()),
         };
         Ok(Box::into_raw(Box::new(Task {
+            owner: a.documents.selected(),
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
             request: id as u32,
@@ -246,6 +251,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         };
         return Ok(());
     }
+    e.admission.admit(&project)?;
     let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(
         e.adapter,
         e.device,
@@ -516,29 +522,26 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         if t.gpu_generation != a.gpu_generation {
             return Err("The canvas changed while preparing this drawing; open it again".into());
         }
-        let next = candidate.take().ok_or("Project is not prepared")?;
-        let result = if t.recovered {
-            a.host
-                .session
-                .adopt_recovered_project(next, t.epoch, t.revision)
-        } else {
-            a.host
-                .session
-                .adopt_project(next, t.epoch, t.revision, location)
-        };
-        match result {
-            Ok(retired) => t.payload = Payload::Retired { _session: retired },
-            Err((error, next)) => {
-                *candidate = Some(next);
-                return Err(error);
-            }
+        if t.owner != a.documents.selected()
+            || a.host.session.state().document_file.epoch != t.epoch
+            || a.host.session.engine().document().revision != t.revision {
+            return Err("The drawing changed while opening; try again".into());
         }
-        if !t.recovered {
-            a.host
-                .session
-                .complete_document_request(t.request, Ok(true))?;
+        let next = candidate.as_mut().ok_or("Project is not prepared")?;
+        a.documents.admit(&a.host.session.retained_document_tiles(), &next.capture_project_recovery()?)?;
+        next.initialize_document_location(location)?;
+        if t.recovered { next.mark_recovered(); }
+        next.set_document_replacement(false);
+        next.inherit_window_state(&a.host.session)?;
+        if !t.recovered && a.host.session.state().requests.iter().any(|r| r.id==t.request) {
+            a.host.session.complete_document_request(t.request, Ok(true))?;
         }
-        a.host.document_adopted();
+        let tiles=a.host.session.park_document()?;
+        let retired=a.retire_document_gpu();
+        let outgoing=std::mem::replace(&mut a.host.session,*candidate.take().unwrap());
+        a.documents.append(outgoing,tiles);
+        t.payload=Payload::Retired{_renderer:retired};
+        a.tabs_changed();
         a.project_adopted();
         Ok(())
     })();
@@ -631,6 +634,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
             .ok_or("Canvas is unavailable")?
             .snapshot_gpu();
         Ok(Box::into_raw(Box::new(Task {
+            owner: a.documents.selected(),
             epoch,
             revision,
             request: id as u32,
@@ -707,9 +711,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
         }
         let payload = if opening != 0 {
             session.require_document_idle()?;
-            if session.state().document_file.modified || session.state().document_file.busy {
-                return Err("Recovery requires an unchanged, idle drawing".to_string());
-            }
+
             let gpu = session
                 .engine()
                 .backend()
@@ -718,6 +720,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                 .ok_or("Wait for the canvas")?;
             Payload::Open {
                 environment: Some(Environment {
+                    admission: a.documents.admission(&session.retained_document_tiles()),
                     adapter: gpu.adapter().clone(),
                     device: gpu.device().clone(),
                     queue: gpu.queue().clone(),
@@ -736,6 +739,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
             Payload::Save(Some(session.capture_project_recovery()?))
         };
         Ok(Box::into_raw(Box::new(Task {
+            owner: a.documents.selected(),
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
             request: 0,
@@ -774,4 +778,42 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
         layer_core::atomic_write(std::path::Path::new(&path), |output| project.write(output))
     })();
     fail(&mut env, result);
+}
+
+/// Complete only this transfer's initiating request, then poll exact backing.
+/// Its stable owner and activation generation remain checked during adoption.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEnv,_:JClass,handle:jlong,transfer:jlong)->jboolean {
+    let result=(|| {
+        let a=unsafe{app(handle)};let t=unsafe{task(transfer)};
+        if t.owner!=a.documents.selected() || t.epoch!=a.host.session.state().document_file.epoch || t.revision!=a.host.session.engine().document().revision || t.gpu_generation!=a.gpu_generation {
+            return Err("The drawing changed while opening; try again".into());
+        }
+        if !t.recovered && a.host.session.state().requests.iter().any(|r|r.id==t.request) {
+            a.host.session.complete_document_request(t.request,Ok(true))?;
+        }
+        a.document_park_ready()
+    })();match result{Ok(ready)=>u8::from(ready),Err(e)=>{fail(&mut env,Err(e));0}}
+}
+
+/// Capture before handing an immutable recovery write to the serialized worker.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryFor(mut env:JNIEnv,_:JClass,handle:jlong,id:jlong)->jlong {
+    let result=(|| {
+        let a=unsafe{app(handle)};let session=a.document_session(id as u64)?;
+        if session.recovery_document().busy {return Ok(0);}
+        Ok(Box::into_raw(Box::new(Task{
+            owner:id as u64,epoch:session.state().document_file.epoch,revision:session.engine().document().revision,request:0,
+            recovered:true,source:layer_ui::ImportSource::Master,place:None,gpu_generation:a.gpu_generation,
+            open_control:Default::default(),payload:Payload::Save(Some(session.capture_project_recovery()?)),
+        })) as jlong)
+    })();match result{Ok(task)=>task,Err(e)=>{fail(&mut env,Err(e));0}}
+}
+
+/// Shared native-drawing/photo classification for external drop routing. Actual
+/// decoding and validation still run in the bounded import worker.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_importSource(mut env:JNIEnv,_:JClass,prefix:jni::objects::JByteArray)->jni::sys::jstring {
+    let result=env.convert_byte_array(prefix).map_err(error).and_then(|bytes|layer_ui::ImportSource::identify(&bytes,layer_ui::ImportIntent::Open)).and_then(|source|serde_json::to_string(&source).map_err(error));
+    crate::android::string(&mut env,result)
 }

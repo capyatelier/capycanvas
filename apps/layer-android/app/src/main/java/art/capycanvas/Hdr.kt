@@ -34,6 +34,7 @@ internal class HdrController(private val host:CanvasHost) {
         if(available!=displayAvailable){displayAvailable=available;host.displayInfo(available)}
     }
     fun pause(){paused=true;lifecycle++;if(flag!=0L)Native.captureCancel(flag);loop?.cancel();loop=null}
+    suspend fun pauseAndDrain(){pause();running?.join()}
     fun resume(){if(!paused)return;paused=false
         loop=host.viewModelScope.launch {
             while(isActive&&!paused){

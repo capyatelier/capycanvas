@@ -31,10 +31,11 @@ import kotlin.math.ln
     val file = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")
     val key = "${file?.optLong("epoch")}:${file?.optLong("revision")}"
     fun refresh() {
-        if (busy) return
+        if (busy || host.drawingTabs.switching) return
         attempted = key; busy = true; status = "Updating · complete composite at full resolution"
         scope.launch {
             val control = Native.captureControl(); cancel = control
+            host.drawingTabs.registerInspection(control, currentCoroutineContext().job)
             try {
                 // Always consume an allocated job, including cancellation while
                 // waiting for its owner to return the newly allocated handle.
@@ -45,7 +46,7 @@ import kotlin.math.ln
                 ensureActive(); result = next; status = if (next.isNull("sampled_time")) "Current committed drawing" else "Animated effects · snapshot at ${"%.2f".format(next.getDouble("sampled_time"))} s"
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { status = e.message ?: "Could not inspect the drawing" }
-            finally { cancel = 0; Native.captureFree(control); busy = false }
+            finally { host.drawingTabs.releaseInspection(control); cancel = 0; Native.captureFree(control); busy = false }
         }
     }
     DisposableEffect(Unit) { onDispose { if (cancel != 0L) Native.captureCancel(cancel) } }

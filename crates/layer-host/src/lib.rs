@@ -37,6 +37,8 @@ pub struct PointerBatch<'a> {
 
 pub struct NativeHost {
     pub session: UiSession<Renderer>,
+    /// Number of drawings owned by the window, for shared header geometry.
+    pub document_count: usize,
     /// Configure before publishing UI; hosts tag these preview values to match.
     pub ui_color_space: layer_core::color::RgbSpace,
     pub logical: [f32; 2],
@@ -116,6 +118,7 @@ impl NativeHost {
             last_workspace_model_revision: None,
             last_workspace_content_revision: None,
             last_camera_revision: None,
+            document_count: 1,
             document_view_revision: 0,
             last_durable_workspace: None,
             service_changes: 0,

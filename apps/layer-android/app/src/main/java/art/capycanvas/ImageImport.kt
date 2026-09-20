@@ -25,7 +25,7 @@ import java.io.File
 internal fun ClipData.imageUris(): List<Uri> = (0 until itemCount).map { index ->
     getItemAt(index).uri ?: error("Every item in the image batch must be a file")
 }
-internal data class IncomingImages(val uris: List<Uri>, val context: String, val release: () -> Unit)
+internal data class IncomingImages(val uris: List<Uri>, val context: String, val release: () -> Unit, val finished: ((Boolean) -> Unit)? = null)
 
 /** One coroutine owns the picker, all provider grants and one private native batch. */
 internal class ImageImportController(private val host: CanvasHost, private val application: Application) {
@@ -57,7 +57,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         selection?.complete(uris)
     }
     fun accepts(event: DragEvent): Boolean = event.localState == null && event.clipDescription?.let { description ->
-        mimeTypes.any(description::hasMimeType) || description.hasMimeType("text/uri-list") || description.hasMimeType("application/octet-stream")
+        mimeTypes.any(description::hasMimeType) || description.hasMimeType("text/uri-list") || description.hasMimeType("application/octet-stream") || description.hasMimeType("application/x-capy")
     } == true && !working && !receiving && incoming == null && host.snapshot?.getJSONObject("state")?.array("commands")?.objects()
         ?.any { it.getString("id") == "import_image" && it.getBoolean("enabled") } == true
 
@@ -69,6 +69,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         receiving = true
         // Queue camera/identity capture immediately, before provider access.
         host.viewModelScope.launch {
+            var requestId=0
             try {
                 val (context, request) = host.withNative { handle ->
                     val resolved = destination?.let { d ->
@@ -81,20 +82,41 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     val request = JSONObject(Native.snapshot(handle)!!).getJSONObject("state").array("requests").objects().first { it.getJSONObject("kind").getString("type") == "document" }
                     captured to request
                 }
-                incoming = IncomingImages(uris, context) { permission?.release() }
-                start(request, false); host.documentChanged()
-            } catch (e: Exception) { permission?.release(); host.reportActionError(e.message ?: "Cannot drop images") }
+                requestId=request.getInt("id");cancelled=false;providerSignal=android.os.CancellationSignal()
+                // Classify encoded prefixes through shared Rust, never MIME or
+                // provider filename guesses. Keep the original placement target.
+                val masters=withContext(Dispatchers.IO) {uris.filter {uri->
+                    val prefix=ByteArray(4);var size=0
+                    val descriptor=application.contentResolver.openFileDescriptor(uri,"r",providerSignal)?:error("Dropped file cannot be read")
+                    ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {input->
+                        val poll=android.system.StructPollfd().apply{fd=descriptor.fileDescriptor;events=android.system.OsConstants.POLLIN.toShort()}
+                        while(size<4){ensureActive();check(!cancelled){"Drop cancelled"};if(android.system.Os.poll(arrayOf(poll),100)==0)continue;val read=input.read(prefix,size,4-size);if(read<0)break;size+=read}
+                    }
+                    Native.importSource(prefix.copyOf(size))=="\"Master\""
+                }}
+                val photos=uris.filterNot{it in masters}
+                if(photos.isEmpty()) {
+                    host.withNative{Native.documentComplete(it,request.getInt("id"),false,"null")}
+                    host.documents.openUris(masters,release={permission?.release()});host.documentChanged()
+                } else {
+                    incoming = IncomingImages(photos,context,release={if(masters.isEmpty())permission?.release()},finished={success->
+                        if(masters.isNotEmpty()){if(success)host.documents.openUris(masters,release={permission?.release()})else permission?.release()}
+                    })
+                    start(request, false, fromDrop=true); host.documentChanged()
+                }
+            } catch (e: Exception) { permission?.release();if(requestId!=0)withContext(NonCancellable){runCatching{host.withNative{Native.documentComplete(it,requestId,false,JSONObject.quote(e.message?:"Cannot drop images"))}}};host.reportActionError(e.message ?: "Cannot drop images") }
             finally { receiving = false }
         }
         return true
     }
-    fun start(request: JSONObject, paste: Boolean) {
-        if (working) return
+    fun start(request: JSONObject, paste: Boolean, fromDrop:Boolean=false) {
+        if (working || (receiving&&!fromDrop)) return
         working = true; cancelled = false
         val drop = incoming; incoming = null
         host.viewModelScope.launch {
             val id = request.getInt("id")
             var task = 0L
+            var adopted=false
             try {
                 control = Native.captureControl()
                 providerSignal = android.os.CancellationSignal()
@@ -151,14 +173,14 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     }
                 }
                 if (cancelled) { finish(id, false); return@launch }
-                host.withNative { Native.imageImportAdopt(it, task) }; host.documentChanged()
+                host.withNative { Native.imageImportAdopt(it, task) }; adopted=true; host.documentChanged()
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false) }; throw e
             } catch (e: Exception) { finish(id, false, if (cancelled) null else e.message ?: "Could not import images") }
             finally {
                 withContext(NonCancellable + Dispatchers.IO) { if (task != 0L) Native.imageImportFree(task) }
                 if (control != 0L) Native.captureFree(control)
-                control = 0; providerSignal = null; working = false; drop?.release?.invoke()
+                control = 0; providerSignal = null; working = false; drop?.release?.invoke();drop?.finished?.invoke(adopted)
             }
         }
     }

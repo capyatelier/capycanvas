@@ -267,6 +267,7 @@ impl App {
         self.surface = None;
         let retired = self.host.session.renderer_mut().0.take();
         self.instance = None;
+        self.document_gpu = None;
         self.blank_presented = false;
         self.cursor = Default::default();
         self.host.document_adopted();
@@ -303,6 +304,7 @@ impl App {
             .map_or(Ok(()), |error| Err(error.clone()))
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
+        if self.host.session.engine().backend().0.is_none() { return Ok(false); }
         self.check_gpu()?;
         self.frame_cost = [0; 5];
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {

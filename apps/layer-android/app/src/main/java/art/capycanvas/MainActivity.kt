@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         windows.add(WeakReference(this))
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { host.closeWorkspaceWindow { finish() } }
+            override fun handleOnBackPressed() { host.drawingTabs.closeWindow() }
         })
         enableEdgeToEdge()
         enterFullscreen()
@@ -47,6 +47,19 @@ class MainActivity : ComponentActivity() {
             ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
             CapyApp(host)
         }
+        if(savedInstanceState==null)openIntent(intent)
+    }
+    override fun onNewIntent(intent:android.content.Intent) {
+        super.onNewIntent(intent);setIntent(intent);openIntent(intent)
+    }
+    private fun openIntent(intent:android.content.Intent) {
+        val uris=when(intent.action) {
+            android.content.Intent.ACTION_VIEW->listOfNotNull(intent.data)
+            android.content.Intent.ACTION_SEND->listOfNotNull(androidx.core.content.IntentCompat.getParcelableExtra(intent,android.content.Intent.EXTRA_STREAM,android.net.Uri::class.java))
+            android.content.Intent.ACTION_SEND_MULTIPLE->androidx.core.content.IntentCompat.getParcelableArrayListExtra(intent,android.content.Intent.EXTRA_STREAM,android.net.Uri::class.java).orEmpty()
+            else->emptyList()
+        }
+        if(uris.isNotEmpty())host.documents.openUris(uris,intent.flags)
     }
     private fun enterFullscreen() {
         WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -82,6 +95,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (host.headerKeyHandler?.invoke(event) == true) return true
+        if (host.drawingTabs.key(event)) return true
         host.key(event)
         return super.dispatchKeyEvent(event)
     }

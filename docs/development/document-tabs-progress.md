@@ -125,3 +125,99 @@ http://127.0.0.1:8148/; recovery used http://127.0.0.1:8150/. Earlier test origi
 contain only this task's regression records. Final review will use a separate
 packaged build/origin. A generic ADB screenshot showed another foreground native
 activity; the actual Chrome capture is `web/huion-browser-tabs.png`.
+
+## M2 synchronization and M3 Android work
+
+- Web committed as `a3f4c196`; fetched and merged latest `origin/main` at
+  `8789c04c` in `b20fd452`. Upstream adds shared HDR gain-map delivery. The only
+  conflict was Web test registration; both suites are retained. Merged WASM
+  build and desktop drawing-tabs journey pass (`m2-merged-web-*.log`).
+- Android implementation is in progress. `App` now retains shared
+  `DocumentSessions<UiSession<Renderer>>`; one bounded activation worker drops
+  the outgoing renderer and prepares the incoming renderer on the window device.
+  File preparation admits candidates before GPU allocation and appends only after
+  exact outgoing captures are ready. Native spill uses the same unlinked immutable
+  chunks as GTK. Stable tab IDs bind file transfers and recovery captures.
+- Android has a strip/compact selector, shared drop queries/order history,
+  Drawings command and keyboard alternatives, sequential multi-file SAF opening,
+  selected/background close, final Activity/workspace flush, and per-tab recovery
+  leases with one serialized writer. Proof, tone and inspection work drain before
+  transitions. Header customization keeps ownership of the whole title item.
+- First Android build + instrumentation build + lint passed. SDK/tool invocation:
+  `ANDROID_HOME=/home/babymastodon/Android/Sdk`
+  `PATH=/tmp/capy-audit-tools/bin:/home/babymastodon/.cargo/bin:$PATH`
+  with isolated application ID `art.capycanvas.tabtest`, label `Capy Tabs Test`.
+  The temporary tools directory contains the installed cargo-about needed by the
+  new upstream Android notice packaging; do not skip that packaging task.
+- Huion `AndroidRasterTest#drawingTabsKeepHistorySpillAndLifecycle` passed
+  (54.817 s): exact redo-only disk backing, independent history, no parked
+  renderers, same GPU device generation, order undo independent of selection,
+  Activity recreation, corrupt-open retention, admission rejection, close cancel,
+  neighbor choice and empty final ownership (`m3-huion-native-tabs.log`).
+- Huion `AndroidRasterTest#drawingTabsRecoverMultipleInactiveDrawings` passed
+  (20.162 s): two independently captured active/inactive recovery records, two
+  sequential offers appending unsaved drawings with distinct layer contents and
+  correct origin retirement (`m3-huion-recovery.log`).
+- Rotation audit found parked viewport dimensions could be stale. Shared
+  `inherit_window_state` now copies window viewport/scale while retaining drawing
+  history/camera state. Its added test passes, as do all five renderer lifecycle
+  tests and 28 native-host tests. The initial test incorrectly assumed a blank
+  drawing had one layer; changed it to compare the actual starting layer count.
+- Current work: compile/run real Android mouse/touch/pen strip/handle input and
+  production close flow, finish edge-case audit, commit/synchronize M3, then final
+  GTK/Web qualification and packaged Huion deployments. No final deployment yet.
+
+M3 additional qualification:
+
+- Android native strip mouse/pen/touch dragging and cancellation passed. The first
+  selector test used its underlying header's target coordinates; fixed the test
+  to use the same native view as the selector handle. The row-hold extension
+  needed Compose's virtual clock advanced alongside real time. The complete
+  input/close journey then passed in 20.536 s (`m3-huion-input-close-clock.log`),
+  including pre-hold scrolling, held pen/touch row drag, background close,
+  Cancel/Discard, and final Activity closure.
+- Android serial file-batch test passed in 11.626 s, including duplicate URIs,
+  independent clean owners, a corrupt middle file, and last-success selection.
+- Added Android ACTION_VIEW/SEND/SEND_MULTIPLE entry points, title/compact/overflow
+  file drops, and shared Rust prefix classification for canvas/layer drops.
+  Photos keep captured layer targets; native drawings open as drawings. Mixed
+  canvas batches place photos first, then open native drawings only after the
+  placement succeeds. Title drops open all inputs in supplied order.
+- New/Open and recovery retry native spill before admission, so freeing disk
+  space allows a fresh attempt. Normal switching refuses active edits/modals
+  before taking input ownership. Surface recreation defers while an activation
+  owns the renderer exchange. The native placeholder covers transitions.
+- Shared full suites pass: 106 core, 63 engine, 497 UI, 28 native-host (one
+  intentionally ignored host test). GTK real-GPU history/storage/close passed
+  9.89 s and native input passed 18.11 s after the viewport change.
+- Final Android build/instrumentation/lint passed (`m3-android-final-build.log`).
+  A combined Huion suite is currently running in exec session 24692; its log is
+  `m3-huion-final-suite.log` (four tab cases plus retained place/paste/details).
+- Preparing Web distribution exposed missing new module entries in the explicit
+  fingerprint graph. Fixed packaging and extended its fixtures; all 14 package
+  tests pass. Also hardened Web multi-file continuation after a bad middle file,
+  batch input ownership, and installed-app file-handle entry point. Updated Web
+  lifecycle passes; the test now also includes a corrupt middle batch item.
+- Web production package is building in exec session 83676, log
+  `m4-package-build.log`; tools are `/tmp/capy-audit-tools/bin/{resvg,cargo-about}`.
+  New package uses the shared viewport fix. Must rerun packaged Web/device
+  qualification after final upstream merges. No M3 commit/sync yet.
+
+M3 final reruns:
+
+- The combined five-case Huion run passed three tab cases and exposed two issues.
+  The existing photo test called adoption without waiting for parking; its Open
+  helper now uses `projectParkReady`. The new selected-tab guard also refused
+  final close during read-only library warmup. Closing the already selected tab
+  now uses the shared Close permission directly, without requesting a switch.
+  Both affected cases then passed together in 75.323 s
+  (`m3-huion-close-photo-retry.log`). No failing cases remain from that run.
+- Native visual inspection found Compose's zero-width border still paints a
+  hairline. Idle tabs now omit that modifier entirely; only the dragged tab gets
+  the drag border. Titles are centered with balanced close-control space.
+- The Web distribution built successfully with host access for required original
+  dependency notices (`m4-package-build-retry.log`, 282 precached files).
+  Packaged tab lifecycle passes (`m4-package-tabs.log`). Desktop offline PWA test
+  reached its real-ink presentation assertion and failed under the already
+  documented headless Dawn issue; final offline presentation must be checked on
+  the Huion, not counted as a desktop pass.

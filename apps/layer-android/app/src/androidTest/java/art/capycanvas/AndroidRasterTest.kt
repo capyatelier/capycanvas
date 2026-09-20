@@ -167,6 +167,7 @@ class AndroidRasterTest {
             try {
                 Native.projectWork(job.first,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
                 if(corrupt)fail("Corrupt file was accepted")
+                compose.waitUntil(120_000){tick();native{Native.projectParkReady(it,job.first)}}
                 native {Native.projectAdopt(it,job.first,"null")}
             } catch(e: Exception) {
                 if(!corrupt)throw e
@@ -2203,4 +2204,195 @@ class AndroidRasterTest {
         assertEquals(1,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
         activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS: exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, atomic recovery, Activity recreation, recovery offer/adoption\n")
     }
+    @Test fun drawingTabsKeepHistorySpillAndLifecycle() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
+        fun ready() {compose.waitUntil(120_000){tick();native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}}
+        fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
+        fun fresh():Long {
+            val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+            try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}
+            finally{Native.projectFree(task)}
+            tick();ready();return tabs().getLong("selected")
+        }
+        fun select(id:Long,close:Boolean=false) {
+            ready();val task=native{Native.documentSwitch(it,id,close)}
+            if(task!=0L)try{Native.documentResumeWork(task);native{Native.documentResume(it,task)}}finally{Native.documentResumeFree(task)}
+            tick();if(ids().isNotEmpty())ready()
+        }
+        fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
+        fun trim(){while(true){val task=native{Native.documentSpillTask(it)};if(task==0L)break;Native.documentSpillWork(task)}}
+        val first=tabs().getLong("selected");val generation=tabs().getLong("gpu_generation")
+        stroke(0.0);val exact=manifest(save("tabs-exact.capy")).getJSONArray("blobs").toString()
+        action("undo") // Its only ink is now retained exclusively by redo history.
+        val second=fresh();assertEquals(listOf(first,second),ids())
+        order(obj("op" to "budget","bytes" to 0));trim()
+        assertEquals(0,tabs().getLong("resident_bytes"));assertEquals(0,tabs().getInt("parked_renderers"))
+        action("add_layer");val secondLayers=native{state(it).array("layers").length()}
+        select(first);action("redo")
+        assertEquals(exact,manifest(save("tabs-redo.capy")).getJSONArray("blobs").toString())
+        assertEquals(generation,tabs().getLong("gpu_generation"))
+        select(second);assertEquals(secondLayers,native{state(it).array("layers").length()})
+        action("undo");assertEquals(secondLayers-1,native{state(it).array("layers").length()})
+        val third=fresh()
+        order(obj("op" to "reorder","id" to third,"before" to first));assertEquals(listOf(third,first,second),ids())
+        select(first);order(obj("op" to "history","redo" to false));assertEquals(listOf(first,second,third),ids());assertEquals(first,tabs().getLong("selected"))
+        order(obj("op" to "history","redo" to true));assertEquals(listOf(third,first,second),ids())
+        val retained=host;scenario.recreate();scenario.onActivity{activity=it};assertSame(retained,host)
+        compose.waitUntil(60_000){host.surfaceReady};assertEquals(listOf(third,first,second),ids())
+        assertEquals(exact,manifest(save("tabs-recreated.capy")).getJSONArray("blobs").toString())
+        val bad=File(files,"tabs-invalid.capy").apply{writeText("invalid")};open(bad,true);assertEquals(3,ids().size)
+        native{Native.documentTabs(it,obj("op" to "storage","error" to "Disk full test").toString())}
+        val refused=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision")) to id}
+        try{assertTrue(runCatching{Native.projectWork(refused.first,-1,64,64)}.isFailure);assertEquals(3,ids().size)}finally{Native.projectFree(refused.first);native{Native.documentComplete(it,refused.second,false,"null")}}
+        native{Native.documentTabs(it,obj("op" to "storage","error" to null).toString())}
+        select(second);stroke(80.0);ready()
+        action("close_document")
+        val close=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+        native{Native.documentClose(it,close,"\"cancel\"")};assertEquals(3,ids().size)
+        action("close_document")
+        val discard=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+        native{Native.documentClose(it,discard,"\"discard\"")};select(second,true)
+        assertEquals(first,tabs().getLong("selected"));assertEquals(listOf(third,first),ids())
+        assertFalse(tabs().getBoolean("can_undo"))
+        while(ids().isNotEmpty()) {
+            action("close_document")
+            val file=native{state(it).getJSONObject("document_file")}
+            if(!file.getBoolean("close_ready")) {
+                val request=native{state(it).array("requests").objects().first{r->r.getJSONObject("kind").optString("type")=="document"}.getInt("id")}
+                native{Native.documentClose(it,request,"\"discard\"")}
+            }
+            select(tabs().getLong("selected"),true)
+        }
+        assertEquals(0,tabs().getLong("selected"));assertEquals(0,tabs().getInt("parked_renderers"))
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-native.txt").writeText("PASS independent history, exact redo-only disk backing, device reuse, order undo, Activity recreation, admission failure, corrupt open, close cancellation/neighbour/final ownership")
+    }
+
+    @Test fun drawingTabsRecoverMultipleInactiveDrawings() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
+        action("add_layer")
+        val firstLayers=native{state(it).array("layers").length()}
+        val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+        try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
+        tick();compose.waitUntil(120_000){native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}
+        action("add_layer");action("add_layer")
+        val secondLayers=native{state(it).array("layers").length()}
+        var write:Job?=null
+        compose.runOnUiThread{host.documentChanged();write=host.recovery.capture()};runBlocking{write?.join()}
+        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        assertEquals(listOf(true,true),tabs().array("tabs").objects().map{it.getBoolean("modified")})
+        scenario.close();launch()
+        repeat(2) {
+            compose.waitUntil(30_000){host.recovery.candidate!=null&&!host.recovery.working}
+            compose.onNodeWithTag("recover-drawing").performClick()
+            compose.waitUntil(120_000){!host.recovery.working&&tabs().array("tabs").length()==it+2}
+            assertNull(host.failure);assertNull(host.actionError)
+        }
+        assertEquals(3,tabs().array("tabs").length());assertNull(host.recovery.candidate)
+        val counts=tabs().array("tabs").objects().drop(1).map { tab ->
+            assertTrue(tab.getBoolean("modified"));assertTrue(tab.isNull("uri"))
+            val capture=native{Native.projectRecoveryFor(it,tab.getLong("id"))};val file=File(files,"recovered-tab-${tab.getLong("id")}.capy")
+            try{Native.projectPublish(capture,file.absolutePath)}finally{Native.projectFree(capture)}
+            manifest(file.readBytes()).getJSONObject("document").getJSONArray("layers").length()
+        }
+        assertEquals(setOf(firstLayers,secondLayers),counts.toSet())
+        assertEquals(2,recoveryDirectory.listFiles().orEmpty().count{it.extension=="capy"})
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS two independently owned inactive/active recovery snapshots; sequential offers append unsaved independent drawings; durable origins retired only after publication")
+    }
+
+    @Test fun drawingTabsNativePointerAndCloseUi() {
+        fun tabs()=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        fun ids()=tabs().array("tabs").objects().map{it.getLong("id")}
+        fun settled(){compose.waitUntil(60_000){!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}};compose.runOnUiThread{host.documentChanged()};compose.waitForIdle();assertNull(host.failure);assertNull(host.actionError)}
+        val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+        try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
+        val order=ids();val selected=tabs().getLong("selected")
+        val workspace=native{state(it).getJSONObject("workspace")}
+        workspace.getJSONObject("layout").put("header",obj("size" to "large","next_id" to 2,"zones" to org.json.JSONArray(listOf(org.json.JSONArray(),org.json.JSONArray(listOf(obj("id" to 1,"item" to obj("kind" to "document_title")))),org.json.JSONArray()))))
+        native{Native.dispatch(it,obj("type" to "restore_workspace","workspace" to workspace).toString())};settled()
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        fun roots(view:android.view.View):List<androidx.compose.ui.platform.ViewRootForTest> = when(view) {
+            is androidx.compose.ui.platform.ViewRootForTest -> listOf(view)
+            is android.view.ViewGroup -> (0 until view.childCount).flatMap{roots(view.getChildAt(it))}
+            else -> emptyList()
+        }
+        fun find(node:androidx.compose.ui.semantics.SemanticsNode,tag:String):androidx.compose.ui.semantics.SemanticsNode? {
+            if(node.config.contains(SemanticsProperties.TestTag)&&node.config[SemanticsProperties.TestTag]==tag)return node
+            return node.children.firstNotNullOfOrNull{find(it,tag)}
+        }
+        fun locate(tag:String,within:android.view.View?=null):Pair<android.view.View,androidx.compose.ui.geometry.Rect> {
+            var found:Pair<android.view.View,androidx.compose.ui.geometry.Rect>?=null
+            instrumentation.runOnMainSync{found=android.view.inspector.WindowInspector.getGlobalWindowViews().flatMap(::roots).filter{within==null||it.view===within}.firstNotNullOfOrNull{root->find(root.semanticsOwner.unmergedRootSemanticsNode,tag)?.let{root.view to it.boundsInRoot}}}
+            return checkNotNull(found){"Missing $tag"}
+        }
+        fun drag(tool:Int,handle:Boolean=false,cancel:Boolean=false,vertical:Boolean=handle,hold:Long=0) {
+            val (view,anchor)=locate(if(vertical)"drawing-handle-${order.first()}"else"drawing-tab-${order.first()}")
+            val start=if(vertical&&!handle)locate("drawing-tab-${order.first()}",view).second else anchor
+            val end=locate("drawing-tab-${order.last()}",view).second
+            val from=androidx.compose.ui.geometry.Offset(start.left+start.width*.30f,start.center.y)
+            val to=if(vertical)androidx.compose.ui.geometry.Offset(end.center.x,end.bottom-8f)else androidx.compose.ui.geometry.Offset(end.right-8f,end.center.y)
+            val down=SystemClock.uptimeMillis()
+            fun event(action:Int,point:androidx.compose.ui.geometry.Offset) {
+                val source=when(tool){android.view.MotionEvent.TOOL_TYPE_MOUSE->android.view.InputDevice.SOURCE_MOUSE;android.view.MotionEvent.TOOL_TYPE_STYLUS->android.view.InputDevice.SOURCE_STYLUS;else->android.view.InputDevice.SOURCE_TOUCHSCREEN}
+                val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&action!=android.view.MotionEvent.ACTION_UP&&action!=android.view.MotionEvent.ACTION_CANCEL)android.view.MotionEvent.BUTTON_PRIMARY else 0
+                val event=android.view.MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,1,arrayOf(android.view.MotionEvent.PointerProperties().apply{id=0;toolType=tool}),arrayOf(android.view.MotionEvent.PointerCoords().apply{x=point.x;y=point.y;pressure=.7f}),0,buttons,1f,1f,0,0,source,0)
+                try{instrumentation.runOnMainSync{view.dispatchTouchEvent(event)}}finally{event.recycle()}
+                SystemClock.sleep(40)
+            }
+            event(android.view.MotionEvent.ACTION_DOWN,from)
+            if(hold>0){SystemClock.sleep(hold);compose.mainClock.advanceTimeBy(hold);instrumentation.runOnMainSync {}}
+            event(android.view.MotionEvent.ACTION_MOVE,to)
+            event(if(cancel)android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP,to)
+        }
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
+            native{Native.documentTabs(it,obj("op" to "history","redo" to false).toString())};settled();assertEquals(order,ids())
+            drag(tool,cancel=true);settled();assertEquals(order,ids())
+        }
+        compose.runOnUiThread{host.drawingTabs.selector=true};compose.onNodeWithTag("drawing-selector").assertIsDisplayed()
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_MOUSE,android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool,handle=true);compose.waitUntil(10_000){ids()==order.reversed()};assertEquals(selected,tabs().getLong("selected"))
+            compose.onNodeWithTag("drawing-order-undo").performClick();compose.waitUntil(10_000){ids()==order};settled()
+        }
+        for(tool in listOf(android.view.MotionEvent.TOOL_TYPE_STYLUS,android.view.MotionEvent.TOOL_TYPE_FINGER)) {
+            drag(tool,vertical=true);settled();assertEquals("Row bodies preserve pre-hold scrolling",order,ids());assertEquals(selected,tabs().getLong("selected"))
+            drag(tool,vertical=true,hold=android.view.ViewConfiguration.getLongPressTimeout().toLong()+120)
+            compose.waitUntil(10_000){ids()==order.reversed()}
+            compose.onNodeWithTag("drawing-order-undo").performClick();compose.waitUntil(10_000){ids()==order};settled()
+        }
+        compose.runOnUiThread{host.drawingTabs.selector=false;DocumentController.nativeFileJobsForTest=false}
+        // Close a background drawing through the actual controller/UI. Selection
+        // precedes the prompt, cancellation retains it, clean close removes only it.
+        compose.runOnUiThread{host.drawingTabs.select(order.first())};settled()
+        native{Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick();settled()
+        compose.runOnUiThread{host.drawingTabs.select(order.last())};settled()
+        compose.onNodeWithTag("drawing-close-${order.first()}").performClick()
+        compose.waitUntil(30_000){compose.onAllNodesWithTag("document-close-cancel").fetchSemanticsNodes().isNotEmpty()}
+        assertEquals(order.first(),tabs().getLong("selected"));compose.onNodeWithTag("document-close-cancel").performClick();settled();assertEquals(order,ids())
+        compose.runOnUiThread{host.drawingTabs.closeSelected()}
+        compose.onNodeWithTag("document-close-discard").performClick()
+        compose.waitUntil(30_000){ids()==listOf(order.last())&&!host.drawingTabs.switching}
+        compose.runOnUiThread{host.drawingTabs.closeSelected()}
+        compose.waitUntil(30_000){activity.isFinishing||activity.isDestroyed}
+    }
+
+    @Test fun drawingTabsFileBatchKeepsDuplicateOwnersAndContinuesFailures() {
+        stroke(0.0);save("tab-batch-source.capy")
+        val good=android.net.Uri.fromFile(File(files,"tab-batch-source.capy"))
+        val bad=android.net.Uri.fromFile(File(files,"tab-batch-bad.capy").apply{writeText("corrupt")})
+        val before=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}.getLong("selected")
+        compose.runOnUiThread{DocumentController.nativeFileJobsForTest=false;assertTrue(host.documents.openUris(listOf(good,bad,good)))}
+        compose.waitUntil(120_000){!host.documents.working&&!host.drawingTabs.switching&&native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString())).array("tabs").length()==3}}
+        val tabs=native{JSONObject(Native.documentTabs(it,obj("op" to "view").toString()))}
+        val rows=tabs.array("tabs").objects();assertEquals(before,rows.first().getLong("id"))
+        assertEquals(listOf(good.toString(),good.toString()),rows.drop(1).map{it.getString("uri")})
+        assertNotEquals(rows[1].getLong("id"),rows[2].getLong("id"));assertEquals(rows[2].getLong("id"),tabs.getLong("selected"))
+        assertFalse(rows[1].getBoolean("modified"));assertFalse(rows[2].getBoolean("modified"))
+        // The corrupt middle entry reports its error without redirecting a later
+        // result or replacing the initiating editor.
+        assertNull(host.failure)
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-files.txt").writeText("PASS serial URI batch; corrupt middle file reported and skipped; repeated URI creates independent clean owners; last successful drawing selected")
+    }
+
 }

@@ -33,10 +33,20 @@ internal object Native {
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
+    @JvmStatic external fun documentTabs(handle: Long, request: String): String
+    @JvmStatic external fun documentSwitch(handle: Long, id: Long, close: Boolean): Long
+    @JvmStatic external fun documentResumeWork(task: Long)
+    @JvmStatic external fun documentResume(handle: Long, task: Long)
+    @JvmStatic external fun documentResumeFree(task: Long)
+    @JvmStatic external fun documentSpillTask(handle: Long): Long
+    @JvmStatic external fun documentSpillWork(task: Long)
+    @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean
+    @JvmStatic external fun projectRecoveryFor(handle: Long, id: Long): Long
     @JvmStatic external fun projectRecoveryTask(handle: Long, opening: Boolean): Long
     /** File worker only: atomic publication of a captured recovery snapshot. */
     @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
+    @JvmStatic external fun importSource(prefix: ByteArray): String
     @JvmStatic external fun photoFormats(): String
     @JvmStatic external fun imageImportContext(handle: Long, screen: String, destination: String): String
     @JvmStatic external fun imageImportTask(handle: Long, request: Int, context: String, cancel: Long): Long

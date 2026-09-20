@@ -19,9 +19,10 @@ internal class OutputPreview(private val host:CanvasHost) {
     fun invalidate(){images=emptyList();sdr=null;error=null;clipped=0}
     fun close(done:(()->Unit)?=null){closed=true;after=done;if(control!=0L)Native.captureCancel(control);if(!busy){after?.invoke();after=null}}
     fun prepare(recipe:JSONObject) {
-        if(busy||closed)return
+        if(busy||closed||host.drawingTabs.switching)return
         busy=true;invalidate();control=Native.captureControl()
         host.viewModelScope.launch {
+            val registered=control;host.drawingTabs.registerInspection(registered,currentCoroutineContext().job)
             try {
                 val result=withContext(NonCancellable) {
                     val task=host.withNative{Native.inspectionTask(it,control)}
@@ -30,7 +31,7 @@ internal class OutputPreview(private val host:CanvasHost) {
                 }
                 if(!closed){clipped=result.first.optLong("clipped_channels");images=result.second.take(2);sdr=result.second.getOrNull(2)}
             }catch(e:Exception){if(!closed)error=e.message ?: "Could not preview output"}
-            finally{val flag=control;control=0;Native.captureFree(flag);busy=false;after?.invoke();after=null}
+            finally{host.drawingTabs.releaseInspection(registered);val flag=control;control=0;Native.captureFree(flag);busy=false;after?.invoke();after=null}
         }
     }
 }

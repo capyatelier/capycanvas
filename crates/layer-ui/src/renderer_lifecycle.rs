@@ -66,6 +66,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("Document activation generation exhausted")?;
         self.state.revision = self.state.revision.max(previous.state.revision);
         self.apply_settings(previous.state.settings.clone())?;
+        // View orientation/zoom belongs to this drawing; display size and scale
+        // belong to the window and may have changed while this editor slept.
+        if let Some(logical) = previous.logical_viewport {
+            self.set_viewport(logical, previous.state.camera.viewport)?;
+        }
         self.sync_work_area();
         self.refresh_commands();
         Ok(self.changed(regions::ALL, true))
@@ -203,6 +208,22 @@ mod tests {
     use layer_core::{AssetId, ProjectAsset};
     use layer_render::{BackendError, FramePacket, HostImage, ReadbackImage};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn parked_editor_inherits_window_viewport_without_losing_its_history() {
+        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let layers = parked.engine().document().layers.len();
+        parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+        let revision = parked.engine().document().revision;
+        active.set_viewport([1000., 700.], [2000, 1400]).unwrap();
+        parked.inherit_window_state(&active).unwrap();
+        assert_eq!(parked.state().camera.viewport, [2000, 1400]);
+        assert_eq!(parked.logical_viewport, Some([1000., 700.]));
+        assert_eq!(parked.engine().document().revision, revision);
+        parked.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        assert_eq!(parked.engine().document().layers.len(), layers);
+    }
 
     #[derive(Default)]
     struct Backend {

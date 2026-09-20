@@ -133,6 +133,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
+    @Volatile internal var documentInputBlocked = false
+    internal fun documentCanvasFailure(message: String?) { failure=message }
+    internal val drawingTabs = DrawingTabsController(this)
     internal val documents = DocumentController(this, application)
     internal val recovery = RecoveryController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
@@ -236,11 +239,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
     }
     internal fun documentChanged(complete: () -> Unit = {}) = post {
-        refreshChrome(); publish(true); wake(); main.post(complete)
+        refreshChrome(); publish(true); wake(); main.post { drawingTabs.refresh(); complete() }
     }
     internal fun reportActionError(message: String) { actionError = message; actionErrorFromCanvasFailure = false }
     fun clearActionError() { actionError = null; actionErrorFromCanvasFailure = false }
     fun dispatch(action: JSONObject) = post {
+        val type=action.optString("type")
+        if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen")) return@post
         Native.dispatch(handle, action.toString())
         refreshChrome()
         publish(true)
@@ -313,6 +318,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
     }
     fun input(input: JSONObject, reply: ((JSONObject) -> Unit)? = null) = post {
+        if(documentInputBlocked && input.optString("type") in listOf("key_down", "scroll")) return@post
         val value = JSONObject(Native.input(handle, input.toString()))
         if (reply != null) main.post { reply(value) }
         publish(false)
@@ -339,6 +345,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
 
     fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
+        currentSurface=surface
+        if(documentInputBlocked) {
+            main.postDelayed({if(currentSurface===surface&&surface.isValid)attach(surface,width,height,density,refreshRate)},16)
+            return
+        }
         proof.resume()
         hdr.resume()
         filterPreviewCache.resume()
@@ -412,7 +423,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 attempt {
                     val started = System.nanoTime()
                     val phase = samples[count - 1].toInt()
-                    if (phase == 1 && !predicted) {
+                    if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
+                    if (phase == 1 && !predicted && !documentInputBlocked) {
                         val event = obj("kind" to "contact", "canvas" to true,
                             "position" to JSONArray(listOf(samples[0] / surfaceDensity, samples[1] / surfaceDensity)))
                         val reply = JSONObject(Native.input(handle, chromeInput(event).toString()))
@@ -642,6 +654,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             if (changedContent) panelContent = content
             snapshot = next
+            drawingTabs.refresh()
             workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L
             workspaceModelRevision = geometry?.modelRevision ?: -1L
             if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
