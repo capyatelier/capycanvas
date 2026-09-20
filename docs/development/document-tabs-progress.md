@@ -51,7 +51,13 @@ Validation logs are in ignored `artifacts/document-tabs/m1/`:
   running. The isolated rerun passed the complete mouse/touch/key journey.
 - The disk test initially caught changed error wording; restored the existing
   actionable wording and reran successfully.
-- Refreshed `origin/main` at this milestone; no commits beyond `bc38f041`.
+- Committed shared extraction as `f5400869`, then fetched and merged the new
+  `origin/main` (`9bba67d9`, LZ4 tile/project storage) in `5696b1e7`.
+- Post-merge core/engine/UI: 105 + 63 + 496 passed. Nine photo fixtures needed
+  larger compressed-byte budgets for padded LZ4 tiles; production limits and
+  budget rejection tests remain unchanged. WASM and GTK release builds passed.
+- Post-merge native GTK history/storage, immediate stroke/undo and disk failure
+  regressions passed on the real GPU.
 
 ## Current work
 
