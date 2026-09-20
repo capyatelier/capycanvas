@@ -4,6 +4,9 @@ Follow-up to [latency attribution](android-pen-latency-20260920.md) and
 [the conditional bandwidth model](android-pen-bandwidth-20260920.md).
 Implementation starts from freshly fetched `origin/main`, `90320a41`.
 
+The subsequent [Wacom comparison of main commit 39e9cba3](android-pen-main-comparison-20260920.md)
+measures the additional swept-contact and composition optimizations against this build.
+
 ## Conclusion and scope
 
 30 visible canvas updates/s is achievable on this device and workload. The

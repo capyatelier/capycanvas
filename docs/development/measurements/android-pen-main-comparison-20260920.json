@@ -1,0 +1,859 @@
+{
+  "baseline_commit": "df3940d53a98680bb4ceadc492556a19119d6660",
+  "candidate_commit": "39e9cba3537e604705755ab4ac79dc870bc96884",
+  "device": "5ll21u1002931",
+  "package": "art.capycanvas",
+  "canvas": [
+    9504,
+    6336
+  ],
+  "brush_px": 2048,
+  "zoom_percent": 17.164,
+  "stylus_hz": 200,
+  "runs": {
+    "new-fast-full": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 33.28721079064527,
+      "stroke_gap_ms": {
+        "n": 334,
+        "sum": 10003.842,
+        "p50": 25.049,
+        "p95": 49.841,
+        "p99": 91.837,
+        "max": 211.269
+      },
+      "stroke_first_latch_ms": 211.26901,
+      "owner_cpu_ms_per_latch": 24.731208534534538,
+      "hover_fps": [
+        70.38727019471365,
+        62.968857328512
+      ],
+      "history_first_latch_ms": {
+        "undo": 340.318437,
+        "redo": 411.022552
+      },
+      "gpu_mean_ms": {
+        "Capy GPU elapsed ns": 20.247846625766872,
+        "Capy GPU paint ns": 4.41490490797546,
+        "Capy GPU prediction ns": 5.113960122699386,
+        "Capy GPU composition ns": 10.668361963190184
+      },
+      "counter_first_last": {
+        "Capy input queue ns": [
+          251666,
+          3106979
+        ],
+        "Capy input age ns": [
+          4220672,
+          4742335
+        ],
+        "Capy input samples": [
+          1,
+          1
+        ],
+        "Capy renderer frames": [
+          1563,
+          1896
+        ],
+        "Capy dabs": [
+          939,
+          1842
+        ],
+        "Capy composited pixels": [
+          2866296832,
+          5177358336
+        ],
+        "Capy display batches": [
+          441,
+          450
+        ],
+        "Capy upload drains": [
+          6,
+          6
+        ],
+        "Capy source upload peak bytes": [
+          66322432,
+          66322432
+        ],
+        "Capy restore batches": [
+          0,
+          0
+        ],
+        "Capy paint pages": [
+          66,
+          555
+        ],
+        "Capy preview pages": [
+          90,
+          143
+        ],
+        "Capy source resident limit bytes": [
+          268435456,
+          268435456
+        ],
+        "Capy source upload limit bytes": [
+          67108864,
+          67108864
+        ],
+        "Capy source hits": [
+          36474,
+          66344
+        ],
+        "Capy source misses": [
+          13024,
+          18418
+        ],
+        "Capy canvas submitted": [
+          2224,
+          2557
+        ],
+        "Capy canvas zoom milli-percent": [
+          17164,
+          17164
+        ],
+        "Capy GPU observation": [
+          1560,
+          1885
+        ],
+        "Capy GPU elapsed ns": [
+          108161299,
+          20390677
+        ],
+        "Capy GPU phase observation": [
+          1560,
+          1885
+        ],
+        "Capy GPU paint ns": [
+          38872447,
+          3775104
+        ],
+        "Capy GPU prediction ns": [
+          25468229,
+          4442396
+        ],
+        "Capy GPU composition ns": [
+          41513176,
+          12145677
+        ]
+      },
+      "input_queue_ms": {
+        "n": 1998,
+        "sum": 26788.462,
+        "p50": 10.213,
+        "p95": 39.686,
+        "p99": 93.543,
+        "max": 121.993
+      },
+      "callback": {
+        "n": 335,
+        "wall_mean_ms": 25.042423880597013,
+        "running_mean_ms": 24.12476119402985,
+        "wall_distribution_ms": {
+          "n": 335,
+          "sum": 8389.212,
+          "p50": 21.85,
+          "p95": 39.264,
+          "p99": 85.618,
+          "max": 125.691
+        },
+        "running_distribution_ms": {
+          "n": 335,
+          "sum": 8081.795,
+          "p50": 21.447,
+          "p95": 38.489,
+          "p99": 76.153,
+          "max": 119.273
+        }
+      },
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    4061480 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    4194156 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "new-fast-light-1": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 35.28578204930982,
+      "stroke_gap_ms": {
+        "n": 354,
+        "sum": 10004.029,
+        "p50": 25.027,
+        "p95": 41.671,
+        "p99": 91.859,
+        "max": 237.003
+      },
+      "stroke_first_latch_ms": 237.00276,
+      "owner_cpu_ms_per_latch": 22.751596985835693,
+      "hover_fps": [
+        84.37670853524853,
+        82.16911727958664
+      ],
+      "history_first_latch_ms": {
+        "undo": 291.164635,
+        "redo": 496.085625
+      },
+      "gpu_mean_ms": {},
+      "counter_first_last": {},
+      "input_queue_ms": null,
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    4536348 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    4276032 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "new-fast-light-2": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 35.79083271506253,
+      "stroke_gap_ms": {
+        "n": 359,
+        "sum": 10002.561,
+        "p50": 25.015,
+        "p95": 41.7,
+        "p99": 83.221,
+        "max": 212.135
+      },
+      "stroke_first_latch_ms": 212.134895,
+      "owner_cpu_ms_per_latch": 22.221671754189945,
+      "hover_fps": [
+        82.78053970238516,
+        80.76238832581005
+      ],
+      "history_first_latch_ms": {
+        "undo": 284.491927,
+        "redo": 463.834479
+      },
+      "gpu_mean_ms": {},
+      "counter_first_last": {},
+      "input_queue_ms": null,
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3967304 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    3758684 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "new-slow-full": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 39.68595842134344,
+      "stroke_gap_ms": {
+        "n": 398,
+        "sum": 10003.538,
+        "p50": 24.813,
+        "p95": 42.098,
+        "p99": 83.028,
+        "max": 182.053
+      },
+      "stroke_first_latch_ms": 182.052865,
+      "owner_cpu_ms_per_latch": 18.896507931989923,
+      "hover_fps": [
+        69.38827991706998,
+        65.1752273262498
+      ],
+      "history_first_latch_ms": {
+        "undo": 378.55302,
+        "redo": 474.233594
+      },
+      "gpu_mean_ms": {
+        "Capy GPU elapsed ns": 14.051007633587787,
+        "Capy GPU paint ns": 1.180269720101781,
+        "Capy GPU prediction ns": 4.780603053435114,
+        "Capy GPU composition ns": 8.045910941475828
+      },
+      "counter_first_last": {
+        "Capy input queue ns": [
+          306615,
+          121666
+        ],
+        "Capy input age ns": [
+          5206123,
+          1050129
+        ],
+        "Capy input samples": [
+          1,
+          1
+        ],
+        "Capy renderer frames": [
+          2570,
+          2967
+        ],
+        "Capy dabs": [
+          1850,
+          2336
+        ],
+        "Capy composited pixels": [
+          5303777280,
+          7452178432
+        ],
+        "Capy display batches": [
+          527,
+          527
+        ],
+        "Capy upload drains": [
+          8,
+          8
+        ],
+        "Capy source upload peak bytes": [
+          66322432,
+          66322432
+        ],
+        "Capy restore batches": [
+          0,
+          0
+        ],
+        "Capy paint pages": [
+          66,
+          554
+        ],
+        "Capy preview pages": [
+          90,
+          120
+        ],
+        "Capy source resident limit bytes": [
+          268435456,
+          268435456
+        ],
+        "Capy source upload limit bytes": [
+          67108864,
+          67108864
+        ],
+        "Capy source hits": [
+          68218,
+          99620
+        ],
+        "Capy source misses": [
+          20141,
+          21521
+        ],
+        "Capy canvas submitted": [
+          3231,
+          3628
+        ],
+        "Capy canvas zoom milli-percent": [
+          17164,
+          17164
+        ],
+        "Capy GPU observation": [
+          2567,
+          2959
+        ],
+        "Capy GPU elapsed ns": [
+          75332863,
+          10984323
+        ],
+        "Capy GPU phase observation": [
+          2567,
+          2959
+        ],
+        "Capy GPU paint ns": [
+          39722395,
+          4531
+        ],
+        "Capy GPU prediction ns": [
+          21911249,
+          3859167
+        ],
+        "Capy GPU composition ns": [
+          11378489,
+          7093906
+        ]
+      },
+      "input_queue_ms": {
+        "n": 1999,
+        "sum": 19349.49,
+        "p50": 7.745,
+        "p95": 26.82,
+        "p99": 53.449,
+        "max": 79.496
+      },
+      "callback": {
+        "n": 399,
+        "wall_mean_ms": 19.759751879699248,
+        "running_mean_ms": 18.229714285714287,
+        "wall_distribution_ms": {
+          "n": 399,
+          "sum": 7884.141,
+          "p50": 17.731,
+          "p95": 31.896,
+          "p99": 68.195,
+          "max": 82.983
+        },
+        "running_distribution_ms": {
+          "n": 399,
+          "sum": 7273.656,
+          "p50": 16.917,
+          "p95": 31.505,
+          "p99": 64.349,
+          "max": 75.426
+        }
+      },
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3977148 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    4182804 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "old-fast-full": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 29.18817758260731,
+      "stroke_gap_ms": {
+        "n": 293,
+        "sum": 10004.05,
+        "p50": 32.897,
+        "p95": 50.053,
+        "p99": 183.446,
+        "max": 233.919
+      },
+      "stroke_first_latch_ms": 213.411927,
+      "owner_cpu_ms_per_latch": 27.738516914383563,
+      "hover_fps": [
+        66.57275443452014,
+        64.75947409099722
+      ],
+      "history_first_latch_ms": {
+        "undo": 358.641667,
+        "redo": 446.936979
+      },
+      "gpu_mean_ms": {
+        "Capy GPU elapsed ns": 24.04243006993007,
+        "Capy GPU paint ns": 4.825244755244755,
+        "Capy GPU prediction ns": 6.486430069930069,
+        "Capy GPU composition ns": 12.676027972027972
+      },
+      "counter_first_last": {
+        "Capy input queue ns": [
+          269166,
+          27500
+        ],
+        "Capy input age ns": [
+          4462905,
+          1310766
+        ],
+        "Capy input samples": [
+          1,
+          1
+        ],
+        "Capy renderer frames": [
+          5556,
+          5848
+        ],
+        "Capy dabs": [
+          13577,
+          14418
+        ],
+        "Capy composited pixels": [
+          11186079744,
+          13195872256
+        ],
+        "Capy display batches": [
+          501,
+          512
+        ],
+        "Capy upload drains": [
+          21,
+          21
+        ],
+        "Capy source upload peak bytes": [
+          66322432,
+          66322432
+        ],
+        "Capy restore batches": [
+          1,
+          1
+        ],
+        "Capy paint pages": [
+          66,
+          555
+        ],
+        "Capy preview pages": [
+          90,
+          132
+        ],
+        "Capy source resident limit bytes": [
+          268435456,
+          268435456
+        ],
+        "Capy source upload limit bytes": [
+          67108864,
+          67108864
+        ],
+        "Capy source hits": [
+          146095,
+          171364
+        ],
+        "Capy source misses": [
+          36477,
+          41875
+        ],
+        "Capy canvas submitted": [
+          6225,
+          6517
+        ],
+        "Capy canvas zoom milli-percent": [
+          17164,
+          17164
+        ],
+        "Capy GPU observation": [
+          5553,
+          5838
+        ],
+        "Capy GPU elapsed ns": [
+          93100935,
+          24240781
+        ],
+        "Capy GPU phase observation": [
+          5553,
+          5838
+        ],
+        "Capy GPU paint ns": [
+          43304999,
+          3324740
+        ],
+        "Capy GPU prediction ns": [
+          34320364,
+          7352656
+        ],
+        "Capy GPU composition ns": [
+          13176250,
+          13534479
+        ]
+      },
+      "input_queue_ms": {
+        "n": 2002,
+        "sum": 35844.73,
+        "p50": 12.512,
+        "p95": 63.063,
+        "p99": 115.541,
+        "max": 195.727
+      },
+      "callback": {
+        "n": 294,
+        "wall_mean_ms": 28.839197278911566,
+        "running_mean_ms": 26.79125170068027,
+        "wall_distribution_ms": {
+          "n": 294,
+          "sum": 8478.724,
+          "p50": 24.392,
+          "p95": 48.273,
+          "p99": 123.688,
+          "max": 188.238
+        },
+        "running_distribution_ms": {
+          "n": 294,
+          "sum": 7876.628,
+          "p50": 23.599,
+          "p95": 47.762,
+          "p99": 111.197,
+          "max": 187.21
+        }
+      },
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3606744 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    3979760 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "old-fast-light-1": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 31.193479761057507,
+      "stroke_gap_ms": {
+        "n": 313,
+        "sum": 10002.09,
+        "p50": 25.124,
+        "p95": 41.88,
+        "p99": 141.607,
+        "max": 225.459
+      },
+      "stroke_first_latch_ms": 188.679479,
+      "owner_cpu_ms_per_latch": 25.459671423076923,
+      "hover_fps": [
+        80.37711097795597,
+        77.16461604185062
+      ],
+      "history_first_latch_ms": {
+        "undo": 461.539844,
+        "redo": 475.300885
+      },
+      "gpu_mean_ms": {},
+      "counter_first_last": {},
+      "input_queue_ms": null,
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3458004 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    3760180 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "old-fast-light-return-1": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 31.99019901557268,
+      "stroke_gap_ms": {
+        "n": 321,
+        "sum": 10003.064,
+        "p50": 25.086,
+        "p95": 41.961,
+        "p99": 125.131,
+        "max": 241.604
+      },
+      "stroke_first_latch_ms": 216.950364,
+      "owner_cpu_ms_per_latch": 24.3825615625,
+      "hover_fps": [
+        83.96730700993992,
+        79.59535779178566
+      ],
+      "history_first_latch_ms": {
+        "undo": 305.318021,
+        "redo": 576.783177
+      },
+      "gpu_mean_ms": {},
+      "counter_first_last": {},
+      "input_queue_ms": null,
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    4681960 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    3785288 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "old-fast-light-return-2": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 32.691090840853946,
+      "stroke_gap_ms": {
+        "n": 328,
+        "sum": 10002.725,
+        "p50": 25.121,
+        "p95": 49.974,
+        "p99": 83.345,
+        "max": 205.575
+      },
+      "stroke_first_latch_ms": 205.575416,
+      "owner_cpu_ms_per_latch": 23.570485642201835,
+      "hover_fps": [
+        81.98082334093505,
+        79.9490966020713
+      ],
+      "history_first_latch_ms": {
+        "undo": 369.570052,
+        "redo": 430.819583
+      },
+      "gpu_mean_ms": {},
+      "counter_first_last": {},
+      "input_queue_ms": null,
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3592400 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    4112572 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    },
+    "old-slow-full": {
+      "trace_errors": {},
+      "fully_retained": true,
+      "stroke_fps": 36.48424299906392,
+      "stroke_gap_ms": {
+        "n": 366,
+        "sum": 10004.319,
+        "p50": 24.985,
+        "p95": 49.898,
+        "p99": 74.574,
+        "max": 208.05
+      },
+      "stroke_first_latch_ms": 208.050156,
+      "owner_cpu_ms_per_latch": 20.42551444109589,
+      "hover_fps": [
+        64.55093123522614,
+        62.79182204333054
+      ],
+      "history_first_latch_ms": {
+        "undo": 378.562239,
+        "redo": 599.399687
+      },
+      "gpu_mean_ms": {
+        "Capy GPU elapsed ns": 16.946493074792244,
+        "Capy GPU paint ns": 1.417950138504155,
+        "Capy GPU prediction ns": 6.0282963988919676,
+        "Capy GPU composition ns": 9.451651933701658
+      },
+      "counter_first_last": {
+        "Capy input queue ns": [
+          302031,
+          25677
+        ],
+        "Capy input age ns": [
+          4665023,
+          765123
+        ],
+        "Capy input samples": [
+          1,
+          1
+        ],
+        "Capy renderer frames": [
+          6506,
+          6871
+        ],
+        "Capy dabs": [
+          14422,
+          14890
+        ],
+        "Capy composited pixels": [
+          13315213312,
+          15255341056
+        ],
+        "Capy display batches": [
+          589,
+          589
+        ],
+        "Capy upload drains": [
+          23,
+          23
+        ],
+        "Capy source upload peak bytes": [
+          66322432,
+          66322432
+        ],
+        "Capy restore batches": [
+          1,
+          1
+        ],
+        "Capy paint pages": [
+          66,
+          555
+        ],
+        "Capy preview pages": [
+          90,
+          110
+        ],
+        "Capy source resident limit bytes": [
+          268435456,
+          268435456
+        ],
+        "Capy source upload limit bytes": [
+          67108864,
+          67108864
+        ],
+        "Capy source hits": [
+          173139,
+          201362
+        ],
+        "Capy source misses": [
+          43589,
+          44970
+        ],
+        "Capy canvas submitted": [
+          7175,
+          7540
+        ],
+        "Capy canvas zoom milli-percent": [
+          17164,
+          17164
+        ],
+        "Capy GPU observation": [
+          6503,
+          6863
+        ],
+        "Capy GPU elapsed ns": [
+          87770987,
+          17493229
+        ],
+        "Capy GPU phase observation": [
+          6503,
+          6864
+        ],
+        "Capy GPU paint ns": [
+          40863645,
+          3720781
+        ],
+        "Capy GPU prediction ns": [
+          32215364,
+          4293125
+        ],
+        "Capy GPU composition ns": [
+          12390573,
+          8177135
+        ]
+      },
+      "input_queue_ms": {
+        "n": 2000,
+        "sum": 22278.293,
+        "p50": 9.006,
+        "p95": 30.66,
+        "p99": 56.8,
+        "max": 93.338
+      },
+      "callback": {
+        "n": 367,
+        "wall_mean_ms": 21.900534059945503,
+        "running_mean_ms": 19.424354223433244,
+        "wall_distribution_ms": {
+          "n": 367,
+          "sum": 8037.496,
+          "p50": 19.438,
+          "p95": 36.517,
+          "p99": 68.089,
+          "max": 96.241
+        },
+        "running_distribution_ms": {
+          "n": 367,
+          "sum": 7128.738,
+          "p50": 17.915,
+          "p95": 36.06,
+          "p99": 66.242,
+          "max": 84.263
+        }
+      },
+      "thermal_memory": {
+        "before": [
+          "MemAvailable:    3781896 kB",
+          "Thermal Status: 0"
+        ],
+        "after": [
+          "MemAvailable:    3950204 kB",
+          "Thermal Status: 0"
+        ]
+      }
+    }
+  }
+}
