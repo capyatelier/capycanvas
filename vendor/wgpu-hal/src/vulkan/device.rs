@@ -1396,6 +1396,7 @@ impl crate::Device for super::Device {
             discarded: Vec::new(),
             rpass_debug_marker_active: false,
             end_of_pass_timer_query: None,
+            completed_resets: 0,
             framebuffers: Default::default(),
             temp_texture_views: Default::default(),
             counters: Arc::clone(&self.counters),

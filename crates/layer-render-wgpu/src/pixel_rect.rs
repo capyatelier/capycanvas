@@ -137,7 +137,7 @@ pub(super) fn page_rect(coordinate: [u32; 2]) -> PixelRect {
     PixelRect::new(min_x, min_y, min_x + PAGE_SIZE, min_y + PAGE_SIZE)
 }
 
-pub(super) fn page_coordinates(rect: PixelRect) -> impl DoubleEndedIterator<Item = [u32; 2]> {
+pub(super) fn page_coordinates(rect: PixelRect) -> impl DoubleEndedIterator<Item = [u32; 2]> + Clone {
     let xs = rect.min_x / PAGE_SIZE..rect.max_x.div_ceil(PAGE_SIZE);
     let ys = rect.min_y / PAGE_SIZE..rect.max_y.div_ceil(PAGE_SIZE);
     ys.flat_map(move |y| xs.clone().map(move |x| [x, y]))

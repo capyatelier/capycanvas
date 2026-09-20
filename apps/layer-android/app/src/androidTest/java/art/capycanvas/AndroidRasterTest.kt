@@ -973,7 +973,7 @@ class AndroidRasterTest {
         val sorted=(0 until values.length()).map {values.getDouble(it)}.sorted()
         return obj("count" to sorted.size,"p50" to sorted[((sorted.size-1)*.5).toInt()],"p95" to sorted[((sorted.size-1)*.95).toInt()],"p99" to sorted[((sorted.size-1)*.99).toInt()],"max" to sorted.last())
     }
-    private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0, during: (() -> Unit)? = null): JSONObject {
+    private fun motion(tool: Int, steps: Int, center: Pair<Double, Double> = 1000.0 to 750.0, wideBrush: Boolean = false, during: (() -> Unit)? = null): JSONObject {
         fun measurements(reset: Boolean): JSONObject {
             val done = java.util.concurrent.CountDownLatch(1)
             var result: JSONObject? = null
@@ -1000,12 +1000,23 @@ class AndroidRasterTest {
         measurements(true)
         val duration = if (steps >= 180) InstrumentationRegistry.getArguments()
             .getString("motionDurationMs")?.toLong()?.coerceIn(5_000L, 30_000L) ?: 5_000L else 1_000L
+        val options = InstrumentationRegistry.getArguments()
+        val diameter = host.snapshot!!.getJSONObject("state").getJSONObject("brush").getDouble("diameter")
+        val contactPressure = if (wideBrush) options.getString("wideBrushPressure", "1")!!.toFloat() else .65f
+        val turns = options.getString("wideBrushTurns", "2")!!.toDouble()
+        val radiusX = (.42 * (9504 - diameter) * zoom).toFloat()
+        val radiusY = (.42 * (6336 - diameter) * zoom).toFloat()
         var i = 0
         while (true) {
             val elapsed = SystemClock.uptimeMillis() - start
             val phase=when {i==0->android.view.MotionEvent.ACTION_DOWN;elapsed>=duration->android.view.MotionEvent.ACTION_UP;else->android.view.MotionEvent.ACTION_MOVE}
             val properties=arrayOf(android.view.MotionEvent.PointerProperties().apply {id=7;toolType=tool})
-            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {x=cx+40*kotlin.math.sin(elapsed/250.0).toFloat();y=cy+20*kotlin.math.cos(elapsed/310.0).toFloat();pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else .65f})
+            val coords=arrayOf(android.view.MotionEvent.PointerCoords().apply {
+                val angle = elapsed / 1000.0 * turns * 2 * Math.PI
+                x=cx+if(wideBrush)radiusX*kotlin.math.cos(angle).toFloat() else 40*kotlin.math.sin(elapsed/250.0).toFloat()
+                y=cy+if(wideBrush)radiusY*kotlin.math.sin(angle).toFloat() else 20*kotlin.math.cos(elapsed/310.0).toFloat()
+                pressure=if(phase==android.view.MotionEvent.ACTION_UP)0f else contactPressure
+            })
             val buttons=if(tool==android.view.MotionEvent.TOOL_TYPE_MOUSE&&phase!=android.view.MotionEvent.ACTION_UP)android.view.MotionEvent.BUTTON_PRIMARY else 0
             val event=android.view.MotionEvent.obtain(start,SystemClock.uptimeMillis(),phase,1,properties,coords,0,buttons,1f,1f,0,0,source,0)
             try {assertTrue("Injected tool=$tool phase=$phase at (${coords[0].x}, ${coords[0].y})",InstrumentationRegistry.getInstrumentation().uiAutomation.injectInputEvent(event,phase==android.view.MotionEvent.ACTION_UP))}finally{event.recycle()}
@@ -1025,7 +1036,7 @@ class AndroidRasterTest {
         SystemClock.sleep(100)
         native { Unit } // Drain delivered input, without creating a frame.
         val timeline = measurements(false)
-        assertNull(host.failure)
+        if (!wideBrush) assertNull(host.failure)
         if (timeline.getJSONArray("inputs").length() == 0) {
             InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { screenshot ->
                 try { File(activity.getExternalFilesDir(null), "image-placement-input-missing.png").outputStream().use { screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
@@ -1043,7 +1054,7 @@ class AndroidRasterTest {
 
         return obj("tool" to tool,"cpu_ms" to summary(stats.getJSONArray("samples")),"gpu_ms" to summary(stats.getJSONArray("gpu_samples")),
             "camera" to camera, "input_origin" to org.json.JSONArray(listOf(cx,cy)),
-            "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency,
+            "timeline" to timeline, "surface_layer" to layer, "surface_latency" to latency, "renderer_stats" to stats, "failure" to host.failure,
             "tracked_canvas_bytes" to stats.getLong("resident_bytes"),"process_pss_bytes" to android.os.Debug.getPss().toLong()*1024,
             "process_mappings" to File("/proc/self/maps").useLines { it.count() })
     }
@@ -1596,6 +1607,62 @@ class AndroidRasterTest {
         }
         assertNull(host.failure)
         save("large-photo-sustained.capy")
+    }
+
+    @Test fun largePhotoWideBrushAttribution() {
+        val options = InstrumentationRegistry.getArguments()
+        Assume.assumeTrue(options.getString("wideBrush") == "true")
+        val photo = File(activity.filesDir, "photo-benchmark.jpg")
+        assertTrue("Copy the 61 MP test image into the isolated test app", photo.isFile)
+        open(photo)
+        fun action(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            scenario.onActivity { host.documentChanged() }
+            tick(); compose.waitForIdle(); assertNull(host.actionError)
+        }
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true)))
+        val group=host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "stats" in it.array("panels").values() }.getInt("id")
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
+        action(obj("type" to "invoke", "command" to "fit_canvas"))
+        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "set_brush_size", "value" to options.getString("wideBrushSize", "2000")!!.toDouble()))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, 1.0))))
+        // Injected stylus input has no hardware prediction capability. Keep
+        // the saved platform toggle and exercise the ordinary fallback.
+        for ((id, value) in listOf("feedback" to (options.getString("wideBrushPrediction", "true") == "true"), "prediction_horizon" to options.getString("wideBrushPredictionMs", "16")!!.toInt())) {
+            action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+            assertTrue(host.snapshot!!.getJSONObject("state").getJSONObject("preferences").isNull("error"))
+        }
+        fun shellOutput(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ).use { it.readBytes().decodeToString() }
+        fun resources(): JSONObject = obj(
+            "boot_ns" to System.nanoTime(),
+            "meminfo" to File("/proc/meminfo").readText(),
+            "vmstat" to shellOutput("cat /proc/vmstat"),
+            "gpu" to shellOutput("dumpsys gpu"),
+            "process_stat" to File("/proc/self/stat").readText(),
+            "process_status" to File("/proc/self/status").readText(),
+            "process_mappings" to File("/proc/self/maps").useLines { it.count() })
+        val report = obj("state" to host.snapshot!!.getJSONObject("state"), "device" to android.os.Build.MODEL,
+            "uid" to android.os.Process.myUid(),
+            "pressure" to options.getString("wideBrushPressure", "1"), "turns_per_second" to options.getString("wideBrushTurns", "2"))
+        val runs=org.json.JSONArray()
+        report.put("runs", runs)
+        val output=File(activity.getExternalFilesDir(null), "wide-brush-attribution.json")
+        repeat(options.getString("wideBrushRuns", "2")!!.toInt()) { index ->
+            val before = resources()
+            android.util.Log.i("CapyWidePen", "BEGIN stroke=$index")
+            val run = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0, wideBrush = true)
+            android.util.Log.i("CapyWidePen", "END stroke=$index")
+            run.put("resources_before", before).put("resources_after", resources())
+            runs.put(run)
+            output.writeText(report.toString(2))
+            println("WIDE_PEN stroke=$index cpu=${run.get("cpu_ms")} gpu=${run.get("gpu_ms")} storage=${run.get("tracked_canvas_bytes")}")
+            assertNull(host.failure)
+        }
+        assertNull(host.failure)
     }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {

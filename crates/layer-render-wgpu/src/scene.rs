@@ -61,6 +61,10 @@ pub(super) struct Scene {
     pool: Vec<PageSurface>,
     used: Vec<bool>,
     jobs: Vec<Job>,
+    // Retain table capacity across tile batches, but release resource handles
+    // after encoding so these tables cannot pin evicted paint/source pages.
+    source_bindings: std::collections::HashMap<[wgpu::TextureView; 2], wgpu::BindGroup>,
+    mask_bindings: std::collections::HashMap<[wgpu::TextureView; effects::MASK_SLOTS], wgpu::BindGroup>,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::BindGroupLayout,
     buffer: wgpu::Buffer,
@@ -239,6 +243,7 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         label: &'static str,
     ) -> wgpu::SubmissionIndex {
+        if let Some(cache) = &mut r.live_display { cache.flush_updates(encoder); }
         let next = crate::submission::CommandEncoder::new(&r.device,
             &wgpu::CommandEncoderDescriptor { label: Some(label) });
         let previous = std::mem::replace(encoder, next);
@@ -351,6 +356,8 @@ impl Scene {
             pool: Vec::new(),
             used: Vec::new(),
             jobs: Vec::new(),
+            source_bindings: Default::default(),
+            mask_bindings: Default::default(),
             layout,
             uniforms,
             buffer,
@@ -1497,6 +1504,14 @@ impl Scene {
         }
         let mut composited = 0;
         let mut display_tiles = 0;
+        // Complete pyramids share draws/reductions and no longer allocate one
+        // scratch chain per tile. Bound their commands separately from source
+        // upload bytes; the fallback retains its smaller submission bound.
+        let mut display_batch = if r.live_display.as_ref().is_some_and(|cache| cache.direct_target().is_some()) {
+            display_mips::CompleteUpdates::BATCH
+        } else { SOURCE_SLOTS / 2 };
+        let mut direct_tiles = [[0; 2]; display_mips::CompleteUpdates::BATCH];
+        let mut direct_count = 0;
         let mut submitted = None;
         // Adjacent compositions revisit unchanged sources. Start from the end
         // retained by the preceding sweep instead of evicting it before reuse.
@@ -1509,9 +1524,11 @@ impl Scene {
             if tiles.is_some_and(|tiles| !tiles.contains(&tile)) {
                 continue;
             }
-            if display_tiles == SOURCE_SLOTS / 2 {
-                // Keep at most two halves live. Finish and submit this half
-                // while the previous half can execute, then wait before
+            if display_tiles >= display_batch {
+                self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
+                direct_count = 0;
+                // Keep at most two batches live. Finish and submit this batch
+                // while the previous batch can execute, then wait before
                 // preparing a third. Native command finalization is costly.
                 let current = Self::submit_commands(r, encoder, "bounded display composition");
                 if let Some(previous) = submitted.replace(current) {
@@ -1551,7 +1568,23 @@ impl Scene {
             }
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
             if r.live_display.is_some() {
-                self.encode_jobs(r, encoder)?;
+                let target = r.live_display.as_ref().and_then(|cache| cache.direct_target()).cloned();
+                if !r.device.portable_blend() && self.cached_composition()
+                    && let Some(target) = target
+                    && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, &target, false)
+                {
+                    // Keep independent draws adjacent so they can share a pass.
+                    // Reductions wait until these jobs have actually encoded.
+                    direct_tiles[direct_count] = tile;
+                    direct_count += 1;
+                    display_tiles += 1;
+                    self.free(output);
+                    continue;
+                }
+                // Intermediate/effect work keeps the original smaller bound.
+                display_batch = SOURCE_SLOTS / 2;
+                self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
+                direct_count = 0;
                 let mut cache = r.live_display.take().unwrap();
                 let result = cache.write_tile(r, r.display_pipelines.as_ref().unwrap(), encoder,
                     &self.pool[output].texture, [0; 2], tile);
@@ -1566,7 +1599,7 @@ impl Scene {
             // tiles then share one render pass in encode_jobs, including their
             // background clears, rather than opening a pass and copying each.
             if !r.device.portable_blend() && self.cached_composition()
-                && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, clear_composite)
+                && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, r.composite_view.as_ref().unwrap(), clear_composite)
             {
                 self.free(output);
                 continue;
@@ -1598,17 +1631,21 @@ impl Scene {
             });
             self.free(output);
         }
-        self.encode_jobs(r, encoder)?;
-        // The final half goes with the frame. Together with the submitted half
-        // it fits the original tile ceiling; no terminal CPU wait is needed.
+        self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
+        // The final batch goes with the frame. Together with the submitted batch
+        // it fits the two-batch ceiling; no terminal CPU wait is needed.
+        if let Some(cache) = &mut r.live_display { cache.flush_updates(encoder); }
         r.metrics.composited_pixels += composited;
         Ok(())
     }
 
     fn compose_tile_direct(
         &mut self, r: &WgpuRasterizer, first: usize, output: usize,
-        tile: [u32; 2], extent: [u32; 2], cleared: bool,
+        tile: [u32; 2], extent: [u32; 2], composite: &wgpu::TextureView, cleared: bool,
     ) -> bool {
+        // Source decodes stay in their original queue order before the draw.
+        let first = first + self.jobs[first..].iter()
+            .take_while(|job| matches!(job, Job::DecodedTile(_))).count();
         let target = &self.pool[output].view;
         let Some(Job::Clear(clear, color)) = self.jobs.get(first) else { return false; };
         if clear != target || !self.jobs[first + 1..].iter().all(|job| {
@@ -1618,7 +1655,6 @@ impl Scene {
         let color = *color;
         let origin = tile.map(|n| (n * PAGE_SIZE) as f32);
         let clip = page_rect(tile).intersect(PixelRect::full(extent));
-        let composite = r.composite_view.as_ref().unwrap();
         let mut background = [0.; 32];
         background[..6].copy_from_slice(&[
             origin[0], origin[1], PAGE_SIZE as f32, PAGE_SIZE as f32,
@@ -1647,6 +1683,16 @@ impl Scene {
         true
     }
 
+    fn encode_display_jobs(&mut self, r: &mut WgpuRasterizer,
+        encoder: &mut crate::submission::CommandEncoder, tiles: &[[u32; 2]],
+    ) -> Result<(), GpuRasterError> {
+        self.encode_jobs(r, encoder)?;
+        if let Some(cache) = &mut r.live_display {
+            for &tile in tiles { cache.direct_tile_written(encoder, tile); }
+        }
+        Ok(())
+    }
+
     // wgpu handles hash by stable resource identity, not mutable GPU contents.
     #[allow(clippy::mutable_key_type)]
     fn encode_jobs(
@@ -1655,6 +1701,8 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let result = self.encode_jobs_inner(r, encoder);
+        self.source_bindings.clear();
+        self.mask_bindings.clear();
         if result.is_err() {
             // Dropping unencoded reservations invalidates their source keys.
             self.jobs.clear();
@@ -1703,8 +1751,8 @@ impl Scene {
                 &self.upload,
             )?;
         }
-        let mut source_bindings = std::collections::HashMap::new();
-        let mut mask_bindings = std::collections::HashMap::new();
+        let source_bindings = &mut self.source_bindings;
+        let mask_bindings = &mut self.mask_bindings;
         let mut encoded_through = 0;
         for (i, job) in self.jobs.iter().enumerate() {
             if i < encoded_through {
@@ -1806,7 +1854,7 @@ impl Scene {
                             Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
                             _ => unreachable!(),
                         };
-                        let binding = source_bindings.entry(sources).or_insert_with(|| {
+                        let binding = source_bindings.entry(sources.clone()).or_insert_with(|| {
                             r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("scene tile inputs"),
                                 layout: &self.layout,
@@ -1832,18 +1880,14 @@ impl Scene {
                         {
                             pass.set_pipeline(&prepared.pipeline);
                             pass.set_bind_group(2, &prepared.binding, &[]);
-                            let masks = mask_bindings.entry(masks.as_ref()).or_insert_with(|| {
+                            let masks = mask_bindings.entry(masks.as_ref().clone()).or_insert_with(|| {
                                 r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                     label: Some("effect tile masks"),
                                     layout: &self.effects.masks,
-                                    entries: &masks
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, m)| wgpu::BindGroupEntry {
+                                    entries: &std::array::from_fn::<_, { effects::MASK_SLOTS }, _>(|i| wgpu::BindGroupEntry {
                                             binding: i as u32,
-                                            resource: wgpu::BindingResource::TextureView(m),
-                                        })
-                                        .collect::<Vec<_>>(),
+                                            resource: wgpu::BindingResource::TextureView(&masks[i]),
+                                        }),
                                 })
                             });
                             pass.set_bind_group(3, &*masks, &[]);

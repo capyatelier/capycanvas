@@ -149,6 +149,25 @@ reached 8.33 ms presentation intervals. Submission ownership and completion
 synchronization remain unchanged. Other targets retain their existing policy. See the
 [host qualification](../docs/development/image-placement-web-android-progress.md).
 
+`wgpu-android-resource-reuse.patch` applies after the command-memory patch
+and reuses up to 128 Vulkan framebuffers per completed Android encoder. Entries
+expire after one unused completed cycle;
+encoders with larger sets release the entire set. Permanent attachment-view
+identities prevent recycled Vulkan handles from matching retired attachments.
+The [Vulkan object lifetime rules](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-objectmodel-lifetime)
+permit destroying referenced objects before an unused referencing object;
+object destruction must not access the referenced objects. Cache entries do not
+retain textures and are never reused after their view identities are retired.
+Every completed command buffer is still freed on every reset. Once per 256
+nonempty completed resets, the encoder also releases retained pool storage and
+its framebuffer cache. Empty resets do not advance the interval. This amortized
+cleanup addresses mapping growth in sustained wide-brush drawing; releasing
+pool storage at every reset would restore the earlier driver-allocation cost.
+Completion synchronization is unchanged. Other platforms keep their original
+pool policy and continue to destroy framebuffers at every reset.
+See the [wide-brush measurements](../docs/development/android-wide-brush-performance.md)
+for driver allocation costs, performance and sustained-memory qualification.
+
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when no patch remains necessary.
 
