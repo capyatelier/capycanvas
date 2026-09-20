@@ -1,3 +1,4 @@
+import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -40,7 +41,7 @@ socket.onmessage=event=>{
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},180000);
+  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.includes('--drawing-tabs-recovery')?300000:180000);
   pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));
 });
 const evaluate=async expression=>{
@@ -67,7 +68,7 @@ try {
   // Allow its ordinary beforeunload confirmation, which this harness accepts.
   await call("Runtime.evaluate",{expression:"void 0",userGesture:true});
   await reload();
-  await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
+  await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.includes('--drawing-tabs-recovery')?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
   if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
@@ -78,7 +79,11 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if(process.argv.includes("--hdr-performance")){
+  if(process.argv.includes("--drawing-tabs-recovery")){
+    await checkDrawingTabRecovery({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--drawing-tabs")){
+    await checkDrawingTabs({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--hdr-performance")){
     await measureHdr({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--hdr")){
     await checkHdr({call,evaluate,settle});assert.deepEqual(errors,[]);

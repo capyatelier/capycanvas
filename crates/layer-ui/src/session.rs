@@ -1799,7 +1799,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
                 self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
             }
-            CommandId::CloseDocument => self.require_document_idle().is_ok(),
+            CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::PlacementOriginalSize => idle && self.operation.placing(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
@@ -2389,6 +2389,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return self.activate_tool(control, DrawerAnchor::Tile { panel, tile });
             }
             UiAction::ActivateHeaderItem { id } => {
+                if self.state.workspace.layout.header.entry(id)?.item == HeaderItem::DocumentTitle {
+                    return self.dispatch(UiAction::Invoke { command: CommandId::Drawings });
+                }
                 let HeaderItem::Tool { control } =
                     self.state.workspace.layout.header.entry(id)?.item
                 else {
@@ -3752,6 +3755,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
+                Ok((HOST, false))
+            }
+            CommandId::Drawings => {
+                self.request(HostRequestKind::Drawings)?;
                 Ok((HOST, false))
             }
             CommandId::Website | CommandId::SourceCode => {
@@ -7755,6 +7762,7 @@ mod tests {
             for dirty in [false, true] {
                 for interaction in [false, true] {
                     let mut s = session();
+                    s.set_platform(Platform::Web);
                     s.set_document_replacement(true);
                     if dirty {
                         s.dispatch(UiAction::Invoke {
@@ -7787,6 +7795,8 @@ mod tests {
                     assert_eq!(s.require_workspace_idle().is_ok(), library && !interaction);
                     let accepted = library && !interaction;
                     let can_close = accepted && !dirty;
+                    s.refresh_commands();
+                    assert_eq!(s.command(CommandId::CloseDocument).enabled, accepted);
                     assert_eq!(s.request_document_close().is_ok(), accepted);
                     if accepted && dirty {
                         let id = s.files.pending.as_ref().unwrap().0;

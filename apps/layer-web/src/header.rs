@@ -33,7 +33,7 @@ impl WebApp {
                 .layout
                 .header
                 .projected_for(Platform::Web)
-                .resolve(width, insets, &metrics, state.customization.header_editing),
+                .resolve_documents(width, insets, &metrics, state.customization.header_editing, self.documents.order().len()),
         )
     }
 

@@ -75,8 +75,38 @@ impl<T> DocumentSessions<T> {
     /// Publish a prepared drawing only after its initiating request completes.
     /// The host installs the new active owner; this retains the outgoing one.
     pub fn append(&mut self, outgoing: T, tiles: RetainedTiles) -> u64 {
+        assert_ne!(
+            self.selected(),
+            0,
+            "use start_empty after the final drawing closes"
+        );
         self.park(self.selected(), outgoing, tiles);
         self.tabs.add()
+    }
+    /// A host such as Web can leave a fresh drawing after closing the final
+    /// tab. Its identity must be new, without retaining the discarded owner.
+    pub fn start_empty(&mut self) -> Result<u64, String> {
+        if !self.tabs.order().is_empty() || !self.parked.is_empty() {
+            return Err("Drawings are still open".into());
+        }
+        Ok(self.tabs.add())
+    }
+    pub fn labels<'a>(
+        &'a self,
+        active: &'a DocumentFileState,
+        file: impl Fn(&'a T) -> &'a DocumentFileState,
+    ) -> Vec<DocumentTabLabel> {
+        self.order()
+            .iter()
+            .filter_map(|&id| {
+                let state = if id == self.selected() {
+                    active
+                } else {
+                    file(&self.parked.get(&id)?.owner)
+                };
+                Some(DocumentTabLabel::new(id, state))
+            })
+            .collect()
     }
     /// Atomically exchange membership/selection and ownership. An invalid target
     /// returns the outgoing owner unchanged instead of losing a live document.
@@ -92,6 +122,21 @@ impl<T> DocumentSessions<T> {
         self.park(self.selected(), outgoing, tiles);
         self.tabs.select(id);
         Ok(next.owner)
+    }
+    /// Exchange a host's retained active slot without a placeholder editor.
+    pub fn exchange_in_place(
+        &mut self,
+        id: u64,
+        active: &mut T,
+        tiles: RetainedTiles,
+    ) -> Result<(), String> {
+        let Some(mut incoming) = self.parked.remove(&id) else {
+            return Err("Drawing tab is no longer open".into());
+        };
+        std::mem::swap(active, &mut incoming.owner);
+        self.park(self.selected(), incoming.owner, tiles);
+        self.tabs.select(id);
+        Ok(())
     }
     /// Only call after the selected drawing's Save/Discard/Cancel succeeds.
     /// Final-tab behavior belongs to the host; no session can be resurrected by
@@ -110,9 +155,7 @@ impl<T> DocumentSessions<T> {
         self.tabs.redo();
     }
     pub fn resident_bytes(&self) -> usize {
-        self.parked
-            .values()
-            .fold(0usize, |n, p| n.saturating_add(p.tiles.resident_bytes()))
+        layer_core::raster_storage::resident_tile_bytes(self.parked.values().map(|p| &p.tiles))
     }
     /// Oldest inactive resident payload first. Recount shared handles after each
     /// completion because spilling updates current/undo/redo owners together.
@@ -134,14 +177,33 @@ impl<T> DocumentSessions<T> {
         self.storage_error = result.err();
     }
     pub fn admit(&self, active: &RetainedTiles, candidate: &Project) -> Result<(), String> {
+        self.admission(active).admit(candidate)
+    }
+    /// Freeze admission inputs before asynchronous decoding. Recheck against the
+    /// live collection before publication if the host permits concurrent opens.
+    pub fn admission(&self, active: &RetainedTiles) -> DocumentAdmission {
+        DocumentAdmission {
+            existing: self.parked.values().fold(active.metadata_bytes, |n, p| {
+                n.saturating_add(p.tiles.metadata_bytes)
+            }),
+            limit: self.budget.metadata,
+            storage_error: self.storage_error.clone(),
+        }
+    }
+}
+
+pub struct DocumentAdmission {
+    existing: usize,
+    limit: usize,
+    storage_error: Option<String>,
+}
+impl DocumentAdmission {
+    pub fn admit(&self, candidate: &Project) -> Result<(), String> {
         if let Some(error) = &self.storage_error {
             return Err(format!(
                 "{error}\nFree disk space or close some tabs before opening another drawing."
             ));
         }
-        let existing = self.parked.values().fold(active.metadata_bytes, |n, p| {
-            n.saturating_add(p.tiles.metadata_bytes)
-        });
         let assets = candidate
             .assets
             .values()
@@ -149,11 +211,12 @@ impl<T> DocumentSessions<T> {
         let metadata = layer_core::Editor::new(candidate.document.clone())
             .retained_tiles()
             .metadata_bytes;
-        if existing
+        if self
+            .existing
             .saturating_add(assets)
             .saturating_add(metadata)
             .saturating_add(2 * 1024 * 1024)
-            > self.budget.metadata
+            > self.limit
         {
             return Err("Too much drawing data is open. Save and close some tabs before opening another drawing.".into());
         }
@@ -166,6 +229,7 @@ pub struct DocumentTabLabel {
     pub id: u64,
     pub title: String,
     pub location: String,
+    pub uri: Option<String>,
     pub modified: bool,
 }
 impl DocumentTabLabel {
@@ -178,10 +242,17 @@ impl DocumentTabLabel {
                 file.title().into()
             },
             modified: file.modified,
+            uri: file.location.as_ref().map(|l| l.uri.clone()),
             location: file
                 .location
                 .as_ref()
-                .map(|l| l.uri.clone())
+                .map(|l| {
+                    if l.uri.starts_with("browser:") {
+                        l.name.clone()
+                    } else {
+                        l.uri.clone()
+                    }
+                })
                 .unwrap_or_else(|| "Unsaved drawing".into()),
         }
     }

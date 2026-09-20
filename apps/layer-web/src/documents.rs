@@ -1,5 +1,5 @@
 //! Browser transport owns prepared candidates and readbacks across event-loop
-//! yields. A working document is replaced only after validation and stale checks.
+//! yields. A validated drawing appends without replacing the outgoing editor.
 use super::*;
 use layer_core::ProjectLimits;
 use layer_ui::{DocumentLocation, DocumentRequest, HostRequestKind};
@@ -22,7 +22,6 @@ pub struct WebProject {
     request: u32,
     epoch: u64,
     revision: u64,
-    closing: bool,
     recovered: bool,
     source: layer_ui::ImportSource,
     placed: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
@@ -134,16 +133,12 @@ impl WebApp {
         if recovered
             && (id != 0
                 || bytes.is_none()
-                || self.session.state().document_file.modified
                 || self.session.state().document_file.busy)
         {
-            return Err(js("Recovery requires an unchanged, idle drawing"));
+            return Err(js("Recovery requires an idle drawing"));
         }
-        let closing = id == 0 && self.session.state().document_file.close_ready;
         let request = if recovered {
             Some(DocumentRequest::Open)
-        } else if closing {
-            Some(DocumentRequest::New)
         } else {
             self.session.state().requests.iter().find_map(|r| {
                 if r.id == id {
@@ -188,6 +183,7 @@ impl WebApp {
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
+        let admission = self.documents.admission(&self.session.retained_document_tiles());
         let new_options: layer_ui::NewDocumentOptions =
             if options.is_undefined() || options.is_null() {
                 layer_ui::NewDocumentOptions {
@@ -248,6 +244,7 @@ impl WebApp {
             let source_kind = imported.source;
             let project = imported.project;
             hdr::admit_document(&project.document)?;
+            if !placing { admission.admit(&project).map_err(js)?; }
             if placing {
                 let source = project
                     .document
@@ -260,7 +257,6 @@ impl WebApp {
                     request: id,
                     epoch,
                     revision,
-                    closing: false,
                     recovered: false,
                     source: source_kind,
                     placed: Some(source),
@@ -356,7 +352,6 @@ impl WebApp {
                 request: id,
                 epoch,
                 revision,
-                closing,
                 recovered,
                 source: source_kind,
                 placed: None,
@@ -422,64 +417,39 @@ impl WebApp {
             return serialize(&change);
         }
         let location = project.source.adoption_location(location);
-        if project.closing && !self.session.state().document_file.close_ready {
-            return Err(js("Document close was cancelled"));
-        }
-        let candidate = project
-            .session
-            .take()
-            .ok_or_else(|| js("Project already adopted"))?;
-        let mut retired = if project.recovered {
-            self.session
-                .adopt_recovered_project(candidate, project.epoch, project.revision)
-        } else {
-            self.session
-                .adopt_project(candidate, project.epoch, project.revision, location)
-        }
-        .map_err(|(e, _)| js(e))?;
-        let old = retired.renderer_mut().0.as_mut().unwrap();
-        let next = self.session.renderer_mut().0.as_mut().unwrap();
-        next.surface = old.surface.take();
+        if self.session.state().document_file.epoch != project.epoch
+            || self.session.engine().document().revision != project.revision
+        { return Err(js("The drawing changed while opening; try again")); }
+        let mut candidate = *project.session.take().ok_or_else(|| js("Project already adopted"))?;
+        candidate.initialize_document_location(location).map_err(js)?;
+        if project.recovered { candidate.mark_recovered(); }
+        candidate.set_document_replacement(false);
+        candidate.inherit_window_state(&self.session).map_err(js)?;
+        let active = self.session.retained_document_tiles();
+        self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(js)?;
+        let old = self.session.renderer_mut().0.as_mut().unwrap();
+        let next = candidate.renderer_mut().0.as_mut().unwrap();
+        // Both renderers share this device. Only the retired renderer is dropped;
+        // destroying the device here would also destroy the prepared drawing.
         next.config = old.config.clone();
         if next.color != old.color {
             next.color = old.color;
             next.presenter = ViewportPresenter::for_surface(&next.renderer, next.config.format, next.color).map_err(js)?;
         }
-        next.renderer
-            .resize_surface(next.config.width, next.config.height)
-            .map_err(js)?;
-        next.surface
-            .as_ref()
-            .unwrap()
-            .configure(next.renderer.device(), &next.config);
-        // Tool/settings changes are allowed while the candidate is preparing.
-        // Recompute readiness for the brush retained by shared adoption before
-        // accepting the first contact in the new document.
-        self.prepare_startup()?;
-        self.startup = self
-            .session
-            .renderer_mut()
-            .0
-            .as_mut()
-            .unwrap()
-            .renderer
-            .poll_startup()
-            .map_err(js)?;
-        self.deferred_contacts.clear();
-        if project.closing || project.recovered {
-            serialize(&layer_ui::UiChange {
-                revision: self.session.state().revision,
-                regions: 255,
-                canvas_wake: true,
-            })
-        } else {
-            serialize(
-                &self
-                    .session
-                    .complete_document_request(project.request, Ok(true))
-                    .map_err(js)?,
-            )
-        }
+        next.renderer.resize_surface(next.config.width, next.config.height).map_err(js)?;
+        // All fallible candidate preparation precedes retiring the live editor.
+        // The host has completed its initiating request and drained captures.
+        let tiles = self.session.park_document().map_err(js)?;
+        next.surface = self.session.renderer_mut().0.as_mut().unwrap().surface.take();
+        next.surface.as_ref().unwrap().configure(next.renderer.device(), &next.config);
+        self.session.renderer_mut().0.take();
+        let previous = std::mem::replace(&mut self.session, candidate);
+        self.documents.append(previous, tiles);
+        if let Some(control) = self.tone.pending.take() { control.cancel(); }
+        self.tone = Default::default();
+        self.proof = Default::default();
+        self.reset_document_views();
+        self.document_changed()
     }
 }
 

@@ -6,7 +6,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// parking. Failed renderers remain navigable/saveable/closeable.
     pub fn can_park_document(&self) -> bool {
         (self.rendering_suspended || (self.require_workspace_idle().is_ok()
-            && self.require_document_idle().is_ok() && self.engine.can_park()))
+            && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
+            && self.engine.can_park()))
             && !self.workspace_transition && !self.state.customization.header_editing
             && self.state.requests.is_empty() && !self.state.document_file.busy
     }
@@ -86,6 +87,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | CommandId::ToggleTheme
                 | CommandId::Fullscreen
                 | CommandId::NewWindow
+                | CommandId::Drawings
                 | CommandId::About
                 | CommandId::Website
                 | CommandId::SourceCode

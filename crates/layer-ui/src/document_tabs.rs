@@ -66,6 +66,13 @@ impl DocumentTabs {
         self.redo.clear();
         true
     }
+    pub fn after_close(&self) -> Option<u64> {
+        let i = self.order.iter().position(|&id| id == self.selected)?;
+        self.order
+            .get(i + 1)
+            .or_else(|| i.checked_sub(1).and_then(|i| self.order.get(i)))
+            .copied()
+    }
     pub fn reorder(&mut self, id: u64, before: Option<u64>) -> bool {
         if !self.order.contains(&id) || before.is_some_and(|v| !self.order.contains(&v) || v == id)
         {
@@ -106,6 +113,46 @@ impl DocumentTabs {
     pub fn compact(width: f32, count: usize) -> bool {
         !width.is_finite() || width < count.max(1) as f32 * 140.
     }
+    pub fn step(&self, id: u64, forward: bool) -> Option<Option<u64>> {
+        let i = self.order.iter().position(|&v| v == id)?;
+        if forward {
+            (i + 1 < self.order.len()).then(|| self.order.get(i + 2).copied())
+        } else {
+            i.checked_sub(1).map(|i| Some(self.order[i]))
+        }
+    }
+    /// Only measured, visible members accept a drop. Out-of-strip movement is
+    /// cancellation, never an implicit move-to-end or a window tear-off.
+    pub fn drop_target(
+        &self,
+        hits: &[DocumentTabHit],
+        point: [f32; 2],
+        vertical: bool,
+    ) -> Option<Option<u64>> {
+        if !point.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let hit = hits
+            .iter()
+            .find(|h| self.order.contains(&h.id) && h.bounds.contains(point[0], point[1]))?;
+        let before = if vertical {
+            point[1] < hit.bounds.y + hit.bounds.height / 2.
+        } else {
+            point[0] < hit.bounds.x + hit.bounds.width / 2.
+        };
+        if before {
+            Some(Some(hit.id))
+        } else {
+            let i = self.order.iter().position(|&id| id == hit.id)?;
+            Some(self.order.get(i + 1).copied())
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct DocumentTabHit {
+    pub id: u64,
+    pub bounds: crate::Bounds,
 }
 
 #[cfg(test)]

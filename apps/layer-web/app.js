@@ -1,5 +1,6 @@
 import init, { WebApp, WebGpu, configure_raster_worker } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
+import { createDocumentStorage } from "./document-storage.js";
 import { createWorkspaceClient } from "./workspace-store.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
@@ -195,6 +196,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
+    if(documents?.busy()&&!['complete_request','measure_panels','measure_titlebar','measure_workspace_bottom','measure_column_drawers','measure_drawer_tiles','measure_column_scroll'].includes(action.type))return;
     if (action.type === "measure_column_drawers" && workspaceGesture) workspaceGesture.hits = null;
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
@@ -1326,6 +1328,7 @@ function keyInput(e, pressed, divider = null) {
 }
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); return; }
+  if(documents?.key(e))return;
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));
@@ -1406,7 +1409,8 @@ workspace.addEventListener("drop", (e) => {
 });
 try {
   await init();
-  const rasterWorker = createRasterWorker();
+  const fileWorker = createRasterWorker(),documentStorage=createDocumentStorage();
+  const rasterWorker = request=>request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request);
   configure_raster_worker(rasterWorker);
   canvas.width = 800;
   canvas.height = 600;
@@ -1446,10 +1450,10 @@ try {
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
-  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker});
+  documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
   documents.mountProof(panels.get("proof"));
   workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js"), { onSettled: () => workspaceManager?.wake() }), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
-  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen});
+  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
@@ -1482,6 +1486,21 @@ async function restartGpu() {
   compilerFailed=false;firstCanvasRendered=false;
   for(const key of Object.keys(startupTimes))startupTimes[key]=null;
   await startGpu();
+}
+
+async function resumeDocumentCanvas() {
+  compilerEpoch++;compilerScheduled=false;compilerFailed=false;
+  gpuReady=app.gpu_ready();firstCanvasRendered=false;pending.length=0;
+  for(const key of Object.keys(startupTimes))startupTimes[key]=null;
+  if(!gpuReady){
+    try{gpuReady=app.resume_document_gpu();}
+    catch(error){stopGpu(error);return;}
+  }
+  if(!gpuReady)await startGpu();
+  else {document.body.dataset.gpu='ready';$('gpu-notice').hidden=true;wake();}
+  // Renderer replacement refreshes shared command availability. Publish that
+  // change after attachment so retained controls do not keep their parked state.
+  if(gpuReady){update(255);wake();}
 }
 
 async function startGpu() {

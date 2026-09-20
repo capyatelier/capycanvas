@@ -1,9 +1,9 @@
 // One cancellable, full-resolution inspection per open window. Navigation and
 // editing remain available; a stale result is labeled until its successor ends.
 export function createHistogram({app,element,button}) {
-  let root,control,running=false,result,wanted,failed,changed=0,timer;
+  let root,control,running=false,result,wanted,failed,changed=0,timer,done=Promise.resolve();
   const key=()=>{const f=app.state().document_file;return`${f.epoch}:${f.revision}`;};
-  return {open(){
+  return {async retire(){clearInterval(timer);control?.cancel();const old=root;if(old?.isConnected){const closed=new Promise(resolve=>old.addEventListener('close',resolve,{once:true}));if(old.open)old.close();await closed;}await done;},open(){
     if(root){root.focus();return;}
     root=element("dialog","histogram-dialog");root.setAttribute("aria-label","Histogram");
     const title=element("h2","","Histogram"),close=button("Close",()=>root.close()),status=element("p"),description=element("p"),range=element("p");
@@ -29,9 +29,10 @@ export function createHistogram({app,element,button}) {
     };
     const refresh=async()=>{
       if(running)return;failed=null;running=true;const owner=root;control=app.capture_control();status.textContent="Updating · complete composite at full resolution";update.disabled=true;
+      let settled;done=new Promise(resolve=>settled=resolve);
       try{const next=await app.histogram(control);if(root===owner){result=next;draw();status.textContent=key()===`${next.epoch}:${next.revision}`?(next.sampled_time==null?"Current committed drawing":`Animated effects · snapshot at ${Number(next.sampled_time).toFixed(2)} s`):"Drawing changed · showing previous inspection";}}
       catch(error){if(root===owner&&!control.cancelled()){failed=key();status.textContent=String(error);}}
-      finally{control.free();control=null;running=false;if(root===owner)update.disabled=false;}
+      finally{control.free();control=null;running=false;if(root===owner)update.disabled=false;settled();}
     };
     const update=button("Refresh",refresh);
     select.onchange=logarithmic.onchange=draw;

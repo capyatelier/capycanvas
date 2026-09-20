@@ -1,3 +1,5 @@
+import {createDrawingTabs} from './drawing-tabs.js';
+import {createDocumentRecovery} from './document-recovery.js';
 import {chooseDocumentColor} from './document-color.js';
 import {createProof} from './proof.js';
 import {createHistogram} from './histogram.js';
@@ -5,12 +7,12 @@ import {chooseExport,chooseSourceProfile} from './export-controls.js';
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker}) {
+export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker,resumeCanvas}) {
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
-  let nextHandle=0,closing=false;
+  let nextHandle=0,closing=false,changing=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
-  const pruneHandles=()=>{const current=app.state().document_file.location?.uri;for(const key of handles.keys())if(key!==current)handles.delete(key);};
+  const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.map(t=>t.uri));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const dialog=(title,build)=>new Promise(resolve=>{
     const root=element("dialog","document-dialog"),form=element("form");
@@ -65,10 +67,10 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   function chooseFile(placing=false) {
     const formats=app.photo_formats(),accept=Object.fromEntries(formats.flatMap(f=>f.mime_types.map(m=>[m,f.extensions.map(e=>'.'+e)])));
     if(!placing)accept['application/octet-stream']=['.capy'];
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:placing,types:[{description:placing?"Images":"Drawing or photo",accept}]})
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:true,types:[{description:placing?"Images":"Drawing or photo",accept}]})
       .then(async handles=>Promise.all(handles.map(async handle=>({file:await handle.getFile(),handle}))));
     return new Promise(resolve=>{
-      const input=element("input");input.type="file";input.multiple=placing;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
+      const input=element("input");input.type="file";input.multiple=true;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
       const done=value=>{input.remove();resolve(value);};
       input.onchange=()=>done([...input.files].map(file=>({file})));input.oncancel=()=>done(null);input.click();
     });
@@ -100,8 +102,10 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   }
   async function handle(request) {
     if(active.has(request.id))return;active.add(request.id);
+    const ownerId=app.document_tabs(0).selected;
     let candidate;
     try {
+      if(request.kind.type==='drawings'){dispatch({type:'complete_request',id:request.id});tabs.showSelector();return;}
       if(["soft_proof_setup","sdr_rendition"].includes(request.kind.type)){await proof.run(request.id,request.kind.type==="sdr_rendition");if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type==="histogram"){histogram.open();dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);
@@ -144,19 +148,13 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       } else if(["place","paste"].includes(r.type)) {
         await images.run(id,async()=>r.type==="paste"?clipboardImage():(await chooseFile(true))?.map(c=>c.file));
       } else if(["new","open"].includes(r.type)) {
-        const fileState=app.state().document_file;let bytes,inputFile,extent=[0,0],target=null,options;
-        if(r.type==="new") {options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}}
-        else {const chosen=(await chooseFile())?.[0];if(!chosen){applyChange(app.finish_document(id,false));return;}
-          inputFile=chosen.file;target=location(chosen.file.name,chosen.handle);}
-        const progress=element("aside","file-progress");progress.setAttribute("role","status");let cancelled=false;
-        progress.append(element("span","","Preparing drawing…"),button("Cancel",()=>{cancelled=true;progress.firstChild.textContent="Cancelling…";rasterWorker({operation:"cancel-read",metadata:"",buffers:[]}).catch(()=>{});}));document.body.append(progress);
-        try{
-          if(inputFile)bytes=new Uint8Array(await inputFile.arrayBuffer());
-          candidate=await gpuOperation(()=>app.prepare_document(id,bytes,...extent,fileState.epoch,fileState.revision,false,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
-          if(cancelled)throw new DOMException("Opening cancelled","AbortError");
-          applyChange(app.adopt_document(candidate,target));candidate=null;wake();
-          await retireRecovery();
-        }finally{progress.remove();}
+        if(r.type==='new'){
+          const options=await newDocument();if(!options){applyChange(app.finish_document(id,false));return;}
+          await openDrawing({request:id,options});
+        }else{
+          const chosen=await chooseFile();if(!chosen?.length){applyChange(app.finish_document(id,false));return;}
+          for(const [index,file] of chosen.entries())await openDrawing({request:index===0?id:null,file});
+        }
       } else if(r.type==="save"||r.type==="export") {
         if(r.type==="export"&&proof.hasPending()) {
           // Export has only requested its options; no capture or file write has
@@ -198,7 +196,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           applyChange(app.finish_document(id,success));
           if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(`Image saved; export preferences were not saved: ${error}`);}
           if(success && r.type==="save" && !app.state().document_file.modified) {
-            await retireRecovery();
+            await recovery.retire(ownerId);
           }
         } catch(error) {
           const wasCancelled=control?.cancelled();control?.cancel();
@@ -209,107 +207,96 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
         }
       } else throw new Error(`Unknown document operation: ${r.type}`);
     } catch(error) {
-      if(request.kind.type==="document") {
+      if(request.kind.type==="document" && app.state().requests.some(r=>r.id===request.id)) {
         const cancelled=error?.name==="AbortError";applyChange(app.finish_document(request.id,false,cancelled?undefined:String(error)));
-      } else dispatch({type:"complete_request",id:request.id,error:String(error)});
+      } else if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id,error:String(error)});
+      else if(error?.name!=="AbortError")message(String(error));
     } finally {candidate?.free();active.delete(request.id);pruneHandles();}
   }
-  // Each live tab owns its recovery record through a Web Lock. Abandoned
-  // records can be offered in another tab without racing a live drawing.
-  const recoveryKey=crypto.randomUUID(),lockName=key=>`capy-raster:${key}`;
-  let recoveryBusy=false,recoveryStarted=false,recoveryPolicy="",recoveryJobs=Promise.resolve();
-  const heldOrigins=new Set();
-  const recoveryCall=(operation,key="")=>rasterWorker({operation:`recover-${operation}`,metadata:key,buffers:[]});
-  const recoveryEvent=event=>{
-    const result=app.recovery_update(recoveryPolicy,event);recoveryPolicy=result.state;return result.update;
-  };
-  const observeRecovery=()=>recoveryEvent({type:"observe",document:app.recovery_document(),owned:recoveryStarted});
-  function executeRecovery(first) {
-    if(!first)return recoveryJobs;
-    const run=async()=>{
-      let work=first;
-      while(work){
-        let success=false;
-        try{
-          switch(work.kind.type){
-            case "capture":await app.save_recovery(recoveryKey);success=true;break;
-            case "retire":await recoveryCall("delete",recoveryKey);success=true;break;
-            case "retire_origin":{
-              const key=work.kind.key;
-              const remove=async()=>{await recoveryCall("delete",key);success=true;};
-              if(heldOrigins.has(key))await remove();
-              else await navigator.locks.request(lockName(key),{ifAvailable:true},async lock=>{if(lock)await remove();});
-              break;
-            }
-            case "restore":{
-              let candidate;
-              try{
-                const state=app.state().document_file,bytes=await recoveryCall("get",work.kind.key);
-                candidate=await gpuOperation(()=>app.prepare_document(0,bytes,0,0,state.epoch,state.revision,true));
-                applyChange(app.adopt_document(candidate,null));candidate=null;wake();
-                observeRecovery();success=true;
-              }finally{candidate?.free();}
-              break;
-            }
-          }
-        }catch(error){message(`Recovery operation failed: ${error}`);}
-        work=recoveryEvent({type:"complete",token:work.token,success}).work;
-      }
-    };
-    recoveryJobs=recoveryJobs.then(run,run);return recoveryJobs;
-  }
-  async function retireRecovery() {
-    await executeRecovery(recoveryEvent({type:"retire",discard_origin:true}).work);
-  }
-  async function autosave() {
-    if(!recoveryStarted)return;
-    await executeRecovery(observeRecovery().work);
-  }
-  let recoveryInitialization;
-  function startRecovery() { return recoveryInitialization ||= initializeRecovery(); }
-  async function initializeRecovery() {
-    if(!navigator.locks)throw new Error("Recovery storage requires Web Locks");
-    await new Promise(resolve=>navigator.locks.request(lockName(recoveryKey),()=>{resolve();return new Promise(()=>{});}));
-    recoveryStarted=true;
-    await executeRecovery(observeRecovery().work);
-    for(const key of await recoveryCall("list")) {
-      await navigator.locks.request(lockName(key),{ifAvailable:true},async lock=>{
-        if(!lock||key===recoveryKey)return;
-        heldOrigins.add(key);
-        try {
-          const offered=recoveryEvent({type:"offer",key,owned:true});
-          if(offered.offer!==key)return;
-          const decision=await dialog("Recover drawing?",(form,finish)=>{
-            form.append(element("p","","An unsaved drawing from a closed tab is available."));
-            const footer=element("footer");
-            footer.append(button("Keep for Later",()=>finish(null)),button("Discard",()=>finish("discard")),button("Recover",()=>finish("recover"),"suggested-action"));form.append(footer);
-          });
-          const event=decision==="recover"?{type:"restore"}:{type:"dismiss",discard:decision==="discard"};
-          await executeRecovery(recoveryEvent(event).work);
-        } finally {heldOrigins.delete(key);}
-      });
-      if(app.state().document_file.modified)break;
+  async function readyToPark(){
+    const deadline=performance.now()+30000;
+    while(!app.document_park_ready()){
+      if(performance.now()>deadline)throw Error('Finish the current operation before switching drawings.');
+      wake();await new Promise(resolve=>setTimeout(resolve,8));
     }
   }
-  setInterval(()=>{
-    if(!recoveryStarted && !recoveryBusy && app.gpu_ready() && app.brush_ready()) {
-      recoveryBusy=true;startRecovery().catch(error=>message(`Recovery unavailable: ${error}`)).finally(()=>{recoveryBusy=false;});
-    } else autosave();
-  },15000);
-  document.addEventListener("visibilitychange",()=>{if(document.hidden)autosave();});
-  // Exposed on the existing host controller for deterministic lifecycle tests.
-  window.addEventListener("beforeunload",e=>{if(app.state().document_file.modified){e.preventDefault();e.returnValue="";}});
-  return {mountProof:proof.mount,handle,autosave,startRecovery,refresh(){
-    proof.sync();
-    const published=state();
-    images.refresh(published);
-    if(closing || !published.document_file.close_ready)return;
+  let spilling=null;
+  function trim(){
+    if(spilling)return spilling;
+    const run=async()=>{
+      try{while(await app.spill_document_tiles()){}app.document_storage_result();}
+      catch(error){app.document_storage_result(String(error));message(`${error}\nThe drawing is retained in memory. Free disk space or close some tabs.`);}
+    };
+    spilling=run().finally(()=>spilling=null);return spilling;
+  }
+  async function transition(action,capture=true){
+    if(changing)throw Error('A drawing change is already in progress.');
+    changing=true;tabs.cancel();
+    const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','','Switching drawing…'));document.body.append(blocker);
+    try{
+      await proof.pause();await histogram.retire();await readyToPark();
+      if(capture)await recovery.capture().catch(error=>message(`Recovery unavailable: ${error}`));
+      await action();
+      await trim();
+      await recovery.ensure();
+      await resumeCanvas();
+    }finally{changing=false;blocker.remove();proof.resume();tabs.refresh(true);pruneHandles();wake();}
+  }
+  async function select(id){
+    if(id==null||String(id)===String(app.document_tabs(0).selected))return;
+    if(active.size||closing||document.querySelector('dialog[open]'))throw Error('Finish the current dialog before switching drawings.');
+    await transition(()=>applyChange(app.select_document(BigInt(id))));
+  }
+  async function close(id){
+    await select(id);
+    if(changing||active.size)throw Error('Finish the current operation before closing the drawing.');
+    const deadline=performance.now()+30000;
+    while(!app.document_close_available()){
+      if(performance.now()>deadline)throw Error('Finish the current operation before closing the drawing.');
+      wake();await new Promise(resolve=>setTimeout(resolve,8));
+    }
+    if(String(id)!==String(app.document_tabs(0).selected))throw Error('The selected drawing changed before closing.');
+    dispatch({type:'invoke',command:'close_document'});
+  }
+  async function openDrawing({request=null,file=null,options,recovered=false,bytes}){
+    await trim();
+    if(request===null&&!recovered){
+      const change=app.dispatch({type:'invoke',command:file?'open_document':'new_document'});
+      const pending=app.state().requests.find(r=>r.kind.type==='document'&&['new','open'].includes(r.kind.request.type));
+      if(!pending)throw Error('Finish the current operation before opening a drawing.');
+      request=pending.id;active.add(request);
+      applyChange(change);
+    }
+    const id=request??0,fileState=app.state().document_file,target=file?location(file.file.name,file.handle):null;
+    const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
+    progress.append(element('span','','Preparing drawing…'),button('Cancel',()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
+    try{
+      if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
+      candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
+      if(cancelled)throw new DOMException('Opening cancelled','AbortError');
+      if(request!==null)applyChange(app.finish_document(request,true));
+      await transition(()=>{const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,target));});
+    }catch(error){
+      if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:String(error)));
+      throw error;
+    }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
+  }
+  async function openFiles(files){
+    if(active.size||changing||closing||document.querySelector('dialog[open]'))throw Error('Finish the current operation before opening drawings.');
+    for(const file of files)await openDrawing({file:{file}});
+  }
+  const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,
+    canOffer:()=>!active.size&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
+  const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||closing});
+  return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing,showSelector:tabs.showSelector,
+    mountProof:proof.mount,handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
+    proof.sync();tabs.refresh();
+    const published=state();images.refresh(published);
+    if(closing||changing||!published.document_file.close_ready)return;
     closing=true;
-    const current=app.state().document_file,extent=app.editor_models(innerWidth,innerHeight).document_options.extent;
-    // Close leaves an empty untitled workspace after the shared unsaved decision.
-    gpuOperation(()=>app.prepare_document(0,undefined,...extent,current.epoch,current.revision))
-      .then(async candidate=>{applyChange(app.adopt_document(candidate,null));wake();await retireRecovery();})
-      .catch(error=>{app.reset_document_close();message(error);})
-      .finally(()=>{closing=false;pruneHandles();});
+    const id=app.document_tabs(0).selected;
+    transition(async()=>{await recovery.retire(id,true);applyChange(app.close_document_tab());},false)
+      .catch(error=>{app.reset_document_close();message(String(error));})
+      .finally(()=>{closing=false;tabs.refresh(true);pruneHandles();});
   }};
 }

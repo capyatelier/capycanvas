@@ -61,7 +61,67 @@ Validation logs are in ignored `artifacts/document-tabs/m1/`:
 
 ## Current work
 
-Proceeding to M2 (Web). Browser tile storage still needs implementation; native
-spill support compiling for WASM does not provide browser disk backing. Hosts
-retain native input/capture, GPU surface creation, scheduling and storage
-transport. Shared tab/session/storage policy stays in Rust.
+M2 (Web) is implemented and qualified below. Proceed to M3 (Android), then
+perform the final GTK regression, upstream synchronization and device deployments.
+Hosts retain native input/capture, GPU surfaces, scheduling and storage transport;
+shared tab/session/storage policy stays in Rust.
+
+## M2 Web milestone
+
+Web now retains CPU editors in the shared `DocumentSessions`, has a flexible
+strip/compact selector, shared Drawings command, immediate tab/handle input for
+mouse/touch/pen, reorder history, multi-file opening, background close and a
+fresh final browser drawing. Recovery has a lease/policy per drawing, immutable
+capture-before-await, and one serialized window writer. Proof/tone/histogram jobs
+retire before switches. The GPU device/surface now belongs to the window;
+parked editors have no renderer or textures. A newly selected editor gets a new
+renderer on that same device (the first Huion run exposed the cost and close
+race from requesting a whole new device on each switch).
+
+Core tile storage now also supports asynchronous immutable host chunks. Browser
+OPFS uses async APIs, no blocking main-thread calls or per-tab workers. Core
+publishes references only after complete successful writes, verifies compressed
+integrity on reads, and releases chunks with their last tile owner. Render
+restoration polls backing before consuming a frame; file packing awaits backing
+and reports errors instead of assuming all WASM tiles remain resident. Old read
+caches evict on parking. Inactive RAM and metadata policies remain shared Rust.
+
+Current validation:
+
+- Shared full suites: 106 core + 63 engine + 496 UI passed.
+- Core external-chunk test covers failed/cancelled write retaining bytes, pending
+  async reads, exact samples, cache eviction without rewriting, last-owner drop.
+- Updated GTK release builds and native history/storage/close passed.
+- Desktop Chrome `--headless --offscreen-raster --drawing-tabs` passes independent
+  history, mouse/pen/touch immediate reorder, order undo, background close,
+  cancel/discard, selector, final fresh drawing, and OPFS redo-only exact data.
+  The explicit offscreen mode is needed for the documented pre-existing Chrome
+  headless Dawn instance warning; this does not qualify desktop presentation.
+- Huion first run reached closing and caught a close request issued before
+  replacement startup was idle. Fixed by waiting for the safe boundary, and
+  avoiding device/catalog recreation during tab switches. The updated device run
+  passed lifecycle, immediate mouse/pen/touch input and exact redo-only OPFS data.
+- Desktop final journeys also pass corrupt and duplicate opens, failed Save/Close,
+  real OPFS write failure retaining RAM, refusal of additional opens and retry.
+- Multiple recovery offers append independent unsaved drawings on both desktop
+  and Huion, and inactive unsaved tabs protect browser unload. The Huion reload
+  test initially timed out during cold shader-library startup (149 s measured);
+  the rerun with a longer cold-start allowance passed. Tab switches reuse the
+  window device and do not repeat the catalog load.
+- Visual review caught stale disabled controls after renderer attachment; Web
+  now publishes the refreshed command state. The final desktop journey asserts
+  visible New controls are enabled after reactivation.
+- GTK now uses the shared tab drop target calculation. Its native mouse/touch/
+  keyboard regression passed again. The Close command and approved-close parking
+  also honor the existing shared permission to close during read-only library
+  warmup; the extended shared guard test passes.
+- Recovery test navigation now waits for the new page context. An intermediate
+  desktop run caught a harness race evaluating the page being destroyed; rerun
+  passed after fixing the navigation wait.
+
+Live test server: exec session 49285 on 127.0.0.1:8147. Huion reverse ports 8147
+8148 and 8150 route to it; CDP forward 9237. Device lifecycle used
+http://127.0.0.1:8148/; recovery used http://127.0.0.1:8150/. Earlier test origins
+contain only this task's regression records. Final review will use a separate
+packaged build/origin. A generic ADB screenshot showed another foreground native
+activity; the actual Chrome capture is `web/huion-browser-tabs.png`.

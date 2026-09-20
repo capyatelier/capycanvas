@@ -6,9 +6,9 @@
 
 mod camera;
 mod document_tabs;
-pub use document_tabs::DocumentTabs;
+pub use document_tabs::{DocumentTabs, DocumentTabHit};
 mod document_sessions;
-pub use document_sessions::{DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
+pub use document_sessions::{DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
 mod document_creation;
 pub use document_creation::{DocumentBackground, NewDocumentAction, NewDocumentOptions, NewDocumentPreset, NewDocumentSettings};
 mod document_workflow;
@@ -196,6 +196,7 @@ pub const PRIMARY_MENU: &[&[CommandId]] = &[
         CommandId::KeyboardShortcuts,
         CommandId::About,
     ],
+    &[CommandId::Drawings],
 ];
 pub const EDIT_MENU: MenuSpec = MenuSpec {
     label: "Edit",
@@ -245,7 +246,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
             CommandId::SaveDocumentAs,
             CommandId::ExportDocument,
         ],
-        &[CommandId::DocumentProperties, CommandId::RepairSourceProfile, CommandId::CloseDocument],
+        &[CommandId::DocumentProperties, CommandId::RepairSourceProfile, CommandId::Drawings, CommandId::CloseDocument],
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
@@ -535,10 +536,12 @@ pub enum CommandId {
     About,
     Website,
     SourceCode,
+    Drawings,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::SdrRendition | Self::PreviewSdr => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Windows),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -677,14 +680,14 @@ impl CommandId {
             Self::RaiseLayer => "up",
             Self::LowerLayer => "down",
             Self::ResetLayout => "reset-layout",
-            Self::NewWindow => "new-window",
+            Self::NewWindow | Self::Drawings => "new-window",
             Self::KeyboardShortcuts => "keyboard",
             Self::About => "info",
             Self::Website => "website",
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 78] = [
+    pub const ALL: [Self; 79] = [
         Self::SdrRendition,
         Self::PreviewSdr,
         Self::SoftProofSetup,
@@ -763,6 +766,7 @@ impl CommandId {
         Self::About,
         Self::Website,
         Self::SourceCode,
+        Self::Drawings,
     ];
     pub const TOOLS: [Self; 18] = [
         Self::Pen,
@@ -866,6 +870,7 @@ impl CommandId {
             Self::ZenMode => "Zen mode",
             Self::Fullscreen => "Full screen",
             Self::NewWindow => "New Window",
+            Self::Drawings => "Drawings…",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
             Self::Website => ApplicationLink::Website.label(),

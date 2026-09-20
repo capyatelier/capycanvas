@@ -147,6 +147,7 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::Drawings => { w.documents.show_selector(&w); Ok(()) }
                                 HostRequestKind::SdrRendition => crate::hdr::open(&w),
                                 HostRequestKind::SoftProofSetup => proof::run(&w),
                                 HostRequestKind::Histogram => {

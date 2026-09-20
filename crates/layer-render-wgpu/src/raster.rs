@@ -539,7 +539,12 @@ impl WgpuRasterizer {
                                 .get(key)
                                 .is_some_and(|old| old.same_capture(tile))
                     });
-                retained || tile.try_backing().is_some()
+                retained || match tile.try_backing() {
+                    None => false,
+                    Some(Ok(blob)) => blob.compressed_ready().unwrap_or(true),
+                    // Submit reports concrete capture/storage errors.
+                    Some(Err(_)) => true,
+                }
             })
         };
         for (id, root) in packet.restore_rasters {
@@ -551,6 +556,9 @@ impl WgpuRasterizer {
             }
         }
         for layer in packet.layers {
+            if layer.source.as_ref().is_some_and(|source| source.tiles.values().any(|tile| !tile.compressed_ready().unwrap_or(true))) {
+                return false;
+            }
             for (id, root) in std::iter::once((layer.id, &layer.raster))
                 .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
             {

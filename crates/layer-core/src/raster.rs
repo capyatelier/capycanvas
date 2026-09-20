@@ -184,10 +184,8 @@ impl TileBlob {
     }
     pub fn compressed_len(&self) -> usize { self.compressed.len() }
     pub fn compressed(&self) -> Result<Arc<[u8]>, String> { self.compressed.read() }
-    #[cfg(target_arch = "wasm32")]
-    pub fn compressed_owned(&self) -> Arc<[u8]> {
-        self.compressed().expect("browser tiles have immutable memory backing")
-    }
+    /// Poll asynchronous backing without synchronously reading native files.
+    pub fn compressed_ready(&self) -> Result<bool, String> { self.compressed.ready() }
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     pub fn decode(&self) -> Result<Vec<u8>, String> {
         let size = self

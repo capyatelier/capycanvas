@@ -6,6 +6,7 @@ const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
 export function createProof({app,element,button,icon,applyChange,wake}) {
+  let paused=false;
   let work=null,setup=null,finishPending=async()=>{},hasPending=()=>false,refreshLibrary=()=>{};
   // The same immutable 512² Rust illustration as GTK, built off the UI thread.
   const texture=element('canvas');texture.width=texture.height=512;
@@ -26,6 +27,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   const mountObserver=new ResizeObserver(scheduleMount);
   function mount(root){if(!primary)primary=root;mounts.add(root);mountObserver.observe(root);scheduleMount();return()=>{mountObserver.unobserve(root);mounts.delete(root);scheduleMount();};}
   function placePanel(){
+    if(paused)return;
     const visible=[...mounts].reverse().find(n=>n.isConnected&&!n.closest("[inert]")&&n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0);
     if(!panel&&visible)run(null);
     const target=visible||primary;
@@ -65,6 +67,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
   const hdrLabel=button('Showing SDR',displayDetails);hdrLabel.className='proof-status';hdrLabel.id="hdr-status";hdrLabel.hidden=true;hdrLabel.title='Display details';
   document.getElementById("canvas-status").prepend(hdrLabel);
   function syncTone(){
+    if(paused)return;
     if(!app.gpu_ready())return;
     syncDisplay();
     const status=app.tone_status();
@@ -75,7 +78,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     if(!status.needed||tone||performance.now()-toneChanged<180)return;
     const generation=status.generation,control=app.capture_control();
     const job={cancel(){control.cancel();}};tone=job;
-    app.tone_prepare(control).then(candidate=>{
+    job.done=app.tone_prepare(control).then(candidate=>{
       if(control.cancelled()||generation!==toneGeneration){candidate.free();return;}
       if(app.tone_apply(candidate))wake();
     }).catch(error=>{if(!control.cancelled())app.tone_failed(Number(generation),String(error));})
@@ -99,6 +102,7 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     });
   }
   function sync(){
+    if(paused)return;
     syncTone();
     const status=app.proof_status();label.textContent=status.text;label.title=status.error||status.text;label.hidden=!status.text;
     if(setup&&(work?.generation===null||pendingTimer))return;
@@ -251,5 +255,8 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     }).catch(e=>{if(panel===owner)issue.textContent=String(e);});
     profile.addEventListener('focus',()=>refreshLibrary());refreshLibrary();
   }
-  return {run,mount,hasPending:()=>hasPending(),finishPending:()=>finishPending(),sync(){sync();placePanel();refreshPanel();},cancel};
+  return {run,mount,hasPending:()=>hasPending(),finishPending:()=>finishPending(),
+    async pause(){paused=true;disposePanel();cancel();const pending=tone;pending?.cancel();await pending?.done;},
+    resume(){paused=false;sync();placePanel();refreshPanel();},
+    sync(){if(paused)return;sync();placePanel();refreshPanel();},cancel};
 }

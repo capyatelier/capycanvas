@@ -2,10 +2,10 @@
 // allocation, overflow, drag slots, validation and publication stay in Rust.
 import { workspaceSwitcherMenu } from './workspace-switcher.js';
 
-export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen}) {
+export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
-  const title = document.querySelector('#document-title');
+  const title = documents.title;
   const switcher = document.querySelector('.workspace-switcher');
   const recovery = document.querySelector('.workspace-recovery');
   retained.append(title, switcher, systemStatus.root);

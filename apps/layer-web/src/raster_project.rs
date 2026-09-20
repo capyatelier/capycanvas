@@ -65,7 +65,8 @@ struct Original {
     tiles: Vec<([u32; 2], usize)>,
 }
 struct Part {
-    bytes: Arc<[u8]>,
+    bytes: Option<Arc<[u8]>>,
+    tile: Option<Arc<TileBlob>>,
     range: Range<usize>,
 }
 
@@ -155,7 +156,8 @@ fn describe(project: Project) -> Result<(Metadata, Vec<Part>), String> {
         for start in (0..asset.bytes.len()).step_by(BLOCK) {
             data.push(parts.len());
             parts.push(Part {
-                bytes: asset.bytes.clone(),
+                bytes: Some(asset.bytes.clone()),
+                tile: None,
                 range: start..(start + BLOCK).min(asset.bytes.len()),
             });
         }
@@ -174,7 +176,7 @@ fn push_blob(blob: &Arc<TileBlob>, blobs: &mut Vec<Blob>, parts: &mut Vec<Part>,
     *dedup.entry(blob.digest).or_insert_with(|| {
         let index = blobs.len();
         blobs.push(Blob { descriptor: blob.descriptor, digest: blob.digest, data: parts.len() });
-        parts.push(Part { bytes: blob.compressed_owned(), range: 0..blob.compressed_len() });
+        parts.push(Part { bytes: None, tile: Some(blob.clone()), range: 0..blob.compressed_len() });
         index
     })
 }
@@ -185,8 +187,16 @@ pub(super) async fn pack(project: Project) -> Result<JsValue, JsValue> {
     let buffers = js_sys::Array::new();
     let mut copied = 0;
     for part in parts {
+        let bytes = if let Some(tile) = part.tile {
+            let deadline = js_sys::Date::now() + 30_000.;
+            while !tile.compressed_ready().map_err(js)? {
+                if js_sys::Date::now() > deadline { return Err(js("Parked drawing read timed out")); }
+                documents::yield_browser().await?;
+            }
+            tile.compressed().map_err(js)?
+        } else { part.bytes.unwrap() };
         copied += part.range.len();
-        buffers.push(&js_sys::Uint8Array::from(&part.bytes[part.range]));
+        buffers.push(&js_sys::Uint8Array::from(&bytes[part.range]));
         if copied >= BLOCK {
             copied = 0;
             documents::yield_browser().await?;

@@ -830,3 +830,28 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .proof-panel select { min-width:0; width:100%; min-height:24px; padding:0 6px; text-overflow:ellipsis; }
 .proof-panel .document-size:has(input[type=checkbox]) { min-height:28px; margin:0; gap:6px; }
 .proof-controls > p:empty { display:none; }
+
+/* Drawing tabs use the final flexible title allocation, independently of dock tabs. */
+.drawing-title { display:flex; flex:1; min-width:0; width:100%; height:100%; }
+.drawing-title [hidden] { display:none !important; }
+.drawing-tabs { display:flex; flex:1; width:100%; min-width:0; gap:3px; }
+.drawing-tab { display:flex; flex:1 1 0; min-width:0; border-radius:6px; background:var(--header-control-bg); }
+.drawing-tab-pick { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; touch-action:none; border-radius:6px 0 0 6px; }
+.drawing-tab-pick[aria-selected="true"] { background:var(--accent-bg, #477b9c); }
+.drawing-tab-close { width:28px; min-width:28px; padding:4px; border-radius:0 6px 6px 0; }
+.drawing-selector { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.drawing-list { width:min(600px,90vw); max-height:80vh; padding:16px; }
+.drawing-list header { display:flex; justify-content:space-between; align-items:center; }
+.drawing-list-rows { overflow:auto; max-height:55vh; touch-action:pan-y; }
+.drawing-list-row { display:flex; min-height:48px; align-items:stretch; gap:4px; border-radius:5px; }
+.drawing-list-pick { display:flex; flex:1; min-width:0; flex-direction:column; align-items:start; touch-action:pan-y; }
+.drawing-list-pick :is(strong,small) { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.drawing-list-pick[aria-current="true"] { background:var(--accent-bg, #477b9c); }
+.drawing-grip { touch-action:none; }
+.drawing-tabs [data-drawing-drop="before"] { box-shadow:inset 3px 0 #55acff; }
+.drawing-tabs [data-drawing-drop="after"] { box-shadow:inset -3px 0 #55acff; }
+.drawing-list-row[data-drawing-drop="before"] { box-shadow:inset 0 3px #55acff; }
+.drawing-list-row[data-drawing-drop="after"] { box-shadow:inset 0 -3px #55acff; }
+.drawing-dragging, .drawing-dragging * { cursor:grabbing !important; }
+.document-transition { position:fixed; inset:0; z-index:11000; cursor:progress; }
+.document-transition > span { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); border-radius:8px; padding:8px 16px; background:var(--bg); }

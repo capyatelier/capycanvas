@@ -95,17 +95,11 @@ impl Documents {
                 && let Some(b) = row.compute_bounds(&self.root)
                 && b.contains_point(&gtk::graphene::Point::new(p[0], p[1]))
             {
-                let before = p[0] < b.x() + b.width() / 2.;
-                row.add_css_class(if before { "drop-before" } else { "drop-after" });
-                result = Some(if before {
-                    Some(id)
-                } else {
-                    let m = self.model.borrow();
-                    m.order()
-                        .iter()
-                        .position(|v| *v == id)
-                        .and_then(|i| m.order().get(i + 1).copied())
-                });
+                result = self.model.borrow().drop_target(&[layer_ui::DocumentTabHit {
+                    id,
+                    bounds: layer_ui::Bounds { x: b.x(), y: b.y(), width: b.width(), height: b.height() },
+                }], p, false);
+                row.add_css_class(if result == Some(Some(id)) { "drop-before" } else { "drop-after" });
             }
         }
         result

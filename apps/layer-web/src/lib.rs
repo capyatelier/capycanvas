@@ -1,6 +1,8 @@
 #![cfg(target_arch = "wasm32")]
 
 mod documents;
+mod document_tabs;
+mod document_storage;
 mod image_import;
 mod color_edit;
 mod source_edit;
@@ -28,6 +30,8 @@ pub struct WebApp {
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
     session: UiSession<WebRenderer>,
+    documents: layer_ui::DocumentSessions<UiSession<WebRenderer>>,
+    document_gpu: Option<document_tabs::DocumentGpu>,
     canvas: web_sys::HtmlCanvasElement,
     sequence: u64,
     startup: StartupProgress,
@@ -398,7 +402,7 @@ impl WebApp {
         )
         .map_err(js)?;
         session.set_platform(layer_ui::Platform::Web);
-        session.set_document_replacement(true);
+        session.set_document_replacement(false);
         session
             .dispatch(UiAction::RestoreWorkspace {
                 workspace: Box::new(layer_ui::WorkspaceState::for_platform(
@@ -410,6 +414,8 @@ impl WebApp {
             proof: Default::default(),
             tone: Default::default(),
             session,
+            documents: Default::default(),
+            document_gpu: None,
             workspaces: None,
             canvas,
             sequence: 0,
@@ -512,6 +518,7 @@ impl WebApp {
             .clone()
     }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
+        if let Some(context) = self.document_gpu.take() { context.device.destroy(); }
         let change = self.session.suspend_renderer().map_err(js)?;
         if let Some(gpu) = self.session.renderer_mut().0.take() {
             // Dropping WebGPU handles leaves release to JavaScript GC. Retire

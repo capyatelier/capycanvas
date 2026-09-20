@@ -15,12 +15,26 @@ pub(crate) struct Bytes {
 }
 enum Value {
     Memory(Arc<[u8]>),
+    External {
+        chunk: Arc<dyn TileChunk>,
+        offset: usize,
+        digest: [u8; 32],
+    },
     #[cfg(not(target_arch = "wasm32"))]
     Disk {
         file: Arc<Mutex<std::fs::File>>,
         offset: u64,
         digest: [u8; 32],
     },
+}
+/// Immutable host storage with an asynchronous read/cache boundary. Polling
+/// requests a read and returns None until it completes. The final Arc owns the
+/// chunk's file lifetime; no document or GPU identity is stored in the transport.
+pub trait TileChunk: Send + Sync {
+    fn len(&self) -> usize;
+    fn poll(&self) -> Result<Option<Arc<[u8]>>, String>;
+    fn resident_bytes(&self) -> usize;
+    fn evict(&self);
 }
 impl From<Arc<[u8]>> for Bytes {
     fn from(bytes: Arc<[u8]>) -> Self {
@@ -31,12 +45,32 @@ impl From<Arc<[u8]>> for Bytes {
     }
 }
 impl Bytes {
+    fn resident_owner(&self) -> (usize, usize) {
+        match &*self.value.lock().unwrap() {
+            Value::Memory(bytes) => (Arc::as_ptr(bytes) as *const () as usize, bytes.len()),
+            Value::External { chunk, .. } => (
+                Arc::as_ptr(chunk) as *const () as usize,
+                chunk.resident_bytes(),
+            ),
+            #[cfg(not(target_arch = "wasm32"))]
+            Value::Disk { .. } => (0, 0),
+        }
+    }
     pub fn len(&self) -> usize {
         self.len
     }
     pub fn resident_bytes(&self) -> usize {
         match &*self.value.lock().unwrap() {
             Value::Memory(_) => self.len,
+            // Per-tile callers count this payload. Window inventory accounting
+            // separately charges the whole shared read chunk exactly once.
+            Value::External { chunk, .. } => {
+                if chunk.resident_bytes() > 0 {
+                    self.len
+                } else {
+                    0
+                }
+            }
             #[cfg(not(target_arch = "wasm32"))]
             Value::Disk { .. } => 0,
         }
@@ -44,6 +78,21 @@ impl Bytes {
     pub fn read(&self) -> Result<Arc<[u8]>, String> {
         match &*self.value.lock().map_err(|_| "Tile storage lock failed")? {
             Value::Memory(bytes) => Ok(bytes.clone()),
+            Value::External {
+                chunk,
+                offset,
+                digest,
+            } => {
+                use sha2::{Digest, Sha256};
+                let bytes = chunk.poll()?.ok_or("Drawing tile is still loading")?;
+                let bytes = bytes
+                    .get(*offset..offset + self.len)
+                    .ok_or("Incomplete parked drawing chunk")?;
+                if <[u8; 32]>::from(Sha256::digest(bytes)) != *digest {
+                    return Err("Parked drawing tile integrity check failed".into());
+                }
+                Ok(bytes.into())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             Value::Disk {
                 file,
@@ -65,6 +114,80 @@ impl Bytes {
             }
         }
     }
+    pub fn ready(&self) -> Result<bool, String> {
+        match &*self.value.lock().map_err(|_| "Tile storage lock failed")? {
+            Value::External { chunk, .. } => Ok(chunk.poll()?.is_some()),
+            _ => Ok(true),
+        }
+    }
+}
+
+/// One bounded, immutable write transaction. The original tile payloads remain
+/// resident until the host has committed every byte. Failed writes just drop
+/// this ticket; they cannot change document/history handles.
+pub struct PreparedSpill {
+    pub bytes: Vec<u8>,
+    records: Vec<(Arc<TileBlob>, usize, [u8; 32])>,
+}
+impl PreparedSpill {
+    pub fn commit(self, chunk: Arc<dyn TileChunk>) -> Result<(), String> {
+        if chunk.len() != self.bytes.len() {
+            return Err("Incomplete parked drawing write".into());
+        }
+        for (blob, offset, digest) in self.records {
+            let mut value = blob
+                .compressed
+                .value
+                .lock()
+                .map_err(|_| "Tile storage lock failed")?;
+            if matches!(*value, Value::Memory(_)) {
+                *value = Value::External {
+                    chunk: chunk.clone(),
+                    offset,
+                    digest,
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Evict previous read caches, then prepare at most one chunk of remaining RAM
+/// payloads. The host repeats this while the shared inactive budget is exceeded.
+pub fn prepare_external_spill(tiles: &RetainedTiles) -> Result<Option<PreparedSpill>, String> {
+    use sha2::{Digest, Sha256};
+    let blobs = tiles
+        .try_blobs()?
+        .ok_or("Wait for drawing capture before parking")?;
+    let mut spill = PreparedSpill {
+        bytes: Vec::new(),
+        records: Vec::new(),
+    };
+    for blob in blobs {
+        let value = blob
+            .compressed
+            .value
+            .lock()
+            .map_err(|_| "Tile storage lock failed")?;
+        match &*value {
+            Value::External { chunk, .. } => chunk.evict(),
+            Value::Memory(bytes) => {
+                if !spill.bytes.is_empty() && spill.bytes.len() + bytes.len() > SPILL_CHUNK_BYTES {
+                    continue;
+                }
+                let offset = spill.bytes.len();
+                spill.bytes.extend_from_slice(bytes);
+                spill.records.push((
+                    blob.clone(),
+                    offset,
+                    <[u8; 32]>::from(Sha256::digest(bytes)),
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Value::Disk { .. } => (),
+        }
+    }
+    Ok((!spill.records.is_empty()).then_some(spill))
 }
 
 /// Tile roots include both undo directions. Cloning this inventory never copies
@@ -156,9 +279,13 @@ impl RetainedTiles {
     pub fn try_blobs(&self) -> Result<Option<Vec<Arc<TileBlob>>>, String> {
         let mut blobs = self.sources.clone();
         for raster in &self.rasters {
-            let Some(data) = raster.try_data() else { return Ok(None) };
+            let Some(data) = raster.try_data() else {
+                return Ok(None);
+            };
             for tile in data?.tiles.values() {
-                let Some(blob) = tile.try_backing() else { return Ok(None) };
+                let Some(blob) = tile.try_backing() else {
+                    return Ok(None);
+                };
                 blobs.push(blob?);
             }
         }
@@ -181,11 +308,14 @@ impl RetainedTiles {
     }
     /// Conservative nonblocking accounting; pending captures reserve their limit.
     pub fn resident_bytes(&self) -> usize {
-        let mut seen = HashSet::new();
+        self.resident_bytes_with(&mut HashSet::new())
+    }
+    fn resident_bytes_with(&self, seen: &mut HashSet<usize>) -> usize {
         let mut bytes = 0usize;
         let mut charge = |blob: &Arc<TileBlob>| {
-            if seen.insert(Arc::as_ptr(blob) as usize) {
-                bytes = bytes.saturating_add(blob.resident_bytes());
+            let (identity, size) = blob.compressed.resident_owner();
+            if seen.insert(identity) {
+                bytes = bytes.saturating_add(size);
             }
         };
         for blob in &self.sources {
@@ -199,7 +329,8 @@ impl RetainedTiles {
                         if let Some(Ok(blob)) = tile.try_backing() {
                             charge(&blob);
                         } else {
-                            pending = pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);
+                            pending =
+                                pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);
                         }
                     }
                 }
@@ -211,6 +342,15 @@ impl RetainedTiles {
     }
 }
 
+/// Count each resident immutable allocation once across all inactive editors,
+/// including a shared external read chunk containing several tile descriptors.
+pub fn resident_tile_bytes<'a>(inventories: impl IntoIterator<Item = &'a RetainedTiles>) -> usize {
+    let mut seen = HashSet::new();
+    inventories.into_iter().fold(0usize, |n, tiles| {
+        n.saturating_add(tiles.resident_bytes_with(&mut seen))
+    })
+}
+
 /// Shared chunk bound for native and browser backing. Chunk ownership follows
 /// the immutable tiles, including references held by undo, redo and file jobs.
 pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -219,25 +359,43 @@ pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 /// file worker. Unlinked open files survive pathname eviction and disappear on
 /// final-owner release or process exit, without a compactor or orphan scan.
 #[cfg(unix)]
-pub fn spill_to_directory(tiles: &RetainedTiles, directory: &std::path::Path) -> Result<(), String> {
+pub fn spill_to_directory(
+    tiles: &RetainedTiles,
+    directory: &std::path::Path,
+) -> Result<(), String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     std::fs::create_dir_all(directory).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
-    let blobs: Vec<_> = tiles.blobs()?.into_iter().filter(|b| b.resident_bytes() > 0).collect();
+    let blobs: Vec<_> = tiles
+        .blobs()?
+        .into_iter()
+        .filter(|b| b.resident_bytes() > 0)
+        .collect();
     let mut start = 0;
     while start < blobs.len() {
         let mut end = start;
         let mut bytes = 0;
-        while end < blobs.len() && (bytes == 0 || bytes + blobs[end].compressed_len() <= SPILL_CHUNK_BYTES) {
+        while end < blobs.len()
+            && (bytes == 0 || bytes + blobs[end].compressed_len() <= SPILL_CHUNK_BYTES)
+        {
             bytes += blobs[end].compressed_len();
             end += 1;
         }
-        let path = directory.join(format!("{}-{}.tiles", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        let file = std::fs::OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
-            .open(&path).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
+        let path = directory.join(format!(
+            "{}-{}.tiles",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("Cannot create drawing cache: {e}"))?;
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         spill_tiles(&blobs[start..end], file)?;
         start = end;
@@ -319,6 +477,84 @@ mod tests {
             .unwrap(),
         )
     }
+    #[test]
+    fn external_chunks_publish_only_after_commit_and_keep_exact_identity() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        struct Chunk {
+            bytes: Arc<[u8]>,
+            ready: AtomicBool,
+            drops: Arc<AtomicUsize>,
+        }
+        impl TileChunk for Chunk {
+            fn len(&self) -> usize {
+                self.bytes.len()
+            }
+            fn poll(&self) -> Result<Option<Arc<[u8]>>, String> {
+                Ok(self
+                    .ready
+                    .load(Ordering::Relaxed)
+                    .then(|| self.bytes.clone()))
+            }
+            fn resident_bytes(&self) -> usize {
+                if self.ready.load(Ordering::Relaxed) {
+                    self.bytes.len()
+                } else {
+                    0
+                }
+            }
+            fn evict(&self) {
+                self.ready.store(false, Ordering::Relaxed);
+            }
+        }
+        impl Drop for Chunk {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let first = blob(42);
+        let retained = RetainedTiles {
+            sources: vec![first.clone()],
+            ..Default::default()
+        };
+        let original = first.compressed().unwrap();
+        assert_eq!(resident_tile_bytes([&retained, &retained]), original.len());
+        let failed = prepare_external_spill(&retained).unwrap().unwrap();
+        drop(failed); // failed/cancelled host write
+        assert!(first.resident_bytes() > 0);
+        assert_eq!(first.compressed().unwrap(), original);
+        let spill = prepare_external_spill(&retained).unwrap().unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let chunk = Arc::new(Chunk {
+            bytes: spill.bytes.clone().into(),
+            ready: AtomicBool::new(false),
+            drops: drops.clone(),
+        });
+        spill.commit(chunk.clone()).unwrap();
+        assert_eq!(first.resident_bytes(), 0);
+        assert!(!first.compressed_ready().unwrap());
+        assert!(
+            first.compressed().is_err(),
+            "pending read is recoverable, never a panic or empty tile"
+        );
+        chunk.ready.store(true, Ordering::Relaxed);
+        assert_eq!(resident_tile_bytes([&retained, &retained]), original.len());
+        assert!(first.compressed_ready().unwrap());
+        assert_eq!(first.compressed().unwrap(), original);
+        assert_eq!(first.decode().unwrap(), vec![42; 256 * 256 * 4]);
+        assert!(
+            prepare_external_spill(&retained).unwrap().is_none(),
+            "reread caches evict without rewriting immutable bytes"
+        );
+        drop(chunk);
+        drop(retained);
+        assert_eq!(
+            drops.load(Ordering::Relaxed),
+            0,
+            "the exact tile still owns its file"
+        );
+        drop(first);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
     fn revision(blob: Arc<TileBlob>) -> RasterRevision {
         RasterRevision::backed(RasterData {
             tiles: [(
@@ -337,15 +573,28 @@ mod tests {
         let mut editor = Editor::new(Document::new("pending redo", 256, 256));
         let target = editor.document().layers[0].id;
         let root = RasterRevision::pending();
-        editor.perform(Edit::SetRaster { target, revision: root.clone() }).unwrap();
+        editor
+            .perform(Edit::SetRaster {
+                target,
+                revision: root.clone(),
+            })
+            .unwrap();
         editor.undo().unwrap();
         let retained = editor.retained_tiles();
         assert!(retained.try_blobs().unwrap().is_none());
         let tile = RasterTile::pending(crate::color::PixelDescriptor::SRGB8_PAINT);
         root.publish(Ok(RasterData {
-            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile.clone())].into(),
+            tiles: [(
+                TileKey {
+                    plane: RasterPlane::Color,
+                    coordinate: [0, 0],
+                },
+                tile.clone(),
+            )]
+            .into(),
             ..Default::default()
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(retained.try_blobs().unwrap().is_none());
         tile.publish(Err("Capture worker stopped".into())).unwrap();
         assert_eq!(retained.try_blobs().unwrap_err(), "Capture worker stopped");
