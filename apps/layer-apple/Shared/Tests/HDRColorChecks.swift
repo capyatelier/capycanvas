@@ -29,7 +29,7 @@ extension XCTestCase {
             workspaceActivate(app.buttons[text].firstMatch)
             #endif
         }
-        command("Change Bit Depth…"); choose("document-color-depth", "16-bit float HDR")
+        command("Change Bit Depth…"); choose("document-color-depth", "32-bit float HDR")
         workspaceActivate(app.buttons["document-color-preview"])
         let apply = app.buttons["document-color-apply"]
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: apply); waitForExpectations(timeout: 60)
@@ -77,11 +77,37 @@ extension XCTestCase {
         command("Export…")
         let range = app.descendants(matching: .any)["export-range"].firstMatch
         XCTAssertTrue(range.waitForExistence(timeout: 30))
+        // Exercise delivery sizing too. Debug AV1 encoding of the full canvas
+        // is deliberately outside this UI-control test's latency budget.
+        workspaceActivate(app.descendants(matching: .any)["export-fit"].firstMatch)
+        for (id, value) in [("export-width", "192"), ("export-height", "128")] {
+            let field = app.textFields[id]
+            XCTAssertTrue(field.waitForExistence(timeout: 15)); workspaceActivate(field)
+            #if os(macOS)
+            field.typeKey("a", modifierFlags: .command); field.typeText(value)
+            #else
+            let current = field.value as? String ?? "2048"
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + value)
+            #endif
+        }
         choose("export-range", "HDR PNG · BT.2020 PQ")
         XCTAssertTrue(app.staticTexts["BT.2020 PQ · 16-bit · Transparency preserved"].waitForExistence(timeout: 15))
         workspaceActivate(app.buttons["export-preview"])
         XCTAssertTrue(app.staticTexts["HDR output · SDR preview"].waitForExistence(timeout: 60))
         attachEditor(in: app, name: "hdr-pq-output")
+        for format in ["HDR JPEG · gain map", "HDR AVIF · gain map with transparency"] {
+            choose("export-range", format)
+            workspaceActivate(app.buttons["export-preview"])
+            XCTAssertTrue(app.staticTexts["HDR reconstruction · SDR preview"].firstMatch.waitForExistence(timeout: 90))
+            choose("export-preview-rendition", "Encoded SDR base")
+            XCTAssertTrue(app.staticTexts["Encoded SDR base"].firstMatch.waitForExistence(timeout: 15))
+            attachEditor(in: app, name: format.hasPrefix("HDR JPEG") ? "hdr-jpeg-sdr-base" : "hdr-avif-sdr-base")
+            choose("export-preview-rendition", "HDR reconstruction · SDR preview")
+        }
+        choose("export-range", "OpenEXR · 32-bit float")
+        workspaceActivate(app.buttons["export-preview"])
+        XCTAssertTrue(app.staticTexts["SDR display preview. OpenEXR preserves document-linear 32-bit float RGB and alpha."].waitForExistence(timeout: 90))
+        attachEditor(in: app, name: "hdr-exr-output")
         workspaceActivate(app.buttons["export-cancel"])
     }
 }

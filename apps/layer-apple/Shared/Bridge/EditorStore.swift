@@ -257,7 +257,7 @@ import SwiftUI
         }
     }
     func cancelPreparedClose(_ completion: @escaping @MainActor () -> Void = {}) {
-        native?.documentRequest(closeDecision: 4) { _ in }
+        query(["type": "document_tabs", "op": "reset_close"]) { _ in }
         for value in recoveries.values { value.resume() }
         Task { @MainActor in
             do { try await workspaceLibrary?.reopenAfterCancelledClose() }

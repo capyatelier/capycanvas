@@ -104,8 +104,7 @@ import AppKit
                 }
             }
         }
-        if store.state["document_file"]["close_ready"].bool { confirm(true) }
-        else { store.projectFiles.confirmClose(confirm) }
+        store.projectFiles.confirmClose(confirm)
         return false
     }
     @MainActor func windowWillClose(_ notification: Notification) {

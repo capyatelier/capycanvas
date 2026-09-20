@@ -351,6 +351,7 @@ extension XCTestCase {
         name.typeKey("a", modifierFlags: .command); name.typeText(project.lastPathComponent)
         workspaceActivate(save)
         XCTAssertTrue(save.waitForNonExistence(timeout: 15))
+        app.activate()
         expectation(for: NSPredicate { _, _ in titleText().hasPrefix("Survivor.capy · ") }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
         let saved = try Data(contentsOf: project)
@@ -362,7 +363,6 @@ extension XCTestCase {
         editorMenu(in: app, menu: "Edit", id: "clear_layer", label: "Clear layer")
         expectPixels(paper)
         command("open_document", "Open…")
-        workspaceActivate(dialog.buttons["Discard Changes"])
         chooseOpen(invalid)
         let failure = dialog
         XCTAssertTrue(failure.waitForExistence(timeout: 20), "An invalid project must report its error")
@@ -377,14 +377,16 @@ extension XCTestCase {
         }
         attachEditor(in: app, name: "failed-open-preserves-unsaved-artwork-and-history")
 
-        // A failed replacement must not mark the original drawing clean, even
-        // after the user agreed to discard it for that unsuccessful Open.
+        // Open now adds a drawing. Cancelling its native picker must preserve
+        // the original dirty owner and its history without a discard decision.
         command("open_document", "Open…")
-        workspaceActivate(dialog.buttons["Cancel"])
+        let picker = app.windows.buttons["OKButton"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 10))
         XCTAssertTrue(dialog.waitForNonExistence(timeout: 10))
         expectPixels(paper)
         command("open_document", "Open…")
-        workspaceActivate(dialog.buttons["Discard Changes"])
         chooseOpen(project)
         expectPixels(painted)
         XCTAssertEqual(titleText(), savedTitle); XCTAssertEqual(rows.count, savedRows)

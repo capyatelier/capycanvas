@@ -11,6 +11,10 @@ import UniformTypeIdentifiers
     init(store: EditorStore) { self.store = store }
     var rows: [JSON] { view["tabs"].array }
     var selected: UInt64 { view["selected"].uint }
+    var selectedDescription: String {
+        guard let tab = store?.state["tabs"][0] else { return "" }
+        return "\(tab["title"].string) · \(tab["width"].uint) × \(tab["height"].uint)"
+    }
     func receive() {
         guard let store else { return }
         let next = store.snapshot["document_tabs"]
@@ -181,7 +185,7 @@ struct DrawingTabsHeader: View {
                         if tabs.rows.count > 1 { Image(systemName: "chevron.down").font(.caption) }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("document-title")
-                    .accessibilityValue(store.state["tabs"][0]["title"].string).help("Drawings")
+                    .accessibilityValue(tabs.selectedDescription).help(tabs.selectedDescription)
             }
         }.modifier(DrawingOpenDrop(store: store))
     }
@@ -212,7 +216,7 @@ private struct DrawingTabList: View {
                         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).help(row["location"].string)
                         .accessibilityIdentifier("drawing-tab-\(id)").accessibilityAddTraits(id == tabs.selected ? .isSelected : [])
-                        .accessibilityValue(id == tabs.selected ? store.state["tabs"][0]["title"].string : row["location"].string)
+                        .accessibilityValue(id == tabs.selected ? tabs.selectedDescription : row["location"].string)
                     Button { tabs.close(id) } label: { Image(systemName: "xmark").font(.caption).frame(width: 24, height: vertical ? 44 : 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("Close " + row["title"].string).accessibilityIdentifier("drawing-close-\(id)")
                         .modifier(DrawingMeasure(id: id, part: \.close))

@@ -50,6 +50,7 @@ import QuartzCore
             try await invoke("new_document")
             precondition(store.drawingTabs.rows.count == 2 && store.drawingTabs.selected == 2)
             precondition(store.snapshot["proof_panel"]["depth"].string == "F32")
+            precondition(store.drawingTabs.selectedDescription.hasSuffix(" · 96 × 64"))
             // Exercise the actual tab hit-target model with all native device
             // identities. Sensors and OS movement slop remain native-adapter work.
             let drag = DrawingTabInteraction()
@@ -106,7 +107,38 @@ import QuartzCore
             precondition(store.drawingTabs.rows[1]["title"].string == a.lastPathComponent)
             precondition(store.drawingTabs.rows[2]["title"].string == b.lastPathComponent)
             precondition(store.drawingTabs.view["parked_renderers"].uint == 0)
-            print("Apple \(platform): independent history/save destinations, per-tab recovery, close/cancel, ordered multi-open passed")
+            let ids = store.drawingTabs.rows.map { $0["id"].uint }
+            for id in ids { try await select(id); try await invoke("add_layer") }
+            var windowAllowed: Bool?
+            store.drawingTabs.confirmWindowClose { windowAllowed = $0 }
+            try await wait("window close first prompt") { store.projectFiles.confirming }
+            store.projectFiles.choose("discard")
+            try await wait("window close second prompt") { store.projectFiles.confirming }
+            store.projectFiles.choose("cancel")
+            try await wait("window close cancelled") { windowAllowed != nil }
+            precondition(windowAllowed == false && store.drawingTabs.rows.count == 3)
+            // Cancelling any drawing revokes earlier approvals. All three dirty
+            // owners must be prompted again on the next window-close attempt.
+            windowAllowed = nil
+            store.drawingTabs.confirmWindowClose { windowAllowed = $0 }
+            for _ in ids {
+                try await wait("window close reconsidered prompt") { store.projectFiles.confirming }
+                store.projectFiles.choose("discard")
+            }
+            try await wait("window close approved") { windowAllowed != nil }
+            precondition(windowAllowed == true && !store.drawingTabs.confirmingWindow)
+            // Storage or native window/scene teardown can fail after every
+            // drawing was approved. That rollback also revokes every approval.
+            await withCheckedContinuation { done in store.cancelPreparedClose { done.resume() } }
+            windowAllowed = nil
+            store.drawingTabs.confirmWindowClose { windowAllowed = $0 }
+            for _ in ids {
+                try await wait("failed teardown reconsidered prompt") { store.projectFiles.confirming }
+                store.projectFiles.choose("discard")
+            }
+            try await wait("failed teardown approval") { windowAllowed != nil }
+            precondition(windowAllowed == true)
+            print("Apple \(platform): device pickup matrix, independent history/save destinations, per-tab recovery, close/cancel, ordered multi-open and whole-window approval reset passed")
         }
     }
 }

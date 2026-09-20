@@ -203,9 +203,8 @@ import QuartzCore
             let startupFlush = await flush(reopened); precondition(startupFlush)
             let preserved = try await io { try files.current(recovered.scene) }
             precondition(preserved == recovered)
-            // Recovery must protect a different drawing already in this window.
-            // Save-and-continue retains the selected recovery destination across
-            // the intermediate manual-save request, without another Open picker.
+            // Recovery adds a drawing and preserves the current owner. Its
+            // selected archive stays reserved until adoption completes.
             let manual = root.appendingPathComponent("before-recovery.capy")
             reopened.projectFiles = ProjectFiles(store: reopened, dialogs: .init(
                 open: { _, _ in preconditionFailure("Recovery must retain its selected archive through Save") },
@@ -216,30 +215,18 @@ import QuartzCore
                 } : nil))
             reopened.invoke("add_layer")
             try await wait("Current replacement fixture missing") { reopened.state["layers"].array.count == 3 }
-            for recoveryFirst in [false, true] {
-                if recoveryFirst {
-                    reopened.recovery.restore(recovered)
-                    reopened.projectFiles.openURL(manual)
-                } else {
-                    reopened.projectFiles.openURL(manual)
-                    reopened.recovery.restore(recovered)
-                }
-                precondition(reopened.projectFiles.error == (recoveryFirst
-                    ? "Finish the current document operation first"
-                    : "Finish the current canvas operation before recovering a drawing"),
-                    "External Open and recovery must reserve their destination before shared busy state arrives")
-                reopened.projectFiles.error = nil
-                try await wait("Replacement must ask about the current unsaved drawing") { reopened.projectFiles.confirming }
-                reopened.projectFiles.choose("cancel")
-                try await wait("Cancelled replacement did not settle") { !reopened.projectFiles.busy }
-                precondition(reopened.state["document_file"]["epoch"].uint == 0 && reopened.state["layers"].array.count == 3)
-                let cancelledReplacement = try await io { try files.current(recovered.scene) }
-                precondition(cancelledReplacement == recovered)
+            reopened.invoke("save_document_as")
+            try await wait("Current drawing did not save before recovery") {
+                !reopened.projectFiles.busy && reopened.state["document_file"]["location"]["name"].string == manual.lastPathComponent
             }
             reopened.recovery.restore(recovered)
-            try await wait("Save before recovery prompt missing") { reopened.projectFiles.confirming }
-            reopened.projectFiles.choose("save")
+            reopened.recovery.restore(recovered)
+            precondition(reopened.projectFiles.error == "Finish the current canvas operation before recovering a drawing",
+                "Recovery must reserve its archive before shared busy state arrives")
+            reopened.projectFiles.error = nil
             try await wait("Recovery adoption did not finish") { reopened.state["document_file"]["epoch"].uint == 1 && !reopened.projectFiles.busy }
+            precondition(reopened.drawingTabs.rows.count == 2 && reopened.drawingTabs.selected == 2,
+                "Recovery must preserve the previous drawing in its own tab")
             precondition(FileManager.default.fileExists(atPath: manual.path))
             precondition(reopened.projectFiles.error == nil, reopened.projectFiles.error ?? "")
             precondition(reopened.state["layers"].array.count == 13)
@@ -250,7 +237,7 @@ import QuartzCore
             precondition(remaining.count == 1 && remaining[0].scene != recovered.scene)
 
             var closed: Bool?
-            reopened.projectFiles.confirmClose { closed = $0 }
+            reopened.projectFiles.confirmCurrentClose { closed = $0 }
             try await wait("Recovered content did not require close confirmation") { reopened.projectFiles.confirming }
             reopened.projectFiles.choose("cancel")
             try await wait("Close cancellation did not complete") { closed != nil }
@@ -258,7 +245,7 @@ import QuartzCore
             let cancelledClose = try await io { try files.list().records.count }
             precondition(cancelledClose == 1)
             closed = nil
-            reopened.projectFiles.confirmClose { closed = $0 }
+            reopened.projectFiles.confirmCurrentClose { closed = $0 }
             try await wait("Discard confirmation missing") { reopened.projectFiles.confirming }
             reopened.projectFiles.choose("discard")
             try await wait("Discard did not authorize close") { closed == true }

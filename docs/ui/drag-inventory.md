@@ -100,6 +100,16 @@ GTK `DropTarget` receivers are destinations, not additional pickup surfaces.
 
 ## Apple: macOS and iPadOS
 
+Drawing tabs added on 2026-09-20 use [`DrawingTabs.swift`](../../apps/layer-apple/Shared/Editor/DrawingTabs.swift)
+with the retained native reorder adapter. Horizontal tab bodies and selector
+grips pick up immediately after movement slop; vertical selector row bodies
+require a touch/pen hold and remain immediate for mouse. Shared Rust validates
+drop positions and maintains separate tab-order undo/redo. Native Mac and
+physical-iPad UI tests cover row reorder, one-step undo/redo, selection and close.
+The Swift owner fixture additionally exercises all three device identities,
+same-contact menu dismissal and cancellation on the actual tab target model.
+These automated device identities do not qualify physical Pencil sensors.
+
 UIKit's common native reorder adapter cancels only for its owning window scene.
 A two-scene fixture reproduces the former application-wide cancellation and
 passes pending/held/dragging contacts, retained menus, late releases, resumed

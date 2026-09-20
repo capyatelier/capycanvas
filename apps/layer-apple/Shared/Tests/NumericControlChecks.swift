@@ -143,6 +143,20 @@ extension XCTestCase {
     }
 
     @MainActor func capturePaintEditor(in app: XCUIApplication, scenario: String = "paint-expanded", theme: String = "light") {
+        #if os(macOS)
+        // AppKit may restore this isolated test window partly offscreen after
+        // earlier native window journeys. Move its unused header into view
+        // before resolving any control hit points.
+        let initialWindow = app.windows.firstMatch
+        XCTAssertTrue(initialWindow.waitForExistence(timeout: 20))
+        if initialWindow.frame.minX < 0 || initialWindow.frame.minY < 0 {
+            let start = initialWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.02))
+            start.click(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(
+                dx: max(0, 20 - initialWindow.frame.minX), dy: max(0, 30 - initialWindow.frame.minY))))
+            expectation(for: NSPredicate { _, _ in initialWindow.frame.minX >= 0 && initialWindow.frame.minY >= 0 }, evaluatedWith: initialWindow)
+            waitForExpectations(timeout: 10)
+        }
+        #endif
         let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
         XCTAssertTrue(paint.waitForExistence(timeout: 30))
         if !paint.isSelected { workspaceActivate(paint) }
