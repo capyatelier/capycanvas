@@ -17,7 +17,7 @@ import {createImageImport} from './image-import.js';
 // decisions stay in UiSession. File handles never enter a project or localStorage.
 export function createDocuments({app,state,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,rasterWorker,resumeCanvas}) {
   const active=new Set(),handles=new Map(),histogram=createHistogram({app,element,button});
-  let nextHandle=0,closing=false,changing=false;
+  let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.map(t=>t.uri));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
@@ -160,7 +160,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
           await openDrawing({request:id,options});
         }else{
           const chosen=await chooseFile();if(!chosen?.length){applyChange(app.finish_document(id,false));return;}
-          for(const [index,file] of chosen.entries())await openDrawing({request:index===0?id:null,file});
+          await openBatch(chosen,id);
         }
       } else if(r.type==="save"||r.type==="export") {
         if(r.type==="export"&&proof.hasPending()) {
@@ -252,12 +252,12 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;
-    if(active.size||closing||document.querySelector('dialog[open]'))throw Error('Finish the current dialog before switching drawings.');
+    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw Error('Finish the current dialog before switching drawings.');
     await transition(()=>applyChange(app.select_document(BigInt(id))));
   }
   async function close(id){
     await select(id);
-    if(changing||active.size)throw Error('Finish the current operation before closing the drawing.');
+    if(changing||batching||active.size)throw Error('Finish the current operation before closing the drawing.');
     const deadline=performance.now()+30000;
     while(!app.document_close_available()){
       if(performance.now()>deadline)throw Error('Finish the current operation before closing the drawing.');
@@ -289,14 +289,22 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
       throw error;
     }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
   }
+  async function openBatch(files,request=null){
+    if(batching)throw Error('Another file batch is still opening.');
+    batching=true;
+    try{for(const [index,file] of files.entries()){
+      try{await openDrawing({request:index===0?request:null,file});}
+      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;message(`Could not open ${file.file.name}: ${error}`);}
+    }}finally{batching=false;tabs.refresh(true);}
+  }
   async function openFiles(files){
-    if(active.size||changing||closing||document.querySelector('dialog[open]'))throw Error('Finish the current operation before opening drawings.');
-    for(const file of files)await openDrawing({file:{file}});
+    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw Error('Finish the current operation before opening drawings.');
+    await openBatch(files.map(value=>value.file?value:{file:value}));
   }
   const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,
-    canOffer:()=>!active.size&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
-  const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||closing});
-  return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing,showSelector:tabs.showSelector,
+    canOffer:()=>!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
+  const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
+  return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
     mountProof:proof.mount,handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
     const published=state();images.refresh(published);

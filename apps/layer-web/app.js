@@ -1462,6 +1462,22 @@ try {
   // Test harness accesses the actual Wasm instance and native widgets.
   window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes, documents, restartGpu };
   await startGpu();
+  if (window.launchQueue?.setConsumer) {
+    let launches=Promise.resolve();
+    window.launchQueue.setConsumer(params=>{
+      const files=params.files??[];
+      launches=launches.then(async()=>{
+        if(!files.length)return;
+        const deadline=performance.now()+240000;
+        while(documents.busy()||!app.document_park_ready()||document.querySelector('dialog[open]')) {
+          if(performance.now()>deadline)throw Error('Finish the current operation, then open the files again.');
+          await new Promise(resolve=>setTimeout(resolve,50));
+        }
+        const selected=[];for(const handle of files)selected.push({file:await handle.getFile(),handle});
+        await documents.openFiles(selected);
+      }).catch(error=>message(String(error)));
+    });
+  }
 } catch (error) {
   $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
     element("p", "", "Reload the page. If the problem continues, check that the complete app package is being served."), element("pre", "", String(error)));
