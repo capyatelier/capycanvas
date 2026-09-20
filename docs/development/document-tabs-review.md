@@ -49,9 +49,9 @@ Review build identities:
   correction; PWA version:
   `980928620784418dff3156b17bca03b0be9e4b418934416085d7d09fff6dc8ce`.
 
-The post-close audit rebuilt the same packaged Web source after `a1d55083`; its
-Huion CDP lifecycle completion is currently unqualified because the isolated
-test harness stalled after live rendering. Desktop lifecycle coverage passed.
+The post-close audit rebuilt the same packaged Web source after `a1d55083`.
+Its complete Huion CDP lifecycle passed after correcting the isolated server's
+lifetime; desktop lifecycle coverage also passed.
 
 ## Shared ownership
 

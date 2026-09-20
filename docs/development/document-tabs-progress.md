@@ -390,13 +390,20 @@ M3 final reruns:
   journey passed. It covers independent history, close decisions, pointer
   reorder, selector behavior, final fresh drawing, OPFS redo restore and
   file/storage failures.
-- An isolated Huion Web origin on port 8164 reached live ARM Valhall rendering
-  and the duplicate-file phase. Its full CDP lifecycle harness then stalled
-  without producing a completion result; the first attempt was additionally
-  invalid because its short-lived local server had stopped. Neither attempt is
-  counted as a Huion Web pass. The packaged review build is nevertheless served
-  from the normal port 8162; this is a remaining device-automation gap, not a
-  claimed regression.
+- The isolated Huion Web run initially used a short-lived local server, then
+  correctly completed after the server was made persistent. The full ARM
+  Valhall lifecycle journey passed: independent history, mouse/pen/touch
+  reorder, close decisions, compact selector, final fresh drawing, exact
+  redo-only OPFS restore, corrupt/duplicate batch opening, failed Save and
+  quota failure/retry.
 - Rebuilt and installed the isolated review Android package
   `art.capycanvas.tabtest` with `adb install -r`, preserving its data. APK SHA-256:
   `dfd693003df055d15e96bbf85dab13aef28b031d2e674a0153ff89440d4fd2c9`.
+- The broad Huion Android tab run passed all four lifecycle cases: exact
+  history/spill/Activity recreation, independent inactive recovery, native
+  mouse/pen/touch selector and close input, and duplicate/corrupt URI batches.
+  Its real-frame close class initially failed only because its test assumed the
+  non-compact File label remains visible. On the tablet's compact title bar it
+  is correctly folded into the primary menu. The test now follows that visible
+  File → Close route; the isolated five-case rerun passed in 127.366 s with
+  zero failures.

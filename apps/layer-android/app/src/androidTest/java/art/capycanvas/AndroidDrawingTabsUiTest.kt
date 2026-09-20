@@ -86,6 +86,12 @@ class AndroidDrawingTabsUiTest {
     private fun tag(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.TestTag) == value }
     private fun text(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true }
     private fun description(value: String): (SemanticsNode) -> Boolean = { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(value) == true }
+    /** The narrow title bar folds File into its primary menu; exercise the
+     * same route a tablet user sees instead of assuming desktop menu labels. */
+    private fun openFileMenu() {
+        if (point(tag("application-menu-file")) != null) tap(tag("application-menu-file"))
+        else { tap(tag("header-menu-labels-compact")); tap(text("File")) }
+    }
     private fun tap(match: (SemanticsNode) -> Boolean, checkErrors: Boolean = true) {
         var target: Offset? = null
         var stableSince = SystemClock.uptimeMillis()
@@ -181,7 +187,7 @@ class AndroidDrawingTabsUiTest {
         val third = create()
         tap(tag("drawing-close-$first")); closed(first, 1)
         assertEquals(third, tabs().getLong("selected"))
-        tap(tag("application-menu-file")); tap(text("Close")); finished()
+        openFileMenu(); tap(text("Close")); finished()
     }
     @Test fun dirtyCloseCancelAndActualSavePickerCancelPreserveDrawing() {
         val first = tabs().getLong("selected"); dirty(); val second = create()
@@ -213,7 +219,7 @@ class AndroidDrawingTabsUiTest {
         val first = tabs().getLong("selected"); create()
         for (final in listOf(false, true)) {
             dirty(); val before = ids()
-            if (final) { tap(tag("application-menu-file")); tap(text("Close")) }
+            if (final) { openFileMenu(); tap(text("Close")) }
             else tap(tag("drawing-close-${tabs().getLong("selected")}"))
             waitFor("close prompt") { point(tag("document-close-discard")) != null }
             val gate = CompletableDeferred<Unit>(); val control = Native.captureControl()
