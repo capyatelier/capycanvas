@@ -3,7 +3,7 @@ use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 #[test]
 fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
@@ -68,7 +68,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                         let mut encoder =
                             crate::submission::CommandEncoder::new(&r.device, &Default::default());
                         let uploaded = cache
-                            .encode(&r, &mut encoder, &pending, &scene.binding, 0)
+                            .encode(&mut r, &mut encoder, &pending, &scene.binding, 0)
                             .unwrap();
                         assert_eq!(cache.charge_upload(&encoder, uploaded), uploaded);
                         assert_eq!(
@@ -80,6 +80,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
                                     4 * depth.bytes() as u64
                                 }
                         );
+                        r.uploads.finish(&encoder);
                         encoder.submit(&r.queue);
                         let read = crate::layer_tests::page_bytes(&r, &pending.texture);
                         assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
@@ -209,7 +210,7 @@ fn source_decode_preserves_all_integer_codes_and_extended_linear_rgb() {
 #[test]
 #[ignore = "hardware native source decode, upload and table residency benchmark"]
 fn native_source_decode_workloads() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     #[cfg(target_os = "linux")]
     let _affinity = pin_benchmark_thread();
     let scene = Scene::new(&r);
@@ -267,11 +268,12 @@ fn native_source_decode_workloads() {
                     let (_, pending) = cache.plan(&r, &source, [index % 5, index / 5]).unwrap();
                     if let Some(pending) = pending {
                         let uploaded = cache
-                            .encode(&r, &mut commands, &pending, &scene.binding, 0)
+                            .encode(&mut r, &mut commands, &pending, &scene.binding, 0)
                             .unwrap();
                         peak_upload = peak_upload.max(cache.charge_upload(&commands, uploaded));
                     }
                 }
+                r.uploads.finish(&commands);
                 commands.submit(&r.queue);
                 let cpu = start.elapsed().as_secs_f64() * 1000.;
                 r.device
@@ -375,7 +377,7 @@ fn raster_fixture(
     )
 }
 fn encode_pending(
-    r: &WgpuRasterizer,
+    r: &mut WgpuRasterizer,
     scene: &Scene,
     cache: &mut DecodedTiles,
     pending: &PendingTile,
@@ -393,6 +395,7 @@ fn encode_pending(
         .encode(r, encoder, pending, &scene.binding, 0)
         .unwrap();
     cache.charge_upload(encoder, count);
+    r.uploads.finish(encoder);
 }
 
 #[test]
@@ -422,7 +425,7 @@ fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
             .plan_raster(&r, tile, RgbSpace::Srgb, RgbSpace::Srgb)
             .unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        encode_pending(&r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
+        encode_pending(&mut r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
         encoder.submit(&r.queue);
     }
     r.wait_idle().unwrap();
@@ -454,7 +457,7 @@ fn neighboring_layer_tiles_stay_decoded_across_bounded_upload_submissions() {
 
 #[test]
 fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     let (first, bytes) = raster_fixture(SampleDepth::U16, AlphaAssociation::Straight, Some(32767));
@@ -464,7 +467,7 @@ fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() 
     let weak = Arc::downgrade(&first);
     let (decoded, pending) = cache.plan_raster(&r, &first, RgbSpace::ProPhoto, RgbSpace::Srgb).unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    encode_pending(&r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
+    encode_pending(&mut r, &scene, &mut cache, &pending.unwrap(), &mut encoder);
     encoder.submit(&r.queue);
     let original = crate::layer_tests::page_bytes(&r, &decoded.texture);
     drop(first);
@@ -483,7 +486,7 @@ fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() 
 
 #[test]
 fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
-    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     for space in RgbSpace::ALL {
@@ -511,7 +514,7 @@ fn native_raster_decode_preserves_codes_alpha_and_profile_meaning() {
                                 &r.device,
                                 &Default::default(),
                             );
-                            encode_pending(&r, &scene, &mut cache, &pending, &mut commands);
+                            encode_pending(&mut r, &scene, &mut cache, &pending, &mut commands);
                             commands.submit(&r.queue);
                         }
                         let actual = crate::layer_tests::page_bytes(&r, &tile.texture);
@@ -603,7 +606,7 @@ fn native_and_source_cache_share_slots_without_retaining_history_or_discarded_va
     );
 }
 
-fn check_cache_ownership(r: WgpuRasterizer) {
+fn check_cache_ownership(mut r: WgpuRasterizer) {
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     let mut source_builder = SourceBuilder::new(
@@ -650,7 +653,7 @@ fn check_cache_ownership(r: WgpuRasterizer) {
             identities.push(tile.texture.clone());
         }
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+        encode_pending(&mut r, &scene, &mut cache, &pending, &mut encoder);
         encoder.submit(&r.queue);
     }
     assert_eq!(identities.len(), DECODED_SLOTS);
@@ -663,7 +666,7 @@ fn check_cache_ownership(r: WgpuRasterizer) {
         .unwrap();
     let pending = pending.unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+    encode_pending(&mut r, &scene, &mut cache, &pending, &mut encoder);
     drop(pending);
     drop(encoder);
     let (_, pending) = cache
@@ -671,7 +674,7 @@ fn check_cache_ownership(r: WgpuRasterizer) {
         .unwrap();
     let pending = pending.unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    encode_pending(&r, &scene, &mut cache, &pending, &mut encoder);
+    encode_pending(&mut r, &scene, &mut cache, &pending, &mut encoder);
     drop(pending);
     encoder.submit(&r.queue);
     assert!(

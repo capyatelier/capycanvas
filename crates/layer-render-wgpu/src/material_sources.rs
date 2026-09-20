@@ -6,6 +6,25 @@ use super::*;
 use layer_core::{Point, Rect};
 use wgpu::util::DeviceExt;
 
+/// Dry contact metadata changes each batch, but its storage does not. One
+/// ordered upload replaces a separate GPU allocation/upload for every tile.
+#[derive(Default)]
+pub(super) struct DryRecords {
+    buffer: Option<wgpu::Buffer>,
+    stride: u64,
+}
+impl DryRecords {
+    pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
+
+    pub fn binding(&self, index: usize) -> wgpu::BufferBinding<'_> {
+        wgpu::BufferBinding {
+            buffer: self.buffer.as_ref().expect("dry tile records prepared before encoding"),
+            offset: index as u64 * self.stride,
+            size: NonZeroU64::new(160),
+        }
+    }
+}
+
 pub(super) struct Gather {
     fields: [(wgpu::Texture, wgpu::TextureView); 2],
     pages: wgpu::Buffer,
@@ -266,14 +285,47 @@ mod bounds_tests {
 }
 
 impl WgpuRasterizer {
+    pub(super) fn prepare_dry_records(
+        &mut self, batch: &DabBatch,
+        records: impl Iterator<Item = (PixelRect, std::ops::Range<u32>)> + Clone,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        if batch.style.execution != BrushExecution::Dry { return Ok(()); }
+        let records_buffer = &mut self.dry_records;
+        records_buffer.stride = u64::from(self.device.limits().min_uniform_buffer_offset_alignment.max(256));
+        let used = (records.clone().count() as u64).checked_mul(records_buffer.stride)
+            .filter(|size| *size <= self.device.limits().max_buffer_size)
+            .ok_or(GpuRasterError::SizeOverflow)?;
+        if used == 0 { return Ok(()); }
+        if records_buffer.buffer.as_ref().is_none_or(|buffer| buffer.size() < used) {
+            let size = used.next_power_of_two().min(self.device.limits().max_buffer_size);
+            records_buffer.buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("reusable dry material tile records"), size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        // Serialize directly into pooled mapped storage: no intermediate byte
+        // vector or second CPU copy on the drawing path.
+        self.uploads.write_mapped(encoder, records_buffer.buffer.as_ref().unwrap(), 0, used, |mapped| {
+            mapped.slice(..).fill(0);
+            for (index, (local, range)) in records.enumerate() {
+                let offset = index * records_buffer.stride as usize;
+                for (i, word) in [0, 0, range.start, range.len() as u32,
+                    local.min_x(), local.min_y(), local.max_x(), local.max_y()].into_iter().enumerate() {
+                    mapped.slice(offset + i * 4..offset + i * 4 + 4).copy_from_slice(&word.to_le_bytes());
+                }
+            }
+        })
+    }
+
     pub(super) fn material_source_binding(
         &mut self,
         batch_index: usize,
         batch: &DabBatch,
         dabs: &[Dab],
         coordinate: [u32; 2],
-        local: PixelRect,
-        dab_range: std::ops::Range<u32>,
+        record_index: usize,
         preview: bool,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
@@ -301,18 +353,8 @@ impl WgpuRasterizer {
         self.metrics.material_cpu_ms[0] += elapsed(started);
         if !distant {
             let started = timing.then(web_time::Instant::now);
-            let metadata = (batch.style.execution == BrushExecution::Dry).then(|| {
-                let header = [0u32, 0, dab_range.start, dab_range.len() as u32,
-                    local.min_x(), local.min_y(), local.max_x(), local.max_y()];
-                let mut bytes = [0u8; 160];
-                for (destination, word) in bytes.chunks_exact_mut(4).zip(header) {
-                    destination.copy_from_slice(&word.to_le_bytes());
-                }
-                self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("dry material page contacts"), contents: &bytes, usage: wgpu::BufferUsages::UNIFORM,
-                })
-            });
-            let result = self.material_bind_group(batch, coordinate, preview, None, metadata.as_ref(), encoder);
+            let metadata = (batch.style.execution == BrushExecution::Dry).then_some(record_index);
+            let result = self.material_bind_group(batch, coordinate, preview, None, metadata, encoder);
             self.metrics.material_cpu_ms[4] += elapsed(started);
             return result;
         }
@@ -379,7 +421,7 @@ impl WgpuRasterizer {
                 &self.dab_buffer,
                 &self.empty_scalar_view,
                 &gather.fields[current].1,
-                &gather.pages,
+                gather.pages.as_entire_binding(),
             );
             self.metrics.material_cpu_ms[2] += elapsed(started);
             let started = timing.then(web_time::Instant::now);

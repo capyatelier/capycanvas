@@ -239,6 +239,7 @@ impl RetainedLevel {
 pub(super) struct Cache {
     pub coarse: display_mips::Image,
     retained: Vec<RetainedLevel>,
+    complete_updates: Option<display_mips::CompleteUpdates>,
     retained_level: Option<u32>,
     fine: Option<Fine>,
     window: Option<Window>,
@@ -263,10 +264,12 @@ impl Cache {
                     * 16
             })
             .sum::<u64>();
-        let complete_bytes = pyramid_bytes + Self::base_bound(plan);
+        let record_bytes = display_mips::CompleteUpdates::record_bytes(&r.device, plan);
+        let complete_bytes = pyramid_bytes + Self::base_bound(plan) + record_bytes;
         let allowance = r.native_edit.as_ref().map_or(0, |native| native.display_complete_bytes);
         let complete = plan.extent.into_iter()
             .all(|v| v <= r.device.limits().max_texture_dimension_2d)
+            && record_bytes <= r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
             && complete_bytes <= allowance;
         // Partial admission is useful too: visible detail can coexist with
         // completed reduced levels without admitting the entire native image.
@@ -274,9 +277,8 @@ impl Cache {
         if Self::base_bound(plan) > limit {
             return Err(GpuRasterError::SizeOverflow);
         }
-        Ok(Self {
-            coarse: display_mips::Image::new(r, pipelines, plan),
-            retained: RetainedLevel::new(
+        let coarse = display_mips::Image::new(r, pipelines, plan);
+        let retained = RetainedLevel::new(
                 r,
                 plan,
                 if complete {
@@ -285,7 +287,16 @@ impl Cache {
                     limit.saturating_sub(DETAIL_BYTES)
                 },
                 complete,
-            ),
+            );
+        let complete_updates = retained.first().filter(|level| level.level == 0).map(|_| {
+            let views: Vec<_> = retained.iter().map(|level| &level.view)
+                .chain(std::iter::once(&coarse.view)).collect();
+            display_mips::CompleteUpdates::new(&r.device, pipelines, plan, &views)
+        });
+        Ok(Self {
+            coarse,
+            retained,
+            complete_updates,
             retained_level: None,
             fine: None,
             window: None,
@@ -303,6 +314,7 @@ impl Cache {
     pub fn storage_bytes(&self) -> u64 {
         self.coarse.storage_bytes()
             + self.retained_bytes()
+            + self.complete_updates.as_ref().map_or(0, |updates| updates.storage_bytes())
             + self.geometry.size()
             + self.fine.as_ref().map_or(0, Fine::bytes)
     }
@@ -354,6 +366,9 @@ impl Cache {
         view: ViewState,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<std::collections::BTreeSet<[u32; 2]>, GpuRasterError> {
+        // A failed frame may have queued reductions without submitting their
+        // source writes. Never carry that unencoded work into another frame.
+        if let Some(updates) = &mut self.complete_updates { updates.discard_pending(); }
         self.artwork_changed = true;
         let requested = Window::new(view, self.coarse.plan)?;
         if self.retained.first().is_some_and(|level| level.level == 0) {
@@ -556,6 +571,32 @@ impl Cache {
         source_origin: [u32; 2],
         coordinate: [u32; 2],
     ) -> Result<(), GpuRasterError> {
+        if let Some(updates) = &mut self.complete_updates {
+            let extent = self.coarse.plan.extent;
+            if coordinate.into_iter().zip(extent).any(|(c, n)| c >= n.div_ceil(PAGE_SIZE)) {
+                return Err(GpuRasterError::InvalidExtent);
+            }
+            let origin = coordinate.map(|v| v * PAGE_SIZE);
+            let valid: [u32; 2] = std::array::from_fn(|i| (extent[i] - origin[i]).min(PAGE_SIZE));
+            if source.format() != wgpu::TextureFormat::Rgba32Float
+                || source_origin.into_iter().zip(valid).zip([source.width(), source.height()])
+                    .any(|((start, n), size)| start.checked_add(n).is_none_or(|end| end > size)) {
+                return Err(GpuRasterError::InvalidExtent);
+            }
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x: source_origin[0], y: source_origin[1], z: 0 },
+                    ..source.as_image_copy()
+                },
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x: origin[0], y: origin[1], z: 0 },
+                    ..self.retained[0].texture.as_image_copy()
+                },
+                wgpu::Extent3d { width: valid[0], height: valid[1], depth_or_array_layers: 1 },
+            );
+            updates.tile(encoder, coordinate);
+            return Ok(());
+        }
         let reduced_detail = self.window.is_some_and(|window| window.level > 0);
         if self.artwork_changed || reduced_detail {
             self.coarse.write_tile(
@@ -642,6 +683,15 @@ impl Cache {
         }
 
         Ok(())
+    }
+    pub fn flush_updates(&mut self, encoder: &mut crate::submission::CommandEncoder) {
+        if let Some(updates) = &mut self.complete_updates { updates.flush(encoder); }
+    }
+    pub fn direct_target(&self) -> Option<&wgpu::TextureView> {
+        self.complete_updates.as_ref().map(|_| &self.retained[0].view)
+    }
+    pub fn direct_tile_written(&mut self, encoder: &mut crate::submission::CommandEncoder, coordinate: [u32; 2]) {
+        self.complete_updates.as_mut().expect("direct target admitted").tile(encoder, coordinate);
     }
     /// Publish newly filled slots only after the entire frame was submitted.
     pub fn finish_frame(&mut self) {

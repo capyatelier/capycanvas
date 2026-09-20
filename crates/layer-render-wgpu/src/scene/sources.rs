@@ -51,6 +51,7 @@ enum Pixels {
 pub(super) struct PendingTile {
     pixels: Pixels,
     pub texture: wgpu::Texture,
+    view: wgpu::TextureView,
     pub data: Option<[f32; 24]>,
     write: crate::submission::CacheWrite,
 }
@@ -191,6 +192,7 @@ impl DecodedTiles {
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Image(source.clone(), coordinate),
             texture: tile.texture.clone(),
+            view: tile.view.clone(),
             data: builtin_settings(source, coordinate, self.destination),
             write,
         });
@@ -214,6 +216,7 @@ impl DecodedTiles {
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space),
             texture: tile.texture.clone(),
+            view: tile.view.clone(),
             data: Some(rgb_settings(
                 space,
                 destination,
@@ -307,7 +310,7 @@ impl DecodedTiles {
 
     pub fn encode(
         &mut self,
-        r: &WgpuRasterizer,
+        r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         pending: &PendingTile,
         uniforms: &wgpu::BindGroup,
@@ -365,16 +368,7 @@ impl DecodedTiles {
             let decoded = r.device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
             let step = samples.depth.bytes();
             let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
-            let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("bounded integer source upload"),
-                size: bytes as u64,
-                usage: wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: true,
-            });
-            {
-                let mut mapped = buffer
-                    .get_mapped_range_mut(..)
-                    .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+            r.uploads.write_texture(encoder, &input.texture, PAGE_SIZE * 4 * step as u32, |mapped| {
                 if samples.channels == SourceChannels::Rgba {
                     mapped.copy_from_slice(&decoded);
                 } else {
@@ -390,17 +384,9 @@ impl DecodedTiles {
                             .copy_from_slice(&row[..row_bytes]);
                     }
                 }
-            }
-            buffer.unmap();
-            copy_upload(
-                encoder,
-                &buffer,
-                &input.texture,
-                PAGE_SIZE * 4 * step as u32,
-            );
-            let target = pending.texture.create_view(&Default::default());
+            })?;
             let attachments = [Some(attachment(
-                &target,
+                &pending.view,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             ))];
             let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
@@ -413,8 +399,7 @@ impl DecodedTiles {
             let Pixels::Image(source, coordinate) = &pending.pixels else {
                 unreachable!()
             };
-            let buffer = self.upload_icc(r, source, *coordinate)?;
-            copy_upload(encoder, &buffer, &pending.texture, PAGE_SIZE * 16);
+            self.upload_icc(r, source, *coordinate, encoder, &pending.texture)?;
             FLOAT_TILE_BYTES
         };
         pending.write.track(encoder);
@@ -423,10 +408,12 @@ impl DecodedTiles {
 
     fn upload_icc(
         &mut self,
-        r: &WgpuRasterizer,
+        r: &mut WgpuRasterizer,
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
-    ) -> Result<wgpu::Buffer, GpuRasterError> {
+        encoder: &mut crate::submission::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> Result<(), GpuRasterError> {
         let weak = Arc::downgrade(source);
         let index = if let Some(index) = self.decoders.iter().position(|(s, _)| s.ptr_eq(&weak)) {
             index
@@ -452,16 +439,7 @@ impl DecodedTiles {
             .decode_tile_cached(source, coordinate, &mut self.pixels, &r.device.source_samples)
             .map_err(GpuRasterError::Color)?;
         self.decoders.push_back(decoder);
-        let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bounded linear source upload"),
-            size: FLOAT_TILE_BYTES,
-            usage: wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
-        });
-        {
-            let mut mapped = buffer
-                .get_mapped_range_mut(..)
-                .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
+        r.uploads.write_texture(encoder, texture, PAGE_SIZE * 16, |mapped| {
             let mut row = [0u8; PAGE_SIZE as usize * 16];
             for (y, pixels) in self.pixels.chunks_exact(PAGE_SIZE as usize).enumerate() {
                 for (bytes, pixel) in row.chunks_exact_mut(16).zip(pixels) {
@@ -478,30 +456,8 @@ impl DecodedTiles {
                     .slice(y * row.len()..(y + 1) * row.len())
                     .copy_from_slice(&row);
             }
-        }
-        buffer.unmap();
-        Ok(buffer)
+        })
     }
-}
-
-fn copy_upload(
-    encoder: &mut crate::submission::CommandEncoder,
-    buffer: &wgpu::Buffer,
-    texture: &wgpu::Texture,
-    bytes_per_row: u32,
-) {
-    encoder.copy_buffer_to_texture(
-        wgpu::TexelCopyBufferInfo {
-            buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(PAGE_SIZE),
-            },
-        },
-        texture.as_image_copy(),
-        texture.size(),
-    );
 }
 
 pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), GpuRasterError> {
