@@ -30,10 +30,14 @@ struct ColorEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var form: JSON
     let use: (JSON) -> Void
-    init(value: JSON, documentSpace: String, use: @escaping (JSON) -> Void) {
+    let hdrUse: ((JSON, Double) -> Void)?
+    let viewing: JSON
+    @State private var intensityText: String
+    init(value: JSON, documentSpace: String, intensity: Double? = nil, viewing: JSON = JSON(), hdrUse: ((JSON, Double) -> Void)? = nil, use: @escaping (JSON) -> Void) {
         _form = State(initialValue: ColorUI.resolve(["type": "form", "request": [
-            "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "model": "document_rgb"]]))
-        self.use = use
+            "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "model": "document_rgb", "intensity": intensity as Any? ?? NSNull()]]))
+        self.use = use; self.hdrUse = hdrUse; self.viewing = viewing
+        _intensityText = State(initialValue: intensity.map { String(format: "%.2f", $0) } ?? "")
     }
     private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw]) }
     var body: some View {
@@ -49,8 +53,19 @@ struct ColorEditor: View {
                         ForEach(models.indices, id: \.self) { i in Text(models[i][1].string).tag(models[i][0].string) }
                     }.accessibilityIdentifier("color-input-model")
                     if !form["preview"].isNull {
-                        ColorSwatch(rgba: form["preview"]["rgba"]).frame(height: 48).accessibilityHidden(true)
-                        if !form["preview"]["in_gamut"].bool {
+                        if !form["draft"]["intensity"].isNull {
+                            HStack(spacing: 0) {
+                                VStack(spacing: 4) { Text("Base").font(.caption); HDRColorSwatch(color: form["base"], viewing: viewing) }
+                                VStack(spacing: 4) { Text("Adjusted").font(.caption); HDRColorSwatch(color: form["value"], viewing: viewing) }
+                            }.frame(height: 68)
+                            HStack {
+                                Text("Intensity (EV)")
+                                TextField("Intensity (EV)", text: $intensityText).textFieldStyle(.roundedBorder)
+                                    .accessibilityIdentifier("color-input-intensity")
+                                    .onChange(of: intensityText) { _, value in update(form["draft"].replacing("change_intensity", with: JSON(value))) }
+                            }
+                        } else { ColorSwatch(rgba: form["preview"]["rgba"]).frame(height: 48).accessibilityHidden(true) }
+                        if form["draft"]["intensity"].isNull && !form["preview"]["in_gamut"].bool {
                             Text("Outside the Display P3 preview gamut. The stored color is preserved.").font(.caption)
                         }
                     }
@@ -74,7 +89,10 @@ struct ColorEditor: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Use Color") { use(form["value"]) }.disabled(form["value"].isNull || !form["error"].isNull)
+                Button("Use Color") {
+                    if let hdrUse, !form["draft"]["intensity"].isNull { hdrUse(form["value"], form["draft"]["intensity"].number) }
+                    else { use(form["value"]) }
+                }.disabled(form["value"].isNull || !form["error"].isNull)
                     .keyboardShortcut(.defaultAction).accessibilityIdentifier("color-input-use")
             }
         }.padding(20).frame(minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 420, idealHeight: 520)

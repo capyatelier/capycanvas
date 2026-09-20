@@ -231,9 +231,10 @@ impl NativeHost {
         map.serialize_entry("zen_toolbars", &json!({"sections": []}))?;
         map.serialize_entry("application_menus", &menus)?;
         map.serialize_entry("header", &self.session.header_view())?;
+        map.serialize_entry("proof_panel", &layer_ui::color_management::proof_view(&self.session))?;
         map.serialize_entry("color_panel", &state.colors.view_in(self.ui_color_space))?;
         map.serialize_entry("document_options", &json!({"extent": state.settings.new_document.defaults.extent,
-            "creation": state.settings.new_document.form(),
+            "creation": state.settings.new_document.form_for(state.platform),
             "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
             "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
             "new_title": layer_ui::DocumentRequest::New.title(),

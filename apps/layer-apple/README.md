@@ -301,10 +301,11 @@ and default-button delivery for all four RGB spaces without a renderer or
 simulator. It covers unchanged precision, alpha edits, extended RGB values and
 invalid drafts. Modal dismissal and UIKit delivery remain separate UI checks.
 
-The Color panel and brush-color popup expose **Edit Color…** and **Palettes…**.
+The Color panel and brush-color popup expose **Edit Color…**.
 Paint entry uses the same tagged form, captures its foreground/background target,
-and rejects publication into a replacement document. Palette creation, naming,
-swatch storage and removal use the shared workspace library; previews never
+and rejects publication into a replacement document. HDR documents add intensity
+in EV and Base/Adjusted swatches. The palette popup is removed; previously saved
+palette data remains readable by the shared workspace library. Previews never
 replace the retained color definition. The former inline RGB sliders are removed.
 
 New Drawing exposes shared presets, dimensions, background and independent
@@ -313,8 +314,13 @@ validation before creating the document on the file worker. The focused
 `tests/color-workflows.swift` owner check exercises validation/retry/cancellation,
 all four tagged palette spaces, document adoption and fresh-owner persistence
 with temporary storage and Metal. Run it through `test-project-files.sh`.
-`EditorLaunchTests/testNativeSDRCreationAndPalettes` is the separate native-control
+`EditorLaunchTests/testNativeSDRCreationAndColorEditing` is the separate native-control
 workflow; owner checks alone do not qualify AppKit/UIKit control delivery.
+`EditorLaunchTests/testNativeHDRColor` covers native HDR conversion, color entry,
+proof/history controls and PQ export preview. The focused `tests/hdr-controls.swift`
+fixture checks EDR surface metadata, picker worker coalescing/cancellation and
+actual AppKit proof input. See the [Apple HDR validation record](../../docs/history/color-management-apple-m4-validation.md)
+for current hardware evidence and qualification limits.
 Full-app SDR tests require a Metal adapter with Float32 filtering and blending.
 The current iPad simulator lacks Float32 filtering and cannot run these workflows;
 use supported physical hardware for rendering-dependent iPad tests. Isolated

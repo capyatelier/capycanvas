@@ -39,6 +39,8 @@ the generated project in Xcode to select a run destination and launch the
 `CapyCanvas-Mac` or `CapyCanvas-iPad` scheme.
 
 Set `CAPY_CONFIGURATION=Release` for optimized Swift and Rust builds.
+For the color-management implementation and current validation evidence, see
+[Apple HDR validation](../history/color-management-apple-m4-validation.md).
 `CAPY_DESTINATION='id=DEVICE_UDID'` selects a device build destination, and
 `CAPY_DERIVED_DATA` changes the output directory. macOS builds use ad-hoc signing
 unless a team is supplied.
@@ -86,6 +88,9 @@ Xcode installation's `Contents/Developer` directory.
   relevant Xcode test with `-only-testing`; test editor actions rather than macOS
   system-menu mechanics. Inspect the `.xcresult` for failures and resolve any
   reported device-trust or automation/capture permission blocker before retrying.
+  On a physical iPad, keep the device awake and unlocked and enable
+  **Settings → Developer → Enable UI Automation**; Developer Mode alone does
+  not enable the XCTest UI runner.
   Simulator and injected input do not replace the
   [physical Pencil check](../../apps/layer-apple/INPUT.md#physical-pencil-smoke-check).
 - Use the [isolated drawing workloads](../../apps/layer-apple/PERFORMANCE.md#repeatable-native-drawing-workloads)

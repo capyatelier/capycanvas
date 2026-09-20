@@ -144,6 +144,27 @@ mod organization_tests {
         assert!(mask.validate().is_err());
     }
     #[test]
+    fn hdr_operation_colors_follow_document_depth_and_keep_alpha_bounded() {
+        let mut doc = Document::new("HDR operations", 64, 64);
+        let colors = [[-0.1, 4., 1., 0.5], [2., 0., 0.5, 1.]];
+        let operations = [
+            LayerOperationKind::Fill {color:colors[0],alpha_locked:false},
+            LayerOperationKind::Gradient {start:Point::default(),end:Point {x:32.,y:32.},colors,radial:false,alpha_locked:false},
+            LayerOperationKind::Figure(Figure {shape:crate::FigureShape::Rectangle,paint:crate::FigurePaint::Fill,start:Point::default(),end:Point {x:32.,y:32.},width:1.,colors,alpha_locked:false,erase:false}),
+        ];
+        for kind in operations {
+            let mut layer = doc.layer(doc.active_layer).unwrap().clone();
+            layer.pending_operations.push(LayerOperation {placement:Affine::IDENTITY,coverage:LayerMask::reveal_all(LayerId(99),Point::default()),kind});
+            doc.color.depth=crate::color::SampleDepth::U16;
+            assert!(doc.validate_layer(&layer).is_err());
+            doc.color.depth=crate::color::SampleDepth::F16;
+            assert!(doc.validate_layer(&layer).is_ok());
+        }
+        for invalid in [[f32::NAN,0.,0.,1.],[65505.,0.,0.,1.],[0.,0.,0.,1.01],[0.,0.,0.,-0.01]] {
+            assert!(!operation_color_valid(&invalid,true));
+        }
+    }
+    #[test]
     fn references_preserve_objects_and_ancestors_not_unrelated_siblings() {
         let mut doc = Document::new("references", 128, 128);
         let mut group = Layer::paint(LayerId(10), "Group");
@@ -686,6 +707,9 @@ impl LayerOperation {
         }
     }
     fn validate(&self) -> Result<(), DocumentError> {
+        self.validate_color(false)
+    }
+    fn validate_color(&self, hdr: bool) -> Result<(), DocumentError> {
         if self.placement.inverse().is_none() {
             return Err(DocumentError::InvalidLayerOperation("Invalid paint operation placement"));
         }
@@ -707,7 +731,7 @@ impl LayerOperation {
                 "Invalid selection transform",
             ));
         }
-        let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
+        let color_ok = |c: &[f32; 4]| operation_color_valid(c, hdr);
         let valid = match &self.kind {
             LayerOperationKind::ApplyMask => self.placement == Affine::IDENTITY,
             LayerOperationKind::Transform(transform) => {
@@ -723,7 +747,7 @@ impl LayerOperation {
                         self.coverage.default_coverage == 1.
                     }
             }
-            LayerOperationKind::Figure(figure) => figure.valid(),
+            LayerOperationKind::Figure(figure) => figure.valid_color(hdr),
             LayerOperationKind::Fill { color, .. } => color_ok(color),
             LayerOperationKind::Gradient {
                 start, end, colors, ..
@@ -746,6 +770,14 @@ impl LayerOperation {
                 "Invalid paint operation",
             ))
         }
+    }
+}
+/// Paint operations carry straight linear RGB; masks and alpha remain bounded.
+pub(crate) fn operation_color_valid(color: &[f32; 4], hdr: bool) -> bool {
+    if hdr {
+        crate::color::hdr::encode_pixel(*color).is_ok()
+    } else {
+        color.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
     }
 }
 impl LayerMask {
@@ -1196,7 +1228,7 @@ impl Document {
             return Err(DocumentError::InvalidLayerOperation("Invalid tiled source"));
         }
         for op in &layer.pending_operations {
-            op.validate()?;
+            op.validate_color(self.color.depth.is_float())?;
         }
         if let Some(mask) = &layer.mask {
             mask.validate()?;

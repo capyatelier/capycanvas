@@ -609,6 +609,7 @@ impl NativeHost {
         enum Query {
             ImageLayerDrop { target: u64, fraction: f32 },
             DocumentColor,
+            ProofPanel { action: Option<layer_ui::color_management::ProofAction> },
             RecoveryDocument,
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
@@ -729,6 +730,14 @@ impl NativeHost {
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
             Query::ApplicationLink { link } => json!(link.url()),
+            Query::ProofPanel {action} => {
+                if let Some(action)=action {
+                    let previous=self.session.state().revision;
+                    let change=layer_ui::color_management::proof_action(&mut self.session,action)?;
+                    self.apply_change(previous,change);
+                }
+                layer_ui::color_management::proof_view(&self.session)
+            },
             Query::DocumentColor => json!(self.session.engine().document().color),
             Query::RecoveryDocument => json!(self.session.recovery_document()),
             Query::ExportForm => json!(layer_ui::ExportForm::new(self.session.engine().document())),

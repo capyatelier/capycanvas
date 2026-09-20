@@ -1,27 +1,41 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkNativeSDRCreationAndPalettes(in app: XCUIApplication) {
+    @MainActor func checkNativeSDRCreationAndColorEditing(in app: XCUIApplication) {
         // Initial actions run only after native GPU startup completes.
         guard app.textFields["new-document-width"].waitForExistence(timeout: 60) else {
             XCTFail("The initial New Drawing form did not open after canvas startup")
             return
         }
         func replace(_ field: XCUIElement, _ value: String) {
-            workspaceActivate(field)
             #if os(macOS)
+            workspaceActivate(field)
             field.typeKey("a", modifierFlags: .command)
-            #else
-            field.tap(withNumberOfTaps: 3, numberOfTouches: 1)
-            #endif
             field.typeText(value)
+            #else
+            // Keyboard avoidance can move the iPad sheet during the first tap.
+            // Reacquire the field at its settled frame before sending keys.
+            let focused = app.textFields.matching(identifier: field.identifier)
+                .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+            let scroll = app.scrollViews.containing(.textField, identifier: field.identifier).firstMatch
+            for _ in 0..<2 {
+                if scroll.exists { revealEditorControl(field, in: scroll) }
+                workspaceActivate(field)
+                if focused.waitForExistence(timeout: 1) { break }
+            }
+            XCTAssertTrue(focused.waitForExistence(timeout: 3))
+            let current = field.value as? String ?? ""
+            let count = current == field.placeholderValue ? 0 : current.count
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: count) + value)
+            #endif
             XCTAssertEqual(field.value as? String, value)
         }
         func choose(_ id: String, _ label: String) {
-            workspaceActivate(app.descendants(matching: .any).matching(identifier: id).firstMatch)
             #if os(macOS)
+            workspaceActivate(app.descendants(matching: .any).matching(identifier: id).firstMatch)
             workspaceActivate(app.menuItems[label].firstMatch)
             #else
+            workspaceActivate(app.buttons[id].firstMatch)
             workspaceActivate(app.buttons[label].firstMatch)
             #endif
         }
@@ -58,21 +72,7 @@ extension XCTestCase {
         attachEditor(in: app, name: "sdr-tagged-paint")
         workspaceActivate(app.buttons["Cancel"].firstMatch)
         XCTAssertTrue(alpha.waitForNonExistence(timeout: 10))
-        workspaceActivate(app.buttons["paint-palettes"].firstMatch)
-        let name = app.textFields["color-library-name"]
-        replace(name, "Studio colors")
-        workspaceActivate(app.buttons["color-library-new"])
-        replace(name, "Retained ink")
-        workspaceActivate(app.buttons["color-library-store"])
-        let swatch = app.buttons.matching(NSPredicate(format: "identifier MATCHES %@", "color-swatch-[0-9]+" )).firstMatch
-        XCTAssertTrue(swatch.waitForExistence(timeout: 10))
-        attachEditor(in: app, name: "sdr-palette-stored")
-        workspaceActivate(swatch)
-        XCTAssertTrue(name.waitForNonExistence(timeout: 10))
-        workspaceActivate(app.buttons["paint-edit-color"].firstMatch)
-        XCTAssertTrue(alpha.waitForExistence(timeout: 10))
-        XCTAssertEqual(alpha.value as? String, "37", "Using a palette color must preserve alpha")
-        workspaceActivate(app.buttons["Cancel"].firstMatch)
+        XCTAssertFalse(app.buttons["paint-palettes"].exists, "The picker uses Edit Color instead of a palette popup")
         #if os(macOS)
         app.typeKey("n", modifierFlags: .command)
         #else

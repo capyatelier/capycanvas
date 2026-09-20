@@ -77,7 +77,10 @@ struct SettingsView: View {
                     }
                     if model["page"].string == "color" {
                         Section("Display Details") {
-                            LabeledContent("Canvas and color previews", value: "Display P3 · SDR")
+                            LabeledContent("Canvas and color previews", value: store.snapshot["color_panel"]["hdr"].bool ? "Extended linear sRGB · HDR" : "Display P3 · SDR")
+                            if store.snapshot["color_panel"]["hdr"].bool {
+                                LabeledContent("Current display headroom", value: String(format: "%.1f× SDR white", store.displayHeadroom))
+                            }
                             LabeledContent("Screen", value: store.displayDetails.screen)
                             LabeledContent("Display conversion", value: store.displayDetails.destination)
                             Text("The system converts tagged colors for this display, including sRGB screens. Document and export colors are independent of the screen.").font(.caption).foregroundStyle(.secondary)

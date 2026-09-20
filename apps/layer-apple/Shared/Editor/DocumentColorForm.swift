@@ -111,7 +111,7 @@ struct DocumentColorForm: View {
             }.accessibilityIdentifier("document-color-space")
         }
         if editor.operation == "depth" {
-            FormPicker("Bit depth", selection: $depth) { Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16") }
+            FormPicker("Bit depth", selection: $depth) { Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16"); Text("16-bit float HDR").tag("F16") }
                 .accessibilityIdentifier("document-color-depth")
             if depth == "U8" {
                 FormPicker("Dither", selection: $dither) { Text("None").tag("None"); Text("Stochastic").tag("Stochastic8") }

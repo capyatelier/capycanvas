@@ -6,7 +6,8 @@ struct LayerPropertiesPanel: View {
     @ObservedObject var store: EditorStore
     @State private var selectedCurve = ""
     private var view: JSON { store.state["layer_properties"] }
-    private var controls: [JSON] { view["controls"].array }
+    private var controls: [JSON] { view["controls"].array.filter { $0["section"].string != "Advanced" } }
+    private var advanced: [JSON] { view["controls"].array.filter { $0["section"].string == "Advanced" } }
     private var curves: [JSON] { controls.filter { $0["kind"]["kind"].string == "curve" } }
     var body: some View {
         let epoch = store.state["document_file"]["epoch"].uint
@@ -18,7 +19,8 @@ struct LayerPropertiesPanel: View {
                     background: EditorPalette(source: store.state["palette"])["input"]) {
                     selectedCurve = curves[$0]["key"].string
                 }
-                CurveProperty(store: store, layer: view["layer"].uint, epoch: epoch, control: curve)
+                CurveProperty(store: store, layer: view["layer"].uint, epoch: epoch, control: curve,
+                    maximum: view["curve_max"].isNull ? nil : view["curve_max"].number)
                     .id("\(epoch):\(view["layer"].uint):\(curve["key"].string)")
             }
             ForEach(controls.indices, id: \.self) { index in
@@ -30,6 +32,15 @@ struct LayerPropertiesPanel: View {
                     }
                     PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
                         .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
+                }
+            }
+            if !advanced.isEmpty {
+                DisclosureGroup("Advanced") {
+                    ForEach(advanced.indices, id: \.self) { index in
+                        let control = advanced[index]
+                        PropertyField(store: store, layer: view["layer"].uint, epoch: epoch, control: control)
+                            .id("\(epoch):\(view["layer"].uint):\(control["key"].string):\(control["kind"]["kind"].string)")
+                    }
                 }
             }
         }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
@@ -102,6 +113,7 @@ private struct CurveProperty: View {
     let layer: UInt64
     let epoch: UInt64
     let control: JSON
+    let maximum: Double?
     @Environment(\.isEnabled) private var enabled
     @GestureState private var contact = false
     @State private var selected: Int?
@@ -129,6 +141,23 @@ private struct CurveProperty: View {
                         grid.move(to: CGPoint(x: 0, y: size.height * fraction)); grid.addLine(to: CGPoint(x: size.width, y: size.height * fraction))
                     }
                     context.stroke(grid, with: .color(palette["text"].opacity(0.2)), lineWidth: 1)
+                    let ink = palette["text"].opacity(0.7)
+                    if let maximum, maximum > 0 {
+                        let white = 1 / maximum
+                        var reference = Path()
+                        reference.move(to: CGPoint(x: white * size.width, y: 0))
+                        reference.addLine(to: CGPoint(x: white * size.width, y: size.height))
+                        reference.move(to: CGPoint(x: 0, y: (1 - white) * size.height))
+                        reference.addLine(to: CGPoint(x: size.width, y: (1 - white) * size.height))
+                        context.stroke(reference, with: .color(ink), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        context.draw(Text("SDR white · 0 EV").font(.system(size: 11)).foregroundColor(ink),
+                            at: CGPoint(x: 5, y: 5), anchor: .topLeading)
+                        context.draw(Text(String(format: "%.0f · %+.0f EV", maximum, log2(maximum))).font(.system(size: 11)).foregroundColor(ink),
+                            at: CGPoint(x: size.width - 5, y: size.height - 5), anchor: .bottomTrailing)
+                    } else {
+                        context.draw(Text("Output").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: 5, y: 5), anchor: .topLeading)
+                        context.draw(Text("Input").font(.system(size: 11)).foregroundColor(ink), at: CGPoint(x: size.width - 5, y: size.height - 5), anchor: .bottomTrailing)
+                    }
                     var curve = Path()
                     for (index, p) in control["plot"].array.enumerated() {
                         let point = CGPoint(x: p[0].number * size.width, y: (1 - p[1].number) * size.height)

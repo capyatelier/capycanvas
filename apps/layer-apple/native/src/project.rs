@@ -509,7 +509,6 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         let ready = imported.as_ref().ok_or("Document preparation is incomplete")?;
         if ready.interpretation_required(context.photo_policy).is_some() { return Ok(()); }
         ready.project.validate(limits)?;
-        layer_ui::require_sdr_host(&ready.project.document, "Apple hosts")?;
         *source = ready.source;
         let project = imported.take().unwrap().project;
         let environment = environment.take().unwrap();

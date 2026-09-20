@@ -21,13 +21,15 @@ struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
-    working_space: layer_core::color::RgbSpace,
+    working_color: layer_core::color::DocumentColor,
 }
 
 #[derive(Default)]
 pub struct MetalHost {
     pub(crate) proof: layer_ui::proof_workflow::ProofView,
     surface: Option<Surface>,
+    pub(crate) local_tone: crate::local_tone::LocalTone,
+    headroom: f32,
     instance: Option<wgpu::Instance>,
     cursor: CanvasCursor,
     blank_presented: bool,
@@ -42,6 +44,23 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 impl MetalHost {
+    pub(crate) fn set_headroom(&mut self,host:&mut NativeHost,headroom:f32)->Result<(),String>{
+        if !headroom.is_finite() || !(1. ..=100.).contains(&headroom){return Err("Invalid display headroom".into());}
+        if self.headroom!=headroom {
+            self.headroom=headroom;host.session.set_hdr_display_available(headroom>1.);
+            host.invalidate_snapshot();host.dirty=true;
+        }
+        Ok(())
+    }
+    pub(crate) fn poll_color(&mut self,host:&mut NativeHost)->Result<bool,String>{
+        let changed=self.local_tone.tick(host)?;
+        if changed {host.dirty=true;}
+        Ok(changed)
+    }
+    fn encoding(color:layer_core::color::DocumentColor)->SdrSurfaceColor {
+        if color.depth.is_float(){SdrSurfaceColor::ExtendedLinearSrgb}else{SdrSurfaceColor::DisplayP3}
+    }
+
     /// Each device records failures separately; a retired callback cannot stop
     /// its replacement. All session changes still happen on the serial owner.
     pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, mut renderer: WgpuRasterizer) -> Result<(), String> {
@@ -58,6 +77,7 @@ impl MetalHost {
         let previous = host.session.state().revision;
         let (retired, change) = host.session.replace_renderer(layer_host::Renderer(Some(renderer)))?;
         host.apply_change(previous, change);
+        self.local_tone.clear();
         self.failure = failure;
         self.timing = None;
         self.blank_presented = false;
@@ -88,6 +108,7 @@ impl MetalHost {
         // Retire capture/encoder resources on a worker. Their completion can
         // wait, but already captured immutable rasters remain saveable.
         let suspension = host.suspend_renderer();
+        self.local_tone.clear();
         self.surface = None;
         self.timing = None;
         let retired = host.session.renderer_mut().0.take();
@@ -225,14 +246,16 @@ impl MetalHost {
         }
         // Metal advertises P3 SDR for its native formats on both Apple hosts.
         // The compositor handles destination-profile changes without touching artwork.
-        config.color_space = SdrSurfaceColor::DisplayP3.surface_color_space();
+        let encoding=Self::encoding(gpu.document_color());
+        if gpu.document_color().depth.is_float(){config.format=wgpu::TextureFormat::Rgba16Float;}
+        config.color_space = encoding.surface_color_space();
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::for_surface(gpu, config.format, SdrSurfaceColor::DisplayP3).map_err(error)?;
+        let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(error)?;
         self.surface = Some(Surface {
             surface,
             config,
             presenter,
-            working_space: gpu.document_color().space,
+            working_color: gpu.document_color(),
         });
         host.error = None;
         host.dirty = true;
@@ -280,6 +303,7 @@ impl MetalHost {
         presentation: u64,
     ) -> Result<(bool, [u64; 5]), String> {
         self.observe_failure(host, true);
+        self.poll_color(host)?;
         if host.session.rendering_suspended() { return Ok((false, [0; 5])); }
         if (!host.dirty && host.startup.complete) || self.surface.is_none() {
             return Ok((false, [0; 5]));
@@ -325,6 +349,8 @@ impl MetalHost {
         };
         let proof = self.proof.lut(&host.session);
         let (proof_enabled, gamut) = (host.session.state().soft_proof, host.session.state().gamut_warning);
+        let rendition=host.session.engine().document().color.depth.is_float().then(||host.session.effective_sdr_rendition());
+        let headroom=if host.session.state().preview_sdr || proof_enabled || gamut {1.} else {self.headroom.max(1.)};
         let surface = self.surface.as_mut().unwrap();
         let gpu = host
             .session
@@ -332,10 +358,16 @@ impl MetalHost {
             .0
             .as_ref()
             .ok_or("Missing Metal renderer")?;
-        if surface.working_space != gpu.document_color().space {
-            surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, SdrSurfaceColor::DisplayP3).map_err(error)?;
-            surface.working_space = gpu.document_color().space;
+        if surface.working_color != gpu.document_color() {
+            let encoding=Self::encoding(gpu.document_color());
+            surface.config.format=if gpu.document_color().depth.is_float(){wgpu::TextureFormat::Rgba16Float}else{wgpu::TextureFormat::Bgra8UnormSrgb};
+            surface.config.color_space=encoding.surface_color_space();
+            surface.surface.configure(gpu.device(),&surface.config);
+            surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, encoding).map_err(error)?;
+            surface.working_color = gpu.document_color();
         }
+        surface.presenter.set_hdr_view(gpu,rendition,headroom).map_err(error)?;
+        surface.presenter.set_local_tone_guide(gpu,self.local_tone.guide.clone()).map_err(error)?;
         if [view.width_px, view.height_px] != [surface.config.width, surface.config.height] {
             surface.config.width = view.width_px;
             surface.config.height = view.height_px;

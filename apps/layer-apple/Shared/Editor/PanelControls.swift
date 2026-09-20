@@ -5,7 +5,10 @@ struct BrushColorButton: View {
     let label: String
     var body: some View {
         Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
-            ColorSwatch(rgba: store.paintPreview)
+            Group {
+                if store.snapshot["color_panel"]["hdr"].bool { HDRColorSwatch(color: store.snapshot["color_panel"]["definition"], viewing: store.colorViewing) }
+                else { ColorSwatch(rgba: store.paintPreview) }
+            }
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
                 .background(EditorPalette(source: store.state["palette"])["button"].opacity(13 / 255),
@@ -30,7 +33,8 @@ struct PanelControls: View {
             }
     }
     @ViewBuilder private var contents: some View {
-        if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof) }
+        else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
                 AdjustmentPanel(store: store)
@@ -76,7 +80,6 @@ struct PanelControls: View {
         case "color_wheel":
             VStack(alignment: .leading, spacing: 8) {
                 ColorPanel(store: store)
-                PaintColorControls(store: store)
             }.frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)

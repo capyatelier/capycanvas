@@ -1,6 +1,7 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
+mod local_tone;
 
 /// SDR viewing contract shared by canvas, UI values and image transports.
 /// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
@@ -178,6 +179,31 @@ pub extern "C" fn capy_apple_color_layout(size: f32) -> *mut c_char {
     .flatten()
     .unwrap_or(std::ptr::null_mut())
 }
+/// Shared dial hit testing: 0 misses, 1 center, 2 brightness, 3 color.
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_apple_parameter_hit(x:f32,y:f32,size:f32,hdr:bool)->u32 {
+    if hdr { u32::from(layer_ui::HdrIntensityArc::new(size).is_some_and(|a|a.contains([x,y]))) }
+    else {layer_ui::color_management::dial_hit(size,[x,y])}
+}
+/// # Safety
+/// Caller supplies exactly edge²*4 writable bytes. This is a disposable UI texture.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_proof_texture(edge:u32,bytes:*mut u8,count:usize)->bool {
+    if edge==0 || edge>512 || bytes.is_null() || count!=(edge as usize).pow(2)*4 {return false;}
+    let texture=layer_ui::proof_panel::sdr_direction_texture(edge);
+    unsafe {std::ptr::copy_nonoverlapping(texture.as_ptr(),bytes,count)};
+    true
+}
+/// # Safety
+/// Borrowed JSON and side²*4 Float32 output components, exclusively writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_hdr_field(side:u32,request:*const c_char,pixels:*mut f32,count:usize,operation:u32)->bool {
+    if side==0 || side>2048 || pixels.is_null() || count!=(side as usize).pow(2)*4 || request.is_null(){return false;}
+    let Ok(source)=unsafe{CStr::from_ptr(request)}.to_str() else{return false;};
+    let Ok(request)=serde_json::from_str::<layer_ui::color_management::PickerField>(source) else{return false;};
+    let pixels=unsafe{std::slice::from_raw_parts_mut(pixels.cast::<[f32;4]>(),count/4)};
+    match operation {0=>request.render(side,pixels),1=>request.render_base(side,pixels),2=>request.map(pixels),_=>Err("Unknown field operation".into())}.is_ok()
+}
 /// Stateless display-encoded wheel field. No editor, GPU or file access.
 /// # Safety
 /// `rgba` must point to `count` writable bytes exclusively borrowed for this call.
@@ -270,6 +296,11 @@ pub unsafe extern "C" fn capy_apple_request(
                 Some(serde_json::to_value(reply).map_err(|e| e.to_string())?)
             }
             2 => Some(match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("display_headroom") => {
+                    let headroom=value["value"].as_f64().ok_or("Missing display headroom")? as f32;
+                    a.metal.set_headroom(&mut a.host,headroom)?;
+                    serde_json::Value::Null
+                },
                 Some("proof_form") => layer_ui::proof_workflow::proof_form(&a.host.session),
                 Some("proof_status") => serde_json::to_value(a.metal.proof.observe(&a.host.session)).map_err(|e| e.to_string())?,
                 _ => a.host.query(value)?,
@@ -443,7 +474,9 @@ pub unsafe extern "C" fn capy_apple_poll_renderer(app: *mut CapyApple) -> i32 {
     app.perform(|a| {
         a.gpu_operation(|a| {
             a.metal.observe_failure(&mut a.host, true);
-            Ok(i32::from(a.host.session.rendering_suspended()))
+            let changed=a.metal.poll_color(&mut a.host)?;
+            if changed {a.host.invalidate_snapshot();}
+            Ok(i32::from(changed || a.host.session.rendering_suspended()))
         })
     }).unwrap_or(-1)
 }

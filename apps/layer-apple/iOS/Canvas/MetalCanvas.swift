@@ -49,6 +49,7 @@ final class CanvasView: UIView {
         addGestureRecognizer(hover)
         installIndirectGestures()
         store.wake = { [weak self] in self?.wake() }
+        store.observeDisplayHeadroom = { [weak self] in self?.updateHeadroom() }
         store.focusCanvas = { [weak self] in
             guard let self, self.window?.isKeyWindow == true,
                 self.window?.rootViewController?.presentedViewController == nil else { return }
@@ -168,7 +169,14 @@ final class CanvasView: UIView {
         contacts.removeAll(); ignoredContacts.removeAll()
     }
     func wake() { frames.wake() }
+    private func updateHeadroom() {
+        let value = Double(window?.screen.currentEDRHeadroom ?? 1).clampedHeadroom
+        if store.displayHeadroom != value {
+            store.displayHeadroom = value; store.native?.displayHeadroom(value)
+        }
+    }
     @objc private func tick(_ link: CADisplayLink) {
+        updateHeadroom()
         frames.tick(target: link.targetTimestamp)
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 1) }

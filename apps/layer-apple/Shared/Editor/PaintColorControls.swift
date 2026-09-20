@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One entry point shared by the Color panel, brush controls and toolbar popup.
+/// Color entry captures the document and paint slot. Cancel never publishes a draft.
 struct PaintColorControls: View {
     @ObservedObject var store: EditorStore
+    var compact = false
     @State private var selection: Selection?
     private struct Selection: Identifiable {
         let id = UUID()
@@ -10,38 +11,32 @@ struct PaintColorControls: View {
         let slot: String
         let color: JSON
         let space: String
-        let palettes: Bool
+        let intensity: Double?
     }
-    private func open(palettes: Bool) {
-        let colors = store.state["colors"]
-        let slot = colors["slot"].string == "background" ? "background" : "foreground"
+    private func open() {
+        let colors = store.state["colors"], panel = store.snapshot["color_panel"]
+        let slot = colors["paint_slot"].string == "background" ? "background" : "foreground"
         selection = Selection(epoch: store.state["document_file"]["epoch"].uint,
-            slot: slot, color: colors[slot], space: colors["rgb_space"].string, palettes: palettes)
+            slot: slot, color: colors[slot], space: colors["rgb_space"].string,
+            intensity: panel["hdr"].bool ? panel["intensity"].number : nil)
     }
-    private func use(_ color: JSON, for selection: Selection) {
+    private func use(_ color: JSON, intensity: Double? = nil, for selection: Selection) {
         self.selection = nil
         guard store.state["document_file"]["epoch"].uint == selection.epoch else { return }
-        store.edit(["type": "color", "action": ["op": "set_slot", "slot": selection.slot, "color": color.raw]]) {
-            if let error = $0 { store.failure = error }
-        }
-    }
-    @ViewBuilder private var actions: some View {
-        Button("Edit Color…") { open(palettes: false) }.accessibilityIdentifier("paint-edit-color")
-        Button("Palettes…") { open(palettes: true) }.accessibilityIdentifier("paint-palettes")
+        var action: [String: Any] = ["op": intensity == nil ? "set_slot" : "set_slot_intensity", "slot": selection.slot, "color": color.raw]
+        if let intensity { action["stops"] = intensity }
+        store.edit(["type": "color", "action": action]) { if let error = $0 { store.failure = error } }
     }
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack { actions }
-            VStack(alignment: .leading) { actions }
-        }.buttonStyle(.bordered).frame(maxWidth: .infinity, alignment: .leading)
+        Button(action: open) {
+            if compact { Image(systemName: "square.and.pencil").resizable().scaledToFit().padding(3).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { Text("Edit Color…") }
+        }.buttonStyle(.plain).accessibilityLabel("Edit Color").accessibilityIdentifier("paint-edit-color")
+            .help("Edit Color…")
             .sheet(item: $selection) { selection in
-                Group {
-                    if selection.palettes {
-                        ColorLibraryView(store: store, slot: selection.slot) { use($0, for: selection) }
-                    } else {
-                        ColorEditor(value: selection.color, documentSpace: selection.space) { use($0, for: selection) }
-                    }
-                }.modifier(EditorPopupPresentation())
+                ColorEditor(value: selection.color, documentSpace: selection.space, intensity: selection.intensity,
+                    viewing: store.colorViewing, hdrUse: { color, stops in use(color, intensity: stops, for: selection) }) { use($0, for: selection) }
+                    .modifier(EditorPopupPresentation())
             }
     }
 }

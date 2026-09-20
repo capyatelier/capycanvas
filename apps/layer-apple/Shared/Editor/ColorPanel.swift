@@ -5,6 +5,7 @@ struct ColorPanel: View {
     @StateObject private var resources = ColorPanelLayoutCache()
     @FocusState private var readoutFocused: Bool
     private var model: JSON { store.snapshot["color_panel"] }
+    private var hdr: Bool { model["hdr"].bool }
     private var context: String {
         "\(store.state["document_file"]["epoch"].uint):\(model["rgb_space"].string):\(model["shape"].string):\(store.state["colors"]["paint_slot"].string)"
     }
@@ -20,11 +21,13 @@ struct ColorPanel: View {
     }
     var body: some View {
         GeometryReader { allocation in
-            let side = max(128, min(allocation.size.width, allocation.size.height))
-            let layout = resources.layout(side: side)
+            let full = ColorUI.resolve(["type": "picker_layout", "size": max(128, allocation.size.width), "hdr": hdr])
+            let side = max(128, allocation.size.width * min(1, allocation.size.height / max(1, full["height"].number)))
+            let spec = resources.layout(side: side, hdr: hdr)
+            let layout = spec["layout"], height = spec["height"].number
             let palette = EditorPalette(source: store.state["palette"])
             ZStack(alignment: .topLeading) {
-                ColorWheelDrawing(model: model, bounds: layout["wheel"])
+                ColorWheelDrawing(model: model, bounds: layout["wheel"], viewing: hdr ? store.colorViewing : JSON())
                     .frame(width: side, height: side).allowsHitTesting(false)
                 ColorWheelInput(shape: ColorWheelShape(model["shape"].string).rawValue, context: context,
                     value: captureState ?? model["readout_description"].string) { part, point, size in
@@ -35,8 +38,10 @@ struct ColorPanel: View {
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {
-                        ColorPaintPreview(rgba: swatch["rgba"])
-                            .modifier(ColorPanelMeasurement(id: "paint-" + slot))
+                        Group {
+                            if hdr { HDRColorSwatch(color: slot == "transparent" ? JSON(["space": "Srgb", "rgba": [0, 0, 0, 0]]) : store.state["colors"][slot], viewing: store.colorViewing).clipShape(Circle()) }
+                            else { ColorPaintPreview(rgba: swatch["rgba"]) }
+                        }.modifier(ColorPanelMeasurement(id: "paint-" + slot))
                             .padding(slot == "foreground" ? 3 : 1)
                             .contentShape(Circle())
                     }.buttonStyle(ColorPanelButtonStyle(kind: .paint(swatch["selected"].bool), palette: palette))
@@ -46,6 +51,8 @@ struct ColorPanel: View {
                         .accessibilityIdentifier("color-" + slot)
                         .colorPlaced(layout[slot], id: slot)
                 }
+                PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
+                if hdr { HDRIntensityArc(store: store, geometry: spec["arc"], size: side).frame(width: side, height: height) }
                 ForEach(0..<2, id: \.self) { index in
                     let shape = model["other_shapes"][index].string
                     Button { color(["op": "shape", "shape": shape]) } label: {
@@ -78,9 +85,9 @@ struct ColorPanel: View {
                     .accessibilityLabel(model["readout_description"].string)
                     .accessibilityValue(model["readout_label"].string).accessibilityIdentifier("color-readout")
                     .colorPlaced(layout["readout"], id: "readout")
-            }.frame(width: side, height: side, alignment: .topLeading)
+            }.frame(width: side, height: height, alignment: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.aspectRatio(1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
+        }.aspectRatio(hdr ? 226 / max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) : 1, contentMode: .fit).frame(minWidth: 128, minHeight: 128)
             .modifier(ColorPanelMeasurement(id: "panel"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
     }

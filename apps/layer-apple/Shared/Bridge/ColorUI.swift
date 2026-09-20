@@ -23,3 +23,7 @@ enum ColorUI {
         resolve(["type": "preview", "colors": [color.raw], "display_space": "DisplayP3"])[0]
     }
 }
+
+extension Double {
+    var clampedHeadroom: Double { isFinite ? min(100, max(1, self)) : 1 }
+}

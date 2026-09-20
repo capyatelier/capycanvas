@@ -490,7 +490,7 @@ impl Panel {
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if self == Self::Proof { return matches!(platform, crate::Platform::Gtk | crate::Platform::Generic); }
+        if self == Self::Proof { return crate::color_management::enabled(platform) || platform == crate::Platform::Generic; }
         if matches!(
             self,
             Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands

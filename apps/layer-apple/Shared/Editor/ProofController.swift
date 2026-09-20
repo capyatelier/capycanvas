@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor final class ProofController: ObservableObject {
     @Published private(set) var setupID: UInt64?
     @Published private(set) var form = JSON()
+    @Published private(set) var formRevision: UInt64 = 0
     @Published private(set) var status = ""
     @Published private(set) var busy = false
     @Published private(set) var committing = false
@@ -13,6 +14,9 @@ import SwiftUI
     private let worker = DispatchQueue(label: "art.capycanvas.proof", qos: .userInitiated)
     private var task: NativeProjectTask?
     private var serial: UInt64 = 0
+    private var pendingRecipe: JSON?
+    private var documentKey = ""
+    private var lastSDRRequest: UInt64 = 0
     private var generation: UInt64?
     private var gpuReady = false
     private var paused = false
@@ -23,17 +27,50 @@ import SwiftUI
 
     func receive(_ state: JSON, gpuReady: Bool) {
         self.gpuReady = gpuReady
+        let key = String(state["document_file"]["epoch"].uint)
+        if key != documentKey {
+            pendingRecipe = nil; cancelWork(); generation = nil
+            documentKey = key
+            if !form.isNull { loadForm() }
+        }
+        if let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "sdr_rendition" }), request["id"].uint != lastSDRRequest {
+            lastSDRRequest = request["id"].uint
+            action(["type": "mode", "mode": "sdr"]); reveal()
+            store?.dispatch(["type": "complete_request", "id": lastSDRRequest, "error": NSNull()])
+        }
         let next = state["requests"].array.first { $0["kind"]["type"].string == "soft_proof_setup" }?["id"].uint
         if next != setupID {
-            cancelWork(); setupID = next; form = JSON(); error = nil
+            cancelWork(); setupID = next; error = nil
             if let next {
+                busy = pendingRecipe != nil
+                reveal()
+                if store?.snapshot["proof_panel"]["mode"].string == "off" { action(["type": "mode", "mode": "print"]) }
                 store?.query(["type": "proof_form"]) { [weak self] value in
                     guard let self, setupID == next else { return }
-                    form = value
+                    acceptForm(value)
+                    if let recipe = pendingRecipe { pendingRecipe = nil; busy = false; apply(recipe) }
+                    else { store?.dispatch(["type": "complete_request", "id": next, "error": NSNull()]) }
                 }
             }
         }
         if setupID != nil || state["soft_proof"].bool || state["gamut_warning"].bool || !status.isEmpty || busy { sync() }
+    }
+    func action(_ action: [String: Any]) {
+        store?.query(["type": "proof_panel", "action": action]) { [weak self] _ in self?.store?.wake?() }
+    }
+    func reveal() { action(["type": "reveal"]) }
+    func loadForm() {
+        let key = documentKey
+        store?.query(["type": "proof_form"]) { [weak self] value in
+            guard let self, documentKey == key else { return }
+            acceptForm(value)
+        }
+    }
+    private func acceptForm(_ value: JSON) { form = value; formRevision &+= 1 }
+    func applyLive(_ recipe: JSON) {
+        guard !committing else { return }
+        if setupID != nil { apply(recipe) }
+        else { pendingRecipe = recipe; busy = true; store?.invoke("soft_proof_setup") }
     }
     func setPaused(_ value: Bool) {
         paused = value
@@ -44,8 +81,9 @@ import SwiftUI
         serial &+= 1; task?.cancel(); task = nil; busy = false
     }
     func close() {
+        pendingRecipe = nil
         guard !committing, let id = setupID else { return }
-        cancelWork(); setupID = nil; form = JSON(); error = nil
+        cancelWork(); setupID = nil; error = nil
         store?.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
         store?.focusCanvas?()
     }
@@ -59,6 +97,7 @@ import SwiftUI
             guard !paused, !value.isNull else { return }
             status = value["text"].string
             if setupID == nil && !committing {
+                if generation != value["generation"].uint && !form.isNull { loadForm() }
                 if generation != value["generation"].uint || !value["needed"].bool || !gpuReady { cancelWork() }
                 generation = value["generation"].uint
                 if value["needed"].bool && gpuReady && !busy { start(id: 0, recipe: nil) }
@@ -67,6 +106,7 @@ import SwiftUI
         }
     }
     func apply(_ recipe: JSON) {
+        if setupID == nil { applyLive(recipe); return }
         guard !busy, !committing, let id = setupID else { return }
         cancelWork(); start(id: id, recipe: recipe)
     }
@@ -114,8 +154,9 @@ import SwiftUI
                         native.finishProof(task, preserved: previous != nil) { [weak self] failure in
                             DispatchQueue.main.async {
                                 guard let self, self.serial == token else { return }
-                                if failure == nil && id != 0 { self.setupID = nil; self.form = JSON() }
+                                if failure == nil && id != 0 { self.setupID = nil }
                                 self.finished(token, error: failure)
+                                if failure == nil { self.loadForm() }
                                 self.store?.wake?()
                             }
                         }

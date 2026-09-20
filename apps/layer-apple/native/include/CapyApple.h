@@ -78,6 +78,10 @@ char *capy_apple_color_ui(const char *json);
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t shape);
 /* Shared logical panel layout. Owned JSON, NULL for invalid input.
    Cache by size; release with capy_apple_string_free. */
+// operation: 0 = generate and map; 1 = generate base; 2 = map retained base in place.
+bool capy_apple_hdr_field(uint32_t side, const char *request, float *pixels, size_t count, uint32_t operation);
+uint32_t capy_apple_parameter_hit(float x, float y, float size, bool hdr);
+bool capy_apple_proof_texture(uint32_t edge, uint8_t *bytes, size_t count);
 char *capy_apple_color_layout(float size);
 /* Stateless cached field or hue guide: square, straight Display P3 RGBA8.
    Caller owns side*side*4 writable bytes. Returns 1 on success, 0 invalid.

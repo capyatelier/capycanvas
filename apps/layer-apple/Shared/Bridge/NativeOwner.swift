@@ -23,8 +23,15 @@ final class NativeOwner: @unchecked Sendable {
     private var layer: CAMetalLayer?
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
     private var gpuHealth: DispatchSourceTimer?
+    private var hdrDocument = false
     /// Returning from occlusion/suspension needs a fresh frame even when the
     /// document has no further edits.
+    func displayHeadroom(_ value: Double) {
+        perform { [self] in
+            _ = try request(2, JSON(["type": "display_headroom", "value": value]))
+            try publish()
+        }
+    }
     func redraw() {
         perform { [self] in try check(capy_apple_redraw(handle)) }
     }
@@ -119,6 +126,13 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func publish() throws {
         if let snapshot = try request(7) {
+            if !snapshot["proof_panel"].isNull {
+                let hdr = snapshot["proof_panel"]["hdr"].bool
+                if hdr != hdrDocument {
+                    hdrDocument = hdr
+                    gpuHealth?.schedule(deadline: .now(), repeating: hdr ? 0.2 : 1, leeway: .milliseconds(50))
+                }
+            }
             if !snapshot["canvas_ready"].isNull { canvasReady = snapshot["canvas_ready"].bool }
             if !snapshot["shaders_ready"].isNull { shadersReady = snapshot["shaders_ready"].bool }
             try persist(snapshot)
@@ -433,9 +447,12 @@ final class NativeOwner: @unchecked Sendable {
     private func startGpuHealthChecks() {
         guard gpuHealth == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(250))
+        timer.schedule(deadline: .now() + 1, repeating: hdrDocument ? 0.2 : 1, leeway: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
+            // EDR headroom can change while the display link is asleep. Poll
+            // only HDR documents, using the existing foreground health timer.
+            if hdrDocument { receive(JSON(["display_poll": true]), nil) }
             // Failure callbacks can arrive after the display link goes idle.
             // Healthy checks do not publish UI state or submit canvas work.
             let status = capy_apple_poll_renderer(handle)

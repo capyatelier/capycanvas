@@ -45,7 +45,7 @@ import SwiftUI
             }
             func setup(_ command: String = "soft_proof_setup") async throws {
                 try await invoke(command)
-                try await wait("Proof Setup") { model.setupID != nil && !model.form.isNull }
+                try await wait("Proof panel") { model.setupID == nil && !model.form.isNull && !store.state["requests"].array.contains(where: { $0["kind"]["type"].string == "soft_proof_setup" }) }
             }
             func apply(_ recipe: JSON) async throws {
                 model.apply(recipe)
@@ -116,7 +116,7 @@ import SwiftUI
             try await setup()
             let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 520, height: 460), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: ProofForm(model: model, form: model.form))
+            let host = NSHostingView(rootView: ProofPanel(store: store, controller: model))
             window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             try await drain(0.3)
             if let directory = ProcessInfo.processInfo.environment["CAPY_PROOF_CAPTURE"] {
@@ -128,9 +128,9 @@ import SwiftUI
                 try capture.run(); capture.waitUntilExit()
                 try require(capture.terminationStatus == 0, "Capture the owned Proof Setup window")
             }
-            try key("\r", code: 36, window: window)
-            try await wait("Native Apply action") { model.setupID == nil && !model.busy }
-            try require(model.error == nil, model.error ?? "Native Apply failed")
+            model.applyLive(srgb)
+            try await wait("Live panel apply") { model.setupID == nil && !model.busy }
+            try require(model.error == nil, model.error ?? "Live panel apply failed")
             window.contentView = nil; window.close()
             try await io { try preferences.removeProfile(id) }
             try require(try await io { try preferences.profiles().isEmpty }, "Removing a saved copy leaves embedded recipes independent")
@@ -143,7 +143,7 @@ import SwiftUI
                 .replacing("simulate_paper", with: JSON(true)))
             try await invoke("undo")
             try require(await query("proof_form")["recipe"]["name"].string == "sRGB proof", "CMYK setup is one reversible history step")
-            note("PASS platform \(platform): RGB/CMYK proof preparation, retry, cancellation, exact ICC preservation, visibility, history, save/reopen, scene pause/resume and native Apply")
+            note("PASS platform \(platform): RGB/CMYK proof preparation, retry, cancellation, exact ICC preservation, visibility, history, save/reopen, scene pause/resume and live panel edits")
         }
     }
     @MainActor static func main() {

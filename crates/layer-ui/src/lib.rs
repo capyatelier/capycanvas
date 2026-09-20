@@ -13,6 +13,7 @@ pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, 
 pub mod profile_library;
 pub mod proof_workflow;
 pub mod proof_panel;
+pub mod color_management;
 pub mod parameter_pad;
 
 mod import_policy;
@@ -535,7 +536,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::SdrRendition | Self::PreviewSdr => platform == Platform::Gtk,
+            Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios),
             Self::Histogram => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::ImportImage | Self::PasteImage => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios | Platform::Mac | Platform::Windows),

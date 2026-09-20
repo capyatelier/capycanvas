@@ -11,6 +11,7 @@ struct ExportForm: View {
     @State private var quality = "90"
     @State private var presetName = ""
     @State private var readingProfile = false
+    private var hdr: Bool { editor.draft["hdr"].bool }
     private var draft: [String] { [String(fit), String(enlarge), width, height, resolution, ppi, quality] }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -25,17 +26,17 @@ struct ExportForm: View {
                     }
                     if editor.busy { ProgressView("Preparing export…") }
                     ForEach(Array(editor.previews.enumerated()), id: \.offset) { index, image in
-                        Text(index == 0 ? "Artwork" : "Output").font(.headline)
+                        Text(hdr ? (index == 0 ? "Artwork · SDR preview" : "HDR output · SDR preview") : (index == 0 ? "Artwork" : "Output")).font(.headline)
                         Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: 180)
                             .accessibilityLabel(index == 0 ? "Artwork preview" : "Output preview")
                     }
                     if !editor.previews.isEmpty {
-                        Text("Display P3 preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
+                        Text(hdr ? "SDR display preview of PQ output, including its encoded precision and range. The file retains HDR." : "Display P3 preview of output size, profile, precision and transparency. JPEG compression artifacts are not previewed.").font(.caption)
                         Text("Output: \(editor.details["output_extent"][0].uint) × \(editor.details["output_extent"][1].uint) pixels")
                             .accessibilityIdentifier("export-output-size")
                     }
-                    if editor.clipped > 0 { Text("Some colors exceed the output gamut and will be clipped.") }
+                    if editor.clipped > 0 { Text(editor.details["range_blocked"].bool ? "Some colors exceed the PQ output range. Enable clipping or choose SDR output." : "Some colors exceed the output gamut and will be clipped.") }
                     if let error = editor.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("export-error") }
                     if !editor.loaded && !editor.busy {
                         Button("Retry") { editor.load() }
@@ -61,10 +62,21 @@ struct ExportForm: View {
             })) {
                 ForEach(editor.names.indices, id: \.self) { Text(editor.names[$0]).tag($0) }
             }.accessibilityIdentifier("export-destination")
-            FormPicker("Format", selection: choice("format")) {
-                options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG"])
+            if editor.details["color"]["depth"].string == "F16" {
+                Picker("Output range", selection: Binding(get: { hdr }, set: { value in
+                    // AppKit updates the segmented control during this callback.
+                    // Publish its enabled/content changes after that update returns.
+                    DispatchQueue.main.async { editor.change("format", JSON(value ? "PngHdr" : "Png")) }
+                })) {
+                    Text("SDR").tag(false); Text("HDR").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("export-range")
+            }
+            FormPicker("Format", selection: Binding(get: { editor.draft["format"].string }, set: { editor.change("format", JSON($0)) })) {
+                options("formats", labels: ["Png": "PNG", "Tiff": "TIFF", "Jpeg": "JPEG", "PngHdr": "HDR PNG · BT.2020 PQ"])
             }
                 .accessibilityIdentifier("export-format")
+            if hdr { Text("BT.2020 PQ · 16-bit · Transparency preserved").font(.caption) }
+            else {
             FormPicker("Output profile", selection: Binding(get: { editor.profileIndex }, set: editor.selectProfile)) {
                 ForEach(editor.profiles.indices, id: \.self) { Text(editor.profiles[$0]["name"].string).tag($0) }
             }.accessibilityIdentifier("export-profile")
@@ -75,6 +87,7 @@ struct ExportForm: View {
             FormPicker("Transparency", selection: choice("background")) {
                 options("backgrounds", labels: ["Preserve": "Preserve", "White": "White background", "Black": "Black background"])
             }.accessibilityIdentifier("export-background")
+            }
             if editor.recipe["format"].string == "Jpeg" { number("JPEG quality (1–100)", $quality, id: "export-quality") }
             Toggle("Fit within pixel size", isOn: $fit).accessibilityIdentifier("export-fit")
             if fit {
@@ -84,6 +97,11 @@ struct ExportForm: View {
             }
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: 12) {
+                    if hdr {
+                        Toggle("Clip to output HDR range", isOn: Binding(get: { editor.draft["clip_hdr_range"].bool }, set: { editor.change("clip_hdr_range", JSON($0)) }))
+                            .accessibilityIdentifier("export-hdr-clip")
+                    }
+                    if !hdr {
                     FormPicker("Rendering intent", selection: Binding(get: { editor.recipe["encoding"]["conversion"]["intent"].string }, set: { intent in
                         let conversion = editor.recipe["encoding"]["conversion"].replacing("intent", with: JSON(intent))
                         editor.change("encoding", editor.recipe["encoding"].replacing("conversion", with: conversion))
@@ -94,6 +112,7 @@ struct ExportForm: View {
                     FormPicker("Dither", selection: Binding(get: { editor.recipe["encoding"]["dither"].string }, set: { encoding("dither", $0) })) {
                         options("dithers", labels: ["None": "None", "Stochastic8": "Stochastic (8-bit output)"])
                     }.disabled(editor.draft["dithers"].array.count < 2)
+                    }
                     FormPicker("Resolution metadata", selection: $resolution) {
                         Text("Keep original").tag("Master"); Text("Pixels per inch").tag("Ppi"); Text("Omit").tag("Omit")
                     }

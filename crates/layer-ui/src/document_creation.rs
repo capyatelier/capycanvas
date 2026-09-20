@@ -78,7 +78,7 @@ pub struct NewDocumentPreset {
 impl NewDocumentPreset {
     pub fn builtins_for(platform: crate::Platform) -> Vec<Self> {
         let mut presets = Self::builtins().to_vec();
-        if platform == crate::Platform::Gtk {
+        if crate::color_management::enabled(platform) {
             presets.push(Self { name: "HDR drawing".into(), options: NewDocumentOptions {
                 color: DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 },
                 ..Default::default()
@@ -180,10 +180,11 @@ pub struct NewDocumentForm {
     pub spaces: Vec<(RgbSpace, &'static str)>,
 }
 impl NewDocumentSettings {
-    pub fn form(&self) -> NewDocumentForm {
+    pub fn form(&self) -> NewDocumentForm {self.form_for(crate::Platform::Generic)}
+    pub fn form_for(&self,platform:crate::Platform)->NewDocumentForm {
         NewDocumentForm {
             options: self.defaults,
-            presets: NewDocumentPreset::builtins().into_iter().chain(self.presets.iter().cloned()).collect(),
+            presets: NewDocumentPreset::builtins_for(platform).into_iter().chain(self.presets.iter().cloned()).collect(),
             spaces: RgbSpace::ALL.into_iter().map(|space| (space, space.name())).collect(),
         }
     }

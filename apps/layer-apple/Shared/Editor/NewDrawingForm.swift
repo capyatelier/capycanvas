@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct NewDrawingChoice {
     let options: JSON
@@ -72,7 +75,7 @@ struct NewDrawingForm: View {
                         ForEach(spec["creation"]["spaces"].array, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
                     }.accessibilityIdentifier("new-document-space")
                     FormPicker("Bit depth", selection: color("depth")) {
-                        Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16")
+                        Text("8-bit SDR").tag("U8"); Text("16-bit SDR").tag("U16"); Text("16-bit float HDR").tag("F16")
                     }.accessibilityIdentifier("new-document-depth")
                     if options["color"]["space"].string == "ProPhoto" && options["color"]["depth"].string == "U8" {
                         Text("16-bit is recommended for ProPhoto's wider color range.").font(.caption)
@@ -88,15 +91,28 @@ struct NewDrawingForm: View {
                 Spacer()
                 Button(spec["cancel"].string, role: .cancel) { completion(nil) }
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("new-document-cancel")
-                Button(spec["accept"].string) {
-                    if let options = selectedOptions {
-                        completion(NewDrawingChoice(options: options, presetName: presetName, useAsDefaults: useAsDefaults))
-                    }
-                }.keyboardShortcut(.defaultAction).disabled(selectedOptions == nil)
+                Button(spec["accept"].string, action: create)
+                    .keyboardShortcut(.defaultAction).disabled(selectedOptions == nil)
                     .accessibilityIdentifier("new-document-create")
             }
         }.disabled(busy).padding(24).frame(minWidth: 320, idealWidth: 400, maxWidth: 500,
             minHeight: 440, idealHeight: 540)
+    }
+    private func create() {
+        #if os(iOS)
+        // UIKit can still hold marked text when a button closes the form.
+        // Commit it before reading SwiftUI's bound preset name and dimensions.
+        UIApplication.shared.sendAction(#selector(UITextInput.unmarkText), to: nil, from: nil, for: nil)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DispatchQueue.main.async { completeCreation() }
+        #else
+        completeCreation()
+        #endif
+    }
+    private func completeCreation() {
+        if let options = selectedOptions {
+            completion(NewDrawingChoice(options: options, presetName: presetName, useAsDefaults: useAsDefaults))
+        }
     }
     private func dimension(_ value: Binding<String>, label: String, id: String) -> some View {
         TextField("", text: value).textFieldStyle(.roundedBorder)

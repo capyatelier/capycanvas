@@ -156,6 +156,9 @@ struct ColorCoordinates {
 /// unit square; hosts scale it and render gradients without converting colors.
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPanelView {
+    pub hdr: bool,
+    pub intensity: f32,
+    pub base: RgbColor,
     pub rgb_space: RgbSpace,
     pub definition: RgbColor,
     pub outside_document_gamut: bool,
@@ -286,6 +289,7 @@ impl ColorState {
             ColorSpace::Hls => ["Hue", "Lightness", "Saturation"],
         };
         ColorPanelView {
+            hdr: self.hdr_picker.is_some(), intensity: self.hdr_intensity(), base:self.picker_base(),
             rgb_space: self.rgb_space,
             definition: self.definition(),
             outside_document_gamut: !self.definition().in_gamut(self.rgb_space).unwrap(),

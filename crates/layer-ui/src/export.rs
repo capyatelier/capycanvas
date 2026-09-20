@@ -20,6 +20,14 @@ pub enum ExportFormat {
 impl ExportFormat {
     pub fn is_hdr(self) -> bool { matches!(self, Self::PngHdr | Self::PngHdrMapped | Self::JpegHdr | Self::JpegHdrMapped | Self::AvifHdr | Self::AvifHdrMapped) }
     pub fn maps_hdr_range(self) -> bool { matches!(self, Self::PngHdrMapped | Self::JpegHdrMapped | Self::AvifHdrMapped) }
+    pub fn with_hdr_range_mapping(self, mapped: bool) -> Self {
+        match self {
+            Self::PngHdr | Self::PngHdrMapped => if mapped {Self::PngHdrMapped} else {Self::PngHdr},
+            Self::JpegHdr | Self::JpegHdrMapped => if mapped {Self::JpegHdrMapped} else {Self::JpegHdr},
+            Self::AvifHdr | Self::AvifHdrMapped => if mapped {Self::AvifHdrMapped} else {Self::AvifHdr},
+            _=>self,
+        }
+    }
     pub fn gainmap(self) -> Option<layer_color::photo::GainMapFormat> { match self {
         Self::JpegHdr | Self::JpegHdrMapped => Some(layer_color::photo::GainMapFormat::Jpeg),
         Self::AvifHdr | Self::AvifHdrMapped => Some(layer_color::photo::GainMapFormat::Avif), _ => None,
@@ -284,6 +292,7 @@ impl ExportRecipe {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ExportDraftAction {
     Refresh,
+    ClipHdrRange(bool),
     Format(ExportFormat),
     Profile(ExportProfile),
     Depth(SampleDepth),
@@ -292,6 +301,9 @@ pub enum ExportDraftAction {
 }
 #[derive(Serialize)]
 pub struct ExportDraft {
+    pub hdr: bool,
+    pub clip_hdr_range: bool,
+    pub format: ExportFormat,
     pub recipe: ExportRecipe,
     pub formats: Vec<ExportFormat>,
     pub depths: Vec<SampleDepth>,
@@ -303,6 +315,7 @@ impl ExportRecipe {
         use layer_core::color::OutputDither;
         match action {
             ExportDraftAction::Refresh => (),
+            ExportDraftAction::ClipHdrRange(v) => self.format=self.format.with_hdr_range_mapping(v),
             ExportDraftAction::Format(v) => self.format = v,
             ExportDraftAction::Profile(v) => self.profile = v,
             ExportDraftAction::Depth(v) => self.depth = v,
@@ -322,6 +335,7 @@ impl ExportRecipe {
         if (jpeg || cmyk) && self.background == ExportBackground::Preserve { self.background = ExportBackground::White; }
         if self.depth != SampleDepth::U8 { self.encoding.dither = OutputDither::None; }
         ExportDraft {
+            hdr:self.format.is_hdr(),clip_hdr_range:self.format.maps_hdr_range(),format:self.format.with_hdr_range_mapping(false),
             formats: if self.format.is_hdr() { vec![ExportFormat::JpegHdr, ExportFormat::AvifHdr, ExportFormat::PngHdr] } else if cmyk { vec![ExportFormat::Tiff, ExportFormat::Jpeg] } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] },
             depths: if self.format.is_hdr() { vec![SampleDepth::U16] } else if jpeg { vec![SampleDepth::U8] } else { vec![SampleDepth::U8, SampleDepth::U16] },
             backgrounds: if self.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg) { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] } else if self.format.is_hdr() { vec![ExportBackground::Preserve] } else if jpeg || cmyk { vec![ExportBackground::White, ExportBackground::Black] } else { vec![ExportBackground::Preserve, ExportBackground::White, ExportBackground::Black] },

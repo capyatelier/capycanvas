@@ -61,7 +61,7 @@ impl Settings {
                         NewBitDepth,
                         "Bit depth",
                         "16-bit improves precision for subsequent edits.",
-                        if platform == Platform::Gtk { &["8-bit SDR", "16-bit SDR", "16-bit float HDR"] }
+                        if crate::color_management::enabled(platform) { &["8-bit SDR", "16-bit SDR", "16-bit float HDR"] }
                         else { &["8-bit SDR", "16-bit SDR"] },
                         match defaults.color.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2 },
                     ),

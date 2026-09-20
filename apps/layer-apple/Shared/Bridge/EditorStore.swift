@@ -9,6 +9,7 @@ import SwiftUI
     private(set) var colorPreferences = ColorPreferencesStore(root: nil)
     let camera = CameraReadout()
     @Published var displayDetails = DisplayDetails()
+    @Published var displayHeadroom: Double = 1
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
@@ -21,6 +22,7 @@ import SwiftUI
     @Published var headerLeadingInset: CGFloat = 0
     var cameraRevision: UInt64 = 0
     var wake: (() -> Void)?
+    var observeDisplayHeadroom: (() -> Void)?
     var interruptInput: (() -> Void)?
     var focusWindow: (() -> Void)?
     var focusCanvas: (() -> Void)?
@@ -43,6 +45,10 @@ import SwiftUI
     lazy var proof = ProofController(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
+    var colorViewing: JSON {
+        JSON(["document_space": state["colors"]["rgb_space"].raw, "recipe": snapshot["proof_panel"]["recipe"].raw,
+              "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
+    }
     var paintPreview: JSON {
         snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()
     }
@@ -77,6 +83,7 @@ import SwiftUI
         Self.instances.add(self)
     }
     private func receive(_ next: JSON?, _ error: String?) {
+        if next?["display_poll"].bool == true { observeDisplayHeadroom?(); return }
         if let error { failure = error }
         if let next {
             if !next["persistence"].isNull {

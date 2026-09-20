@@ -39,6 +39,7 @@ final class MacCanvasView: NSView {
         setAccessibilityLabel("Canvas")
         setAccessibilityValue("Initializing")
         store.wake = { [weak self] in self?.wake() }
+        store.observeDisplayHeadroom = { [weak self] in self?.updateHeadroom() }
         store.interruptInput = { [weak self] in self?.input.interrupt() }
         store.focusCanvas = { [weak self] in
             guard let self, self.window?.isKeyWindow == true, self.window?.attachedSheet == nil else { return }
@@ -54,6 +55,9 @@ final class MacCanvasView: NSView {
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
         if let window {
+            windowObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateHeadroom() }
+            })
             window.acceptsMouseMovedEvents = true
             window.makeFirstResponder(self)
             for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
@@ -130,7 +134,14 @@ final class MacCanvasView: NSView {
         displayLink?.invalidate(); displayLink = nil
         if attached { store.native?.detach(); attached = false }
     }
+    private func updateHeadroom() {
+        let value = Double(window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1).clampedHeadroom
+        if store.displayHeadroom != value {
+            store.displayHeadroom = value; store.native?.displayHeadroom(value)
+        }
+    }
     @objc private func tick(_ link: CADisplayLink) {
+        updateHeadroom()
         frames.tick(target: link.targetTimestamp)
     }
     override func mouseDown(with event: NSEvent) { input.mouse(event, phase: 1) }

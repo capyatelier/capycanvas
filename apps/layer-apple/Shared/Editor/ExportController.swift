@@ -126,8 +126,13 @@ import SwiftUI
         NativeProjectTask.io.async { [weak self] in
             do {
                 try task.configureExport(recipe)
-                if preview { try task.compare() }
+                // HDR preflight scans output codes on the worker before the
+                // save picker; a range failure stays in the editable form.
+                if preview || recipe["format"].string.contains("Hdr") { try task.compare() }
                 let details = try task.details()
+                if !preview && details["range_blocked"].bool {
+                    throw HostFailure(message: "Some colors exceed the PQ output range. Enable Clip to output HDR range, or choose SDR output.")
+                }
                 let images = preview ? try [task.comparison(after: false), task.comparison(after: true)] : []
                 let draft = try preferences.exportDraft(recipe: recipe)
                 DispatchQueue.main.async { [weak self] in

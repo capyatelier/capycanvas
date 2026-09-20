@@ -26,6 +26,6 @@ impl Task {
         let histogram = snapshot.histogram().map_err(|e| e.to_string())?;
         task.check_cancelled()?;
         Ok(serde_json::json!({"epoch":task.epoch, "revision":task.revision,
-            "histogram":histogram, "sampled_time":sampled_time}))
+            "axis":layer_ui::color_management::histogram_axis(&histogram),"histogram":histogram, "sampled_time":sampled_time}))
     }
 }

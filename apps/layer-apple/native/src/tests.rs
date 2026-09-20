@@ -18,6 +18,8 @@ mod correction;
 mod export;
 #[path = "proof_tests.rs"]
 mod proof;
+#[path = "hdr_tests.rs"]
+mod hdr;
 #[path = "photo_tests.rs"]
 mod photo;
 fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {
