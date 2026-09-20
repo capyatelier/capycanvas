@@ -156,6 +156,9 @@ before presentation, unlike the earlier Mailbox replacement-only freeze.
 
 ## Ceiling and targets
 
+The follow-up [CPU and bandwidth analysis](android-pen-bandwidth-20260920.md)
+separates these current timings from a conditional bytes-per-update model.
+
 There is no experimentally established absolute brush ceiling yet. The useful
 bounds and counterfactuals are:
 
