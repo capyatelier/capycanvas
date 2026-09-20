@@ -374,3 +374,29 @@ M3 final reruns:
   APK hash matches the build recorded in the review guide
   (`close-review-deployment.txt`). Final milestone fetch/merge again reported
   already up to date at `54ca69cc`.
+
+## Post-close lifecycle audit
+
+- Fetched and merged current `origin/main` as `a1d55083`. The merge updates
+  Android/WebGPU rendering and Android raster tests, so prior device evidence was
+  not carried forward without rerunning affected checks.
+- The shared Rust UI suite passed all 498 tests. Android debug and
+  instrumentation artifacts rebuilt, and the Huion production-frame
+  `AndroidDrawingTabsUiTest` passed all five cases in 118.321 s (zero failures):
+  selected/background close controls, File close, dirty Cancel/Discard, actual
+  Save picker cancellation, successful/failed saves, repeated close, sequential
+  window close, and Activity recreation/teardown.
+- The production Web package rebuilt and the desktop drawing-tabs lifecycle
+  journey passed. It covers independent history, close decisions, pointer
+  reorder, selector behavior, final fresh drawing, OPFS redo restore and
+  file/storage failures.
+- An isolated Huion Web origin on port 8164 reached live ARM Valhall rendering
+  and the duplicate-file phase. Its full CDP lifecycle harness then stalled
+  without producing a completion result; the first attempt was additionally
+  invalid because its short-lived local server had stopped. Neither attempt is
+  counted as a Huion Web pass. The packaged review build is nevertheless served
+  from the normal port 8162; this is a remaining device-automation gap, not a
+  claimed regression.
+- Rebuilt and installed the isolated review Android package
+  `art.capycanvas.tabtest` with `adb install -r`, preserving its data. APK SHA-256:
+  `dfd693003df055d15e96bbf85dab13aef28b031d2e674a0153ff89440d4fd2c9`.

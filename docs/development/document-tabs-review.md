@@ -43,10 +43,15 @@ same upstream revision.
 Review build identities:
 
 - Android APK SHA-256:
-  `4788fe3045952740564f39fe3bc33e6abf7ba5a066862ade2d07f80f75073fe6`.
+  `dfd693003df055d15e96bbf85dab13aef28b031d2e674a0153ff89440d4fd2c9`
+  (post-close audit, `a1d55083`).
 - Web implementation commit: `4be6cf2c`, rebuilt with the shared header-retirement
   correction; PWA version:
-  `c3c42ee55bd3a8d4e3f66c4a9e047d85acdc6a0ea16d19386bad77abdc392f1d`.
+  `980928620784418dff3156b17bca03b0be9e4b418934416085d7d09fff6dc8ce`.
+
+The post-close audit rebuilt the same packaged Web source after `a1d55083`; its
+Huion CDP lifecycle completion is currently unqualified because the isolated
+test harness stalled after live rendering. Desktop lifecycle coverage passed.
 
 ## Shared ownership
 
