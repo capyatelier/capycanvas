@@ -514,7 +514,6 @@ mod tests {
     }
     #[test]
     fn jpeg_hdr_and_authored_sdr_roundtrip_without_native_features() {
-        assert!(gainmap_format_available(GainMapFormat::Jpeg));
         for quality in [35, 90, 100] {
             for exposure in [0., -2.] {
                 let bytes = encoded(quality, exposure);

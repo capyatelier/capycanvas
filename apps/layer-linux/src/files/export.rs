@@ -336,9 +336,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     });
     refresh_size();
     let delivery_group = adw::PreferencesGroup::new();
-    let avif_gainmaps = layer_color::photo::gainmap_format_available(layer_color::photo::GainMapFormat::Avif);
-    let exr_index = if avif_gainmaps { 4 } else { 3 };
-    let range = combo(&delivery_group, "Output", "export-output", if avif_gainmaps { &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF", "OpenEXR · 32-bit float"] } else { &["SDR", "HDR native · PNG", "HDR JPEG", "OpenEXR · 32-bit float"] });
+    let exr_index = 4;
+    let range = combo(&delivery_group, "Output", "export-output", &["SDR", "HDR native · PNG", "HDR JPEG", "HDR with transparency · AVIF", "OpenEXR · 32-bit float"]);
     range.set_visible(document.depth.is_float());
     let format = combo(&delivery_group, "Format", "export-format", &["PNG", "TIFF", "JPEG"]);
     let flatten=adw::SwitchRow::builder().title("Flatten transparency").visible(false).build();
@@ -564,7 +563,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             #[strong] apply_background,
             move |recipe: &ExportRecipe| {
                 updating.set(true);
-                range.set_selected(if recipe.format == ExportFormat::Exr { exr_index } else { match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>if avif_gainmaps {3} else {1},None=>u32::from(recipe.format.is_hdr())}});
+                range.set_selected(if recipe.format == ExportFormat::Exr { exr_index } else { match recipe.format.gainmap(){Some(layer_color::photo::GainMapFormat::Jpeg)=>2,Some(layer_color::photo::GainMapFormat::Avif)=>3,None=>u32::from(recipe.format.is_hdr())}});
                 flatten.set_active(recipe.format.gainmap()==Some(layer_color::photo::GainMapFormat::Jpeg)&&recipe.background!=ExportBackground::Preserve);
                 clip_hdr.set_active(recipe.format.maps_hdr_range());
                 format.set_selected(match recipe.format {
@@ -829,7 +828,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         #[strong] validate, #[strong] recommend, #[weak] comparison, #[weak] clip_hdr, #[weak] range, #[weak] flatten, #[weak] color_link,
         move |_| {
             if let Some(transparent)=comparison.has_transparency.get(){
-                if recommend.replace(false) {range.set_selected(if transparent{if avif_gainmaps {3} else {1}}else{2});}
+                if recommend.replace(false) {range.set_selected(if transparent{3}else{2});}
                 flatten.set_visible(range.selected()==2&&range.selected()!=exr_index&&(transparent||flatten.is_active()));
                 color_link.set_visible(range.selected()==0||(range.selected()==2&&range.selected()!=exr_index&&(transparent||flatten.is_active())));
             }

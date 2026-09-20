@@ -10,9 +10,28 @@ Commit and push significant milestones to `origin/main`.
 
 - Qualify larger JPEG/AVIF images and device latency alongside the remaining
   host work. Both formats now import/export and preview through shared Rust.
-- Remove obsolete runtime-availability checks now that the codecs are built in.
 - Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
   JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+
+## Availability cleanup — 2026-09-19
+
+The always-true gain-map availability functions, GTK's unreachable AVIF fallback
+choices and duplicate native/portable GTK journey are removed. JPEG and AVIF are
+ordinary built-in formats. This also removes unused-variable suppressions left
+from conditional codec compilation. No old `.capy` or native-codec fallback is
+introduced for compatibility.
+
+The shared color suite passes (116 tests, 14 optional tests ignored), and GTK's
+real JPEG/AVIF choice, preview, flattening, save and HDR reopen journey passes
+with an empty codec directory on private Wayland/Vulkan. Evidence:
+`/tmp/capy-portable-gtk-cleanup-ui.log`.
+
+The separately selected 1031×1037 AVIF grid regression passes across partial
+cells, alpha and gain-map boundaries. Running the release test binary directly,
+excluding compilation, takes 13.15 seconds and peaks at 42,576 KiB RSS on this
+Linux host (`/tmp/capy-portable-avif-grid-runtime.log`). This small working set
+does not offset the slow encode/reopen time; stage profiling and larger-photo
+latency remain open work.
 
 ## Android host milestone — 2026-09-19
 

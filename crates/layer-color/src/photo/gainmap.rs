@@ -51,14 +51,6 @@ mod jpeg;
 mod jpeg_container;
 mod metadata;
 pub(super) use metadata::Metadata;
-pub fn gainmap_available() -> bool {
-    true
-}
-pub fn gainmap_format_available(_format: GainMapFormat) -> bool {
-    true
-}
-
-#[allow(unused_variables)]
 pub fn write_gainmap_rows(
     output: impl Write,
     extent: [u32; 2],
@@ -77,7 +69,6 @@ pub fn write_gainmap_rows(
         cancelled, read,
     )
 }
-#[allow(unused_variables)]
 pub fn write_gainmap_rows_with_guide(
     output: impl Write,
     extent: [u32; 2],
@@ -100,7 +91,6 @@ pub fn write_gainmap_rows_with_guide(
         clip, cancelled, read)
 }
 
-#[allow(unused_variables)]
 pub fn preview_gainmap_rows(
     extent: [u32; 2],
     bounds: [u32; 2],
@@ -124,7 +114,6 @@ pub fn preview_gainmap_rows(
         extent, bounds, space, rendition, None, format, quality, matte, cancelled, read,
     )
 }
-#[allow(unused_variables)]
 pub fn preview_gainmap_rows_with_guide(
     extent: [u32; 2],
     bounds: [u32; 2],
@@ -465,7 +454,6 @@ mod tests {
     #[test]
     fn gainmap_jpeg_and_transparent_avif_roundtrip_edited_hdr_and_authored_sdr() {
         use std::{io::Cursor, sync::atomic::AtomicBool};
-        assert!(gainmap_available());
         let extent = [64, 48];
         let row = |y: u32, row: &mut [[f32; 4]], transparent: bool| {
             for (x, p) in row.iter_mut().enumerate() {
