@@ -45,6 +45,9 @@ pub struct ChromeFacts {
     /// Native/DOM tab hit for the current contact; labels have host-measured widths.
     #[serde(default)]
     pub contact_tab: Option<crate::Panel>,
+    /// Visible standalone Capy hit target; using it must not reveal over the button.
+    #[serde(default)]
+    pub zen_button: Option<crate::Bounds>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -99,9 +102,10 @@ pub struct InputReply {
     pub cancel_paint: bool,
     pub dismiss_popups: bool,
     pub chrome_hidden: bool,
+    /// Whether to show the standalone top-left Capy while chrome is hidden.
+    pub keep_zen_button: bool,
     /// Retired partial-Zen wire fields; current interaction always leaves these false.
     pub hide_floating_panels: bool,
-    pub keep_zen_button: bool,
     pub partial_zen: bool,
     pub pan_cursor: bool,
 }

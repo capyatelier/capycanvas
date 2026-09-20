@@ -428,11 +428,15 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val command = state.array("commands").objects().first { it.getString("id") == "zen_mode" }
     val target = remember { obj("kind" to "zen_mode") }
     val anchor = dock.anchorKey(target)
-    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
+    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor); dock.zenButton = null; dock.refresh() } }
     IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
-        modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button")
+        modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
             .background(colors.surround, RoundedCornerShape(6.dp))
-            .onGloballyPositioned { dock.anchors[anchor] = it.boundsInRoot().translate(-dock.origin) }
+            .onGloballyPositioned {
+                val bounds = it.boundsInRoot().translate(-dock.origin)
+                dock.anchors[anchor] = bounds
+                if (dock.zenButton != bounds) { dock.zenButton = bounds; dock.refresh() }
+            }
             .pointerInput(dock) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)

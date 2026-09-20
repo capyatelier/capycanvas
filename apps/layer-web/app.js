@@ -1104,6 +1104,8 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
+    const capy = $("zen-capy");
+    if (capy) capy.hidden = !reply.keep_zen_button;
     canvas.style.cursor = reply.pan_cursor ? "grab" : "";
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(
@@ -1121,11 +1123,14 @@ function input(event) {
   }
 }
 function chromeInput(event) {
+  const capy = $("zen-capy");
+  const capyBounds = capy && !capy.hidden ? capy.getBoundingClientRect() : null;
   return input({
     type: "chrome",
     event,
     viewport: workspaceViewport,
     facts: {
+      zen_button: capyBounds ? {x:capyBounds.x,y:capyBounds.y,width:capyBounds.width,height:capyBounds.height} : null,
       expanded_panel: customization?.placement(),
       ...workspaceChrome?.facts(),
       contact_tab: event.kind === "contact"
@@ -1519,6 +1524,10 @@ try {
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
+  const capy = iconButton("zen_mode");
+  capy.id = "zen-capy"; capy.hidden = true;
+  customization.target(capy, {kind:"zen_mode"});
+  workspace.append(capy);
   performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();

@@ -65,6 +65,7 @@ internal class DockInteraction(val host: CanvasHost) {
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
     val regions = mutableMapOf<Any, Region>()
     val chromeRegions = mutableMapOf<Any, Rect>()
+    var zenButton: Rect? = null
     var drawer: JSONObject? = null
     val drawerSources = mutableStateMapOf<String, DrawerSource>()
     var drawerTileRevision by mutableIntStateOf(0)
@@ -154,6 +155,8 @@ internal class DockInteraction(val host: CanvasHost) {
     // Shared workspace gestures have their own Zen state in Rust. Only tile
     // reordering uses the host's generic dragging fact.
     fun facts() = obj("held" to false, "dragging" to (active?.optString("type") == "tile_drag"),
+        "zen_button" to zenButton?.let { obj("x" to it.left / density, "y" to it.top / density,
+            "width" to it.width / density, "height" to it.height / density) },
         "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
         "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())

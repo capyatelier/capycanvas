@@ -193,6 +193,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
+.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--window-bg-color); border-radius: 6px; }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */

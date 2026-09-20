@@ -224,6 +224,67 @@ class AndroidTitleBarTest {
         SystemClock.sleep(200)
     }
 
+    @Test fun zenCapyAndEdgeRevealPreferences() {
+        fun preference(id: String, value: Boolean) = action(obj("type" to "preferences", "action" to
+            obj("type" to "edit", "id" to id, "value" to value)))
+        fun hidden() = snapshot().optBoolean("chrome_hidden")
+        fun contact(position: Offset) {
+            instrumentation.runOnMainSync { pressed = checkNotNull(node("workspace")).first }
+            event(MotionEvent.ACTION_DOWN, position); event(MotionEvent.ACTION_UP); idle()
+        }
+        action(obj("type" to "restore_settings", "settings" to JSONObject()))
+        assertTrue(state().getJSONObject("settings").getBoolean("zen_show_capy"))
+        assertFalse(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
+        for (theme in listOf("dark", "light")) for (show in listOf(true, false)) for (edges in listOf(false, true)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "open_settings", "page" to "appearance"))
+            // Reveal scrolls the native preferences row into view, then use real contacts.
+            for ((id, value) in listOf("zen_show_capy" to show, "zen_reveal_at_edges" to edges)) {
+                action(obj("type" to "preferences", "action" to obj("type" to "reveal", "id" to id)))
+                waitFor("preference row") { node("preference-$id") != null }
+                if (state().getJSONObject("settings").getBoolean(id) != value) {
+                    tool = MotionEvent.TOOL_TYPE_FINGER
+                    tap("preference-$id")
+                    waitFor("switch $id") { state().getJSONObject("settings").getBoolean(id) == value }
+                }
+            }
+            shot("zen-settings-$theme-$show-$edges")
+            action(obj("type" to "close_settings"))
+            val baseline = layout()
+            val camera = state().getJSONObject("camera").toString()
+            for (device in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool = device
+                val workspace = bounds("workspace")
+                instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(workspace.width / density / 2, workspace.height / density / 2)))) }
+                action(obj("type" to "invoke", "command" to "zen_mode"))
+                waitFor("hidden chrome $theme/$show/$edges/$device") { hidden() && (node("zen-button") != null) == show }
+                shot("zen-$theme-$show-$edges-$device")
+                contact(Offset(workspace.center.x, workspace.top + 6 * density))
+                waitFor("edge policy $edges device $device") { hidden() == !edges }
+                assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
+                if (edges) {
+                    // Move away from the revealed edge before using the standalone Capy.
+                    instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(workspace.width / density / 2, workspace.height / density / 2)))) }
+                    waitFor("rehide after edge reveal") { hidden() && (!show || node("zen-button") != null) }
+                }
+                if (show) {
+                    tap("zen-button")
+                } else {
+                    key(KeyEvent.KEYCODE_TAB)
+                }
+                waitFor("Zen exit") { !state().getJSONObject("workspace").getBoolean("zen_mode") && !hidden() }
+                assertEquals(baseline, layout())
+                assertEquals(camera, state().getJSONObject("camera").toString())
+            }
+        }
+        preference("zen_show_capy", false)
+        preference("zen_reveal_at_edges", true)
+        scenario.close(); launch()
+        assertFalse(state().getJSONObject("settings").getBoolean("zen_show_capy"))
+        assertTrue(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
+        android.util.Log.i("ZenAcceptance", "PASS: defaults, switches, all combinations, both themes, touch/mouse/stylus, Capy exit, keyboard exit, unchanged layout/camera, restart persistence")
+    }
+
     @Test fun bankBodiesGripsCancellationAndHistoryEveryDeviceSizeAndTheme() {
         for (theme in listOf("light", "dark")) for (size in listOf("small", "medium", "large"))
             for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {

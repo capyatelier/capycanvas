@@ -819,6 +819,7 @@ pub struct Workspace {
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
     header: header::Header,
+    zen_capy: gtk::Button,
     system_status: Rc<crate::system_status::SystemStatus>,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_held: Cell<bool>,
@@ -992,6 +993,19 @@ impl Workspace {
         let workspaces = manager::NativeWorkspaces::new();
         workspaces.root.add_css_class("workspace-notice");
         content.set_child(Some(&surface));
+        let zen_capy = gtk::Button::builder()
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .margin_start(6)
+            .margin_top(6)
+            .visible(false)
+            .build();
+        zen_capy.set_widget_name("zen-capy");
+        zen_capy.add_css_class("zen-capy");
+        let capy_icon = crate::icons::image("layer-zen-looking-up-symbolic");
+        capy_icon.set_pixel_size(ZEN_ICON_SIZE as i32);
+        zen_capy.set_child(Some(&capy_icon));
+        content.add_overlay(&zen_capy);
         // Notices must not resize the full-window canvas, change its viewport,
         // or recreate the GPU swapchain while opening/saving a workspace.
         let notices = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1026,6 +1040,7 @@ impl Workspace {
             palette_css,
             palette: Cell::new(None),
             header,
+            zen_capy,
             system_status,
             popovers: RefCell::new(Vec::new()),
             chrome_held: Cell::new(false),
@@ -1102,6 +1117,14 @@ impl Workspace {
         this.customization.bind(&this);
         this.preferences.bind(&this);
         this.workspaces.bind(&this);
+        this.zen_capy.connect_clicked(glib::clone!(
+            #[weak]
+            this,
+            move |_| this.dispatch(UiAction::Invoke {
+                command: CommandId::ZenMode
+            })
+        ));
+        this.install_context(&this.zen_capy, ContextTarget::ZenMode);
         this.install_chrome();
         this.tooltips.install(&this.window);
         crate::input::install(&this);
@@ -1468,6 +1491,18 @@ impl Workspace {
         };
         let facts = ChromeFacts {
             contact_tab,
+            zen_button: self
+                .zen_capy
+                .is_visible()
+                .then(|| {
+                    self.zen_capy.compute_bounds(&self.surface).map(|b| Bounds {
+                        x: b.x(),
+                        y: b.y(),
+                        width: b.width(),
+                        height: b.height(),
+                    })
+                })
+                .flatten(),
             expanded_panel: self.customization.placement(),
             content_drawer: self.drawer.placement().map(|p| p.bounds),
             drawer_connection: self
@@ -1584,6 +1619,7 @@ impl Workspace {
 
     fn present_interaction(&self, reply: InputReply) {
         self.set_chrome_hidden(reply.chrome_hidden);
+        self.zen_capy.set_visible(reply.keep_zen_button);
         let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
             self.area.set_cursor_from_name(cursor);
@@ -2234,6 +2270,19 @@ impl Workspace {
             }
         }
         if regions & regions::COMMANDS != 0 {
+            let zen = state
+                .commands
+                .iter()
+                .find(|c| c.id == CommandId::ZenMode)
+                .unwrap();
+            self.zen_capy.set_tooltip_text(Some(&zen.tooltip));
+            self.zen_capy.set_sensitive(zen.enabled);
+            if let Some(image) = self.zen_capy.child().and_downcast::<gtk::Image>() {
+                crate::icons::set(
+                    &image,
+                    zen.icon.map(|i| format!("layer-{i}-symbolic")).as_deref(),
+                );
+            }
             for (id, button) in self.commands.borrow().iter() {
                 if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
                     button.set_sensitive(command.enabled);

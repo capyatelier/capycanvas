@@ -752,6 +752,7 @@ try {
       x: 600,
       y: 450,
     });
+    await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false,zen_reveal_at_edges:true}})");
     await click('[data-command="zen_mode"]');
     await evaluate("new Promise(r=>setTimeout(r,250))");
     assert.equal(

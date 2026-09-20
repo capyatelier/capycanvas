@@ -6742,37 +6742,53 @@ fn native_zen_behaviors() {
     let zen = command(&w, CommandId::ZenMode);
     let saved = state(&w).workspace.layout;
     for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        click(&zen);
-        let reply = w.chrome_event(ChromeEvent::Motion {
-            position: [600.0, 450.0],
-        });
-        assert!(reply.chrome_hidden && !reply.partial_zen && !reply.hide_floating_panels);
-        assert!(!w.header.root.can_target());
-        for (slot, widget) in w.surface.imp().children.borrow().iter() {
-            if !matches!(slot, Slot::Canvas) && !widget.has_css_class("floating-panel") {
-                assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
+        for show in [true, false] {
+            for edges in [false, true] {
+                w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+                for (id, value) in [
+                    (PreferenceId::ZenShowCapy, show),
+                    (PreferenceId::ZenRevealAtEdges, edges),
+                ] {
+                    w.dispatch(UiAction::Preferences {
+                        action: PreferenceAction::Edit {
+                            id,
+                            value: PreferenceValue::Bool(value),
+                        },
+                    });
+                }
+                click(&zen);
+                let reply = w.chrome_event(ChromeEvent::Motion {
+                    position: [600., 450.],
+                });
+                assert!(reply.chrome_hidden && !reply.partial_zen && !reply.hide_floating_panels);
+                assert_eq!(w.zen_capy.is_visible(), show);
+                assert!(!w.header.root.can_target());
+                for (slot, widget) in w.surface.imp().children.borrow().iter() {
+                    if !matches!(slot, Slot::Canvas) && !widget.has_css_class("floating-panel") {
+                        assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
+                    }
+                }
+                assert_eq!(w.reveal_chrome_at(600., 6.), edges);
+                assert_eq!(w.header.root.can_target(), edges);
+                if show && !edges {
+                    click(&w.zen_capy);
+                } else {
+                    for pressed in [true, false] {
+                        w.interact(UiInput::Key {
+                            key: "Tab".into(),
+                            pressed,
+                            repeat: false,
+                            modifiers: Modifiers::default(),
+                            editing: false,
+                            divider: None,
+                        });
+                    }
+                }
+                assert!(!state(&w).workspace.zen_mode);
+                assert!(!w.zen_capy.is_visible());
+                assert_eq!(state(&w).workspace.layout, saved);
             }
         }
-        assert!(
-            !w.chrome_event(ChromeEvent::Motion {
-                position: [6.0, 6.0]
-            })
-            .chrome_hidden
-        );
-        assert!(w.header.root.can_target());
-        for pressed in [true, false] {
-            w.interact(UiInput::Key {
-                key: "Tab".into(),
-                pressed,
-                repeat: false,
-                modifiers: Modifiers::default(),
-                editing: false,
-                divider: None,
-            });
-        }
-        assert!(!state(&w).workspace.zen_mode);
-        assert_eq!(state(&w).workspace.layout, saved);
     }
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Appearance,
@@ -6780,6 +6796,14 @@ fn native_zen_behaviors() {
     pump(250);
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-total-zen").is_none());
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-show-capy").is_some());
+    assert!(
+        find_named(
+            w.preferences.dialog.upcast_ref(),
+            "setting-zen-reveal-at-edges"
+        )
+        .is_some()
+    );
     w.dispatch(UiAction::CloseSettings);
     pump(250);
     let menu = w
@@ -6797,6 +6821,9 @@ fn native_zen_behaviors() {
     assert_eq!(state(&w).preferences.reveal, Some(PreferenceId::ZenIcon));
     w.window.close();
     pump(100);
+    // Match application shutdown: a cold shader worker can still be using the
+    // graphics driver after the window closes and before this test process exits.
+    layer_render_wgpu::finish_shader_compiler_shutdown();
 }
 
 #[test]
@@ -13717,6 +13744,12 @@ fn native_workspace_controls_docking_and_ink() {
         }
     }
     crate::capture(&w, "../../artifacts/ui/gtk-zen.png");
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::ZenRevealAtEdges,
+            value: PreferenceValue::Bool(true),
+        },
+    });
     assert!(w.reveal_chrome_at(24.0, 24.0));
     assert!(!w.header.root.has_css_class("zen-hidden"));
     assert!(command(&w, CommandId::ZenMode).has_css_class("selected-tool"));

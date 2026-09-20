@@ -146,6 +146,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
 #header-start > button[aria-pressed="true"] { background: var(--selected); }
 .zen-spacer { width: 36px; height: 36px; flex: none; }
+#zen-capy { touch-action: manipulation; position: absolute; left: 6px; top: 6px; z-index: 1001; background: var(--bg); }
 #zen-button { position: absolute; left: 6px; top: 6px; z-index: 1001; background: var(--bg); }
 #zen-button[aria-pressed="true"] { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 .zen-hidden #zen-button[aria-pressed="true"] { background: var(--bg); }

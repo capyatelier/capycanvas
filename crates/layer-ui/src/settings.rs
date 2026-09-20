@@ -90,6 +90,8 @@ pub struct Settings {
     pub dark_base: HexColor,
     pub light_base: HexColor,
     pub zen_icon: ZenIcon,
+    pub zen_show_capy: bool,
+    pub zen_reveal_at_edges: bool,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub pan_speed: f32,
@@ -115,6 +117,8 @@ impl Default for Settings {
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
             zen_icon: ZenIcon::default(),
+            zen_show_capy: true,
+            zen_reveal_at_edges: false,
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             pan_speed: 1.0,
@@ -263,6 +267,8 @@ pub enum PreferenceId {
     /// Retired preference ID, retained to decode saved custom actions.
     TotalZen,
     ZenIcon,
+    ZenShowCapy,
+    ZenRevealAtEdges,
     DarkBase,
     LightBase,
     Cursor,
@@ -292,6 +298,8 @@ impl PreferenceId {
             Self::ShowClock => "show-clock",
             Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
+            Self::ZenShowCapy => "zen-show-capy",
+            Self::ZenRevealAtEdges => "zen-reveal-at-edges",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Cursor => "cursor",
@@ -872,23 +880,41 @@ impl Settings {
         ];
         groups[0].push(PreferenceGroup {
             title: CommandId::ZenMode.label().into(),
-            rows: vec![row(
-                PreferenceId::ZenIcon,
-                "Button icon",
-                "",
-                PreferenceKind::Choice {
-                    presentation: ChoicePresentation::ImageTiles { columns: 4 },
-                    options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
-                    icons: crate::ZenIcon::CHOICES
-                        .iter()
-                        .map(|c| c.0.icon().into())
-                        .collect(),
-                    selected: crate::ZenIcon::CHOICES
-                        .iter()
-                        .position(|c| c.0 == self.zen_icon)
-                        .unwrap() as u32,
-                },
-            )],
+            rows: vec![
+                row(
+                    PreferenceId::ZenShowCapy,
+                    "Show Capy in Zen mode",
+                    "",
+                    PreferenceKind::Switch {
+                        active: self.zen_show_capy,
+                    },
+                ),
+                row(
+                    PreferenceId::ZenRevealAtEdges,
+                    "Reveal panels near screen edges",
+                    "",
+                    PreferenceKind::Switch {
+                        active: self.zen_reveal_at_edges,
+                    },
+                ),
+                row(
+                    PreferenceId::ZenIcon,
+                    "Button icon",
+                    "",
+                    PreferenceKind::Choice {
+                        presentation: ChoicePresentation::ImageTiles { columns: 4 },
+                        options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
+                        icons: crate::ZenIcon::CHOICES
+                            .iter()
+                            .map(|c| c.0.icon().into())
+                            .collect(),
+                        selected: crate::ZenIcon::CHOICES
+                            .iter()
+                            .position(|c| c.0 == self.zen_icon)
+                            .unwrap() as u32,
+                    },
+                ),
+            ],
         });
         if crate::CommandId::CustomizeWorkspaceUi.available_on(platform) {
             // Clock/battery visibility belongs to each workspace's window
@@ -986,6 +1012,10 @@ impl Settings {
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
             TotalZen => return Err("Zen mode no longer has a partial mode.".into()),
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
+            ZenShowCapy => self.zen_show_capy = matches!(value, PreferenceValue::Bool(true)),
+            ZenRevealAtEdges => {
+                self.zen_reveal_at_edges = matches!(value, PreferenceValue::Bool(true))
+            }
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
@@ -1434,7 +1464,7 @@ mod copy_tests {
     }
 
     #[test]
-    fn zen_icon_is_the_only_preference_and_legacy_mode_is_retired() {
+    fn zen_preferences_roundtrip_reset_and_retire_legacy_mode() {
         for platform in [
             Platform::Generic,
             Platform::Gtk,
@@ -1453,7 +1483,11 @@ mod copy_tests {
                 .unwrap();
             assert_eq!(
                 group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-                [PreferenceId::ZenIcon]
+                [
+                    PreferenceId::ZenShowCapy,
+                    PreferenceId::ZenRevealAtEdges,
+                    PreferenceId::ZenIcon
+                ]
             );
             assert!(settings.field(PreferenceId::TotalZen, platform).is_err());
             assert!(
@@ -1465,6 +1499,24 @@ mod copy_tests {
                     )
                     .is_err()
             );
+            assert!(settings.zen_show_capy);
+            assert!(!settings.zen_reveal_at_edges);
+            for (id, value) in [
+                (PreferenceId::ZenShowCapy, false),
+                (PreferenceId::ZenRevealAtEdges, true),
+            ] {
+                settings
+                    .edit(id, PreferenceValue::Bool(value), platform)
+                    .unwrap();
+                let restored =
+                    serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
+                        .unwrap();
+                assert_eq!(restored, settings);
+                let mut preferences = PreferencesState::default();
+                preferences.edit(&mut settings, PreferenceAction::Reset { id }, platform);
+                assert!(preferences.error.is_none());
+                assert_eq!(settings, Settings::default());
+            }
             settings
                 .edit(PreferenceId::ZenIcon, PreferenceValue::Choice(3), platform)
                 .unwrap();
@@ -1605,6 +1657,8 @@ mod copy_tests {
                 PreferenceId::ZoomSpeed,
                 PreferenceId::Renderer,
                 PreferenceId::ZenIcon,
+                PreferenceId::ZenShowCapy,
+                PreferenceId::ZenRevealAtEdges,
             ] {
                 assert!(settings.field(id, platform).unwrap().description.is_empty());
             }

@@ -1072,6 +1072,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
+        reply.keep_zen_button = self.interaction.hidden && self.state.settings.zen_show_capy;
         reply.pan_cursor = self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand;
         Ok(reply)
@@ -1109,14 +1110,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !self.input_pending
             && !self.engine.has_active_stroke()
         {
-            let near = self
-                .interaction
-                .viewport
-                .zip(self.interaction.hover)
-                .is_some_and(|(viewport, position)| {
-                    self.layout(viewport)
-                        .near_chrome(position, viewport, self.interaction.hidden)
-                });
+            let near =
+                self.state.settings.zen_reveal_at_edges
+                    && self
+                        .interaction
+                        .viewport
+                        .zip(self.interaction.hover)
+                        .is_some_and(|(viewport, position)| {
+                            !(self.interaction.hidden
+                                && self.state.settings.zen_show_capy
+                                && self.interaction.facts.zen_button.is_some_and(|bounds| {
+                                    bounds.contains(position[0], position[1])
+                                }))
+                                && self.layout(viewport).near_chrome(
+                                    position,
+                                    viewport,
+                                    self.interaction.hidden,
+                                )
+                        });
             self.interaction.hidden = !near;
         }
     }
@@ -1431,7 +1442,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("Workspace drag is not active")?;
         drag.position = position;
         drag.viewport = viewport;
-        drag.chrome_revealed |= self.layout(viewport).near_chrome(position, viewport, true);
+        drag.chrome_revealed |= self.state.settings.zen_reveal_at_edges
+            && self.layout(viewport).near_chrome(position, viewport, true);
         drag.moved |= position != drag.press;
         if drag.floating.is_none()
             && !matches!(drag.item, DockItem::Column { .. })
@@ -9296,7 +9308,7 @@ mod tests {
                 );
                 assert!(reply.chrome_hidden);
                 assert!(!reply.hide_floating_panels);
-                assert!(!reply.keep_zen_button);
+                assert!(reply.keep_zen_button);
                 assert!(!reply.partial_zen);
                 let reply = chrome(
                     &mut s,
@@ -9305,8 +9317,8 @@ mod tests {
                     },
                     ChromeFacts::default(),
                 );
-                assert!(!reply.chrome_hidden);
-                assert!(!reply.keep_zen_button);
+                assert!(reply.chrome_hidden);
+                assert!(reply.keep_zen_button);
                 let exit = key(&mut s, "Tab", true, false, false);
                 assert!(
                     exit.handled
@@ -9377,8 +9389,89 @@ mod tests {
     }
 
     #[test]
+    fn zen_capy_and_edge_reveal_are_independent_and_do_not_change_layout() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for capy in [true, false] {
+                for edges in [false, true] {
+                    let mut s = session();
+                    s.set_platform(platform);
+                    for (id, value) in [
+                        (PreferenceId::ZenShowCapy, capy),
+                        (PreferenceId::ZenRevealAtEdges, edges),
+                    ] {
+                        s.dispatch(UiAction::Preferences {
+                            action: PreferenceAction::Edit {
+                                id,
+                                value: PreferenceValue::Bool(value),
+                            },
+                        })
+                        .unwrap();
+                    }
+                    let layout = s.state.workspace.layout.clone();
+                    let camera = s.state.camera.clone();
+                    invoke(&mut s, CommandId::ZenMode);
+                    let reply = chrome(
+                        &mut s,
+                        ChromeEvent::Motion {
+                            position: [600., 450.],
+                        },
+                        ChromeFacts::default(),
+                    );
+                    assert!(reply.chrome_hidden);
+                    assert_eq!(reply.keep_zen_button, capy);
+                    if capy {
+                        let facts = ChromeFacts {
+                            zen_button: Some(Bounds {
+                                x: 6.,
+                                y: 6.,
+                                width: 36.,
+                                height: 36.,
+                            }),
+                            ..ChromeFacts::default()
+                        };
+                        for event in [
+                            ChromeEvent::Motion {
+                                position: [24., 24.],
+                            },
+                            ChromeEvent::Contact {
+                                position: [24., 24.],
+                                canvas: false,
+                            },
+                        ] {
+                            let reply = chrome(&mut s, event, facts);
+                            assert!(
+                                reply.chrome_hidden && reply.keep_zen_button && !reply.handled,
+                                "The visible Capy must receive the click even when edge reveal is enabled"
+                            );
+                        }
+                    }
+                    let reply = chrome(
+                        &mut s,
+                        ChromeEvent::Contact {
+                            position: [600., 6.],
+                            canvas: true,
+                        },
+                        ChromeFacts::default(),
+                    );
+                    assert_eq!(reply.chrome_hidden, !edges);
+                    assert_eq!(
+                        reply.handled, edges,
+                        "Only a reveal contact is consumed; otherwise canvas input continues"
+                    );
+                    assert_eq!(reply.keep_zen_button, capy && !edges);
+                    assert_eq!(s.state.workspace.layout, layout);
+                    assert_eq!(s.state.camera, camera);
+                    assert!(!key(&mut s, "Tab", true, false, false).chrome_hidden);
+                    assert!(!s.state.workspace.zen_mode);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session();
+        s.state.settings.zen_reveal_at_edges = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
         let touch = |p| ChromeEvent::Contact {
@@ -9433,6 +9526,7 @@ mod tests {
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
+            s.state.settings.zen_reveal_at_edges = true;
             s.set_platform(platform);
             let facts = ChromeFacts::default();
             chrome(
@@ -11144,6 +11238,7 @@ mod tests {
     #[test]
     fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
         let mut s = session();
+        s.state.settings.zen_reveal_at_edges = true;
         s.set_platform(Platform::Gtk);
         for column in [4, 8] {
             s.state.workspace.layout.column_stack_mut(column).drawers = true;
@@ -13124,6 +13219,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
+            app.state.settings.zen_reveal_at_edges = true;
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Sizes,

@@ -120,6 +120,10 @@ and Properties shows the selected filter's parameters.
 To clear controls from the canvas without rearranging the workspace, we added
 Zen mode. It temporarily hides controls while keeping the canvas size and position
 fixed, so entering or leaving the mode does not shift the artwork under the pen.
+Settings → Appearance → Zen mode includes **Show Capy in Zen mode** (on by default) to keep
+the top-left exit button visible, and **Reveal panels near screen edges** (off by default)
+to show controls when tapping or moving the pointer near an occupied edge.
+The Zen keyboard shortcut remains available when the Capy is hidden.
 
 We keep this behavior in Rust. When a client receives a button press or a layout
 change, it sends a typed `UiAction` to `UiSession`, which owns the editor session.

@@ -52,6 +52,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
     const track=document.querySelector('#size-number .number-track'), [minus,bar,plus]=[...track.children].map(n=>n.getBoundingClientRect());
     return minus.height===24 && plus.height===24 && bar.left===minus.right+6 && bar.right+6===plus.left;
   })()`), 'compact panel track has symmetric 6px gaps before the step buttons');
+  // This legacy edge-reveal journey opts into its behavior explicitly.
+  await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false,zen_reveal_at_edges:true}})");
   // Real host events: activation hides immediately, even while the pointer
   // remains over the Zen button, and the fixed corner guard survives refresh.
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
