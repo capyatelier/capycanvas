@@ -1,0 +1,89 @@
+{
+  "scope": "Forecast model, not a measured optimization. Probe timings are instrumented; source is unchanged except four census lines.",
+  "measurement": {
+    "callbacks": 332,
+    "fps": 33.09198175656402,
+    "cpu_ms": 24.5245843373494,
+    "gpu_interval_ms": 20.04363157894737,
+    "binding_cpu_ms": 5.319051204819277,
+    "measured_binding_calls_per_callback": 593.2048192771084,
+    "residual_ms": 5.694216318239722
+  },
+  "resource_reuse_model": {
+    "assumptions": [
+      "Constant normal uniform-ink settings and bindings during the stroke",
+      "Stable shared buffers after admission; no capacity growth or eviction of live paint pages",
+      "Metadata offset becomes dynamic; one zero-coverage and two ping-pong input variants per paint page",
+      "At most two output variants per paint page, one per preview surface",
+      "Unmasked scene bindings live with each source/view; 256 decoded source slots",
+      "New descriptor creation costs use observed per-class average; lookup/retirement cost must be subtracted separately"
+    ],
+    "max_paint_pages": 555,
+    "max_preview_pages": 132,
+    "cold_bindings_by_class": [
+      [
+        "material input",
+        1666,
+        0.013334368428873946
+      ],
+      [
+        "paint output",
+        1110,
+        0.009676222015826309
+      ],
+      [
+        "preview output",
+        132,
+        0.0077353198072952455
+      ],
+      [
+        "scene input",
+        1499,
+        0.0063032826142491285
+      ]
+    ],
+    "cold_binding_cpu_ms_per_callback": 0.1307992382331133,
+    "cpu_ms_before_new_lookup_cost": 19.336332370763234,
+    "lookup_budget_before_gpu_becomes_cpu_bound_ms": 0.7072992081841356,
+    "fixed_residual_fps_without_added_lookup_cost": 38.85328734533748,
+    "perfect_overlap_fps": 49.891158498958845
+  },
+  "sparse_preview": {
+    "rectangle_pages": 36325,
+    "planned_pages": 29702,
+    "removed_fraction": 0.18232622161046108,
+    "removed_pages_per_callback": 19.948795180722893,
+    "logical_color_MB_avoided_per_callback": 41.835655710843376,
+    "coverage_read_MB_if_not_eliminated_by_compiler": 5.229456963855422
+  },
+  "pass_model": {
+    "old_16_page_passes": 4263,
+    "after_sparse_16_page_passes": 3856,
+    "one_pass_per_brush_batch": 650,
+    "passes_removed_per_callback_if_inputs_stable": 10.882530120481928,
+    "vk_command_buffers_removed_per_callback_from_two_per_compute_pass": 21.765060240963855,
+    "assumptions": "One pass per independent brush batch is valid only when all input resources remain valid until consumed. Do not batch across transient source-slot reuse."
+  },
+  "sensitivity": [
+    {
+      "binding_cost_removed": 0.5,
+      "cpu_ms": 21.865058734939762,
+      "fixed_residual_fps": 36.28542470984305
+    },
+    {
+      "binding_cost_removed": 0.75,
+      "cpu_ms": 20.535295933734943,
+      "fixed_residual_fps": 38.1249941056268
+    },
+    {
+      "binding_cost_removed": 0.9,
+      "cpu_ms": 19.73743825301205,
+      "fixed_residual_fps": 38.85328734533748
+    },
+    {
+      "binding_cost_removed": 1.0,
+      "cpu_ms": 19.20553313253012,
+      "fixed_residual_fps": 38.85328734533748
+    }
+  ]
+}

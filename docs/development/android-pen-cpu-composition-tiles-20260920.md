@@ -8,6 +8,12 @@ has been implemented or measured. No new tablet timing run was needed to derive
 the following results. Reproducible arithmetic and the extracted CPU scopes are
 in `artifacts/wacom-cpu-tile-analysis-20260920/analyze.py` and `analysis.json`.
 
+The [deeper simplification census](android-pen-tile-simplification-20260920.md)
+corrects the binding-cost interpretation below: 3.13 ms covers only the
+instrumented device wrapper. The raw material-input helper bypasses it; timing
+both in a new matched diagnostic capture accounts for 5.32 ms/update. The newer
+note prioritizes unifying existing paths before considering new storage designs.
+
 ## What the CPU is doing
 
 The 335 drawing callbacks average 25.04 ms elapsed and **24.12 ms scheduled CPU**.
@@ -51,7 +57,7 @@ assuming that deleting that safeguard is a qualified fix.
    buffer growth or resource replacement. `Scene::encode_jobs` also clears its
    source/mask binding caches after every batch; retain a bounded working set
    without pinning evicted textures indefinitely. The measured 3.13 ms direct
-   binding cost bounds the saving from eliminating those calls alone; actual
+   binding cost bounds the saving from eliminating those instrumented calls alone; actual
    savings will be smaller, with possible additional reclamation benefits.
 2. **Batch page work as data.** `dry_material.rs` already uses one compute pass
    per batch, but still changes bindings and dispatches separately for every

@@ -74,7 +74,9 @@ These are measured workload-level differences, not independent kernel speedups.
 
 Fast command finalization falls from 8.35 to 6.86 ms CPU/callback; composition
 encoding from 5.66 to 4.96 ms. Binding creation remains approximately 3.1 ms,
-and bindings/callback remain about 398 versus 401. Vulkan command-buffer
+and instrumented bindings/callback remain about 398 versus 401. The later
+[tile census](android-pen-tile-simplification-20260920.md) measures additional
+material-input binding work that bypasses this original timer. Vulkan command-buffer
 allocation API scopes fall from 134 to 123/callback. The active owner remains
 an important limiting stage; the change does not eliminate driver overhead.
 
