@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the pinned GTK HEIF/AVIF shared libraries without system installation.
+"""Build independent native photo-codec oracles for interoperability tests.
 
 Requires a C/C++ compiler, CMake, Ninja, Meson, pkg-config, and NASM on x86.
-Network access is opt-in (--fetch); normal application builds stay offline.
+Never used by application builds or packages. Network access is opt-in (--fetch).
 The output includes corresponding upstream source archives and this build recipe.
 """
 import argparse
@@ -55,7 +55,7 @@ def source(name, spec, cache, work, fetch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=HERE.parents[1] / "target/photo-codecs")
+    parser.add_argument("--output", type=Path, default=HERE.parents[2] / "target/photo-codec-reference")
     parser.add_argument("--cache", type=Path)
     parser.add_argument("--fetch", action="store_true")
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
@@ -82,8 +82,6 @@ def main():
     sources = {name: source(name, spec, cache, work, args.fetch)
                for name, spec in dependencies.items()}
     patch = HERE / "libheif-source-profile.patch"
-    if not patch.exists():
-        patch = HERE.parents[1] / "vendor/libheif-source-profile.patch"
     run(["patch", "--batch", "--fuzz=0", "-p1", "-i", patch], cwd=sources["libheif"][0])
     env = {**os.environ, "PKG_CONFIG_PATH": str(prefix / "lib/pkgconfig")}
     common = [args.cmake, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
@@ -139,8 +137,6 @@ def main():
     if not lib.heif_have_decoder_for_format(1):
         raise RuntimeError("The bundle has no HEVC decoder")
     bridge = HERE / "heif_bridge.c"
-    if not bridge.exists():
-        bridge = HERE.parents[1] / "crates/layer-color/src/photo/heif_bridge.c"
     run(["cc", "-std=c11", "-O2", "-fPIC", "-shared", "-Wall", "-Wextra", "-Werror",
          "-Wl,-soname,libcapy_photo.so.1", "-Wl,-rpath,$ORIGIN", "-Wl,-z,defs",
          "-I", prefix / "include", bridge, "-L", prefix / "lib", "-lheif", "-lavif",
@@ -152,8 +148,6 @@ def main():
     if not all(bridge_lib.capy_photo_decoder(format) for format in (1, 4)):
         raise RuntimeError("The bridge requires both HEVC and AV1 decoders")
     hdr_worker = HERE / "hdr_codec.cpp"
-    if not hdr_worker.exists():
-        hdr_worker = HERE.parents[1] / "crates/layer-color/src/photo/hdr_codec.cpp"
     run(["c++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
          "-I", prefix / "include", hdr_worker, "-L", prefix / "lib",
          "-Wl,-rpath,$ORIGIN", "-luhdr", "-lavif", "-ljpeg",

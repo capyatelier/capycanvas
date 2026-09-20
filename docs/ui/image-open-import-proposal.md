@@ -300,12 +300,12 @@ and tests exist, or silently reduce rich images to untagged RGBA8.
 
 #### Finish the existing HEIF/AVIF implementation
 
-Reuse the [native reader](../../crates/layer-color/src/photo/heif_io.rs),
-[C bridge](../../crates/layer-color/src/photo/heif_bridge.c),
-[pinned codec recipe](../../tools/build/photo-codecs.py) and
-[package verifier](../../apps/layer-linux/photo-codecs.mjs).
-ABI 2 uses libheif/libde265 for HEIC and libavif/dav1d for AVIF. Package the
-replaceable libraries, licenses and corresponding sources.
+Use the [shared Rust reader](../../crates/layer-color/src/photo/avif_io.rs)
+and the [portable photo core](../development/portable-photo-core.md).
+JPEG/AVIF/HEIC support is built into the application; GTK packages have no
+external photo-codec bundle. The [native reference tools](../../tools/validation/photo-codecs/README.md)
+remain optional independent test oracles. The current Rust HEIC variant limits
+are accepted for initial integration and must remain explicit.
 
 1. Preserve independent exact high-depth, alpha, ICC/NCLX, grid and all 16
    crop/quarter-turn/mirror references. Broaden real high-depth HEIC inputs.

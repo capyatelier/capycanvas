@@ -199,7 +199,9 @@ stalls that merely yielding JavaScript tasks did not resolve. The
 records the evidence and physical-device regressions.
 ## HEIF/AVIF source color preservation
 
-`libheif-source-profile.patch` applies to upstream libheif **1.23.4**. With
+The validation-only
+[`libheif-source-profile.patch`](../tools/validation/photo-codecs/libheif-source-profile.patch)
+applies to upstream libheif **1.23.4**. With
 `output_image_nclx_profile_passthrough` enabled, the RGB conversion pipeline can
 return pixels without their source NCLX primaries/transfer. The patch restores
 an actually present source profile after successful passthrough conversion,
@@ -207,9 +209,10 @@ including profiles signalled only by the compressed bitstream. It does not
 invent a profile for an untagged source or change sample conversion.
 
 The pinned archive, dynamic libde265 backend and bridge are built by
-[`tools/build/photo-codecs.py`](../tools/build/photo-codecs.py). No codec source
-is downloaded during a Cargo build. GTK packaging verifies the source/recipe,
-patch and library checksums and includes corresponding sources and licenses.
+[`tools/validation/photo-codecs/photo-codecs.py`](../tools/validation/photo-codecs/photo-codecs.py). No codec source
+is downloaded during a Cargo build. The optional reference build verifies the
+source hashes and retains recipe, patch and library checksums, corresponding
+sources and licenses. Application packages do not include these reference codecs.
 The patch is supplied under libheif's LGPL-3.0-or-later terms.
 
 Reference: [libheif 1.23.4 decoding options](https://github.com/strukturag/libheif/blob/v1.23.4/libheif/api/libheif/heif_decoding.h).

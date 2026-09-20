@@ -130,27 +130,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Native HEIF/AVIF photo decoders
+## Optional native codec reference tools
 
-GTK packages include dynamically loaded libheif 1.23.4 and libde265 1.1.3
-(LGPL-3.0-or-later), plus libavif 1.4.2 and dav1d 1.5.3 (BSD-2-Clause). Their original licenses,
-corresponding source archives, pinned checksums, local patch and build recipe
-are included in `share/doc/capycanvas-photo-codecs/` in the native package.
-These shared libraries remain replaceable in `lib/capycanvas/photo/`.
+Application photo decoding, encoding and previews use shared Rust codecs.
+The C/C++ programs under `tools/validation/photo-codecs/` are optional independent
+interoperability oracles, excluded from application builds and packages.
 
-The narrow Capy Canvas C bridge uses the project's MIT OR Apache-2.0 terms.
-The libheif patch preserves source color metadata after RGB conversion and
-retains libheif's original license. See [codec provenance](vendor/README.md#heifavif-source-color-preservation).
-
-## Native HDR gain-map codecs
-
-The Linux photo-codec bundle also includes libultrahdr 2.0.0 (Apache-2.0),
+Their pinned recipe builds libheif 1.23.4 and libde265 1.1.3 (LGPL-3.0-or-later),
+libavif 1.4.2 and dav1d 1.5.3 (BSD-2-Clause), libultrahdr 2.0.0 (Apache-2.0),
 libaom 3.14.1 (BSD-2-Clause and the AOM patent license), and libjpeg-turbo 3.1.4.1
-(IJG, BSD-3-Clause and zlib licenses for the applicable components). The pinned
-manifest `tools/build/photo-codecs.json` lists exact archives, hashes and license
-files. The bundle copies those files and corresponding source archives into
-`share/doc/capycanvas-photo-codecs/`. The Capy codec process and bridge retain
-our MIT OR Apache-2.0 license; linking does not relicense the codec libraries.
+(IJG, BSD-3-Clause and zlib for the applicable components). Exact source hashes
+and license filenames are in `tools/validation/photo-codecs/photo-codecs.json`.
+Running that reference build retains original notices, corresponding sources,
+local patch and build recipe with the generated reference libraries. The narrow
+Capy bridge and helper use the project's MIT OR Apache-2.0 terms. The libheif
+source-metadata patch retains upstream's LGPL-3.0-or-later terms.
 
 ## Oklab color conversion — MIT
 

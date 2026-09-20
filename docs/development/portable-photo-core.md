@@ -10,20 +10,61 @@ Commit and push significant milestones to `origin/main`.
 
 - Qualify larger JPEG/AVIF images and device latency alongside the remaining
   host work. Both formats now import/export and preview through shared Rust.
-- Remove the obsolete native codec build, bundle discovery and packaging
-  requirements. GTK now uses shared Rust JPEG/AVIF/HEIC codecs; the packaging
-  recipe still stages the old bundle and its package validation needs updating.
-- Connect Web and Android imports, exports and previews to the shared codecs;
-  test real browser/device operation, memory admission and cancellation.
+- Finish Web and Android host integration: remove their old gain-map export
+  restrictions and connect encoded previews to the shared codecs. Verify imports,
+  exports, memory admission and cancellation in the real browser/device flows.
 - Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
   JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+
+## GTK packaging milestone — 2026-09-19
+
+The GTK staging script and Arch recipe no longer build, discover or ship a native
+photo-codec bundle. Staging clears obsolete payloads from an owned generated
+directory and rejects unmarked directories and symlink outputs. Final package
+validation rejects the old codec directory, helper executables and codec libraries.
+The pinned GTK runtime remains a platform dependency with its original notices,
+corresponding source and rebuild recipe.
+
+The C/C++ bridge, HDR helper, libheif patch and pinned build recipe now live under
+`tools/validation/photo-codecs/`. Independent Rust interoperability tests use the
+explicit `native-codec-reference` feature and `CAPY_PHOTO_CODEC_DIR`; executable-
+relative bundle discovery is removed. `libloading` is a Linux test dependency
+only, including when all production features are selected.
+
+GTK and Web share original Rust notice harvesting/rendering under `tools/build/`,
+with each package selecting its actual target. GTK now includes both original
+Rust dependency notices and the installed Rust toolchain's complete notice.
+The Arch recipe declares the GTK build tools/headers and notice generator.
+
+Verification:
+
+- The complete release GTK package builds without a photo-codec bundle. Original
+  Rust codec notices and all packaged GTK manifest hashes were checked.
+- A relocated copy under a path containing spaces opens three HEIC inputs
+  (8-bit rotated P3 grid, 10-bit P3, and a 1280×854 photograph), 12-bit P3 AVIF,
+  HDR gain-map JPEG, transparent HDR gain-map AVIF and TIFF. All seven captured
+  images were visually checked on private Mutter/Wayland and NVIDIA Vulkan.
+  `/proc` sampling confirms the relocated GTK library and no removed application
+  codec libraries. Evidence is under `artifacts/portable-photo/gtk-package-rust/`.
+  This checks package startup/photo display; its fixed capture delay is not codec
+  throughput, and the SDR display captures do not qualify physical HDR output.
+- Shared photo tests: 118 passed, 27 optional tests ignored. Both separately
+  selected JPEG/libultrahdr and AVIF/libavif interoperability tests pass using
+  the explicit reference directory after the feature/dependency changes.
+- GTK packaging tests: 3 passed; Web packaging tests: 14 passed after integrating
+  current `origin/main`. Web notice generation/rendering retains every Rust photo
+  and storage codec's original license. Repository license/source audit passes.
+- Linux, WebAssembly and Android production `layer-color` graphs, including all
+  features, contain no native codec/C build/assembler dependency or `libloading`.
+  Python validation tools compile and the Arch shell recipe passes syntax checks;
+  an actual Arch `makepkg` build is not qualified on this Fedora host.
 
 ## HEIC import milestone — 2026-09-19
 
 HEIC is now an unconditional shared-core import capability. GTK no longer enables
 the `heif` native feature, and neither application decoding nor file-picker
 availability uses a codec bundle. The old bridge is compiled only in optional
-interoperability tests pending separate cleanup of its packaging/build tools.
+interoperability tests; its packaging/build cleanup is recorded above.
 
 The application uses heif-oxide 0.1.0's patched low-level HEVC adapter around
 rust_h265 0.1.0. Shared BMFF parsing, sequential grid assembly, source ICC/NCLX,

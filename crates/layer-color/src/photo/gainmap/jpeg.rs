@@ -639,7 +639,7 @@ mod tests {
             }
         }
     }
-    #[cfg(all(feature = "heif", target_os = "linux"))]
+    #[cfg(all(feature = "native-codec-reference", target_os = "linux"))]
     #[test]
     #[ignore = "independent libultrahdr interoperability oracle; CAPY_PHOTO_CODEC_DIR"]
     fn jpeg_interoperates_both_directions_with_libultrahdr() {

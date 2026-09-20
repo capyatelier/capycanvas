@@ -190,7 +190,7 @@ fn rust_avif_preview_preserves_hdr_when_the_authored_sdr_changes() {
     assert!(hdr.iter().zip(&sdr).any(|(h, s)| h[0] > s[0] + 0.2));
 }
 
-#[cfg(all(feature = "heif", target_os = "linux"))]
+#[cfg(all(feature = "native-codec-reference", target_os = "linux"))]
 #[test]
 #[ignore = "independent libavif/dav1d reference bundle via CAPY_PHOTO_CODEC_DIR"]
 fn rust_avif_output_interoperates_with_native_libavif() {

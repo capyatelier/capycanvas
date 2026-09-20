@@ -58,7 +58,9 @@ The build:
    graph (including build-time dependencies), and the installed Rust toolchain's
    complete copyright notice. Generic missing-license placeholders fail the
    package build; the `profiling` notice is retrieved from its recorded upstream
-   revision and checked against a pinned checksum.
+   revision and checked against a pinned checksum. Web and GTK share
+   `tools/build/about.toml` and the original-notice renderer; each package selects
+   its own target dependency graph.
 6. Generates a relative-scope manifest, content-versioned service worker,
    integrity-checked precache list and `.nojekyll` marker. The worker/cache
    version is automatically SHA-256-derived from the complete package and

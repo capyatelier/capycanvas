@@ -1,9 +1,17 @@
-# Wasm distribution only. The repository-wide policy lives in /deny.toml.
+# Shared binary-distribution notices. Each packager supplies its actual target.
+# The repository-wide license policy lives in /deny.toml.
 # OpenEXR's exr/lebe dependencies use BSD-3-Clause; the packager includes their
 # complete upstream notices, also recorded in THIRD_PARTY_NOTICES.md.
 accepted = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "CC0-1.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
-targets = ["wasm32-unknown-unknown"]
 ignore-dev-dependencies = true
+
+# The SPIR-V leaf archive omits its repository-root Apache license.
+[spirv.clarify]
+license = "Apache-2.0"
+[[spirv.clarify.git]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 
 # Original notices for the patched Rust HEIC decoder and container adapter.
 [heif-oxide.clarify]
@@ -59,8 +67,9 @@ checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
 
 # TIFF's pinned JPEG decoder declares Zlib as an alternative. Its old archives
 # omit the files; retrieve the original complete notice at the recorded commits.
-# zune-core 0.4.12 and zune-inflate 0.2.54 also omit their repository field. package.mjs supplies its
-# checksum-pinned original notice from licenses/ for that exact crate only.
+# zune-core 0.4.12 and zune-inflate 0.2.54 also omit their repository field.
+# dependency-notices.mjs supplies their checksum-pinned original notice from
+# licenses/ for those exact versions only.
 [zune-jpeg.clarify]
 license = "Zlib"
 [[zune-jpeg.clarify.git]]

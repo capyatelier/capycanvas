@@ -27,7 +27,7 @@ impl GainMapMetadata {
     }
 }
 
-#[cfg(all(test, feature = "heif", target_os = "linux"))]
+#[cfg(all(test, feature = "native-codec-reference", target_os = "linux"))]
 pub(super) mod native;
 mod jpeg;
 mod jpeg_container;

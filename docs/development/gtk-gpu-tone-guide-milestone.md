@@ -153,8 +153,9 @@ Use the test executable paths reported by Cargo. Hardware GPU tests require
 access to the local graphics device outside a restricted sandbox.
 
 The GTK harness is `tools/performance/gtk-raster.sh BINARY FILTER REPORT_PREFIX`.
-Set `LD_LIBRARY_PATH` to the packaged GTK runtime and `CAPY_PHOTO_CODEC_DIR` to
-`target/photo-codecs/prefix/lib`. The pacing run additionally sets:
+Set `LD_LIBRARY_PATH` to the packaged GTK runtime. Current shared Rust codecs
+need no photo-codec environment variable; the timings below predate that migration.
+The pacing run additionally sets:
 
 ```sh
 LAYER_DRAWING_HDR=32

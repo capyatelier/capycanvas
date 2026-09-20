@@ -1,6 +1,6 @@
 // Narrow, versioned bridge to the bundled libheif/libavif APIs. Rust owns input bytes,
 // admission, profile policy and tiled row publication; this library owns only
-// libheif contexts, handles and decoded planes. Built by tools/build/photo-codecs.py.
+// libheif contexts, handles and decoded planes. Built only by tools/validation/photo-codecs/photo-codecs.py.
 #include <libheif/heif.h>
 #include <libheif/heif_properties.h>
 #include <libheif/heif_sequences.h>

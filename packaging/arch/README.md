@@ -2,10 +2,14 @@
 
 `capycanvas-git/PKGBUILD` builds the current upstream revision for Arch Linux
 and Omarchy. It stages the same desktop entry, MIME registration, icon, filters,
-license material, and pinned HEIF/AVIF codec bundle as the native Linux package.
+license material and pinned GTK runtime as the native Linux package. Photo
+codecs are compiled into the shared Rust core.
 
-The codec archives are ordinary `makepkg` sources with checked hashes. The
-build therefore does not fetch unmanaged sources from inside `build()`.
+The recipe no longer downloads or builds native photo-codec archives. `shaderc`
+supplies GTK's shader compiler; `cargo-about` collects original Rust dependency
+notices. GLib tools, DRM/Vulkan headers and Wayland protocols are explicit GTK
+build dependencies. GTK runtime sources and missing license notices use the pinned checksums
+and revisions from the shared packaging tools.
 
 Until upstream PR #2 lands, the recipe applies its immutable commit to restore
 the native build and add the protected-Paper guidance. The guarded patch step

@@ -1,20 +1,23 @@
-// Native package with the pinned startup-safe GTK and photo codecs.
+// Native GTK package. Photo codecs are compiled into the shared Rust core.
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stagePhotoCodecs, verifyPhotoCodecs } from "./photo-codecs.mjs";
+import { preparePackageOutput, verifyPortablePhotoPackage } from "./package-files.mjs";
+import { dependencyNotices } from "../../tools/build/dependency-notices.mjs";
 import { stageGtkRuntime } from "./gtk-runtime.mjs";
 
 const app = dirname(fileURLToPath(import.meta.url)), root = resolve(app, "../..");
-const output = join(root, "dist/capycanvas-linux"), marker = join(output, ".capy-package");
-if (existsSync(output) && !existsSync(marker)) throw new Error("Refusing to overwrite an unmarked native package directory");
-const photoCodecs = verifyPhotoCodecs(root);
-// Mark ownership before staging dependencies so a failed first build can be
-// retried without treating our partial output as an unrelated directory.
-mkdirSync(output, { recursive: true });
-writeFileSync(marker, "Generated Capy Canvas native package (build in progress)\n");
+const output = join(root, "dist/capycanvas-linux"), marker = preparePackageOutput(output);
+const about = process.env.LAYER_CARGO_ABOUT || "cargo-about";
+const host = execFileSync("rustc", ["-vV"], { encoding: "utf8" }).match(/^host: (.+)$/m)?.[1];
+const target = process.env.CARGO_BUILD_TARGET || host;
+if (!target) throw new Error("Cannot determine the Rust package target");
+const licensing = JSON.parse(execFileSync(about, ["generate", "--locked", "--fail", "--manifest-path", join(app, "Cargo.toml"),
+  "--config", join(root, "tools/build/about.toml"), "--target", target, "--format", "json"],
+  { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] }));
+const licenseHtml = dependencyNotices(licensing.licenses);
 const gtkRuntime = stageGtkRuntime(root, output);
 const flags = [...(process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f") || []),
   `--remap-path-prefix=${homedir()}=/build-home`, `--remap-path-prefix=${root}=/capycanvas`];
@@ -36,10 +39,16 @@ const files = [
   ...["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"].map(name => [join(root, name), `share/doc/capycanvas/${name}`]),
 ];
 for (const [source, relative] of files) { const target = join(output, relative); mkdirSync(dirname(target), { recursive: true }); cpSync(source, target); }
-stagePhotoCodecs(photoCodecs, output);
+const docs = join(output, "share/doc/capycanvas");
+writeFileSync(join(docs, "dependency-licenses.html"), '<!doctype html><meta charset="utf-8"><title>Rust dependency licenses</title>'
+  + '<style>body{max-width:70rem;margin:2rem auto;font:16px system-ui}pre{white-space:pre-wrap}</style>'
+  + '<h1>Rust dependency licenses</h1>' + licenseHtml);
+const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
+cpSync(join(sysroot, "share/doc/rust/COPYRIGHT.html"), join(docs, "rust-toolchain-notices.html"));
 chmodSync(join(output, "bin/capycanvas"), 0o755);
 execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas-bin")]);
 writeFileSync(join(output, "share/doc/capycanvas-gtk/manifest.json"), JSON.stringify(gtkRuntime, null, 2) + "\n");
 execFileSync("desktop-file-validate", [join(output, "share/applications/art.capycanvas.CapyCanvas.desktop")]);
+verifyPortablePhotoPackage(output);
 writeFileSync(marker, "Generated Capy Canvas native package\n");
 console.log(`Native package: ${output}\nRun: ${join(output, "bin/capycanvas")}`);
