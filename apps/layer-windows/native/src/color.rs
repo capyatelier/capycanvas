@@ -29,10 +29,9 @@ pub unsafe extern "C" fn capy_export_draft(input: *const c_char) -> *mut c_char 
         struct Request { recipe: layer_ui::ExportRecipe, action: layer_ui::ExportDraftAction, #[serde(default)] validate: bool, extent: Option<[u32;2]>, color: Option<layer_core::color::DocumentColor> }
         let text = unsafe { std::ffi::CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
         let request: Request = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        let mut draft = if let Some(color) = request.color {
+        let draft = if let Some(color) = request.color {
             request.recipe.draft_for_color(color, request.action)
         } else { request.recipe.draft(request.action) };
-        draft.formats.retain(|f| f.gainmap().is_none());
         if request.validate {
             draft.recipe.validate()?;
             draft.recipe.size.extent(request.extent.ok_or("Export extent is missing")?)?;

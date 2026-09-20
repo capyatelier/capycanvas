@@ -657,7 +657,7 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
 
 #[test]
 fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Windows] {
         let mut s=session();s.set_platform(platform);
         s.dispatch(UiAction::Customize {action:CustomizationAction::SetPanelVisible {panel:Panel::Color,visible:true}}).unwrap();
         let before=s.engine.document().clone();

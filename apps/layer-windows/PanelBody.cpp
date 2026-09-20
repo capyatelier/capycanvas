@@ -5,6 +5,7 @@
 #include "EffectControls.h"
 #include "LayersView.h"
 #include "StatsView.h"
+#include "ProofPanel.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
@@ -139,6 +140,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             double inset=panelId==L"stats"||panelId==L"properties"?6:8;
             contentHeight=[content]{return content.ActualHeight();};
             content.Padding(Thickness{inset,inset,inset,inset});
+            if(panelId==L"proof")content.Children().Append(ProofPanel(data,bindings));
             FrameworkElement fittedColor{nullptr};size_t visibleControls=0;
             for(auto value:array(panel,L"controls"))if(flag(value.GetObject(),L"visible_in_panel"))visibleControls++;
             auto brushValue=[data=data](wchar_t const* key){return num(object(data->state,L"brush"),key);};

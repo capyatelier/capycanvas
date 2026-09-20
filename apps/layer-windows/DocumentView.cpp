@@ -153,7 +153,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         Pickers::FileOpenPicker open(window.AppWindow().Id());
                         open.CommitButtonText(str(options,L"open_label"));
                         open.FileTypeFilter().Append(extension);
-                        for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif",L".exr"})open.FileTypeFilter().Append(ext);
+                        for(auto ext:{L".png",L".jpg",L".jpeg",L".jpe",L".tif",L".tiff",L".webp",L".bmp",L".dib",L".gif",L".exr",L".avif",L".heic",L".heif",L".hif"})open.FileTypeFilter().Append(ext);
                         picker=open.PickSingleFileAsync();
                     } else {
                         Pickers::FileSavePicker save(window.AppWindow().Id());
@@ -367,7 +367,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 dialog.CloseButtonText(L"Done");
             }else if(stage==L"preview"){
                 text(flag(details,L"copy")?L"Review the flattened converted copy. The open drawing keeps its current color space.":L"Review the complete drawing before applying this change.");
-                for(uint32_t i=0;i<2;++i){text(i?L"After":L"Before");Image image;image.MaxHeight(210);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,i);}
+                for(uint32_t i=0;i<2;++i){text(array(details,L"preview_labels").Size()==2?array(details,L"preview_labels").GetStringAt(i):i?L"After":L"Before");Image image;image.MaxHeight(210);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,i);}
                 text(L"Clipped channels: "+to_hstring(uint64_t(num(details,L"clipped_channels"))));
                 if(flag(details,L"adds_layer"))text(L"Existing raster edits are preserved; the corrected source will be added as a separate layer.");
                 dialog.PrimaryButtonText(kind==L"export"?L"Export…":flag(details,L"copy")?L"Save copy…":L"Apply");

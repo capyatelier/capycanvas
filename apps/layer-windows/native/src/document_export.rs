@@ -31,9 +31,6 @@ impl Task {
     }
     pub(super) fn configure(&mut self, recipe: ExportRecipe) -> Result<(), String> {
         let document = &self.original.project.document;
-        if recipe.format.gainmap().is_some() {
-            return Err("Gain-map export requires a codec bundle unavailable on Windows".into());
-        }
         recipe.validate_for_document(document)?;
         recipe.size.extent([document.width, document.height])?;
         recipe.output_resolution(document.resolution)?;
@@ -65,8 +62,15 @@ impl Task {
     pub(super) fn compare(&mut self, control: CaptureControl) -> Result<(), String> {
         let recipe = self.recipe.clone();
         let renderer = self.renderer(control)?;
-        let before = renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
-        let (after, statistics) = if recipe.format == ExportFormat::Exr {
+        let mut before = renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?;
+        let (after, statistics) = if let Some(format) = recipe.format.gainmap() {
+            let (hdr, sdr, stats) = renderer.preview_gainmap_output(
+                [512, 384], layer_core::color::RgbSpace::Srgb, 1., format,
+                recipe.jpeg_quality, recipe.background.matte(),
+            )?;
+            before = hdr;
+            (sdr, stats)
+        } else if recipe.format == ExportFormat::Exr {
             (renderer.preview_document([512, 384], layer_core::color::RgbSpace::Srgb)?, Default::default())
         } else if matches!(recipe.format, ExportFormat::PngHdr | ExportFormat::PngHdrMapped) {
             renderer.preview_hdr_output([512, 384], layer_core::color::RgbSpace::Srgb, 1.)?
@@ -95,6 +99,7 @@ impl Task {
         Ok(serde_json::json!({"color":document.color,"extent":extent,
             "resolution":document.resolution,"recipe":self.recipe,"form":layer_ui::ExportForm::new(document),
             "extension":self.recipe.format.extension(),"format_name":self.recipe.format.name(),"output_extent":self.recipe.size.extent(extent)?,"clipped_channels":self.clipped,
+            "preview_labels":if self.recipe.format.gainmap().is_some() { ["Decoded HDR (SDR display)", "Encoded SDR base"] } else { ["Before", "After"] },
             "sampled_time":document.has_animated_effects().then_some(self.original.time)}))
     }
     pub(super) fn write(
@@ -111,7 +116,8 @@ impl Task {
             ExportFormat::Exr => renderer.write_exr(&mut output),
             ExportFormat::PngHdr | ExportFormat::PngHdrMapped => renderer.write_hdr_png(&mut output, recipe.format.maps_hdr_range()),
             ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => {
-                return Err("Gain-map export requires a codec bundle unavailable on Windows".into());
+                renderer.write_gainmap(&mut output, recipe.format.gainmap().unwrap(),
+                    recipe.jpeg_quality, recipe.background.matte(), recipe.format.maps_hdr_range())
             }
             ExportFormat::Png => renderer.write_png(
                 &mut output,

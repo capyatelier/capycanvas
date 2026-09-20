@@ -411,8 +411,10 @@ pub fn sdr_tone_pad() -> crate::parameter_pad::ParameterPadSpec {
     use crate::parameter_pad::{ParameterPadAxis, ParameterPadSpec};
     let mut balance = NumericControl::number(-1., 1., 0.01, 0).unit("%");
     balance.scale = 100.;
+    balance.resolution = 0.01;
     let mut contrast = NumericControl::number(-1., 1., 0.01, 0).unit("%");
     contrast.scale = 100.;
+    contrast.resolution = 0.01;
     ParameterPadSpec {
         axes: [
             ParameterPadAxis {
@@ -462,6 +464,7 @@ pub fn sdr_number_controls() -> [ProofNumberControl; 2] {
             let mut numeric = NumericControl::number(min, max, step, digits).unit(unit);
             numeric.kind = NumericKind::Slider;
             numeric.scale = scale;
+            numeric.resolution = step;
             numeric.soft_min = soft_min;
             numeric.soft_max = soft_max;
             if key == "highlight_color" {
@@ -545,6 +548,26 @@ mod tests {
             assert_eq!(v["pad_values"],serde_json::json!([1.,1.]));
             let v=sdr_dial(size,recipe,Some(g.field.center),Some(3)).unwrap();
             assert_eq!(v["recipe"],serde_json::to_value(recipe).unwrap());
+        }
+    }
+    #[test]
+    fn scaled_numeric_edits_preserve_single_percentage_steps() {
+        use crate::numeric::NumericOperation;
+        let numbers = sdr_number_controls();
+        for (spec, text, expected, stepped) in [
+            (&numbers[0].numeric, "-10", -0.4, -0.36),
+            (&numbers[1].numeric, "42", 0.42, 0.43),
+        ] {
+            let value = spec.resolve(0., NumericOperation::Expression { text: text.into() }).unwrap();
+            assert!((value.value - expected).abs() < 1e-6);
+            let next = spec.resolve(value.value, NumericOperation::Step { steps: 1. }).unwrap();
+            assert!((next.value - stepped).abs() < 1e-6);
+        }
+        for axis in sdr_tone_pad().axes {
+            let value = axis.numeric.resolve(0., NumericOperation::Expression { text: "25".into() }).unwrap();
+            assert!((value.value - 0.25).abs() < 1e-6);
+            let next = axis.numeric.resolve(value.value, NumericOperation::Step { steps: -1. }).unwrap();
+            assert!((next.value - 0.24).abs() < 1e-6);
         }
     }
     #[test]

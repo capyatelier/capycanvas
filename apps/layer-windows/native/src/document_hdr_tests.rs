@@ -92,7 +92,7 @@ fn hdr_wait_tone(service: &mut crate::tone::Service, host: &mut NativeHost, gene
     loop {
         service.poll(host, generation).unwrap();
         assert!(service.error.is_none(), "{:?}", service.error);
-        if service.guide.is_some() {
+        if service.status()["ready"] == true {
             break;
         }
         assert!(Instant::now() < deadline, "HDR analysis timeout");
@@ -161,7 +161,67 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         let checkpoint = host.session.engine().checkpoint();
         let mut tone = crate::tone::Service::new(Arc::new(|| {}));
         hdr_wait_tone(&mut tone, &mut host, 1);
+        let downloaded = tone
+            .guide
+            .as_ref()
+            .unwrap()
+            .download(host.session.engine().backend().0.as_ref().unwrap().queue())
+            .unwrap();
+        let mut reference = hdr::LocalToneBuilder::new([32, 24], color.space).unwrap();
+        for row in master.as_chunks::<32>().0 {
+            reference.push(row).unwrap();
+        }
+        let reference = reference.finish(|| false).unwrap();
+        assert_eq!(downloaded.extent, reference.extent);
+        for (gpu, cpu) in downloaded.samples.iter().zip(&reference.samples) {
+            for c in 0..3 {
+                assert!(
+                    (gpu[c] - cpu[c]).abs() < 0.01,
+                    "GPU tone guide differs from CPU oracle"
+                );
+            }
+        }
+        let publications = tone.status()["publications"].clone();
         let original = host.session.engine().document().sdr_rendition;
+        let epoch = host.session.state().document_file.epoch;
+        let panel_recipe = hdr::SdrRendition {
+            exposure: -0.5,
+            ..original
+        };
+        let panel_edit = |host: &mut NativeHost, epoch: u64, phase: &str| {
+            serde_json::from_value::<crate::actions::Action>(serde_json::json!({
+                "windows_epoch":epoch.to_string(),
+                "windows_proof_action":{"type":"rendition","phase":phase,"recipe":panel_recipe}
+            }))
+            .unwrap()
+            .dispatch(host)
+            .unwrap();
+        };
+        panel_edit(&mut host, epoch + 1, "down");
+        panel_edit(&mut host, epoch + 1, "up");
+        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        panel_edit(&mut host, epoch, "down");
+        assert!(host.session.require_document_snapshot_idle().is_err());
+        panel_edit(&mut host, epoch, "cancel");
+        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        panel_edit(&mut host, epoch, "down");
+        panel_edit(&mut host, epoch, "up");
+        assert_eq!(host.session.engine().document().sdr_rendition, panel_recipe);
+        host.dispatch(UiAction::Invoke {
+            command: CommandId::Undo,
+        })
+        .unwrap();
+        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        host.dispatch(UiAction::Invoke {
+            command: CommandId::Redo,
+        })
+        .unwrap();
+        assert_eq!(host.session.engine().document().sdr_rendition, panel_recipe);
+        host.dispatch(UiAction::Invoke {
+            command: CommandId::Undo,
+        })
+        .unwrap();
+        assert_eq!(host.session.engine().document().sdr_rendition, original);
         let mut cancel = begin(&mut host, CommandId::SdrRendition);
         ready(&mut cancel, Action::Describe);
         cancel.control.cancel();
@@ -209,6 +269,12 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path),
             sdr
         );
+        tone.poll(&mut host, 1).unwrap();
+        assert_eq!(
+            tone.status()["publications"],
+            publications,
+            "SDR recipe changes reuse the GPU guide"
+        );
         let exr = hdr_delivery(
             &mut host,
             layer_ui::ExportRecipe::further_editing(color),
@@ -248,6 +314,81 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         )
         .unwrap();
         assert_eq!(photo.project.document.color.depth, SampleDepth::F16);
+        for format in [
+            layer_ui::ExportFormat::JpegHdr,
+            layer_ui::ExportFormat::JpegHdrMapped,
+            layer_ui::ExportFormat::AvifHdr,
+            layer_ui::ExportFormat::AvifHdrMapped,
+        ] {
+            let mut recipe = layer_ui::ExportRecipe::web_share()
+                .draft_for_color(color, layer_ui::ExportDraftAction::Format(format))
+                .recipe;
+            if format.gainmap() == Some(layer_color::photo::GainMapFormat::Jpeg) {
+                recipe = recipe
+                    .draft_for_color(
+                        color,
+                        layer_ui::ExportDraftAction::Background(layer_ui::ExportBackground::White),
+                    )
+                    .recipe;
+            }
+            let path = directory.join(format!("{depth:?}-{format:?}.{}", format.extension()));
+            let bytes = hdr_delivery(&mut host, recipe.clone(), &path);
+            let imported = layer_ui::read_import(
+                Cursor::new(bytes.clone()),
+                layer_ui::ImportIntent::Open,
+                Default::default(),
+                "gain-map photo",
+                Default::default(),
+                Default::default(),
+                &Default::default(),
+            )
+            .unwrap();
+            assert!(imported.project.document.color.depth.is_float());
+            assert_eq!(
+                [
+                    imported.project.document.width,
+                    imported.project.document.height
+                ],
+                [32, 24]
+            );
+            let source = imported
+                .project
+                .document
+                .layers
+                .iter()
+                .find_map(|l| l.source.as_ref())
+                .unwrap();
+            let mut row = vec![0; source.row_bytes()];
+            source.rows().read(0, &mut row).unwrap();
+            assert!(
+                hdr::decode_samples(
+                    source.interpretation.depth,
+                    &row[..source.interpretation.depth.bytes() * 4]
+                )
+                .unwrap()[0]
+                    > 1.
+            );
+            let mut canceled = begin(&mut host, CommandId::ExportDocument);
+            ready(
+                &mut canceled,
+                Action::ExportOptions {
+                    recipe,
+                    profile_id: None,
+                },
+            );
+            canceled.control.cancel();
+            canceled.work(Action::ExportWrite {
+                path: path.to_str().unwrap().into(),
+            });
+            assert!(canceled.error.is_some());
+            canceled.complete(&mut host, false).unwrap();
+            drop(canceled);
+            assert_eq!(
+                std::fs::read(path).unwrap(),
+                bytes,
+                "Canceled gain-map output replaced its destination"
+            );
+        }
         let changed = hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path);
         let proof = layer_core::color::ProofRecipe::new(
             "sRGB".into(),
@@ -330,6 +471,19 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_eq!(std::fs::read(&png_path).unwrap(), changed);
         // Stop a pending analysis before releasing a removed process device.
         tone.poll(&mut host, 2).unwrap();
+        assert!(
+            tone.guide.is_none(),
+            "Old-device guide survived a generation change"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while tone.status()["pending"] != true {
+            tone.poll(&mut host, 2).unwrap();
+            assert!(
+                Instant::now() < deadline,
+                "Recovery fixture never started analysis"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         crate::gpu_recovery_tests::remove_device(host.session.engine().backend(), &state);
         tone.stop().unwrap();
         drop(host.session.renderer_mut().0.take());

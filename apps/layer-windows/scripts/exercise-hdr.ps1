@@ -114,7 +114,9 @@ function Set-Text([string]$Id,[string]$Text){
  $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
 }
 function Delivery([string]$Name,[string]$Format){
- Command 'export_document' 'File';Select-Choice 'export-format' $Format;Button 'Preview export'
+ Command 'export_document' 'File';Select-Choice 'export-format' $Format
+ if($Format.StartsWith('HDR JPEG')){Select-Choice 'export-background' 'White'}
+ Button 'Preview export'
  Wait-Until {(Model).windows_document.stage -eq 'preview'} 'HDR export preparation failed' 60
  Button 'Export…';Picker 'Save As';$path=Join-Path $run $Name;Path-In-Picker $path;Idle
  Wait-Until {Test-Path -LiteralPath $path} 'HDR export missing'
@@ -155,9 +157,48 @@ try {
  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
  $revision=(Model).state.document_file.revision
  Button 'Test pen';Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).windows_display.analysis.ready} 'HDR painting analysis failed' 60
+ # Exercise the retained native Proof controls through the shared Window menu.
+ [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+ $windowMenu=(Model).application_menus|Where-Object id -eq 'window'
+ $proofEntry=$null
+ foreach($section in $windowMenu.model.sections){foreach($item in $section){if($item.action.action.type -eq 'set_panel_visible' -and $item.action.action.panel -eq 'proof'){$proofEntry=$item}}}
+ if(!$proofEntry){throw 'Windows has no shared Proof panel menu'}
+ if($proofEntry.selected){
+  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+  Invoke 'panel-tab-proof'
+ } else {
+  $proofMenuItem=Control $proofEntry.label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+  $previousDpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
+  [CapyRowPointer]::Initialize([uint32]$review.Id)
+  try {
+   $box=$proofMenuItem.Current.BoundingRectangle
+   [CapyRowPointer]::Down('mouse',[int]($box.X+$box.Width/2),[int]($box.Y+$box.Height/2));[CapyRowPointer]::Up()
+  } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($previousDpi)|Out-Null}
+ }
+ Wait-Until {(Find 'proof-panel-exposure')} 'Native Proof panel did not appear'
+ $field=Control 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
+ [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ $field.SetFocus();Set-Text 'proof-panel-exposure' 'invalid';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ if((Model).windows_proof_form.rendition.exposure -ne -1){throw 'Invalid Proof field changed the recipe'}
+ [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ $field.SetFocus();Set-Text 'proof-panel-exposure' '-10';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ Wait-Until {[Math]::Abs((Model).windows_proof_form.rendition.exposure+0.4) -lt 0.0001} 'Proof numeric commit did not apply'
+ if(((Control 'proof-panel-exposure').GetRuntimeId() -join ':') -ne $fieldId){throw 'Proof value update rebuilt its native editor'}
+ Command 'undo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'Proof field Undo failed'
+ Command 'redo' 'Edit';Wait-Until {[Math]::Abs((Model).windows_proof_form.rendition.exposure+0.4) -lt 0.0001} 'Proof field Redo failed'
+ Command 'undo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'Proof field final Undo failed'
+ $proofHistory=(Model).state.document_file|ConvertTo-Json -Compress
+ Select-Choice 'proof-panel-mode' 'SDR';Wait-Until {(Model).state.preview_sdr} 'Proof panel SDR mode failed'
+ Select-Choice 'proof-panel-mode' 'Off';Wait-Until {!(Model).state.preview_sdr} 'Proof panel Off failed'
+ if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $proofHistory){throw 'Proof panel modes edited history'}
  $plain=Delivery 'SDR.png' 'PNG'
  $pq=Delivery 'HDR.png' 'HDR PNG · BT.2020 PQ'
  $exr=Delivery 'HDR.exr' 'OpenEXR · 32-bit float'
+ $jpeg=Delivery 'gain-map.jpg' 'HDR JPEG · gain map'
+ $avif=Delivery 'gain-map.avif' 'HDR AVIF · gain map'
+ $null=Delivery 'gain-map-clipped.jpg' 'HDR JPEG · clip to gain-map range'
+ $null=Delivery 'gain-map-clipped.avif' 'HDR AVIF · clip to gain-map range'
  Command 'undo' 'Edit'
  if((Delivery 'undo-paint.exr' 'OpenEXR · 32-bit float') -eq $exr){throw 'Float painting undo did not remove the stroke'}
  Command 'redo' 'Edit'
@@ -186,10 +227,14 @@ try {
  $import=Join-Path $run $(if($Depth -eq 'F32'){'HDR.exr'}else{'HDR.png'})
  Command 'open_document' 'File';Picker 'Open';Path-In-Picker $import;Idle
  Wait-Until {(Model).color_panel.document_depth -eq $Depth -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Exported HDR photo did not reopen as HDR' 60
+ foreach($name in @('gain-map.jpg','gain-map.avif')){
+  Command 'open_document' 'File';Button 'Discard Changes';Picker 'Open';Path-In-Picker (Join-Path $run $name);Idle
+  Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
+ }
  & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly *> (Join-Path $run 'hdr.json')
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $directory
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'HDR stderr requires inspection'}
- [pscustomobject]@{depth=$Depth;creation='passed';sdr_appearance_cancel_history='passed';painting='passed';painting_history='passed';numeric_hdr_color='passed';hdr_photo_open='passed';pq_exr_sdr_exports='passed';synthetic_display_switching='passed';proof_export_separation='passed';device_recovery='passed';save_reopen='passed';physical_display=$display;scope='Native UIA/D3D12 functional checks. Injected display reports do not qualify physical HDR, mixed-monitor behavior, or performance.'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
+ [pscustomobject]@{depth=$Depth;creation='passed';sdr_appearance_cancel_history='passed';painting='passed';painting_history='passed';numeric_hdr_color='passed';hdr_photo_open='passed';pq_exr_sdr_exports='passed';gainmap_exports_and_open='passed';proof_panel_numeric_modes_history='passed';synthetic_display_switching='passed';proof_export_separation='passed';device_recovery='passed';save_reopen='passed';physical_display=$display;scope='Native UIA/D3D12 functional checks. Injected display reports do not qualify physical HDR, mixed-monitor behavior, or performance.'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
 }catch{
  if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

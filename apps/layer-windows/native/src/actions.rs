@@ -7,6 +7,10 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub(crate) enum Action {
+    Proof {
+        windows_proof_action: layer_ui::proof_panel::ProofAction,
+        windows_epoch: String,
+    },
     TabDrag {
         windows_tab_drag: TabCapture,
         action: UiAction,
@@ -41,7 +45,7 @@ impl Action {
     pub(crate) fn allowed_while_workspace_blocked(&self) -> bool {
         let action = match self {
             Self::Ordinary(action) | Self::Document { action, .. } => action,
-            Self::TabDrag { .. } => return false,
+            Self::TabDrag { .. } | Self::Proof { .. } => return false,
         };
         matches!(
             action,
@@ -70,6 +74,22 @@ impl Action {
     }
     pub(crate) fn dispatch(self, host: &mut NativeHost) -> Result<(), String> {
         let action = match self {
+            Self::Proof {
+                windows_proof_action,
+                windows_epoch,
+            } => {
+                if windows_epoch
+                    .parse::<u64>()
+                    .map_err(|_| "Invalid document epoch")?
+                    != host.session.state().document_file.epoch
+                {
+                    return Ok(());
+                }
+                let previous = host.session.state().revision;
+                let change = layer_ui::proof_panel::apply(&mut host.session, windows_proof_action)?;
+                host.apply_change(previous, change);
+                return Ok(());
+            }
             Self::TabDrag {
                 windows_tab_drag,
                 action,
@@ -203,5 +223,48 @@ mod tests {
         )
         .unwrap();
         assert!(malformed.dispatch(&mut host).is_err());
+    }
+    #[test]
+    fn proof_panel_rejects_obsolete_controls_and_preserves_view_history() {
+        use layer_ui::{Panel, Platform, ProofMode};
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        let epoch = host.session.state().document_file.epoch;
+        let original = host.session.engine().document().clone();
+        let layout = host.session.state().workspace.clone();
+        let action = |epoch: u64, control: serde_json::Value| {
+            serde_json::from_value::<Action>(serde_json::json!({
+                "windows_epoch": epoch.to_string(), "windows_proof_action": control
+            }))
+            .unwrap()
+        };
+        action(epoch + 1, serde_json::json!({"type":"reveal"}))
+            .dispatch(&mut host)
+            .unwrap();
+        assert_eq!(host.session.state().workspace, layout);
+        action(epoch, serde_json::json!({"type":"mode","mode":"print"}))
+            .dispatch(&mut host)
+            .unwrap();
+        assert_eq!(host.session.proof_panel_mode(), ProofMode::Print);
+        action(epoch, serde_json::json!({"type":"mode","mode":"off"}))
+            .dispatch(&mut host)
+            .unwrap();
+        assert_eq!(host.session.proof_panel_mode(), ProofMode::Off);
+        assert!(
+            action(epoch, serde_json::json!({"type":"mode","mode":"sdr"}))
+                .dispatch(&mut host)
+                .is_err()
+        );
+        action(epoch, serde_json::json!({"type":"reveal"}))
+            .dispatch(&mut host)
+            .unwrap();
+        assert!(
+            host.session
+                .state()
+                .workspace
+                .layout
+                .panel_group(Panel::Proof)
+                .is_some()
+        );
+        assert_eq!(host.session.engine().document(), &original);
     }
 }

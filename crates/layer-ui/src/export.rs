@@ -321,7 +321,7 @@ impl ExportRecipe {
         } else { vec![ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg] };
         if color.depth.is_float() {
             draft.formats.extend([ExportFormat::PngHdr, ExportFormat::PngHdrMapped, ExportFormat::Exr,
-                ExportFormat::JpegHdr, ExportFormat::AvifHdr]);
+                ExportFormat::JpegHdr, ExportFormat::JpegHdrMapped, ExportFormat::AvifHdr, ExportFormat::AvifHdrMapped]);
         }
         draft
     }
@@ -421,6 +421,13 @@ mod tests {
             assert_eq!(draft.dithers, [layer_core::color::OutputDither::None]);
             assert_eq!(draft.recipe.format, format);
             draft.recipe.validate().unwrap();
+            for depth in [SampleDepth::F16, SampleDepth::F32] {
+                let color = DocumentColor { space: RgbSpace::Srgb, depth };
+                let choices = draft.recipe.clone().draft_for_color(color, ExportDraftAction::Refresh);
+                assert!(choices.formats.contains(&format), "Authored range policy must remain selectable");
+            }
+            let integer = ExportRecipe::web_share().draft_for_color(DocumentColor::default(), ExportDraftAction::Refresh);
+            assert!(!integer.formats.contains(&format));
         }
         let sdr = ExportRecipe::web_share().draft(ExportDraftAction::Refresh);
         assert_eq!(sdr.formats, [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Jpeg]);

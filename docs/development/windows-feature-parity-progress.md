@@ -1,4 +1,8 @@
-# Windows feature-gap review against Web and Android
+# Windows feature-gap review against GTK, Web and Android
+
+Current-code follow-up: 2026-09-19. See the follow-up section below for the
+portable photo, GPU tone-guide and native Proof panel work. Earlier codec and
+panel limitations are historical, not the current implementation contract.
 
 HDR implementation update: 2026-09-19. The earlier review below is historical;
 the Windows HDR implementation and fresh evidence are recorded in the new HDR
@@ -254,13 +258,100 @@ cargo test --locked -p layer-render-wgpu --lib d3d12_hdr_float16_float32_display
 - Sustained painting cadence, large-photo 24/45/60 MP latency, peak process/driver
   memory, concurrent save/export throughput and constrained-device behavior have
   not been measured for Windows HDR. No performance acceptance is claimed.
-- Windows has no qualified gain-map JPEG/AVIF codec bundle; those exports remain
-  explicitly unavailable. Unsupported gain-map/HLG/HEIF inputs follow the shared
-  codec's rejection contract. The bounded EXR subset remains the shared flat
+- Gain-map JPEG/AVIF was unavailable at this earlier HDR review. The portable
+  photo follow-up below supersedes that limitation. Inputs outside the shared
+  codec matrix still fail explicitly. The bounded EXR subset remains the shared flat
   scanline FLOAT contract, not arbitrary deep/multipart/tiled/HALF EXR.
+
+## Current-code follow-up (2026-09-19)
+
+Started with a clean Windows main at `8eebe84f`, fast-forwarded to
+`a23c627a`, then integrated `54ca69cc` and concurrent shared-renderer work
+through `29dddabf`, the disjoint tab/storage updates through `e32ded49`,
+and the Multiply preview-routing fix `5004f1be`. Read AGENTS.md, the drag convention,
+this report and current GTK, Android, Web, Windows and shared Rust sources.
+Reference-host findings below are source inspection, not fresh GTK/Android/Web
+runtime acceptance.
+
+| Area | Current-code finding and Windows change |
+| --- | --- |
+| Portable photos | GTK `files/export.rs`, Android `documents.rs`/`inspection.rs` and Web `output.rs` now use shared portable gain-map codecs. Windows still filtered those formats and returned a codec-bundle error. Windows now uses shared gain-map preview/encoding, quality/background/range policy and its existing cancellable atomic file worker. Shared color-aware choices now include explicit clipping variants; transparent JPEG requires an explicit matte. The Open picker exposes AVIF/HEIF/HEIC/HIF alongside EXR. Shared decoding already owns tagged source precision and interpretation. |
+| GPU tone guides | GTK `local_tone_view.rs`, Android and Web `hdr.rs` retain shared GPU guides. Windows used the downloaded CPU guide. Windows now publishes `GpuToneGuide` directly to canvas/Navigator, retains only compatible previous illumination during edits, waits for idle, throttles animated analysis, rejects canceled/stale completions, and releases guides before replacing a removed device. Guide construction and compatibility remain shared Rust. |
+| Proof workspace | Shared `Panel::Proof` excluded Windows and its native panel builder had no Proof content. Windows now offers a retained panel in the shared Paint/Photo presets and through the Window menu, with Off/SDR/Print, four shared SDR numeric controls, print setup and gamut warning. Numeric expressions, ranges, mode policy, cancellation and one-step history remain shared. Fixed shared percent resolution so typed and stepped fractional values survive normalization. Native fields retain widgets and discard drafts on document identity changes; shared print preparation and existing native profile pickers remain in use. |
+| Dependency notices | Windows packaging looked for vendored crates in registry directories and omitted new codec notices. Collection now resolves actual vendor paths, preserves local attribution metadata, and reuses the checked-in original Zune notice with a checksum normalized for Windows checkout line endings. |
+| Drawing tabs | GTK `documents.rs`, Android `native/src/document_tabs.rs` and Web `src/document_tabs.rs` now use shared `DocumentSessions`/`DocumentTabs`, retained editors, backing-store budgets and per-drawing recovery. Windows still replaces the current drawing and supports separate native windows. Retained drawing tabs are a remaining implementation gap; existing multiwindow support does not close it. |
+
+No new reorder gesture is introduced. The Proof panel uses the existing native
+workspace panel/tab/grab-handle integration, including retained drawer views.
+Windows numeric fields provide the four SDR parameters; the GTK/Web/Android
+combined graphical dial and their consolidated Proof menu presentation are not
+implemented by this follow-up.
+
+Persistence uses the upstream version-6 LZ4 project format. Earlier v4/v5
+projects and recovery copies are deliberately rejected by shared storage; there
+is no migration reader in current main. Tests use fresh isolated v6 profiles and
+do not establish compatibility with old Windows saved files.
+
+### Follow-up validation
+
+The final integrated runtime baseline is `e32ded49` plus this patch. The later
+`5004f1be` delta only routes non-normal dry material to the established fragment
+path; its final build/routing check is recorded below. GPU and GUI runs were
+serial, without competing compilation, on Intel Iris Xe / driver `32.0.101.6737`.
+All logs and disposable profiles are under ignored `artifacts/windows`.
+
+| Check | Result and scope |
+| --- | --- |
+| Integrated Release build | Rust and C++/WinUI passed on `e32ded49`. Log: `parity-current-build-upstream.log`. |
+| Integrated Rust library suites | Passed 499 UI, 99 core, 28 host and 119 Windows tests (745); 15 explicitly ignored. Windows used one test thread. Logs: `parity-current-upstream-shared.log` and `parity-current-upstream-windows.log`. The shared photo/color suite also passed 116 tests, with 14 ignored, before the final storage/tab integration: `parity-current-photo-core-retry.log`. |
+| Shared policy regressions | The integrated UI suite includes explicit HDR clipping choices and a new test for fractional percentage expressions/steps across all four Proof parameters. Separate focused runs: `parity-current-export-choices.log`, `parity-current-proof-numeric.log`. |
+| Strict Clippy | Windows/shared host, all targets, no dependency linting, warnings denied: passed. Log: `parity-current-upstream-clippy.log`. |
+| Native C++ input/queue checks | Passed admission, ordering, cancellation/refusal ownership, retained models, query scheduling and completion. Log: `parity-current-native-input.log`. |
+| Hardware HDR workflow | Passed F16/F32 GPU tone-guide comparison with a CPU reference, guide reuse across rendition edits, eight gain-map deliveries/reimports, canceled-output preservation, Proof cancel/undo/redo, v6 persistence and pending-analysis/device replacement (163.49 s). Log: `parity-current-upstream-d3d12.log`. |
+| Hardware signed-range workflow | Passed F32 range preservation, lossy-demotion refusal and destination protection on the earlier `29dddabf` integration (46.69 s). Log: `parity-current-d3d12-signed.log`. |
+| Native F16 and F32 HDR journeys | Both passed on `e32ded49`: invalid input/Escape, retained numeric widget identity, fractional commit and undo/redo, viewing-mode history, all four gain-map outputs and JPEG/AVIF reopen, PNG/PQ/EXR, painting history, synthetic display changes, GPU replacement and Unicode save/reopen. Logs: `parity-current-upstream-gui-f16.log`, `parity-current-upstream-gui-f32.log`. |
+| Native print-proof journey | Passed first-use/picker cancellation, profile-library draft return, shared options, viewing/gamut switches, recipe/artwork history, uncontaminated exports, device replacement and save/reopen. Log: `parity-current-upstream-proof-ui.log`. |
+| Crash/restart recovery | Passed checkpoint restore, durable origin retirement, later edits surviving clean close and explicit discard. Log: `parity-current-upstream-restart.log`. |
+| Dependency notices | Collected 215 Cargo packages plus pinned NuGet/native runtime notices using actual vendored sources. Log: `parity-current-notices-final.log`. |
+
+The direct debug HDR integration test exceeded the default test-thread stack
+while extending coverage to AVIF. Its passing runs used
+`RUST_MIN_STACK=8388608`, matching the native document worker's existing 8 MiB
+allocation. No production stack limit or recovery deadline was increased.
+An early Proof-worker timeout during competing compilation did not recur in
+isolation; its 15-second deadline is unchanged. This does not qualify recovery
+under load. An interrupted linker left one malformed generated PDB; only that
+exact file was removed before the passing core rebuild.
+
+The GUI fixture respects the already-docked Proof tab in the shared preset,
+waits for Undo completion, explicitly chooses a JPEG matte for transparent
+artwork, and discards imported test photos before opening the next. It retains
+foreground/process input guards. GUI validation caught and corrected the native
+panel builder's missing dedicated Proof dispatch; shared numeric tests caught
+whole-unit rounding in the percentage specifications.
+
+Reproduce hardware checks with a fresh absolute `CAPY_SETTINGS_DIRECTORY` under
+ignored artifacts and `RUST_MIN_STACK=8388608`. Run the ignored Windows HDR and
+signed-range tests individually with `--test-threads=1`. Run
+`exercise-hdr.ps1 -Depth F16`, `exercise-hdr.ps1 -Depth F32`,
+`exercise-proof.ps1` and `exercise-artwork-recovery.ps1` serially against the
+Release executable in `artifacts/windows/parity-current`.
+
+The final `5004f1be` integration also passed the Release Windows rebuild and
+the focused `non_normal_dry_material_uses_the_fragment_path` regression. Logs:
+`parity-current-build-final-main.log` and `parity-current-final-routing.log`.
+The full runtime evidence above is scoped to the preceding `e32ded49` build.
 
 ## Remaining gaps and acceptance
 
+- Retained drawing tabs on Windows, including per-drawing resource/recovery
+  ownership and native tab/selector interactions. GTK, Android and Web now use
+  the shared drawing-session implementation; separate Windows windows are not
+  equivalent.
+- The combined graphical Proof dial and consolidated Proof menu presentation.
+  The new native panel provides numeric SDR editing and the existing print setup.
+- Migration of pre-v6 project/recovery files; current shared storage deliberately
+  rejects older archives.
 - Physical pen/touch prediction, pressure/tilt/eraser, capture/cancellation and
   the full drag matrix; synthetic input does not qualify a digitizer.
 - Mixed-display/DPI, suspend/resume and actual sustained 120 Hz painting and
