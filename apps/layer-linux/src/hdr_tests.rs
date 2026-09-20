@@ -759,9 +759,9 @@ fn native_gainmap_export_choices_preview_flatten_and_reopen() {
 
 #[test]
 #[ignore = "isolated Wayland display and GPU; run with no photo codec bundle"]
-fn portable_jpeg_gainmap_export_without_codec_bundle() {
-    assert!(!layer_color::photo::gainmap_format_available(layer_color::photo::GainMapFormat::Avif));
-    gainmap_export_journey(false);
+fn portable_gainmap_export_without_codec_bundle() {
+    assert!(layer_color::photo::gainmap_format_available(layer_color::photo::GainMapFormat::Avif));
+    gainmap_export_journey(true);
 }
 
 #[allow(deprecated)]

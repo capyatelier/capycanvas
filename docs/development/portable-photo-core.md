@@ -8,9 +8,8 @@ Commit and push significant milestones to `origin/main`.
 
 ## Remaining work
 
-- Replace native AVIF export and encoded previews with rav1e/ravif and the Rust
-  container/gain-map path. Rust AVIF import is integrated; qualify larger images
-  and device latency alongside the remaining host work.
+- Qualify larger JPEG/AVIF images and device latency alongside the remaining
+  host work. Both formats now import/export and preview through shared Rust.
 - Replace HEIC import with heif-oxide. Its current fidelity limitations are
   accepted for the initial integration; retain explicit capability reporting.
 - Finish GTK integration and remove native codec build, bundle discovery and
@@ -200,3 +199,60 @@ Verification:
   storage in Chrome 152 WebAssembly, with zero host imports. Exact SDR and HDR
   reference comparisons plus failed-budget/cancellation retry pass. This checks
   the shared core; browser UI and Android device integration are still pending.
+
+## Shared AVIF export milestone — 2026-09-19
+
+AVIF gain-map writing and encoded HDR/SDR previews now use the shared Rust core.
+GTK always offers HDR AVIF for float documents, including transparent documents,
+without a helper executable, native codec library, or codec bundle. The native
+gain-map adapter is compiled only for independent interoperability tests; native
+HEIC import and its packaging remain pending their own replacement.
+
+The encoder retains the existing 12-bit BT.2020/sRGB-transfer base, full-resolution
+RGB gain map, straight alpha, ISO tone-map metadata, and Exif print density.
+rav1e 0.8.1 runs without its default/native build features for quality 1–99.
+oxideav-av1 0.1.16 encodes the quality-100 base, alpha, and gain map losslessly;
+independent rav1d checks require every 12-bit plane sample to match. Its AV1
+sequence color description is rewritten to match the full-range container,
+including full-range monochrome alpha. Both Rust and native libavif read it.
+
+Gains are calculated against the decoded compressed SDR base, preserving the HDR
+master even at low SDR quality. The authored local tone guide and rendition feed
+the SDR base. Previews decode the finished file in HDR and SDR modes, retaining
+transparency. One-cell and multi-cell grids trim repeated-edge padding, with
+64-pixel minimum coded grid dimensions for MIAF interoperability. Exif describes
+the base directly so readers with a single metadata association retain density.
+
+Memory admission reserves the master/base planes, retained compressed packets,
+container copy, and one encoder working set. Export checks cancellation at rows,
+cell boundaries, codec stages, and output chunks. Individual codec calls remain
+synchronous. Cells normally cap at 256 pixels; large images use 512/1024 to stay
+within the 4096-item reader limit. This is conservative admission, not a hard
+allocator quota; large-photo/device performance and cancellation latency still
+need qualification.
+
+Verification:
+
+- Release color/photo suite: 107 passed with no native features; 110 passed with
+  the legacy HEIC feature. The latter leaves 24 optional tests ignored.
+- Nine exports cover quality 25/90/100, odd 23×17 padding, direct 32×24 coding,
+  and partial 263×65 grids. Maximum HDR reconstruction error is 0.00390625 at
+  intensity 4. Alpha is exact at the declared 12-bit precision.
+- Independent libavif/dav1d reads all nine exports, their gain maps and print
+  density. SDR RGBA16 differs by at most one normalization rounding step; HDR
+  reconstruction differs by at most 0.00390625. The permanent optional oracle
+  test is `rust_avif_output_interoperates_with_native_libavif`.
+- The existing 1031×1037 partial-grid/alpha/gain regression passes in release
+  mode (12.34 seconds on this Linux host). This is not a device throughput claim.
+- `portable_gainmap_export_without_codec_bundle` passes on private Mutter/Wayland
+  and NVIDIA Vulkan with an empty codec directory: actual GTK choices, encoded
+  preview switching, save, HDR reopen, JPEG flattening, and unchanged history.
+- Chrome 152 executes both AVIF encoders, padded grids, HDR reconstruction and
+  alpha through the application API. The validation harness uses wasm-bindgen
+  packaging because v_frame exports enum bindings. Its only host import initializes
+  wasm-bindgen's reference table; no host codec or pixel conversion is supplied.
+- Android compilation and WebAssembly/Android dependency graphs pass with no C
+  codec, assembler, C build, or fuzz-harness dependency in production. Repository
+  license/source checks pass. Original encoder licenses and the rav1e patent
+  notice are retained; Web packaging retrieves missing proc-macro notices from
+  pinned upstream revisions.

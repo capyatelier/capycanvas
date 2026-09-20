@@ -68,3 +68,53 @@ license = "CC0-1.0"
 path = "LICENSE"
 license = "CC0-1.0"
 checksum = "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+
+# Preserve the encoder dependency's original attribution.
+[rav1e.clarify]
+license = "BSD-2-Clause"
+[[rav1e.clarify.files]]
+path = "LICENSE"
+license = "BSD-2-Clause"
+checksum = "2dd0a109751e939dec3f80ddcfbc1ba91553f18c574399e85c159632182a2c0a"
+
+# Preserve the encoder dependency's original attribution.
+[oxideav-av1.clarify]
+license = "MIT"
+[[oxideav-av1.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2"
+
+# Preserve the encoder dependency's original attribution.
+[oxideav-core.clarify]
+license = "MIT"
+[[oxideav-core.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "4ecae6b086e0d2663c8629e7d3d7ab7d8b39958e8853f9e1371159499a0c3bf2"
+
+# The proc-macro archive omits its repository-root license.
+[atomig-macro.clarify]
+license = "MIT"
+[[atomig-macro.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "6f54826bbf67526f2d41937c1904ae2de63ef5707b80c68deadbf073b5669c40"
+
+# The proc-macro archive omits its repository-root license.
+[profiling-procmacros.clarify]
+license = "MIT"
+[[profiling-procmacros.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+
+# This release declares MIT but predates its LICENSE file. The author's next
+# commit adds only that original notice; the released source is unchanged.
+[simd_helpers.clarify]
+license = "MIT"
+override-git-commit = "82040194cd05affb060bf94d6f19f82a771d07fb"
+[[simd_helpers.clarify.git]]
+path = "LICENSE"
+license = "MIT"
+checksum = "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e"

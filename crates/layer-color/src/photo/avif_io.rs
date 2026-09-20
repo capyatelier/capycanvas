@@ -4,11 +4,15 @@ use std::{borrow::Cow, sync::atomic::AtomicBool};
 mod codec;
 mod color;
 mod container;
+mod encode;
 mod gainmap;
+mod mux;
+mod output;
 mod properties;
 mod sequence;
 use container::{Container, Reader};
 use properties::{Color, Geometry, Properties};
+pub(super) use output::{preview, write};
 
 // Probe brands without buffering the image or selecting a host-specific codec.
 pub(super) fn is_avif(
@@ -363,6 +367,15 @@ pub(super) fn read(
     limits: DecodeLimits,
     cancel: &AtomicBool,
 ) -> Result<DecodedPhoto, String> {
+    read_rendition(input, limits, cancel, true)
+}
+
+fn read_rendition(
+    input: impl BufRead + Seek,
+    limits: DecodeLimits,
+    cancel: &AtomicBool,
+    reconstruct: bool,
+) -> Result<DecodedPhoto, String> {
     codec::check(cancel)?;
     let mut input = super::raster_io::Input::new(input, limits)?;
     let length = usize::try_from(input.length).map_err(|_| "AVIF input is too large")?;
@@ -424,7 +437,7 @@ pub(super) fn read(
         ProfileChannels::Rgb => SourceChannels::Rgba,
         _ => return Err("AVIF pixels disagree with the embedded profile".into()),
     };
-    let gainmap = descriptor
+    let gainmap = descriptor.filter(|_| reconstruct)
         .map(|v| {
             v.decode(
                 &container,

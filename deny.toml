@@ -21,6 +21,14 @@ name = "to_method"
 version = "=1.1.0"
 allow = ["CC0-1.0"]
 
+# rav1e's cfg(fuzzing) dependency is included by the all-platform source audit.
+# It is absent from production target graphs. NCSA is a permissive attribution
+# license; keep this approval limited to the reviewed fuzz harness version.
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+version = "=0.4.13"
+allow = ["NCSA"]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

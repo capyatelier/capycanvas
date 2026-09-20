@@ -1,8 +1,10 @@
 # Portable photo codecs and color management
 
 `layer-color` uses `libjpeg-turbo-rs` 0.8.0, `moxcms` 0.9.1 and patched `rav1d`
-1.1.0. JPEG, AVIF import, ICC and source-tile Zstd processing use Rust. Native
-HEIC import and AVIF writing remain until their replacements are qualified;
+1.1.0. JPEG, AVIF import/export, encoded previews, ICC and source-tile Zstd
+processing use Rust. AVIF encoding uses rav1e 0.8.1 without native build features
+and oxideav-av1 0.1.16 for exact 12-bit alpha/gain samples. Native
+HEIC import remains until its replacement is qualified;
 GTK/GPU platform APIs retain their build requirements. See the
 [migration record](portable-photo-core.md) for current capability and validation.
 

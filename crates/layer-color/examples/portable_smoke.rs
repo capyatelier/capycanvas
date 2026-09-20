@@ -1,5 +1,63 @@
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
+
+/// Execute both lossy-base and lossless AVIF export in actual Wasm. The odd
+/// extent exercises padded grids; decoded HDR and alpha must survive both.
+#[unsafe(no_mangle)]
+pub extern "C" fn portable_avif_export() -> u32 {
+    use layer_color::photo::{GainMapFormat, read_photo, write_gainmap_rows};
+    use std::{io::Cursor, sync::atomic::AtomicBool};
+    let cancel = AtomicBool::new(false);
+    let extent = [23, 17];
+    for quality in [30, 100] {
+        let mut bytes = Vec::new();
+        write_gainmap_rows(
+            &mut bytes,
+            extent,
+            RgbSpace::Srgb,
+            Default::default(),
+            GainMapFormat::Avif,
+            quality,
+            None,
+            None,
+            false,
+            &cancel,
+            |y, row| {
+                for (x, p) in row.iter_mut().enumerate() {
+                    let a = if x < 11 { 0.375 } else { 1. };
+                    *p = [(if y < 8 { 4. } else { 0.02 }) * a, 0.2 * a, 0.1 * a, a];
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        let source = read_photo(Cursor::new(&bytes), Default::default()).unwrap();
+        assert_eq!(source.extent, extent);
+        assert_eq!(source.interpretation.depth, SampleDepth::F16);
+        let mut row = vec![0; source.row_bytes()];
+        let mut rows = source.rows();
+        for y in 0..extent[1] {
+            rows.read(y, &mut row).unwrap();
+            for (x, p) in row.chunks_exact(8).enumerate() {
+                let pixel = layer_core::color::hdr::decode_pixel(std::array::from_fn(|c| {
+                    u16::from_le_bytes([p[c * 2], p[c * 2 + 1]])
+                }))
+                .unwrap();
+                let expected = [
+                    if y < 8 { 4. } else { 0.02 },
+                    0.2,
+                    0.1,
+                    if x < 11 { 0.375 } else { 1. },
+                ];
+                for c in 0..3 {
+                    assert!((pixel[c] - expected[c]).abs() < 0.01);
+                }
+                assert!((pixel[3] - expected[3]).abs() < 0.0003);
+            }
+        }
+    }
+    2
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn portable_smoke() -> u32 {
     let profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
