@@ -382,13 +382,16 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .divider.vertical { cursor: row-resize; }
 .drop-indicator { position: absolute; z-index: 3000; background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 1px #0003; pointer-events: none; }
 .drop-indicator.drop-body { background: color-mix(in srgb, var(--accent) 25%, transparent); border: 2px solid var(--accent); border-radius: 0; box-shadow: none; }
-.chrome, .dock-group { transition: opacity 180ms ease-out; }
+/* Fade header items separately: Capy swaps with the standalone Zen button
+   immediately, so its ancestors must remain opaque throughout the transition. */
+.chrome:not(:where(#header)), .dock-group, :where(#header) > :not([data-kind="capy"]) { transition: opacity 180ms ease-out; }
 .floating-resize { position: absolute; touch-action: none; user-select: none; -webkit-user-select: none; }
 .floating-resize[data-edge="left"], .floating-resize[data-edge="right"] { cursor: ew-resize; }
 .floating-resize[data-edge="top"], .floating-resize[data-edge="bottom"] { cursor: ns-resize; }
 .floating-resize[data-edge="top_left"], .floating-resize[data-edge="bottom_right"] { cursor: nwse-resize; }
 .floating-resize[data-edge="top_right"], .floating-resize[data-edge="bottom_left"] { cursor: nesw-resize; }
-.zen-hidden > .chrome, .zen-hidden > .dock-group:not(.floating-panel), .zen-hidden > .divider { opacity: 0; pointer-events: none; }
+.zen-hidden > .chrome:not(:where(#header)), .zen-hidden #header > *, .zen-hidden > .dock-group:not(.floating-panel), .zen-hidden > .divider { opacity: 0; pointer-events: none; }
+.zen-hidden > #header { pointer-events: none; }
 .zen-hidden .dock-group:not(.floating-panel) .panel-preview, .zen-hidden .dock-group:not(.floating-panel) .panel-configuration { pointer-events: none; }
 .zen-hidden #canvas { outline: none; }
 #status { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: var(--popover); box-shadow: 0 2px 8px #0004; z-index: 10; max-width: 80vw; }
@@ -526,7 +529,7 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 @media (max-width: 480px) {
   #settings { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; border-radius: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .chrome, .dock-group { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .chrome, .dock-group, :where(#header) > :not([data-kind="capy"]) { transition: none; } }
 @media (max-width: 640px) { #document-title { display: none; } }
 /* Schema-driven adjustment, property and diagnostic panels. */
 .adjustments-panel,.properties-panel,.stats-panel { padding: 0; }

@@ -20,6 +20,40 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
     await evaluate('new Promise(r=>setTimeout(r,350))'); await settle();
   };
   const motion = async position => { await call('Input.dispatchMouseEvent', {type:'mouseMoved',x:position[0],y:position[1]}); await settle(); };
+  // Sample the rendered ancestor opacity while exiting, before contact()'s
+  // click-settlement delay can hide a brief fade-to-invisible regression.
+  const watchCapyExit = () => evaluate(`(() => {
+    window.zenExitFrames = new Promise(resolve => {
+      const frames = [], deadline = performance.now() + 2000;
+      let exitTime;
+      const opacity = node => {
+        if (!node?.getClientRects().length) return 0;
+        let value = 1;
+        for (; node; node = node.parentElement) value *= Number(getComputedStyle(node).opacity);
+        return value;
+      };
+      const sample = () => {
+        const now = performance.now();
+        if (!layerApp.state().workspace.zen_mode) {
+          exitTime ??= now;
+          frames.push({capy:opacity(document.querySelector('#header #zen-button')),
+            controls:opacity(document.querySelector('#header [data-kind="settings"]'))});
+        }
+        if (now >= deadline || (exitTime != null && now - exitTime >= 220)) resolve(frames);
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    return true;
+  })()`);
+  const checkCapyExit = async label => {
+    const frames = await evaluate('window.zenExitFrames');
+    assert.ok(frames.length > 1, `${label}: sampled the Zen exit transition`);
+    assert.ok(frames.every(frame => frame.capy >= .999),
+      `${label}: Capy stays opaque throughout exit: ${JSON.stringify(frames)}`);
+    assert.ok(frames.some(frame => frame.controls > 0 && frame.controls < .99),
+      `${label}: other header controls still fade in`);
+  };
   const saved = await evaluate('({settings:layerApp.state().settings,workspace:layerApp.state().workspace})');
   const exit = async () => { if(await evaluate('layerApp.state().workspace.zen_mode')) await invoke('zen_mode'); };
   try {
@@ -55,8 +89,10 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
         if (show) {
           const target = await point('#zen-capy');
           if (device === 'mouse') await motion(target);
+          await watchCapyExit();
           await contact(device,target);
           assert.equal(await evaluate('layerApp.state().workspace.zen_mode'),false,'one Capy tap exits Zen');
+          await checkCapyExit(`${theme}/${edges}/${device}`);
         } else {
           // Keyboard recovery remains available even with both switches off.
           await evaluate('document.activeElement?.blur()');
@@ -79,12 +115,23 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
     await invoke('zen_mode'); assert.ok(await capy());
     await contact('touch',await point('#zen-capy')); assert.equal(await hidden(),false);
     assert.equal(await evaluate("document.querySelector('#header #zen-button')"),null);
-    console.log('PASS: Zen defaults, settings controls, all four options in both themes, touch/mouse/pen edge contacts, one-tap Capy exit, keyboard recovery, customized title bar, unchanged layout/camera');
+    try {
+      await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+      await invoke('zen_mode');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#header [data-kind="settings"]')).opacity`),'0');
+      await invoke('zen_mode');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#header [data-kind="settings"]')).opacity`),'1',
+        'reduced motion reveals the other header controls immediately');
+    } finally {
+      await call('Emulation.setEmulatedMedia',{features:[]});
+    }
+    console.log('PASS: Zen defaults, settings controls, all four options in both themes, touch/mouse/pen edge contacts, one-tap Capy exit without an opacity dip, other header controls still fade, keyboard recovery, customized title bar, unchanged layout/camera');
   } catch (error) {
     console.error('Zen failure state:', await evaluate(`JSON.stringify({zen:layerApp.state().workspace.zen_mode,settings:layerApp.state().settings,settingsOpen:layerApp.state().settings_open,commands:layerApp.state().commands.filter(c=>c.id==='zen_mode'),status:document.querySelector('#status').textContent,hidden:document.querySelector('#workspace').classList.contains('zen-hidden'),focus:document.activeElement?.outerHTML.slice(0,160),popups:[...document.querySelectorAll('details[open],:popover-open:not(.hover-tooltip),dialog[open]')].map(n=>n.outerHTML.slice(0,160))})`));
     await capture('failure');
     throw error;
   } finally {
+    await evaluate('delete window.zenExitFrames');
     await send({type:'close_settings'});
     await send({type:'restore_workspace',workspace:saved.workspace});
     await send({type:'restore_settings',settings:saved.settings});

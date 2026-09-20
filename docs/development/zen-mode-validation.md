@@ -65,6 +65,18 @@ isolated `art.capycanvas.zenintegration` package; both temporary APKs were remov
 after testing. The temporary Web tab and ADB connections were also removed. This
 integration validation did not replace the previously deployed applications.
 
+## Web Capy exit transition
+
+On 2026-09-20, Huion frame sampling reproduced a Capy flash when leaving Zen:
+the standalone button disappeared while the title-bar Capy inherited the
+header's 180 ms opacity transition, starting with two fully transparent frames.
+Web now fades individual header items and switches the Capy immediately.
+The full Huion Zen test passes with frame-by-frame assertions that Capy stays
+opaque while other header controls still fade, for both themes, both edge-reveal
+settings, and touch/mouse/pen exits. Reduced-motion hide/reveal remains immediate.
+Logs and captures are in
+`artifacts/zen-capy-flash-2026-09-20/`.
+
 ## Reproduce
 
 Build Web with `bash apps/layer-web/build.sh`, serve `apps/layer-web` locally,
