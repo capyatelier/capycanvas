@@ -1,0 +1,1744 @@
+{
+  "date": "2026-09-20",
+  "baseline_revision": "599a2ee66828413db2b9f40313aaa96b0d726418",
+  "main_revision": "51e2b005047c28a6bddb1085301972c546fb2f75",
+  "hardware": {
+    "mac": "Apple M2 Pro, 16 GiB",
+    "ipad": "Physical 13-inch iPad Pro M4 (iPad16,6)"
+  },
+  "input": {
+    "extent": [
+      9504,
+      6336
+    ],
+    "project_sha256": "eef1832858bdae60b9393154327cbdcc819d0f94d446e123cc87f30d3af12135",
+    "description": "Fresh sRGB U8 9504x6336 synthetic photo, empty top paint layer, hidden paper",
+    "jpeg_sha256": "615a62764723e837f786705388c558fcff225d0cf9327f7bbba599f0b006d1be"
+  },
+  "parameters": {
+    "samples_per_frame": 8,
+    "cache_mib": 768,
+    "stroke_frames": 180,
+    "brush_px": 2000,
+    "path": "circles",
+    "pressure": 1,
+    "prediction_ms": 8,
+    "surface": [
+      2752,
+      2064
+    ]
+  },
+  "measurement": "Offscreen input plus renderer, presentation-to-texture and GPU completion; synthetic replay; no physical input/display latency. p99=floor(.99*(n-1)).",
+  "tests": [
+    {
+      "suite": "live-display",
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "display-mips",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "source-ownership",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "suite": "portable-direct",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "checks": {
+    "mac": {
+      "all_drawing_frame_counters_match": true,
+      "exact_native_artwork_vs_main": true,
+      "exact_undo_redo_every_run": true
+    },
+    "ipad": {
+      "all_drawing_frame_counters_match": true,
+      "exact_native_artwork_vs_main": true,
+      "exact_undo_redo_every_run": true
+    }
+  },
+  "binaries": {
+    "baseline-mac": "02d798403584590f17222cef880eba5088da3713f410e402647ef2664dc2101c",
+    "baseline-ipad": "1641ebb96c654ec9aa4cfcec036039507376d350179fbab8ca926ab9725cad80",
+    "main-mac": "3492ba0f80aadfc666e2242c26fb18324fe6c08d9fbcbd05888b98fb0dcb6b42",
+    "main-ipad": "566ae78f6c483f5368f895302d79188342f054e52ff483eae1a3c2c829fa1097",
+    "final-mac": "f526e4e7cd9ee002b29086192957ba8553edd1250d26ac0cc76a762299a4fb0f",
+    "final-ipad": "ddcb0a30b13cd1173262302dc53055c4279b4565fc277513312b925ccc7d633a"
+  },
+  "runtime_source_sha256": {
+    "crates/layer-render-wgpu/src/display_mips.rs": "ee16e71dd0e39c3610ed5f1751e0fd958ba29106b48393d15e5f7ae00d55188d",
+    "crates/layer-render-wgpu/src/live_display.rs": "0a938935cce5e9006256b66c108791eca80185e1c096fec2c2ddf38854bda6fb",
+    "crates/layer-render-wgpu/src/scene.rs": "cb387e266cc3bc20edbb6ff118a1e0749dd8a9a54c2516aa2c0bd7a5ca68b5dd"
+  },
+  "runs": {
+    "baseline-mac-1": {
+      "device": "mac",
+      "version": "baseline",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 31.2995835,
+            "p99": 52.781083
+          },
+          "paint_ms": {
+            "median": 0.498792,
+            "p99": 0.669625
+          },
+          "prediction_ms": {
+            "median": 0.388,
+            "p99": 0.492833
+          },
+          "composition_ms": {
+            "median": 26.9843755,
+            "p99": 47.069708
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8323072.0,
+            "p99": 9371648.0
+          },
+          "source_misses": {
+            "median": 92.0,
+            "p99": 119.0
+          },
+          "display_batches": {
+            "median": 15.0,
+            "p99": 17.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7331045,
+            "p99": 4.2735
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "composition_ms": {
+            "median": 0.000167,
+            "p99": 0.794375
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "b246fefeb744e290481b655cdb5c96f8650bb87f947e53229d222d7c6ff8286f",
+      "artwork_sha256": "4c4eeeb6d937c2858fbf9bc0b1c30eb72d6d2285937e00acc0476efcb875fe46"
+    },
+    "baseline-mac-2": {
+      "device": "mac",
+      "version": "baseline",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 31.1701665,
+            "p99": 42.962166
+          },
+          "paint_ms": {
+            "median": 0.48754200000000003,
+            "p99": 0.667125
+          },
+          "prediction_ms": {
+            "median": 0.3765625,
+            "p99": 0.489875
+          },
+          "composition_ms": {
+            "median": 26.7385625,
+            "p99": 37.491875
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8323072.0,
+            "p99": 9371648.0
+          },
+          "source_misses": {
+            "median": 92.0,
+            "p99": 119.0
+          },
+          "display_batches": {
+            "median": 15.0,
+            "p99": 17.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.703854,
+            "p99": 4.636459
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 0.000125
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 0.000166
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 1.17225
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "fdf9268d4955bdd0941c71fe549ed04973f54511a2e18c3d14a209d3a15a69e0",
+      "artwork_sha256": "4c4eeeb6d937c2858fbf9bc0b1c30eb72d6d2285937e00acc0476efcb875fe46"
+    },
+    "main-mac-1": {
+      "device": "mac",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 28.596249999999998,
+            "p99": 39.228667
+          },
+          "paint_ms": {
+            "median": 0.4629795,
+            "p99": 0.638459
+          },
+          "prediction_ms": {
+            "median": 0.384479,
+            "p99": 0.550292
+          },
+          "composition_ms": {
+            "median": 24.636479,
+            "p99": 34.504042
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.719625,
+            "p99": 4.12675
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 8.4e-05
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 0.755
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "150da9d71363e457a6dff012ab51f0605699da9a32aaaac729c41422195b8380",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "main-mac-2": {
+      "device": "mac",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 28.450417,
+            "p99": 38.276459
+          },
+          "paint_ms": {
+            "median": 0.457437,
+            "p99": 0.618583
+          },
+          "prediction_ms": {
+            "median": 0.383896,
+            "p99": 0.568542
+          },
+          "composition_ms": {
+            "median": 24.772687,
+            "p99": 33.520667
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7240414999999998,
+            "p99": 4.243417
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.4e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 0.000125
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 0.746333
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "61607f3688335142e84674ef4a2b1e72715518373b72c03d46c707f67e3a6b18",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "main-mac-3": {
+      "device": "mac",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 28.624729000000002,
+            "p99": 41.120125
+          },
+          "paint_ms": {
+            "median": 0.47662499999999997,
+            "p99": 0.648291
+          },
+          "prediction_ms": {
+            "median": 0.392729,
+            "p99": 0.551208
+          },
+          "composition_ms": {
+            "median": 24.6795415,
+            "p99": 36.1835
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7384369999999998,
+            "p99": 4.216334
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.4e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 0.000125
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 0.810125
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "5ff70da5014700d32eeac5b827e8e90c3bcae650aacae031a6c423433f28e8d7",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "main-mac-4": {
+      "device": "mac",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 28.471771,
+            "p99": 38.583166
+          },
+          "paint_ms": {
+            "median": 0.4557285,
+            "p99": 0.633667
+          },
+          "prediction_ms": {
+            "median": 0.387479,
+            "p99": 0.54925
+          },
+          "composition_ms": {
+            "median": 24.6060625,
+            "p99": 33.029625
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7188335000000001,
+            "p99": 4.320084
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 8.4e-05
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 0.811875
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "20c773d7367376ca3277b07b11402d80b669a8467c67e3973eb0fb833a3b49cc",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "final-mac-1": {
+      "device": "mac",
+      "version": "final",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 26.1736455,
+            "p99": 36.45725
+          },
+          "paint_ms": {
+            "median": 0.452208,
+            "p99": 0.611208
+          },
+          "prediction_ms": {
+            "median": 0.38685400000000003,
+            "p99": 0.568791
+          },
+          "composition_ms": {
+            "median": 22.5371455,
+            "p99": 31.324875
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7155420000000001,
+            "p99": 4.314125
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 0.000125
+          },
+          "composition_ms": {
+            "median": 0.000209,
+            "p99": 0.766167
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "4c18f9dd059668e1bc486478ae9969c1c720d71113153faa932e0b4299da3b1e",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "final-mac-2": {
+      "device": "mac",
+      "version": "final",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 26.4737085,
+            "p99": 36.893292
+          },
+          "paint_ms": {
+            "median": 0.48225,
+            "p99": 0.69825
+          },
+          "prediction_ms": {
+            "median": 0.399042,
+            "p99": 0.596667
+          },
+          "composition_ms": {
+            "median": 22.6392495,
+            "p99": 32.885208
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.7154585,
+            "p99": 4.291291
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000208,
+            "p99": 0.76425
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "ae85fcdab66216f4743bd21843b8eed96404484166ebb1a033b2dd002932cdeb",
+      "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+    },
+    "baseline-ipad-1": {
+      "device": "ipad",
+      "version": "baseline",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 37.8771255,
+            "p99": 63.907875
+          },
+          "paint_ms": {
+            "median": 0.348021,
+            "p99": 0.464583
+          },
+          "prediction_ms": {
+            "median": 0.26666650000000003,
+            "p99": 0.3245
+          },
+          "composition_ms": {
+            "median": 32.6740415,
+            "p99": 57.796375
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8323072.0,
+            "p99": 9371648.0
+          },
+          "source_misses": {
+            "median": 92.0,
+            "p99": 119.0
+          },
+          "display_batches": {
+            "median": 15.0,
+            "p99": 17.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.865917,
+            "p99": 5.362917
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "prediction_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000166,
+            "p99": 0.566791
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "ab8453eb890599f3849256d7905283fa52b98ab846563d049ae2caf58deea5e3",
+      "artwork_sha256": "0fbf921b7778ad7279151b493893f7ff46a00cd56c29f1ba4ac1b1f88b0d05d5",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "baseline-ipad-2": {
+      "device": "ipad",
+      "version": "baseline",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 37.35025,
+            "p99": 51.6985
+          },
+          "paint_ms": {
+            "median": 0.353479,
+            "p99": 0.480292
+          },
+          "prediction_ms": {
+            "median": 0.267417,
+            "p99": 0.33975
+          },
+          "composition_ms": {
+            "median": 32.453624500000004,
+            "p99": 46.317583
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8323072.0,
+            "p99": 9371648.0
+          },
+          "source_misses": {
+            "median": 92.0,
+            "p99": 119.0
+          },
+          "display_batches": {
+            "median": 15.0,
+            "p99": 17.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.8607295000000001,
+            "p99": 5.156708
+          },
+          "paint_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "prediction_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000166,
+            "p99": 0.557708
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "4d6ad8be0ed653b50bd6ce19669f8cbb1bd52f6e9f32cdf68364b7c6a769e098",
+      "artwork_sha256": "0fbf921b7778ad7279151b493893f7ff46a00cd56c29f1ba4ac1b1f88b0d05d5",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "main-ipad-1": {
+      "device": "ipad",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 37.0849165,
+            "p99": 49.514917
+          },
+          "paint_ms": {
+            "median": 0.333021,
+            "p99": 0.422916
+          },
+          "prediction_ms": {
+            "median": 0.2803335,
+            "p99": 0.386333
+          },
+          "composition_ms": {
+            "median": 32.81860399999999,
+            "p99": 44.723833
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.8643334999999999,
+            "p99": 5.326667
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000166,
+            "p99": 0.557916
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "27c14c927dacfa1497888202a01e102aa4a3faedce9731056663518f1550cc01",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "main-ipad-2": {
+      "device": "ipad",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 37.3595835,
+            "p99": 50.3265
+          },
+          "paint_ms": {
+            "median": 0.33968750000000003,
+            "p99": 0.450917
+          },
+          "prediction_ms": {
+            "median": 0.28512499999999996,
+            "p99": 0.419417
+          },
+          "composition_ms": {
+            "median": 33.017333,
+            "p99": 45.660125
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.8683334999999999,
+            "p99": 5.28675
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000166,
+            "p99": 0.531291
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "be3c2e2875a36af2fe7b53e64d4f7d9ea11180eaf90e5d0dbc74fd463a53b8fa",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "main-ipad-3": {
+      "device": "ipad",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 36.73675,
+            "p99": 48.954083
+          },
+          "paint_ms": {
+            "median": 0.336646,
+            "p99": 0.4475
+          },
+          "prediction_ms": {
+            "median": 0.280812,
+            "p99": 0.392459
+          },
+          "composition_ms": {
+            "median": 32.4596255,
+            "p99": 44.232833
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.868854,
+            "p99": 5.172625
+          },
+          "paint_ms": {
+            "median": 4.1e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000167,
+            "p99": 0.571542
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "b01bebfd396d56a2a118a9fb368ebccd86b1791a24629221a29d1cee9ca40a28",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "main-ipad-4": {
+      "device": "ipad",
+      "version": "main",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 37.094708,
+            "p99": 49.419958
+          },
+          "paint_ms": {
+            "median": 0.3323125,
+            "p99": 0.419833
+          },
+          "prediction_ms": {
+            "median": 0.278354,
+            "p99": 0.406291
+          },
+          "composition_ms": {
+            "median": 32.9552495,
+            "p99": 44.412667
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.869104,
+            "p99": 5.217167
+          },
+          "paint_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "prediction_ms": {
+            "median": 4.1e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.0001455,
+            "p99": 0.564792
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "3274eebaea0a78bf7487175dc2f02a65e3f6803aa83e6cc88b2c0afd6fb7b19f",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "final-ipad-1": {
+      "device": "ipad",
+      "version": "final",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 33.2534795,
+            "p99": 46.593125
+          },
+          "paint_ms": {
+            "median": 0.336854,
+            "p99": 0.426333
+          },
+          "prediction_ms": {
+            "median": 0.2836455,
+            "p99": 0.39525
+          },
+          "composition_ms": {
+            "median": 29.447561999999998,
+            "p99": 42.1225
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.8624375,
+            "p99": 5.224208
+          },
+          "paint_ms": {
+            "median": 4.2e-05,
+            "p99": 8.4e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000125,
+            "p99": 0.551125
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "5f1274145f248f771e3bb5f3371b838dc8b71940119c752c3e06ebea3f4cb4d4",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    },
+    "final-ipad-2": {
+      "device": "ipad",
+      "version": "final",
+      "phases": {
+        "circles": {
+          "completed_ms": {
+            "median": 33.3196665,
+            "p99": 46.18525
+          },
+          "paint_ms": {
+            "median": 0.3402085,
+            "p99": 0.425916
+          },
+          "prediction_ms": {
+            "median": 0.283375,
+            "p99": 0.393333
+          },
+          "composition_ms": {
+            "median": 29.413228500000002,
+            "p99": 41.426209
+          },
+          "dabs": {
+            "median": 5.0,
+            "p99": 6.0
+          },
+          "composited_pixels": {
+            "median": 8978432.0,
+            "p99": 9568256.0
+          },
+          "source_misses": {
+            "median": 54.0,
+            "p99": 87.0
+          },
+          "display_batches": {
+            "median": 17.0,
+            "p99": 18.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 180
+        },
+        "zoom": {
+          "completed_ms": {
+            "median": 1.869958,
+            "p99": 5.325208
+          },
+          "paint_ms": {
+            "median": 4.15e-05,
+            "p99": 8.3e-05
+          },
+          "prediction_ms": {
+            "median": 4.2e-05,
+            "p99": 4.2e-05
+          },
+          "composition_ms": {
+            "median": 0.000166,
+            "p99": 0.543167
+          },
+          "dabs": {
+            "median": 0.0,
+            "p99": 0.0
+          },
+          "composited_pixels": {
+            "median": 0.0,
+            "p99": 917504.0
+          },
+          "source_misses": {
+            "median": 0.0,
+            "p99": 14.0
+          },
+          "display_batches": {
+            "median": 0.0,
+            "p99": 1.0
+          },
+          "display_bytes": {
+            "median": 804592448.0,
+            "p99": 804592448.0
+          },
+          "updates": 360
+        }
+      },
+      "csv_sha256": "914700cebe709307e89724cc5ebd71672c8fc3a1f754e21c1ce31f665e4ae4a6",
+      "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+      "device_report": {
+        "allowance_mib": 768,
+        "cases": [
+          {
+            "diameter": 2000,
+            "exit_code": 0
+          }
+        ],
+        "exit_code": 0,
+        "frames": 180,
+        "samples_per_frame": 8,
+        "synthetic": true,
+        "thermal_after": 0,
+        "thermal_before": 0
+      }
+    }
+  },
+  "artifacts": "artifacts/apple-main-brush-20260920/",
+  "refactoring": {
+    "base_revision": "24bd056535d5bc6d3473c9ef2c271ca36634052e",
+    "runtime_source_sha256": {
+      "crates/layer-render-wgpu/src/display_mips.rs": "e9ef02e36d90956cdf6da99368aacb723ee2d7dc575b40a7d539d18763cf0f0e",
+      "crates/layer-render-wgpu/src/live_display.rs": "a19109b9482f156cf03ad801074a3c9ca2d297b0100801dcd2311cdf79eaac31",
+      "crates/layer-render-wgpu/src/scene.rs": "11f05ee11c75cb40b75c3320ed8cea932560465aa3a57930afd8e05156c27586"
+    },
+    "tests": [
+      {
+        "suite": "live",
+        "passed": 23,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "suite": "mip",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "suite": "portable",
+        "passed": 23,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "runs": {
+      "refactored-mac-1": {
+        "phases": {
+          "circles": {
+            "completed_ms": {
+              "median": 26.132188,
+              "p99": 35.934959
+            }
+          },
+          "zoom": {
+            "completed_ms": {
+              "median": 1.6879795,
+              "p99": 4.223417
+            }
+          }
+        },
+        "csv_sha256": "a3502f16b578732d308c3ab8f83f6dec5ed783c36f011e08c5c0067e58ede3b8",
+        "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877",
+        "note": "Initial confirmation overlapped an iPad compiler process; use refactored-mac-2 for the quiet-host confirmation."
+      },
+      "refactored-mac-2": {
+        "phases": {
+          "circles": {
+            "completed_ms": {
+              "median": 26.099770999999997,
+              "p99": 37.200583
+            }
+          },
+          "zoom": {
+            "completed_ms": {
+              "median": 1.728333,
+              "p99": 4.143416
+            }
+          }
+        },
+        "csv_sha256": "5bbe59e0051102fc3e18811912fdf4f7af99e7965bbae3556c387cbb209dcaee",
+        "artwork_sha256": "42464e653f692b36d6ff170908d7f723bb49263f176aecd89fe700b179001877"
+      },
+      "refactored-ipad-1": {
+        "phases": {
+          "circles": {
+            "completed_ms": {
+              "median": 33.206917000000004,
+              "p99": 45.323833
+            }
+          },
+          "zoom": {
+            "completed_ms": {
+              "median": 1.8691665,
+              "p99": 5.199292
+            }
+          }
+        },
+        "csv_sha256": "65902eb6227a31495d6cce5b0bdb2272b48b43a17f011f8f2e1ee4a750e9bd79",
+        "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+        "device_report": {
+          "allowance_mib": 768,
+          "cases": [
+            {
+              "diameter": 2000,
+              "exit_code": 0
+            }
+          ],
+          "exit_code": 0,
+          "frames": 180,
+          "samples_per_frame": 8,
+          "synthetic": true,
+          "thermal_after": 0,
+          "thermal_before": 0
+        }
+      },
+      "refactored-ipad-2": {
+        "phases": {
+          "circles": {
+            "completed_ms": {
+              "median": 33.901542,
+              "p99": 45.373125
+            }
+          },
+          "zoom": {
+            "completed_ms": {
+              "median": 1.8394585,
+              "p99": 5.362
+            }
+          }
+        },
+        "csv_sha256": "5b04187aa0cf274761efc2decdc48a033af0ee696afb1f8b3994f358f9be49b0",
+        "artwork_sha256": "a2462537a131f2e3ab1e9f6a0a4b9810961a36f10fe386067bc6931a656630a3",
+        "device_report": {
+          "allowance_mib": 768,
+          "cases": [
+            {
+              "diameter": 2000,
+              "exit_code": 0
+            }
+          ],
+          "exit_code": 0,
+          "frames": 180,
+          "samples_per_frame": 8,
+          "synthetic": true,
+          "thermal_after": 0,
+          "thermal_before": 0
+        }
+      }
+    },
+    "binaries": {
+      "mac": "33e5fe0fd2e2ef0a2c28a703a609ae80b95b493a322868f18c54f43fa53ade5d",
+      "ipad": "601c79ea6f9be29229f838abfc35385fa1dd25e18bffccf57abac10ab846e0cc"
+    },
+    "checks": {
+      "mac": {
+        "artwork_matches_main": true,
+        "drawing_counters_match_main": [
+          "dabs",
+          "composited_pixels",
+          "source_misses",
+          "display_batches",
+          "display_bytes"
+        ],
+        "exact_undo_redo": true
+      },
+      "ipad": {
+        "artwork_matches_main": true,
+        "drawing_counters_match_main": [
+          "dabs",
+          "composited_pixels",
+          "source_misses",
+          "display_batches",
+          "display_bytes"
+        ],
+        "exact_undo_redo": true
+      }
+    },
+    "web_compile_passed": true
+  }
+}

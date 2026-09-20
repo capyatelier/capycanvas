@@ -308,6 +308,7 @@ impl Image {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba32Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
@@ -390,6 +391,10 @@ impl Image {
             },
         );
     }
+    pub fn tile_target(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
+        (&self.scratch, &self.views[0])
+    }
+
     /// Consume one completed full-resolution composition tile. `source_origin`
     /// supports both a temporary tile and the current full composite during its
     /// replacement. Every output pixel averages all valid document pixels in its
@@ -413,6 +418,7 @@ impl Image {
         let origin = coordinate.map(|v| v * PAGE_SIZE);
         let valid = std::array::from_fn(|i| (self.plan.extent[i] - origin[i]).min(PAGE_SIZE));
         if source.format() != wgpu::TextureFormat::Rgba32Float
+            || (source == &self.scratch && source_origin != [0; 2])
             || source_origin
                 .into_iter()
                 .zip(valid)
@@ -421,22 +427,24 @@ impl Image {
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                origin: wgpu::Origin3d {
-                    x: source_origin[0],
-                    y: source_origin[1],
-                    z: 0,
+        if source != &self.scratch {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d {
+                        x: source_origin[0],
+                        y: source_origin[1],
+                        z: 0,
+                    },
+                    ..source.as_image_copy()
                 },
-                ..source.as_image_copy()
-            },
-            self.scratch.as_image_copy(),
-            wgpu::Extent3d {
-                width: valid[0],
-                height: valid[1],
-                depth_or_array_layers: 1,
-            },
-        );
+                self.scratch.as_image_copy(),
+                wgpu::Extent3d {
+                    width: valid[0],
+                    height: valid[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         let last = self.last_level();
         let records = self.records.entry(valid).or_insert_with(|| {
             (1..=last)

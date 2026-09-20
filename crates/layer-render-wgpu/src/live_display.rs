@@ -687,8 +687,17 @@ impl Cache {
     pub fn flush_updates(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if let Some(updates) = &mut self.complete_updates { updates.flush(encoder); }
     }
-    pub fn direct_target(&self) -> Option<&wgpu::TextureView> {
-        self.complete_updates.as_ref().map(|_| &self.retained[0].view)
+    pub fn is_complete(&self) -> bool {
+        self.complete_updates.is_some()
+    }
+    /// Both display sizes use the same composition planner. A complete display
+    /// receives document coordinates; a reusable mip tile receives local ones.
+    pub fn composition_target(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
+        if self.is_complete() {
+            (&self.retained[0].texture, &self.retained[0].view)
+        } else {
+            self.coarse.tile_target()
+        }
     }
     pub fn direct_tile_written(&mut self, encoder: &mut crate::submission::CommandEncoder, coordinate: [u32; 2]) {
         self.complete_updates.as_mut().expect("direct target admitted").tile(encoder, coordinate);

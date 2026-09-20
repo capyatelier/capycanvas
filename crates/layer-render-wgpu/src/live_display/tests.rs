@@ -81,6 +81,52 @@ fn repeated_wide_composition_reuses_decoded_sources_with_exact_pixels_and_bounde
 }
 
 #[test]
+fn direct_mip_tile_composition_matches_scratch_through_layer_and_view_changes() {
+    // Translucent U16 source layers, partial edge tiles and a nonzero backdrop
+    // expose incomplete clears, wrong local coordinates and double blending.
+    let mut doc = document([777, 533]);
+    let mut upper = doc.layers[0].clone();
+    upper.id = doc.allocate_layer_id();
+    upper.opacity = 0.43;
+    doc.layers.insert(0, upper);
+    let mut r = bounded_renderer(doc.color).unwrap();
+    r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
+        SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    for step in 0..4 {
+        if step == 1 { doc.layers[0].opacity = 0.; }
+        if step == 2 {
+            doc.layers[0].opacity = 0.7;
+            let mut mask = layer_core::LayerMask::reveal_all(LayerId(99), Default::default());
+            mask.default_coverage = 0.;
+            mask.initial = Some(layer_core::Selection::polygon(vec![
+                layer_core::Point { x: 0., y: 0. },
+                layer_core::Point { x: 640., y: 0. },
+                layer_core::Point { x: 440., y: 533. },
+                layer_core::Point { x: 0., y: 533. },
+            ]).unwrap());
+            doc.layers[0].mask = Some(mask);
+        }
+        if step == 3 { doc.layers[0].properties.offset = layer_core::Point { x: 17., y: -9. }; }
+        for scale in [0.25, 1., 2.] {
+            let v = centered_view([doc.width, doc.height], [320, 240], scale, 0.12);
+            if let Some(scene) = &mut r.scene { scene.set_tiled_composition(false); }
+            submit(&mut r, &doc, v, true);
+            let actual = present(&r, &mut presenter, v);
+            let cache = r.live_display.as_ref().unwrap();
+            assert!(!cache.is_complete());
+            let (texture, _) = cache.composition_target();
+            assert_eq!([texture.width(), texture.height()], [PAGE_SIZE; 2]);
+            let bytes = r.metrics.composite_storage_bytes;
+            r.scene.as_mut().unwrap().set_tiled_composition(true);
+            submit(&mut r, &doc, v, true);
+            close(&actual, &present(&r, &mut presenter, v));
+            assert_eq!(r.metrics.composite_storage_bytes, bytes);
+        }
+    }
+}
+
+#[test]
 fn sparse_contact_prediction_retirement_matches_full_recomposition() {
     let doc = document([1537, 1025]);
     let mut incremental = bounded_renderer(doc.color).unwrap();

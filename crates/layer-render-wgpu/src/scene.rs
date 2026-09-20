@@ -1529,7 +1529,7 @@ impl Scene {
         // Complete pyramids share draws/reductions and no longer allocate one
         // scratch chain per tile. Bound their commands separately from source
         // upload bytes; the fallback retains its smaller submission bound.
-        let mut display_batch = if r.live_display.as_ref().is_some_and(|cache| cache.direct_target().is_some()) {
+        let mut display_batch = if r.live_display.as_ref().is_some_and(|cache| cache.is_complete()) {
             display_mips::CompleteUpdates::BATCH
         } else { SOURCE_SLOTS / 2 };
         let mut direct_tiles = [[0; 2]; display_mips::CompleteUpdates::BATCH];
@@ -1589,12 +1589,14 @@ impl Scene {
                 }
             }
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
-            if r.live_display.is_some() {
-                let target = r.live_display.as_ref().and_then(|cache| cache.direct_target()).cloned();
-                if self.cached_composition()
-                    && let Some(target) = target
-                    && self.compose_tile_direct(r, first_job, output, tile, packet.document_extent, &target, false)
-                {
+            if let Some(cache) = &r.live_display {
+                let complete = cache.is_complete();
+                let (texture, target) = cache.composition_target();
+                let direct = self.cached_composition() && self.compose_tile_direct(
+                    r, first_job, output, if complete { tile } else { [0; 2] },
+                    [texture.width(), texture.height()], target, false,
+                );
+                if direct && complete {
                     // Keep independent draws adjacent so they can share a pass.
                     // Reductions wait until these jobs have actually encoded.
                     direct_tiles[direct_count] = tile;
@@ -1603,13 +1605,16 @@ impl Scene {
                     self.free(output);
                     continue;
                 }
-                // Intermediate/effect work keeps the original smaller bound.
+                // Tile-local and intermediate/effect work use the smaller bound.
                 display_batch = SOURCE_SLOTS / 2;
+                // A tile composed into mip scratch is ready for reduction;
+                // only intermediate work needs a copy from scene scratch.
+                let source = if direct { texture } else { &self.pool[output].texture }.clone();
                 self.encode_display_jobs(r, encoder, &direct_tiles[..direct_count])?;
                 direct_count = 0;
                 let mut cache = r.live_display.take().unwrap();
                 let result = cache.write_tile(r, r.display_pipelines.as_ref().unwrap(), encoder,
-                    &self.pool[output].texture, [0; 2], tile);
+                    &source, [0; 2], tile);
                 r.live_display = Some(cache);
                 self.free(output);
                 result?;
