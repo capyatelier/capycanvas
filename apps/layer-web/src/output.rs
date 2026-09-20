@@ -1,6 +1,7 @@
 //! Browser output keeps Float32 capture bands bounded and spools them to the
 //! file worker. Its synchronous OPFS reader feeds the same streaming CMM,
-//! resampler and codecs as native export, without a full-frame Wasm allocation.
+//! resampler and codecs as native export. Gain-map codecs admit their complete
+//! image working sets against the browser's per-operation memory allowance.
 use super::*;
 use layer_render_wgpu::snapshot::CaptureControl;
 use layer_ui::{ExportFormat, ExportRecipe};
@@ -189,7 +190,7 @@ pub(super) async fn render_output(
     };
     // Codecs consume pixels on their file worker, but illumination analysis is
     // always the shared GPU algorithm. Only its bounded guide crosses to CPU.
-    if metadata.rendition.is_some() && (preview ||
+    if metadata.rendition.is_some() && (preview || metadata.recipe.format.gainmap().is_some() ||
         (!metadata.recipe.format.is_hdr() && !flatten.is_some_and(|c| c.depth.is_float()))) {
         let guide = capture.local_tone_guide_async().await.map_err(js)?;
         cancelled(&control)?;
@@ -251,7 +252,8 @@ pub(super) async fn render_output(
 }
 
 /// The worker owns the synchronous OPFS file. Rust controls codec seek/write
-/// positions; neither encoded output nor the Float32 photograph is buffered whole.
+/// positions. Capture is spooled in bands; gain-map codecs separately admit
+/// their complete image buffers before allocation.
 struct WorkerFile {
     write: js_sys::Function,
     position: u64,
@@ -358,9 +360,47 @@ pub async fn raster_worker_output(
     } else { None };
     if recipe.format.is_hdr() {
         if !metadata.color.depth.is_float() { return Err(js("HDR output requires HDR artwork")); }
-        if recipe.format.gainmap().is_some() { return Err(js("HDR gain-map output is unavailable in this browser; choose HDR PNG")); }
         let mut resampler = layer_color::RowResampler::new(metadata.extent, extent).map_err(js)?;
         let mut rows = |y,pixels: &mut [[f32;4]]| {if y==0 {resampler=layer_color::RowResampler::new(metadata.extent,extent)?;}resampler.read_row(y,pixels,&mut read_row)};
+        if let Some(format) = recipe.format.gainmap() {
+            let rendition = metadata.rendition.ok_or_else(|| js("Missing SDR rendition"))?;
+            let guide = guide.as_ref().ok_or_else(|| js("Missing output illumination guide"))?;
+            let options = layer_color::photo::GainMapEncodeOptions::from_memory_budget(
+                recipe.jpeg_quality, raster_project::photo_memory_budget(),
+            );
+            // The editor cancels the isolated worker from its own event loop,
+            // including during synchronous codec calls. No shared Wasm memory
+            // or browser-provided photo decoder is required.
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            if metadata.preview {
+                let (size, mut hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows_with_guide(
+                    extent, [512, 384], metadata.color.space, rendition, Some(guide),
+                    format, options, recipe.background.matte(), &cancel, &mut rows,
+                ).map_err(js)?;
+                let space = layer_core::color::RgbSpace::Srgb;
+                let mapper = rendition.mapper(space, space);
+                for (i, p) in hdr.iter_mut().enumerate() {
+                    let position = [i as u32 % size[0], i as u32 / size[0]];
+                    *p = mapper.map_local_premultiplied(*p,
+                        std::array::from_fn(|c| (position[c] as f32 + 0.5)
+                            * metadata.extent[c] as f32 / size[c] as f32), guide);
+                }
+                let image = |pixels| layer_render_wgpu::snapshot::SnapshotPreview { extent: size, space, pixels };
+                let result = serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}))?;
+                let previews = js_sys::Array::new();
+                previews.push(&preview_value(before.as_ref().ok_or_else(|| js("Missing artwork preview"))?)?);
+                previews.push(&preview_value(&image(hdr))?);
+                js_sys::Reflect::set(&result, &js("previews"), &previews)?;
+                js_sys::Reflect::set(&result, &js("sdr_preview"), &preview_value(&image(sdr))?)?;
+                return Ok(result);
+            }
+            let stats = layer_color::photo::write_gainmap_rows_with_guide(
+                output, extent, metadata.color.space, rendition, Some(guide), format,
+                options, metadata.resolution, recipe.background.matte(),
+                recipe.format.maps_hdr_range(), &cancel, rows,
+            ).map_err(js)?;
+            return serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}));
+        }
         if recipe.format == ExportFormat::Exr {
             let after=if metadata.preview {
                 Some(mapped_preview(extent,metadata.color.space,metadata.rendition,guide.as_ref(),&mut rows).map_err(js)?)

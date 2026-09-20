@@ -10,11 +10,52 @@ Commit and push significant milestones to `origin/main`.
 
 - Qualify larger JPEG/AVIF images and device latency alongside the remaining
   host work. Both formats now import/export and preview through shared Rust.
-- Finish Web and Android host integration: remove their old gain-map export
-  restrictions and connect encoded previews to the shared codecs. Verify imports,
-  exports, memory admission and cancellation in the real browser/device flows.
+- Finish Android host integration: remove its old gain-map export restriction
+  and connect encoded previews to the shared codecs. Verify imports, exports,
+  memory admission and cancellation in real device flows.
 - Audit target dependency graphs and preserve existing PNG/PQ PNG, TIFF, SDR
   JPEG, WebP, GIF, BMP, EXR and ICC behavior.
+
+## Web host milestone — 2026-09-19
+
+The browser offers HDR JPEG and transparent HDR AVIF, using the shared Rust
+codecs in its existing isolated file worker. Export uses a complete GPU snapshot,
+the authored SDR rendition and the GPU illumination guide. Saved presets, MIME
+and filename handling, quality, resizing, density, JPEG background choices, and
+explicit clipping apply to these formats. Delivery leaves the master unchanged.
+
+Encoded previews share one completed encoding and let the user switch between
+reconstructed HDR (mapped for the SDR preview) and the actual encoded SDR base.
+The small preview canvases keep CPU backing so offscreen comparisons remain
+visible. Per-operation gain-map options carry the browser's explicit encoding
+and decoding memory budget through both codecs. Cancellation terminates the
+isolated worker, including during synchronous codec work, and cleans its OPFS job.
+
+Verification with the production PWA on Chrome 152, private Mutter/Wayland and
+NVIDIA WebGPU:
+
+- `--portable-photo`: real Open of 8/10-bit HEIC and 12-bit/HDR AVIF; both JPEG
+  and AVIF export options, encoded preview switching, file picker types, save,
+  HDR reopen, unchanged source/history, JPEG flattening and AVIF coverage.
+  Saved gain-map presets, in-flight cancellation/retry and OPFS cleanup pass.
+- Independent browser SDR decoding differs by at most 1 premultiplied byte code
+  for JPEG and 2.08 for AVIF. The comparison uses `createImageBitmap` with
+  `premultiplyAlpha: 'none'`: Chrome's default Image decoding prematurely rounds
+  premultiplied wide-gamut values to eight bits. Independent libavif RGBA16 and
+  matrix conversion agree with the Rust preview within one visible byte code.
+- `--image-placement`, supplied JPEG HDR, HEIC and 12-bit AVIF: Open, multi-file
+  import, clipboard, canvas/group drops, placement Apply/Cancel, Undo/Redo,
+  exact source backing after v6 save/reopen and GPU replacement, and
+  malformed/stale/cancelled request rejection all pass.
+- `--raster`: ordinary PNG delivery, exact project save/reopen, corruption,
+  GPU replacement and recovery after reload pass after the LZ4 change.
+- Shared color suite: 116 passed, 14 optional tests ignored, including explicit
+  gain-map encode/decode budget admission. GTK and Wasm checks and the original
+  license/source audit pass. The packaged application contains no codec helper.
+
+Local evidence: `artifacts/portable-photo/web/report.json`, JPEG/AVIF preview
+screenshots and saved exports; `/tmp/capy-portable-web-placement.log`. These
+small-fixture journeys do not qualify large-photo latency or physical HDR display.
 
 ## GTK packaging milestone — 2026-09-19
 

@@ -1,5 +1,6 @@
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
+import {checkPortablePhoto} from "./portable-photo.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
@@ -147,7 +148,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.some(x=>["--shared-workflows","--hdr","--hdr-performance","--proof"].includes(x)) ? 180000 : 30000);
+    }, process.argv.some(x=>["--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -235,7 +236,9 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--gainmap-interchange")) {
+  if (process.argv.includes("--portable-photo")) {
+    await checkPortablePhoto({call,evaluate,settle});checkRasterErrors();
+  } else if (process.argv.includes("--gainmap-interchange")) {
     await checkGainmapInterchange({evaluate});
   } else if (process.argv.includes("--hdr-performance")) {
     await measureHdr({call,evaluate,settle});checkRasterErrors();

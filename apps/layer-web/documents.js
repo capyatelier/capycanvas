@@ -2,6 +2,14 @@ import {chooseDocumentColor} from './document-color.js';
 import {createProof} from './proof.js';
 import {createHistogram} from './histogram.js';
 import {chooseExport,chooseSourceProfile} from './export-controls.js';
+
+const exportFormats={
+  Exr:["exr","image/x-exr","OpenEXR image"],
+  PngHdr:["png","image/png","HDR PQ PNG"],PngHdrMapped:["png","image/png","HDR PQ PNG"],
+  JpegHdr:["jpg","image/jpeg","HDR gain-map JPEG"],JpegHdrMapped:["jpg","image/jpeg","HDR gain-map JPEG"],
+  AvifHdr:["avif","image/avif","HDR gain-map AVIF"],AvifHdrMapped:["avif","image/avif","HDR gain-map AVIF"],
+  Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"],
+};
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
@@ -89,13 +97,12 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
     const old=request.location && handles.get(request.location.uri);
     if(old)return{location:request.location,handle:old};
     if(window.showSaveFilePicker) {
-      const formats={Exr:["exr","image/x-exr","OpenEXR image"],PngHdr:["png","image/png","HDR PQ PNG"],PngHdrMapped:["png","image/png","HDR PQ PNG"],Png:["png","image/png","PNG image"],Tiff:["tif","image/tiff","TIFF image"],Jpeg:["jpg","image/jpeg","JPEG image"]};
-      const [extension,mime,description]=recipe?formats[recipe.format]:["capy","application/octet-stream","Capy Canvas drawing"];
+      const [extension,mime,description]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream","Capy Canvas drawing"];
       const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
     }
-    const extension=recipe?{Exr:"exr",PngHdr:"png",PngHdrMapped:"png",Png:"png",Tiff:"tif",Jpeg:"jpg"}[recipe.format]:null;
+    const extension=recipe?exportFormats[recipe.format][0]:null;
     return {location:location(extension?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name)};
   }
   async function handle(request) {
@@ -175,7 +182,8 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r,recipe);
         if(recipe){
-          const extensions={Exr:['exr'],PngHdr:['png'],PngHdrMapped:['png'],Png:['png'],Tiff:['tif','tiff'],Jpeg:['jpg','jpeg']}[recipe.format];
+          const extension=exportFormats[recipe.format][0];
+          const extensions=extension==='jpg'?['jpg','jpeg']:extension==='tif'?['tif','tiff']:[extension];
           if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw new Error(`Use a .${extensions[0]} filename for this image format.`);
           const master=handles.get(app.state().document_file.location?.uri);
           if(master&&target.handle&&await master.isSameEntry?.(target.handle))throw new Error("Choose a different file to keep the editable drawing.");
@@ -194,7 +202,7 @@ export function createDocuments({app,state,canvas,dispatch,applyChange,wake,elem
             const stream=await target.handle.createWritable();
             try {await stream.write(bytes);await stream.close();success=true;}
             catch(error){try{await stream.abort();}catch{}throw error;}
-          } else success=!!await download(bytes,target.location.name,recipe?{Exr:"image/x-exr",PngHdr:"image/png",PngHdrMapped:"image/png",Png:"image/png",Tiff:"image/tiff",Jpeg:"image/jpeg"}[recipe.format]:"application/octet-stream");
+          } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
           if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(`Image saved; export preferences were not saved: ${error}`);}
           if(success && r.type==="save" && !app.state().document_file.modified) {

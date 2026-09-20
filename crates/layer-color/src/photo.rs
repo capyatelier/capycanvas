@@ -22,7 +22,7 @@ mod metadata_tests;
 mod orientation;
 mod png_io;
 pub use gainmap::{
-    GainMapFormat, GainMapMetadata, gainmap_available, gainmap_format_available, preview_gainmap_rows, write_gainmap_rows,
+    GainMapEncodeOptions, GainMapFormat, GainMapMetadata, gainmap_available, gainmap_format_available, preview_gainmap_rows, write_gainmap_rows,
 };
 pub use gainmap::{preview_gainmap_rows_with_guide, write_gainmap_rows_with_guide};
 pub use hdr_png::{inspect_hdr_rows, preview_hdr_rows, write_hdr_png_rows};

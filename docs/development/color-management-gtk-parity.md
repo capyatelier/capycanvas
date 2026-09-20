@@ -57,7 +57,10 @@ all sRGB8 output channels. It is a host integration parity check, not an
 independent oracle for that shared algorithm. The FFmpeg/PQ check separately
 validates transfer/primaries metadata and encoded PQ values against decoded EXR.
 
-Physical HDR surfaces and gain-map output remain unavailable on Web/Android.
+These initial checks excluded physical HDR surfaces and gain-map output. Later
+display work is recorded in [Web/Android HDR](color-management-web-android-m4.md);
+[portable photo core](portable-photo-core.md) now enables Web JPEG/AVIF gain-map
+export and encoded previews. Android gain-map integration remains pending.
 The browser retains the explicit 12,000,000 HDR-pixel admission limit without
 reducing source precision. Existing cold Float32 heartbeat misses, sustained
 thermal coverage and physical pen/display qualification remain open. These
