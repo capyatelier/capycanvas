@@ -222,36 +222,16 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         })
         .unwrap();
         assert_eq!(host.session.engine().document().sdr_rendition, original);
-        let mut cancel = begin(&mut host, CommandId::SdrRendition);
-        ready(&mut cancel, Action::Describe);
-        cancel.control.cancel();
-        assert!(cancel.commit(&mut host).is_err());
-        cancel.complete(&mut host, false).unwrap();
-        drop(cancel);
+        host.dispatch(UiAction::Invoke { command: CommandId::SdrRendition }).unwrap();
+        assert!(host.session.state().requests.is_empty());
         assert_eq!(host.session.engine().checkpoint(), checkpoint);
         let png_path = directory.join(format!("{depth:?}-SDR.png"));
         let sdr = hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path);
-        let mut settings = begin(&mut host, CommandId::SdrRendition);
-        ready(
-            &mut settings,
-            Action::SdrOptions {
-                recipe: hdr::SdrRendition {
-                    exposure: -1.,
-                    ..original
-                },
-                pad: [0.3, -0.25],
-            },
-        );
-        settings.commit(&mut host).unwrap();
-        assert!(
-            !host
-                .session
-                .state()
-                .requests
-                .iter()
-                .any(|r| r.id == settings.id)
-        );
-        drop(settings);
+        let adjusted = layer_ui::proof_panel::sdr_from_pad(hdr::SdrRendition { exposure: -1., ..original }, [0.3, -0.25]);
+        for phase in [layer_ui::ContactPhase::Down, layer_ui::ContactPhase::Up] {
+            let change = layer_ui::proof_panel::apply(&mut host.session, layer_ui::proof_panel::ProofAction::Rendition { phase, recipe: adjusted }).unwrap();
+            host.apply_change(host.session.state().revision, change);
+        }
         let recipe = host.session.engine().document().sdr_rendition;
         assert_ne!(recipe, original);
         host.dispatch(UiAction::Invoke {
@@ -446,7 +426,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_eq!(reopened.document.layers, saved.document.layers);
         assert_eq!(reopened.document.color, color);
         assert_eq!(reopened.document.sdr_rendition, recipe);
-        let environment = crate::documents::Environment::capture(&host).unwrap();
+        let environment = crate::documents::Environment::capture(&host.session).unwrap();
         let restored =
             crate::documents::prepare_recovery(environment, file, &Default::default()).unwrap();
         assert_eq!(restored.engine().document().layers, layers);

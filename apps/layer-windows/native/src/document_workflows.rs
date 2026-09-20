@@ -28,7 +28,6 @@ mod proof;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
     Describe,
-    SdrOptions { recipe: layer_core::color::hdr::SdrRendition, pad: [f64; 2] },
     ProofOptions {
         settings: layer_ui::proof_panel::PrintProofSettings,
         profile_id: Option<String>,
@@ -86,7 +85,6 @@ impl Drop for Import {
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 enum Payload {
     Profiles,
-    Sdr { form: Value, epoch: u64, revision: u64, recipe: layer_core::color::hdr::SdrRendition },
     Proof(Box<proof::Task>),
     Export(Box<export::Task>),
     Import(Import),
@@ -135,12 +133,6 @@ impl Task {
             .ok_or("Request expired")?
             .kind;
         let (kind, payload) = match request {
-            HostRequestKind::SdrRendition => ("sdr", Payload::Sdr {
-                form: layer_ui::proof_workflow::proof_form(session),
-                epoch: session.state().document_file.epoch,
-                revision: session.engine().document().revision,
-                recipe: session.engine().document().sdr_rendition,
-            }),
             HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id)?))),
             HostRequestKind::Document {
                 request: DocumentRequest::Export { .. },
@@ -272,7 +264,6 @@ impl Task {
     }
     fn describe(&mut self) -> Result<(), String> {
         self.details = match &mut self.payload {
-            Payload::Sdr { form, .. } => form.clone(),
             Payload::Profiles => {
                 json!({"profiles":crate::color_storage::list(self.control.cancellation_flag())?})
             }
@@ -347,15 +338,6 @@ impl Task {
                 return Err("Document operation cancelled".into());
             }
             match action {
-                Action::SdrOptions { recipe, pad } => {
-                    let Payload::Sdr { recipe: saved, .. } = &mut self.payload else { return Err("No SDR appearance request".into()); };
-                    if !pad.iter().all(|v| v.is_finite() && (-1. ..=1.).contains(v)) { return Err("Invalid SDR tone settings".into()); }
-                    recipe.validate().map_err(str::to_string)?;
-                    *saved = layer_ui::proof_panel::sdr_from_pad(recipe, pad);
-                    saved.validate().map_err(str::to_string)?;
-                    self.stage = "commit";
-                    Ok(())
-                }
                 Action::Describe if self.kind == "history" => {
                     if let Payload::Color(task) = &mut self.payload {
                         task.work(None, false, self.control.clone())?;
@@ -607,17 +589,6 @@ impl Task {
             return Err("Preview the result before applying it".into());
         }
         match &mut self.payload {
-            Payload::Sdr { epoch, revision, recipe, .. } => {
-                if self.control.is_cancelled() || host.session.state().document_file.epoch != *epoch
-                    || host.session.engine().document().revision != *revision
-                    || !host.session.state().requests.iter().any(|r| r.id == self.id && matches!(r.kind, HostRequestKind::SdrRendition)) {
-                    return Err("SDR appearance request changed or was cancelled".into());
-                }
-                let previous = host.session.state().revision;
-                let change = host.session.set_sdr_rendition(*recipe)?;
-                host.apply_change(previous, change);
-                host.dispatch(layer_ui::UiAction::CompleteRequest { id: self.id, error: None })
-            }
             Payload::Import(task) => {
                 let session = &mut host.session;
                 session.validate_image_placement(&task.context)?;
@@ -650,7 +621,7 @@ impl Task {
         if self.id == 0 {
             return Ok(());
         }
-        if matches!(self.kind, "histogram" | "proof" | "sdr") {
+        if matches!(self.kind, "histogram" | "proof") {
             host.dispatch(layer_ui::UiAction::CompleteRequest {
                 id: self.id,
                 error: None,
@@ -768,7 +739,7 @@ mod tests {
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
             UiSession::from_project(Renderer(Some(gpu)), project, None, [48, 36]).unwrap();
-        let environment = crate::documents::Environment::capture(&host).unwrap();
+        let environment = crate::documents::Environment::capture(&host.session).unwrap();
         host.session =
             *crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap();
         host.session.set_platform(Platform::Windows);
@@ -972,7 +943,7 @@ mod tests {
         // presenter. Viewing never enters the project/export or edit history.
         let before_proof = host.session.engine().checkpoint();
         let source_pixels = pixels(host.session.renderer_mut().0.as_mut().unwrap());
-        let mut setup = begin(&mut host, CommandId::SoftProof);
+        let mut setup = begin(&mut host, CommandId::SoftProofSetup);
         let embedded = layer_core::color::ProofRecipe::new("Embedded P3".into(), ColorProfile::Icc(profile.clone().into()));
         ready(&mut setup, Action::ProofOptions {
             settings: layer_ui::proof_panel::PrintProofSettings::from_recipe(&embedded).unwrap(),
@@ -999,7 +970,7 @@ mod tests {
         }
         let portable = directory.join("proof-portable.capy");
         host.session.capture_project_recovery().unwrap().write(std::fs::File::create(&portable).unwrap()).unwrap();
-        let environment = crate::documents::Environment::capture(&host).unwrap();
+        let environment = crate::documents::Environment::capture(&host.session).unwrap();
         let restored = crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap();
         assert_eq!(restored.engine().document().proof, Some(embedded.clone()));
         assert!(!restored.state().soft_proof && !restored.state().gamut_warning);

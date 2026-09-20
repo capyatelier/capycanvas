@@ -5,7 +5,7 @@ use crate::{
     documents::Environment,
 };
 use layer_core::Project;
-use layer_host::{NativeHost, Renderer};
+use layer_host::Renderer;
 use layer_ui::{
     UiSession,
     recovery::{RecoveryEvent, RecoveryState, RecoveryUpdate, RecoveryWork, RecoveryWorkKind},
@@ -144,7 +144,14 @@ pub(crate) enum Action {
     Retry,
     KeepOpen,
 }
+pub(crate) struct Restored {
+    pub token: u64,
+    pub identity: (u64,u64),
+    pub candidate: Box<UiSession<Renderer>>,
+}
 pub(crate) struct Service {
+    restored: Option<Restored>,
+    changed: bool,
     state: RecoveryState,
     update: RecoveryUpdate,
     send: SyncSender<Job>,
@@ -254,6 +261,8 @@ impl Service {
             })
             .map_err(|_| "Could not start recovery worker")?;
         Ok(Self {
+            restored: None,
+            changed: true,
             state: Default::default(),
             update: Default::default(),
             send,
@@ -287,7 +296,7 @@ impl Service {
         }
         Ok(())
     }
-    fn event(&mut self, host: &mut NativeHost, event: RecoveryEvent) -> Result<(), String> {
+    fn event(&mut self, session: &mut UiSession<Renderer>, event: RecoveryEvent) -> Result<(), String> {
         self.update = self.state.event(event)?;
         loop {
             if !self.update.release.is_empty() {
@@ -297,16 +306,16 @@ impl Service {
             if let Some(work) = self.update.work.take() {
                 let prepared = (|| {
                     let project = if matches!(work.kind, RecoveryWorkKind::Capture) {
-                        Some(Box::new(host.session.capture_project_recovery()?))
+                        Some(Box::new(session.capture_project_recovery()?))
                     } else {
                         None
                     };
                     let environment = if matches!(work.kind, RecoveryWorkKind::Restore { .. }) {
                         self.restore_identity = Some((
-                            host.session.state().document_file.epoch,
-                            host.session.engine().document().revision,
+                            session.state().document_file.epoch,
+                            session.engine().document().revision,
                         ));
-                        Some(Box::new(Environment::capture(host)?))
+                        Some(Box::new(Environment::capture(session)?))
                     } else {
                         None
                     };
@@ -334,10 +343,10 @@ impl Service {
                 break;
             }
         }
-        host.invalidate_snapshot();
+        self.changed = true;
         self.drain()
     }
-    pub fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
+    pub fn poll(&mut self, session: &mut UiSession<Renderer>) -> Result<bool, String> {
         while let Some(completed) = self
             .completed
             .take()
@@ -347,7 +356,7 @@ impl Service {
             // the prepared candidate and its origin until the shared idle check
             // permits adoption; do not turn this transient state into a failure.
             if matches!(&completed, Finished::Work(_, Ok(Some(_))))
-                && host.session.require_document_idle().is_err()
+                && session.require_document_idle().is_err()
             {
                 self.completed = Some(completed);
                 break;
@@ -356,63 +365,28 @@ impl Service {
                 Finished::Storage(result) => match result {
                     Ok(offer) => {
                         self.ready = true;
-                        self.event(host, RecoveryEvent::Ownership { owned: true })?;
+                        self.event(session, RecoveryEvent::Ownership { owned: true })?;
                         if let Some(key) = offer {
-                            self.event(host, RecoveryEvent::Offer { key, owned: true })?;
+                            self.event(session, RecoveryEvent::Offer { key, owned: true })?;
                         }
                     }
                     Err(error) => {
                         self.error = Some(error);
-                        host.invalidate_snapshot();
+                        self.changed = true;
                     }
                 },
-                Finished::Work(token, mut result) => {
+                Finished::Work(token, result) => {
                     if let Ok(Some(candidate)) = result {
-                        let identity = self
-                            .restore_identity
-                            .take()
-                            .ok_or("Recovery identity missing")?;
-                        let same_device = host
-                            .session
-                            .engine()
-                            .backend()
-                            .0
-                            .as_ref()
-                            .map(|g| g.device())
-                            == candidate.engine().backend().0.as_ref().map(|g| g.device());
-                        result = if !same_device {
-                            self.queue(Job::RetiredSession(candidate));
-                            Err("The GPU changed during recovery; try again".into())
-                        } else {
-                            match host
-                                .session
-                                .adopt_recovered_project(candidate, identity.0, identity.1)
-                            {
-                                Ok(retired) => {
-                                    self.queue(Job::RetiredSession(retired));
-                                    host.document_adopted();
-                                    self.event(
-                                        host,
-                                        RecoveryEvent::Observe {
-                                            document: host.session.recovery_document(),
-                                            owned: true,
-                                        },
-                                    )?;
-                                    Ok(None)
-                                }
-                                Err((error, candidate)) => {
-                                    self.queue(Job::RetiredSession(candidate));
-                                    Err(error)
-                                }
-                            }
-                        };
+                        self.restored = Some(Restored { token, identity: self.restore_identity.ok_or("Recovery identity missing")?, candidate });
+                        self.changed = true;
+                        continue;
                     }
                     if result.is_err() {
                         self.restore_identity = None;
                     }
                     self.error = result.as_ref().err().cloned();
                     self.event(
-                        host,
+                        session,
                         RecoveryEvent::Complete {
                             token,
                             success: result.is_ok(),
@@ -423,50 +397,51 @@ impl Service {
             }
         }
         {
-            if host.session.state().document_file.close_ready && !self.closing {
+            if session.state().document_file.close_ready && !self.closing {
                 self.closing = true;
                 self.event(
-                    host,
+                    session,
                     RecoveryEvent::Retire {
                         discard_origin: true,
                     },
                 )?;
-                self.event(host, RecoveryEvent::Close)?;
-            } else if !host.session.state().document_file.close_ready
+                self.event(session, RecoveryEvent::Close)?;
+            } else if !session.state().document_file.close_ready
                 && self.closing
                 && !self.update.busy
             {
                 self.closing = false;
-                self.event(host, RecoveryEvent::Resume)?;
+                self.event(session, RecoveryEvent::Resume)?;
             }
             if self.ready && !self.closing && Instant::now() >= self.next_observation {
                 self.next_observation = Instant::now() + Duration::from_secs(3);
                 self.event(
-                    host,
+                    session,
                     RecoveryEvent::Observe {
-                        document: host.session.recovery_document(),
+                        document: session.recovery_document(),
                         owned: true,
                     },
                 )?;
             }
         }
-        self.drain()
+        self.drain()?;
+        Ok(std::mem::take(&mut self.changed))
     }
-    pub fn dispatch(&mut self, host: &mut NativeHost, action: Action) -> Result<(), String> {
+    pub fn dispatch(&mut self, session: &mut UiSession<Renderer>, action: Action) -> Result<(), String> {
         if matches!(action, Action::Restore | Action::Retry | Action::Discard) {
             self.error = None;
         }
         match action {
             Action::Restore => {
-                if host.session.state().document_file.modified {
+                if session.state().document_file.modified {
                     return Err(
                         "Save or close the current drawing before restoring this copy".into(),
                     );
                 }
-                self.event(host, RecoveryEvent::Restore)
+                self.event(session, RecoveryEvent::Restore)
             }
-            Action::Later => self.event(host, RecoveryEvent::Dismiss { discard: false }),
-            Action::Discard => self.event(host, RecoveryEvent::Dismiss { discard: true }),
+            Action::Later => self.event(session, RecoveryEvent::Dismiss { discard: false }),
+            Action::Discard => self.event(session, RecoveryEvent::Dismiss { discard: true }),
             Action::Retry if !self.ready => {
                 self.queue(Job::Initialize);
                 self.drain()
@@ -474,25 +449,34 @@ impl Service {
             Action::Retry => {
                 self.next_observation = Instant::now();
                 self.event(
-                    host,
+                    session,
                     if self.closing {
                         RecoveryEvent::Retire {
                             discard_origin: true,
                         }
                     } else {
                         RecoveryEvent::Observe {
-                            document: host.session.recovery_document(),
+                            document: session.recovery_document(),
                             owned: true,
                         }
                     },
                 )
             }
             Action::KeepOpen => {
-                host.session.reset_document_close();
-                host.invalidate_snapshot();
+                session.reset_document_close();
+                self.changed = true;
                 Ok(())
             }
         }
+    }
+    pub fn take_restored(&mut self) -> Option<Restored> { self.restored.take() }
+    pub fn complete_restore(&mut self, session: &mut UiSession<Renderer>, token: u64, result: Result<(),String>) -> Result<(),String> {
+        self.restore_identity = None;
+        if result.is_ok() { self.event(session, RecoveryEvent::Observe { document: session.recovery_document(), owned: true })?; }
+        self.error = result.as_ref().err().cloned();
+        self.event(session, RecoveryEvent::Complete { token, success: result.is_ok() })?;
+        self.next_observation = Instant::now();
+        Ok(())
     }
     pub fn restoring(&self) -> bool {
         self.restore_identity.is_some() && self.update.busy
@@ -508,6 +492,7 @@ impl Service {
     }
     pub fn stop(&mut self) -> Result<(), String> {
         self.cancel.store(true, Ordering::Release);
+        if let Some(restored) = self.restored.take() { self.queue(Job::RetiredSession(restored.candidate)); }
         if let Some(Finished::Work(_, Ok(Some(candidate)))) = self.completed.take() {
             self.queue(Job::RetiredSession(candidate));
         }

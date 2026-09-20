@@ -129,12 +129,16 @@ impl DocumentTabs {
         point: [f32; 2],
         vertical: bool,
     ) -> Option<Option<u64>> {
+        Self::drop_target_in_order(&self.order, hits, point, vertical)
+    }
+    /// Stateless native geometry query; membership is revalidated on publication.
+    pub fn drop_target_in_order(order: &[u64], hits: &[DocumentTabHit], point: [f32; 2], vertical: bool) -> Option<Option<u64>> {
         if !point.iter().all(|v| v.is_finite()) {
             return None;
         }
         let hit = hits
             .iter()
-            .find(|h| self.order.contains(&h.id) && h.bounds.contains(point[0], point[1]))?;
+            .find(|h| order.contains(&h.id) && h.bounds.contains(point[0], point[1]))?;
         let before = if vertical {
             point[1] < hit.bounds.y + hit.bounds.height / 2.
         } else {
@@ -143,8 +147,8 @@ impl DocumentTabs {
         if before {
             Some(Some(hit.id))
         } else {
-            let i = self.order.iter().position(|&id| id == hit.id)?;
-            Some(self.order.get(i + 1).copied())
+            let i = order.iter().position(|&id| id == hit.id)?;
+            Some(order.get(i + 1).copied())
         }
     }
 }

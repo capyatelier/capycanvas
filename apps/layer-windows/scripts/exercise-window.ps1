@@ -52,18 +52,26 @@ if($Action -eq 'Close') {
         $dirty=$snapshot.model.state.document_file.modified
     }
     $p.CloseMainWindow()|Out-Null
-    if($dirty){
-        $watch=[Diagnostics.Stopwatch]::StartNew();$discard=$null
+    if($DiscardUnsaved){
+        $watch=[Diagnostics.Stopwatch]::StartNew();$lastEpoch=$null;$lastDecision=$null
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
-        do {
+        while(!$p.HasExited){
+          try {
+            $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
+            if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){throw 'Discard trace ownership changed'}
+            $epoch=$snapshot.model.state.document_file.epoch
+            if($epoch -ne $lastEpoch){$lastEpoch=$epoch;$watch.Restart()}
             $discard=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
                 [System.Windows.Automation.AndCondition]::new(
                     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Discard Changes'),
                     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
-            if($discard){break};Start-Sleep -Milliseconds 75
-        }while($watch.Elapsed.TotalSeconds -lt 5)
-        if(!$discard){throw 'Unsaved review did not present a discard decision.'}
-        $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            if($discard -and $discard.Current.IsEnabled -and $lastDecision -ne $epoch){
+                $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();$lastDecision=$epoch;$watch.Restart()
+            }
+            if($watch.Elapsed.TotalSeconds -gt 5){throw 'A drawing close exceeded five seconds after authorization'}
+          }catch{$p.Refresh();if($p.HasExited){break};throw}
+            Start-Sleep -Milliseconds 75;$p.Refresh()
+        }
     }
     if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds after authorization.'}
     $code=$p.ExitCode

@@ -121,7 +121,7 @@ mod tests {
     fn fixture() -> (NativeHost, Task) {
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.dispatch(UiAction::Invoke {
-            command: CommandId::SoftProof,
+            command: CommandId::SoftProofSetup,
         })
         .unwrap();
         let id = host.session.state().requests.last().unwrap().id;

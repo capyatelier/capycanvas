@@ -416,12 +416,16 @@ File-Command 'open_document';Picker 'Open';Choose-Path $corrupt;Idle
 Wait-Until {(Model).state.host_error -or (Model).error} 'Corrupt Open did not report failure'
 if((Model).state.document_file.epoch -ne $epoch -or (Model).state.document_file.location.uri -ne $second){throw 'Corrupt Open replaced the live drawing'}
 Draw
-File-Command 'new_document';Confirm-Dialog;Invoke-Control 'Cancel';Idle
-if((Model).state.document_file.epoch -ne $epoch -or !(Model).state.document_file.modified){throw 'Cancelled replacement lost edits'}
-File-Command 'new_document';Confirm-Dialog;Invoke-Control 'Discard Changes';New-Dialog;Invoke-Control 'Cancel';Idle
-if((Model).state.document_file.epoch -ne $epoch -or !(Model).state.document_file.modified){throw 'Cancelled New after discard approval lost the current drawing'}
-File-Command 'open_document';Confirm-Dialog;Invoke-Control 'Save';Picker 'Open';Choose-Path $first;Idle
-Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $first} 'Save-before-Open did not adopt the selected file'
+$drawingCount=@((Model).windows_tabs.tabs).Count
+File-Command 'new_document';New-Dialog;Invoke-Control 'Cancel';Idle
+if((Model).state.document_file.epoch -ne $epoch -or !(Model).state.document_file.modified){throw 'Cancelled New lost edits'}
+File-Command 'open_document';Picker 'Open';Picker-Button '2';Idle
+if((Model).state.document_file.epoch -ne $epoch -or !(Model).state.document_file.modified){throw 'Cancelled Open lost edits'}
+File-Command 'save_document';Idle
+Wait-Until {!(Model).state.document_file.modified} 'Explicit Save did not complete'
+File-Command 'open_document';Picker 'Open';Choose-Path $first;Idle
+Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $first} 'Open did not select the new drawing'
+if(@((Model).windows_tabs.tabs).Count -ne $drawingCount+1){throw 'Open did not retain the existing drawings'}
 if((Model).state.document_file.modified){throw 'Opened project is unexpectedly dirty'}
 Draw
 Fail-Gpu
@@ -506,7 +510,7 @@ if($FailGpu){
     gpu_recovery=if($RecoverGpu){'two replacements, queued and active pen strokes, identical exported pixels, thumbnails and Undo/Redo passed'}else{'not requested'}
     save_existing_and_save_as='passed'
     corrupt_open_preserves_live_document='passed'
-    replacement_cancel_and_save_before_open='passed'
+    retained_drawings_picker_cancel_and_explicit_save='passed'
     preferences_draft_and_cancelled_close='passed'
     durable_save_then_close='passed'
     untitled_close_picker_cancel_and_discard='passed'

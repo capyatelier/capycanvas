@@ -72,8 +72,12 @@ function Select-Choice([string]$Id,[string]$Name){
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Proof/document operation did not finish' 60}
+function ProofPanel {
+ if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}
+ Wait-Until {(Find 'proof-panel-mode')} 'Retained Proof panel did not open'
+}
 function Setup {
- Command 'soft_proof_setup'
+ ProofPanel;Invoke 'proof-panel-setup'
  Wait-Until {(Model).windows_document.kind -eq 'proof' -and (Find 'proof-profile')} 'Proof Setup did not open'
 }
 function Picker([string]$Name){
@@ -115,7 +119,9 @@ try {
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
  $initial=(Model).state.document_file|ConvertTo-Json -Compress
  Command 'soft_proof'
- Wait-Until {$null -ne (Find 'proof-profile')} 'First Proof Colors did not open setup'
+ Wait-Until {$null -ne (Find 'proof-panel-setup')} 'Proof command did not reveal the panel'
+ Invoke 'proof-panel-setup'
+ Wait-Until {$null -ne (Find 'proof-profile')} 'Print setup did not open'
  Button 'Cancel';Idle
  if((Model).state.soft_proof -or ((Model).state.document_file|ConvertTo-Json -Compress) -ne $initial){throw 'First-use cancellation edited the drawing'}
  Setup;Select-Choice 'proof-profile' 'Display P3';Select-Choice 'proof-intent' 'Absolute'
@@ -134,8 +140,8 @@ try {
  if($settings.profile.name -ne 'Display P3' -or $settings.simulation -ne 'paper_and_ink' -or $settings.intent -ne 'RelativeColorimetric'){throw 'Profile/library navigation lost the draft'}
  Button 'Cancel';Idle
  $withProof=(Model).state.document_file|ConvertTo-Json -Compress
- Command 'gamut_warning';Wait-Until {(Model).state.gamut_warning} 'Gamut warning failed'
- Command 'soft_proof';Command 'gamut_warning';Wait-Until {!(Model).state.soft_proof -and !(Model).state.gamut_warning -and !(Model).windows_proof.text} 'Off did not clear proof status'
+ Invoke 'proof-panel-gamut';Wait-Until {(Model).state.gamut_warning} 'Gamut warning failed'
+ Command 'soft_proof';Wait-Until {!(Model).state.soft_proof -and !(Model).state.gamut_warning -and !(Model).windows_proof.text} 'Off did not clear proof status'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $withProof){throw 'Viewing toggles modified the drawing'}
  Command 'undo' 'Edit';Idle
  if((Model).state.document_file.modified){throw 'One Undo did not restore the clean drawing'}

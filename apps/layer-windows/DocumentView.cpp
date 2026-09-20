@@ -287,14 +287,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         auto kind=str(request,L"kind"),stage=str(request,L"stage");auto details=object(request,L"details");
         if((kind==L"place"||kind==L"paste")&&stage==L"options"){showing=false;pickImages(request);co_return;}
         J action=O({{L"op",S(L"cancel")}});
-        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;std::array<NumberBox,4> sdrNumbers;ComboBox profileList;A profileChoices;
+        auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;A profileChoices;
         if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
         bool library=kind==L"profiles"||(kind==L"proof"&&proofManaging);
         try{
             dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.CloseButtonText(L"Cancel");
             dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
-            auto title=library?L"ICC profile library":kind==L"sdr"?L"SDR appearance":kind==L"proof"?L"Proof Setup":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
+            auto title=library?L"ICC profile library":kind==L"proof"?L"Proof Setup":kind==L"export"?L"Export image":kind==L"assign"?L"Assign working RGB":kind==L"convert"?L"Convert color space":kind==L"depth"?L"Change bit depth":
                 kind==L"place"||kind==L"paste"?L"Interpret untagged image":kind==L"repair"?L"Repair source profile":kind==L"rasterize"?L"Rasterize source":kind==L"histogram"?L"Histogram":L"Document properties";
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
@@ -338,17 +338,6 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 add(L"Remove / reset",[preset,operate]{operate(O({{L"type",S(preset.SelectedIndex()<4?L"reset":L"remove")},{L"index",N(preset.SelectedIndex())}}));});body.Children().Append(buttons);
                 dialog.PrimaryButtonText(L"Preview export");
                 dialog.PrimaryButtonClick([exportForm](auto&&,ContentDialogButtonClickEventArgs const& e){try{exportForm->current();}catch(hresult_error const& error){exportForm->validation.Text(error.message());e.Cancel(true);}});
-            }else if(kind==L"sdr"){
-                text(L"This saved appearance is used on SDR displays, for print proofing, and in SDR exports.");
-                auto display=object(model,L"windows_display");text(num(display,L"headroom",1)>1?L"HDR display · "+to_hstring(num(display,L"headroom"))+L"× headroom":L"SDR display · showing the saved SDR appearance");
-                auto recipe=object(details,L"rendition");auto values=array(details,L"pad_values");
-                auto numbers=array(details,L"numbers"),axes=array(object(details,L"pad"),L"axes");
-                for(uint32_t i=0;i<4;++i){auto definition=(i<2?numbers:axes).GetObjectAt(i%2);auto spec=object(definition,L"numeric");auto box=sdrNumbers[i];
-                    box.Header(box_value(str(definition,L"label")+(i==0?L" (EV)":L"")));box.Minimum(num(spec,L"min"));box.Maximum(num(spec,L"max"));box.SmallChange(num(spec,L"step",.01));
-                    box.Value(i<2?num(recipe,str(definition,L"key").c_str()):values.GetNumberAt(i-2));
-                    AutomationProperties::SetAutomationId(box,L"sdr-"+str(definition,L"key"));body.Children().Append(box);
-                }
-                dialog.PrimaryButtonText(L"Save appearance");
             }else if(kind==L"properties"){
                 for(auto item:array(request,L"details")){auto row=item.GetArray();text(row.GetStringAt(0)+L"\n"+row.GetStringAt(1));}dialog.CloseButtonText(L"Done");
             }else if(kind==L"histogram"){
@@ -404,11 +393,6 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 }else if(kind==L"proof"){
                     proofDraft=proofForm->current();proofProfileId=proofForm->profileId;
                     action=O({{L"op",S(L"proof_options")},{L"settings",proofDraft},{L"profile_id",proofProfileId.empty()?JsonValue::CreateNullValue():S(proofProfileId)}});
-                }else if(kind==L"sdr"){
-                    auto recipe=J::Parse(object(details,L"rendition").Stringify());auto numbers=array(details,L"numbers");A pad;
-                    for(uint32_t i=0;i<2;++i)recipe.Insert(str(numbers.GetObjectAt(i),L"key"),N(sdrNumbers[i].Value()));
-                    pad.Append(N(sdrNumbers[2].Value()));pad.Append(N(sdrNumbers[3].Value()));
-                    action=O({{L"op",S(L"sdr_options")},{L"recipe",recipe},{L"pad",pad}});
                 }else if(kind==L"export"&&stage==L"options"){
                     action=O({{L"op",S(L"export_options")},{L"recipe",exportForm->current()},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});
                 }else if(kind==L"export"&&stage==L"preview"){
@@ -471,12 +455,13 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             ProgressRing progress;progress.IsActive(true);progress.Width(48);progress.Height(48);dialog.Content(progress);co_await dialog.ShowAsync();
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;
-        if(!stopping&&!busyCompleted)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(num(state,L"id"))},{L"action",O({{L"op",S(L"cancel")}})}}).Stringify()));
+        if(!stopping&&!busyCompleted&&str(state,L"type")==L"opening_busy")send(to_string(O({{L"operation",S(L"cancel")},{L"id",N(num(state,L"id"))}}).Stringify()));
+        else if(!stopping&&!busyCompleted)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(num(state,L"id"))},{L"action",O({{L"op",S(L"cancel")}})}}).Stringify()));
         busyDialog=false;showing=false;changed();
     }
     void apply(J const& snapshot,bool blocked) {
         model=snapshot;
-        if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
+        if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"&&str(object(model,L"windows_document"),L"type")!=L"opening_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
         if(recoveryProgress&&!flag(object(model,L"windows_recovery"),L"restoring")){if(dialog)dialog.Hide();}
         if(stopping||blocked||showing)return;
         auto recovery=object(model,L"windows_recovery");auto offer=str(recovery,L"offer"),failure=str(recovery,L"error");
@@ -486,7 +471,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             auto stamp=offer+L"/"+failure+L"/"+(flag(recovery,L"closing")?L"close":L"open");if(stamp!=recoveryStamp){recoveryStamp=stamp;recovering(recovery);return;}
         }
         auto document=object(model,L"windows_document");
-        if(str(document,L"type")==L"workflow_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}
+        if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}
         if(str(document,L"type")==L"workflow"){
             auto stamp=to_hstring(uint32_t(num(document,L"id")))+L"/"+to_hstring(uint32_t(num(document,L"serial")));
             if(stamp!=workflowStamp){workflowStamp=stamp;workflow(document);}return;
@@ -502,7 +487,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(flag(model,L"windows_importing"))return;
         for(auto value:array(object(model,L"state"),L"requests")) {
             auto envelope=value.GetObject();
-            if(str(object(envelope,L"kind"),L"type")==L"sdr_rendition"||str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
+            if(str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
                 auto id=uint32_t(num(envelope,L"id"));if(id!=handled){handled=id;send(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(id)}}).Stringify()));}break;
             }
             if(str(object(envelope,L"kind"),L"type")!=L"document")continue;

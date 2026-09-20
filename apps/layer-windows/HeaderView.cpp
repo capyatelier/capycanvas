@@ -2,6 +2,7 @@
 #include "HeaderView.h"
 #include "HeaderInput.h"
 #include "HeaderStatus.h"
+#include "DrawingTabs.h"
 #include "NativeMenus.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceGeometry.h"
@@ -51,7 +52,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     Grid menuGroup,workspaceGroup;
     ScrollViewer switcher;
     Border document;
-    TextBlock title;
+    std::shared_ptr<DrawingTabs> drawings;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
     hstring switchActive,theme,palette,bankKey,geometryKey,desiredKey,lastMeasurement,traceKey;
     J geometry,view,configuration;
@@ -87,7 +88,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto request=value.GetObject();auto id=uint32_t(num(request,L"id"));
             if(handledRequests.contains(id))continue;
             auto kind=object(request,L"kind");auto type=str(kind,L"type");
-            if(type==L"set_fullscreen"){
+            if(type==L"drawings"&&drawings){
+                handledRequests.insert(id);drawings->show(document);complete(id);
+            }else if(type==L"set_fullscreen"){
                 handledRequests.insert(id);
                 try{if(flag(kind,L"fullscreen")!=fullscreenActive)fullscreen();complete(id);}
                 catch(hresult_error const& failure){complete(id,S(L"Windows could not change full screen ("+to_hstring(failure.code().value)+L")."));}
@@ -262,9 +265,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             }
         }}));
         workspaceGroup=Grid();workspaceGroup.VerticalAlignment(VerticalAlignment::Center);workspaceGroup.Children().Append(switcher);workspaceGroup.Children().Append(workspaceOverflow);
-        title=label(data,L"",true);title.VerticalAlignment(VerticalAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);title.TextAlignment(TextAlignment::Center);
-        document=Border();document.Child(title);document.Background(headerSurface(data));document.Padding({6,0,6,0});document.CornerRadius({6,6,6,6});
-        AutomationProperties::SetAutomationId(document,L"document-title");AutomationProperties::SetName(document,L"Document title");
+        drawings=std::make_shared<DrawingTabs>();drawings->data=data;drawings->init();
+        document=Border();document.Child(drawings->root);document.Background(headerSurface(data));document.CornerRadius({6,6,6,6});
+        AutomationProperties::SetAutomationId(document,L"document-title");AutomationProperties::SetName(document,L"Drawings");
         systemStatus=std::make_unique<HeaderStatus>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->schedule();});
         bank=Border();bank.Background(data->brush(L"panel"));bank.CornerRadius({8,8,8,8});bank.Padding({6,6,6,6});bankContent=Canvas();bankScroll=ScrollViewer();
         bankScroll.Content(bankContent);bankScroll.HorizontalScrollMode(ScrollMode::Disabled);bankScroll.VerticalScrollMode(ScrollMode::Enabled);
@@ -306,6 +309,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto it=items.find(id);if(it==items.end())return;
         auto kind=str(object(it->second.entry,L"item"),L"kind");
         if(kind==L"capy"||kind==L"settings"){data->dispatch(invoke(kind==L"capy"?L"zen_mode":L"settings"));return;}
+        if(kind==L"document_title"){drawings->show(anchor?anchor:document);return;}
         if(kind==L"tool"){data->dispatch(O({{L"type",S(L"activate_header_item")},{L"id",N(id)}}));return;}
         if(kind==L"menu"||kind==L"menu_labels"||kind==L"workspaces"){
             auto flyout=kind==L"workspaces"?workspaceOverflow.Flyout():primary.Flyout();
@@ -453,7 +457,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto kind=str(object(native.entry,L"item"),L"kind");double natural=tile,compact=tile;
             if(kind==L"menu_labels")natural=menuWidth;
             else if(kind==L"workspaces")natural=switchWidth;
-            else if(kind==L"document_title")natural=std::clamp(textWidth(title.Text(),true)+12,tile,350.);
+            else if(kind==L"document_title"){natural=std::clamp(double(array(object(data->model,L"windows_tabs"),L"tabs").Size())*180.,180.,720.);compact=140.;}
             else if(kind==L"clock")natural=fullscreenActive||editing?textWidth(editing&&!fullscreenActive?L"Clock":systemStatus->Clock().Child().as<TextBlock>().Text())+12:0;
             else if(kind==L"battery")natural=editing||(fullscreenActive&&systemStatus->HasBattery())?tile:0;
             if(kind==L"clock"||kind==L"battery")compact=natural;
@@ -556,9 +560,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(!built||nextTheme!=theme||nextPalette!=palette){theme=nextTheme;palette=nextPalette;build();}
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         root.TabFocusNavigation(editing?Input::KeyboardNavigationMode::Cycle:Input::KeyboardNavigationMode::Local);
-        auto tabs=array(data->state,L"tabs");if(tabs.Size()){
-            auto tab=tabs.GetObjectAt(0);title.Text(str(tab,L"title")+(flag(object(data->state,L"document_file"),L"modified")?L" •":L"")+L" · "+to_hstring(int(num(tab,L"width")))+L" × "+to_hstring(int(num(tab,L"height"))));
-        }
+        drawings->refresh();
         applyWorkspaces();switchWidth=8+2*std::max(0,int(workspaces.size())-1);
         for(auto const& [item,id]:workspaces){item.Width(std::min(130.,unbox_value<double>(item.Tag())+20));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);
@@ -575,7 +577,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         };
         for(auto const& [id,item]:items){
             auto kind=str(object(item.entry,L"item"),L"kind");
-            if(kind!=L"document_title"&&kind!=L"clock"&&kind!=L"battery"&&kind!=L"space")take(item.frame);
+            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space")take(item.frame);
         }
         for(auto item:overflow)take(item);take(recovery);
         std::sort(controls.begin(),controls.end());float next=leftInset,limit=float(width)/scale-rightInset;
@@ -588,8 +590,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     }
 };
 HeaderView::HeaderView(Dispatch send,Json catalog,std::function<void(bool)> popup,std::function<void()> layout,
-    std::function<void()> fullscreen,std::function<void()> newWindow,PreviewTransport queries,Dispatch input):impl(std::make_shared<Impl>()){
-    impl->data->send=std::move(send);impl->data->catalog=catalog;impl->data->query=std::move(queries);impl->data->input=std::move(input);
+    std::function<void()> fullscreen,std::function<void()> newWindow,PreviewTransport queries,Dispatch input,Dispatch documents):impl(std::make_shared<Impl>()){
+    impl->data->send=std::move(send);impl->data->catalog=catalog;impl->data->query=std::move(queries);impl->data->input=std::move(input);impl->data->document=std::move(documents);
     impl->data->popupChanged=std::move(popup);impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->newWindow=std::move(newWindow);impl->init();
 }
 HeaderView::~HeaderView()=default;
@@ -604,7 +606,12 @@ void HeaderView::SetFullscreen(bool active){
     impl->schedule();
 }
 void HeaderView::SetBlocked(bool blocked){impl->data->externalPopup=blocked;if(blocked)impl->input->Cancel();}
-bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){return impl->input->Key(e,pressed);}
+bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
+    if(pressed&&e.Key()==Windows::System::VirtualKey::Tab&&(GetKeyState(VK_CONTROL)&0x8000)&&impl->drawings&&impl->drawings->available()){
+        e.Handled(true);impl->drawings->send(O({{L"op",S(L"adjacent")},{L"forward",B(!(GetKeyState(VK_SHIFT)&0x8000))}}));return true;
+    }
+    return impl->input->Key(e,pressed);
+}
 std::vector<Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<Windows::Graphics::RectInt32>{};}
 
 std::vector<Windows::Graphics::RectInt32> HeaderView::InputRegions(float scale,uint32_t width)const{

@@ -8,6 +8,8 @@ use layer_render::{CanvasRenderer, EffectValidationRequest};
 use layer_render_wgpu::{ExportReadback, WgpuRasterizer};
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use serde::Deserialize;
+#[path = "document_tabs.rs"]
+mod tabs;
 use std::{
     fs::File,
     io::BufReader,
@@ -25,6 +27,7 @@ use std::{
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentAction {
     RequestImport,
+    Tabs { action: tabs::Action },
     NewPreferences { id: u32, action: layer_ui::NewDocumentAction },
     Recovery { action: crate::recovery::Action },
     WorkflowBegin { id: u32 },
@@ -53,13 +56,6 @@ pub(crate) enum DocumentAction {
         id: u32,
         error: String,
     },
-    New {
-        id: u32,
-        epoch: u64,
-        revision: u64,
-        width: u32,
-        height: u32,
-    },
     Open {
         id: u32,
         epoch: u64,
@@ -76,29 +72,28 @@ pub(crate) enum DocumentAction {
     },
 }
 pub(crate) struct Environment {
+    admission: layer_ui::DocumentAdmission,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     viewport: [u32; 2],
-    defaults: layer_ui::NewDocumentOptions,
     photo_policy: layer_ui::PhotoOpenPolicy,
 }
 impl Environment {
-    pub(crate) fn capture(host: &NativeHost) -> Result<Self, String> {
-        let gpu = host
-            .session
+    pub(crate) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
+        let gpu = session
             .engine()
             .backend()
             .0
             .as_ref()
             .ok_or("Wait for the canvas to finish starting")?;
         Ok(Self {
+            admission: layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles()),
             adapter: gpu.adapter().clone(),
             device: gpu.device().clone(),
             queue: gpu.queue().clone(),
-            viewport: host.session.state().camera.viewport,
-            defaults: host.session.state().settings.new_document.defaults,
-            photo_policy: host.session.state().settings.photo_open,
+            viewport: session.state().camera.viewport,
+            photo_policy: session.state().settings.photo_open,
         })
     }
 }
@@ -107,10 +102,11 @@ enum Source {
     Create(layer_ui::NewDocumentOptions),
     Recovery(PathBuf),
     Interpret(Box<layer_ui::ImportedDocument>, crate::color_storage::ProfileChoice),
-    New { width: u32, height: u32 },
     Open(PathBuf),
 }
 enum Job {
+    Activate { gpu: tabs::Gpu, color: layer_core::color::DocumentColor },
+    Spill { tiles: layer_core::raster_storage::RetainedTiles, directory: PathBuf },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
     ImportImage {
@@ -129,9 +125,12 @@ enum Job {
     Prepare {
         environment: Environment,
         source: Source,
+        cancelled: Arc<AtomicBool>,
     },
 }
 enum Completed {
+    Activated(Box<WgpuRasterizer>),
+    Spilled,
     Workflow(Box<crate::document_workflows::Task>),
     Cancelled,
     Interpretation(Box<Opening>),
@@ -147,6 +146,7 @@ struct Mailbox {
     completed: Option<Result<Completed, String>>,
     retired: Option<Box<UiSession<Renderer>>>,
     retired_image: Option<ProjectAsset>,
+    retired_renderer: Option<Renderer>,
     retired_workflow: Option<Box<crate::document_workflows::Task>>,
 }
 #[derive(Default)]
@@ -169,11 +169,12 @@ impl Worker {
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 loop {
-                    let (job, retired, retired_image, retired_workflow, stopping, completed) = {
+                    let (job, retired, retired_image, retired_workflow, retired_renderer, stopping, completed) = {
                         let mut mailbox = state.mailbox.lock().unwrap();
                         while mailbox.pending.is_none()
                             && mailbox.retired.is_none()
                             && mailbox.retired_image.is_none()
+                            && mailbox.retired_renderer.is_none()
                             && mailbox.retired_workflow.is_none()
                             && !state.stopping.load(Ordering::Acquire)
                         {
@@ -185,6 +186,7 @@ impl Worker {
                             mailbox.retired.take(),
                             mailbox.retired_image.take(),
                             mailbox.retired_workflow.take(),
+                            mailbox.retired_renderer.take(),
                             stopping,
                             if stopping {
                                 mailbox.completed.take()
@@ -197,6 +199,7 @@ impl Worker {
                     drop(retired);
                     drop(retired_image);
                     drop(retired_workflow);
+                    drop(retired_renderer);
                     if stopping {
                         drop(job);
                         drop(completed);
@@ -232,6 +235,13 @@ impl Worker {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
         assert!(mailbox.retired.is_none());
         mailbox.retired = Some(session);
+        self.shared.ready.notify_one();
+    }
+    fn retire_renderer(&self, renderer: Renderer) {
+        if renderer.0.is_none() { return; }
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        assert!(mailbox.retired_renderer.is_none());
+        mailbox.retired_renderer = Some(renderer);
         self.shared.ready.notify_one();
     }
     fn discard_image(&self, image: ProjectAsset) {
@@ -272,6 +282,8 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
+        Job::Activate { gpu, color } => gpu.activate(color).map(|g| Completed::Activated(Box::new(g))),
+        Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::ImportImage {
@@ -294,7 +306,8 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         Job::Prepare {
             environment,
             source,
-        } => prepare(environment, source, cancel),
+            cancelled,
+        } => prepare(environment, source, &cancelled),
     }
 }
 fn prepare(
@@ -311,10 +324,6 @@ fn prepare(
         ..Default::default()
     };
     let imported = match source {
-        Source::New { width, height } => layer_ui::ImportedDocument {
-            project: layer_ui::NewDocumentOptions { extent: [width, height], ..environment.defaults }.project()?,
-            source: layer_ui::ImportSource::Master,
-        },
         Source::Create(options) => layer_ui::ImportedDocument { project: options.project()?, source: layer_ui::ImportSource::Master },
         Source::Recovery(path) => layer_ui::read_import(Stream { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancel },
             layer_ui::ImportIntent::Recovery, environment.photo_policy, "Recovered drawing", limits, Default::default(), cancel)?,
@@ -332,6 +341,7 @@ fn prepare(
     let kind = imported.source;
     let project = imported.project;
     project.validate(limits)?;
+    environment.admission.admit(&project)?;
     check_cancelled(cancel)?;
     // Eager preparation is isolated from the independently presented live canvas.
     let mut gpu = WgpuRasterizer::from_wgpu_native_staged(environment.adapter,
@@ -389,6 +399,7 @@ struct Active {
     epoch: u64,
     revision: u64,
     location: Option<DocumentLocation>,
+    cancelled: Option<Arc<AtomicBool>>,
 }
 struct ImageImport {
     id: u64,
@@ -417,6 +428,15 @@ impl ImageImport {
     }
 }
 pub(crate) struct DocumentService {
+    tabs: layer_ui::DocumentSessions<tabs::Parked>,
+    pub recovery: Option<crate::recovery::Service>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    tab_gpu: Option<tabs::Gpu>,
+    activating: Option<(u64, u64)>,
+    spilling: bool,
+    deferred_action: Option<DocumentAction>,
+    close_window: bool,
+    close_next: bool,
     pub proof: crate::proof::Service,
     pub tone: crate::tone::Service,
     import: Option<ImageImport>,
@@ -435,7 +455,16 @@ impl DocumentService {
         let notify = wake.clone();
         Ok(Self {
             proof: crate::proof::Service::new(wake.clone()),
-            tone: crate::tone::Service::new(wake),
+            tone: crate::tone::Service::new(wake.clone()),
+            wake,
+            tabs: Default::default(),
+            recovery: None,
+            tab_gpu: None,
+            activating: None,
+            spilling: false,
+            deferred_action: None,
+            close_window: false,
+            close_next: false,
             worker: Worker::start(move || notify())?,
             import: None,
             next_import: 1,
@@ -448,6 +477,7 @@ impl DocumentService {
         })
     }
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
+        if self.opening.is_none() && let Some(active) = &self.active && active.cancelled.is_some() { return Some(serde_json::json!({"type":"opening_busy","id":active.id})); }
         if let Some(task) = &self.workflow { return Some(task.status()); }
         if self.workflow_running { return self.workflow_control.as_ref().map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id})); }
         self.opening.as_ref().map(|opening| serde_json::json!({
@@ -536,6 +566,9 @@ impl DocumentService {
         Ok(())
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        self.tab_gpu = None;
+        self.tone.stop()?;
+        self.proof.stop()?;
         self.cancel_import(host);
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
         if let Some(task) = self.workflow.take() {
@@ -598,6 +631,25 @@ impl DocumentService {
         host: &mut NativeHost,
         action: DocumentAction,
     ) -> Result<(), String> {
+        if let DocumentAction::Tabs { action } = action { return self.tab_action(host, action); }
+        if let DocumentAction::Recovery { action } = action {
+            self.recovery.as_mut().ok_or("Recovery service unavailable")?.dispatch(&mut host.session, action)?;
+            host.invalidate_snapshot();
+            return Ok(());
+        }
+        if self.recovery.as_ref().is_some_and(|r| r.restoring()) { return Err("Wait for recovery to finish".into()); }
+        if self.spilling {
+            if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
+            self.deferred_action = Some(action);
+            return Ok(());
+        }
+        if self.activating.is_some() { return Err("Wait for the drawing to finish starting".into()); }
+        if let DocumentAction::Cancel { id } = action
+            && let Some(active) = self.active.as_ref().filter(|a| a.id == id)
+            && let Some(cancelled) = &active.cancelled {
+            cancelled.store(true, Ordering::Release);
+            return Ok(());
+        }
         if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
             Self::matches(host, epoch, revision)?;
             if self.active.is_some() || self.import.is_some() || self.workflow_control.is_some()
@@ -647,7 +699,7 @@ impl DocumentService {
             let opening = self.opening.take().ok_or("No image interpretation is pending")?;
             if let Some(profile) = profile {
                 let Opening { environment, imported, .. } = *opening;
-                self.worker.submit(Job::Prepare { environment, source: Source::Interpret(Box::new(imported), profile) });
+                self.worker.submit(Job::Prepare { environment, source: Source::Interpret(Box::new(imported), profile), cancelled: self.active.as_ref().and_then(|a| a.cancelled.clone()).ok_or("Opening control missing")? });
             } else { self.worker.submit(Job::DiscardOpening(opening)); }
             host.invalidate_snapshot();
             return Ok(());
@@ -663,6 +715,8 @@ impl DocumentService {
             return self.import_picked(host, id, path);
         }
         if let DocumentAction::Close = action {
+            if self.recovery.as_ref().is_some_and(|s| s.restoring()) { return Ok(()); }
+            self.close_window = true;
             self.cancel_import(host);
             let previous = host.session.state().revision;
             let change = host.session.request_document_close()?;
@@ -707,7 +761,6 @@ impl DocumentService {
         let id = match &action {
             DocumentAction::Cancel { id }
             | DocumentAction::Failure { id, .. }
-            | DocumentAction::New { id, .. }
             | DocumentAction::Create { id, .. }
             | DocumentAction::Open { id, .. }
             | DocumentAction::Save { id, .. }
@@ -737,6 +790,7 @@ impl DocumentService {
                 epoch: host.session.state().document_file.epoch,
                 revision: host.session.engine().document().revision,
                 location: None,
+                cancelled: None,
             });
             self.export = Some(PathBuf::from(path));
             host.dirty = true;
@@ -772,30 +826,14 @@ impl DocumentService {
                     if matches!(request, DocumentRequest::New) => {
                     Self::matches(host, epoch, revision)?;
                     options.validate()?;
-                    let environment = Environment::capture(host)?;
+                    let mut environment = Environment::capture(&host.session)?;
+                    environment.admission = self.tabs.admission(&host.session.retained_document_tiles());
                     if defaults || !preset.trim().is_empty() {
                         host.dispatch(layer_ui::UiAction::NewDocumentPreferences { action: layer_ui::NewDocumentAction::Remember {
                             options, name: preset, defaults,
                         } })?;
                     }
-                    (Job::Prepare { environment, source: Source::Create(options) }, None)
-                }
-                DocumentAction::New {
-                    epoch,
-                    revision,
-                    width,
-                    height,
-                    ..
-                } if matches!(request, DocumentRequest::New) => {
-                    Self::matches(host, epoch, revision)?;
-                    let environment = Environment::capture(host)?;
-                    (
-                        Job::Prepare {
-                            environment,
-                            source: Source::New { width, height },
-                        },
-                        None,
-                    )
+                    (Job::Prepare { environment, source: Source::Create(options), cancelled: Arc::new(AtomicBool::new(false)) }, None)
                 }
                 DocumentAction::Open {
                     epoch,
@@ -805,11 +843,13 @@ impl DocumentService {
                 } if matches!(request, DocumentRequest::Open) => {
                     Self::matches(host, epoch, revision)?;
                     let selected = location(&path)?;
-                    let environment = Environment::capture(host)?;
+                    let mut environment = Environment::capture(&host.session)?;
+                    environment.admission = self.tabs.admission(&host.session.retained_document_tiles());
                     (
                         Job::Prepare {
                             environment,
                             source: Source::Open(PathBuf::from(path)),
+                            cancelled: Arc::new(AtomicBool::new(false)),
                         },
                         Some(selected),
                     )
@@ -825,6 +865,7 @@ impl DocumentService {
                     epoch: host.session.state().document_file.epoch,
                     revision: host.session.engine().document().revision,
                     location,
+                    cancelled: match &job { Job::Prepare { cancelled, .. } => Some(cancelled.clone()), _ => None },
                 });
                 self.worker.submit(job);
                 Ok(())
@@ -881,6 +922,7 @@ impl DocumentService {
         Ok(())
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        self.poll_tabs(host)?;
         // New/Open/Save/Export/Close supersede a pending import. Native dialogs
         // wait for its bounded worker slot to drain before responding.
         if host.session.state().document_file.busy || host.session.state().document_file.close_ready
@@ -903,6 +945,14 @@ impl DocumentService {
         let Some(completed) = self.worker.take(defer_import) else {
             return Ok(());
         };
+        if self.activating.is_some() { return self.activated(host, completed); }
+        if self.spilling {
+            self.spilling = false;
+            self.tabs.storage_completed(completed.and_then(|result| if matches!(result, Completed::Spilled) { Ok(()) } else { Err("Unexpected storage completion".into()) }));
+            host.invalidate_snapshot();
+            if let Some(action) = self.deferred_action.take() { self.dispatch(host, action)?; }
+            return Ok(());
+        }
         if self.workflow_running {
             self.workflow_running = false;
             let mut task = match completed {
@@ -969,6 +1019,13 @@ impl DocumentService {
             }
             return Ok(());
         }
+        let completed = if self.active.as_ref().and_then(|a| a.cancelled.as_ref()).is_some_and(|c| c.load(Ordering::Acquire)) {
+            match completed {
+                Ok(Completed::Prepared(candidate) | Completed::PhotoPrepared(candidate)) => { self.worker.retire(candidate); Ok(Completed::Cancelled) }
+                Ok(Completed::Interpretation(opening)) => { self.worker.submit(Job::DiscardOpening(opening)); return Ok(()); }
+                _ => Ok(Completed::Cancelled),
+            }
+        } else { completed };
         let completed = match completed {
             Ok(Completed::Interpretation(opening)) => { self.opening = Some(opening); host.invalidate_snapshot(); return Ok(()); }
             Ok(Completed::PhotoPrepared(candidate)) => {
@@ -980,7 +1037,7 @@ impl DocumentService {
         let active = self.active.take().ok_or("Unexpected document completion")?;
         let result = match completed {
             Ok(Completed::Cancelled) => Ok(false),
-            Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_)) => unreachable!(),
+            Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_) | Completed::Activated(_) | Completed::Spilled) => unreachable!(),
             Ok(Completed::Imported(image)) => {
                 self.worker.discard_image(image);
                 Err("Unexpected image import completion".into())
@@ -1015,22 +1072,7 @@ impl DocumentService {
                         Err("The GPU changed while opening the document. Try again.".into()),
                     );
                 }
-                match host.session.adopt_project(
-                    candidate,
-                    active.epoch,
-                    active.revision,
-                    active.location,
-                ) {
-                    Ok(retired) => {
-                        self.worker.retire(retired);
-                        host.document_adopted();
-                        Ok(true)
-                    }
-                    Err((error, candidate)) => {
-                        self.worker.retire(candidate);
-                        Err(error)
-                    }
-                }
+                return self.append_candidate(host, active, candidate);
             }
             Err(error) => Err(error),
         };
@@ -1041,6 +1083,11 @@ impl DocumentService {
         task.preview(index)
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
+        if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { cancelled.store(true, Ordering::Release); }
+        if let Some(recovery) = &mut self.recovery { recovery.stop()?; }
+        for (_, parked) in self.tabs.parked_mut() {
+            if let Some(recovery) = &mut parked.owner.recovery { recovery.stop()?; }
+        }
         let tone = self.tone.stop();
         let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
@@ -1613,6 +1660,7 @@ mod tests {
             let id = f.request();
             let state = &f.host.session.state().document_file;
             f.service.active = Some(Active {
+                cancelled: None,
                 id,
                 epoch: state.epoch,
                 revision: state.revision,
@@ -1630,6 +1678,8 @@ mod tests {
             if changed {
                 f.invoke(CommandId::AddLayer);
             }
+            // This CPU fixture has no renderer; suspend it before parking.
+            f.host.session.suspend_renderer().unwrap();
             let old = f.host.session.engine().document().clone();
             f.service.poll(&mut f.host).unwrap();
             if changed {
@@ -2047,13 +2097,7 @@ mod gpu_tests {
         service
             .dispatch(
                 &mut host,
-                DocumentAction::New {
-                    id,
-                    epoch,
-                    revision,
-                    width: 96,
-                    height: 72,
-                },
+                DocumentAction::Create { id, epoch, revision, options: layer_ui::NewDocumentOptions { extent: [96, 72], ..Default::default() }, preset: String::new(), defaults: false },
             )
             .unwrap();
         finish(&mut service, &mut host, &done);
@@ -2109,13 +2153,7 @@ mod gpu_tests {
         service
             .dispatch(
                 &mut host,
-                DocumentAction::New {
-                    id,
-                    epoch,
-                    revision,
-                    width: 0,
-                    height: 48,
-                },
+                DocumentAction::Create { id, epoch, revision, options: layer_ui::NewDocumentOptions { extent: [0, 48], ..Default::default() }, preset: String::new(), defaults: false },
             )
             .unwrap();
         finish(&mut service, &mut host, &done);

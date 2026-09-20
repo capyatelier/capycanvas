@@ -65,6 +65,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.document_file.epoch = previous.state.document_file.epoch.checked_add(1)
             .ok_or("Document activation generation exhausted")?;
         self.state.revision = self.state.revision.max(previous.state.revision);
+        self.next_request = self.next_request.max(previous.next_request);
         self.apply_settings(previous.state.settings.clone())?;
         // View orientation/zoom belongs to this drawing; display size and scale
         // belong to the window and may have changed while this editor slept.
@@ -248,6 +249,22 @@ mod tests {
         assert!(session.state().document_file.close_ready);
         assert!(session.rendering_suspended());
         assert!(session.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).is_err());
+    }
+
+    #[test]
+    fn drawing_activation_keeps_native_dialog_request_ids_monotonic() {
+        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        active.set_platform(Platform::Windows);
+        let mut last = 0;
+        for _ in 0..3 {
+            active.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap();
+            last = active.state.requests.last().unwrap().id;
+            active.complete_document_request(last, Ok(false)).unwrap();
+        }
+        parked.inherit_window_state(&active).unwrap();
+        parked.dispatch(UiAction::Invoke { command: CommandId::OpenDocument }).unwrap();
+        assert!(parked.state.requests.last().unwrap().id > last);
     }
 
     #[test]

@@ -49,6 +49,8 @@ mod host;
 #[cfg(target_os = "windows")]
 pub use host::*;
 
+mod shared_controls;
+pub use shared_controls::*;
 mod color;
 pub use color::*;
 

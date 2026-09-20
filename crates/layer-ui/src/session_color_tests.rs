@@ -87,7 +87,12 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
         assert!(s.engine.document().proof.is_none());
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
         assert!(!s.state.soft_proof);
-        assert!(matches!(s.state.requests.last().unwrap().kind, HostRequestKind::SoftProofSetup));
+        if platform == Platform::Windows {
+            assert!(s.state.requests.is_empty());
+            assert_eq!(s.proof_panel_mode(), crate::ProofMode::Print);
+        } else {
+            assert!(matches!(s.state.requests.last().unwrap().kind, HostRequestKind::SoftProofSetup));
+        }
     }
 }
 
@@ -679,4 +684,33 @@ fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() 
         assert_eq!(s.state.workspace.layout,layout);
         assert_eq!(s.engine.document(),&before);
     }
+}
+
+#[test]
+fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history() {
+    use crate::proof_panel::{apply, ProofAction};
+    let mut document=Document::new("HDR",32,32);document.color.depth=layer_core::color::SampleDepth::F32;
+    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32]).unwrap();
+    s.set_platform(Platform::Windows);
+    let original=s.engine.document().sdr_rendition;
+    let checkpoint=s.engine.checkpoint();
+    // No full-recipe snapshots: queued fields resolve against the current recipe.
+    apply(&mut s,ProofAction::Number{key:"exposure".into(),value:-0.4}).unwrap();
+    apply(&mut s,ProofAction::Number{key:"highlight_color".into(),value:0.73}).unwrap();
+    let numbers=s.engine.document().sdr_rendition;
+    assert!((numbers.exposure+0.4).abs()<1e-6 && (numbers.highlight_color-0.73).abs()<1e-6);
+    s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
+    assert!((s.engine.document().sdr_rendition.exposure+0.4).abs()<1e-6);
+    s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);
+    let g=crate::parameter_pad::ParameterDialGeometry::new(256.).unwrap();let origin=g.arcs[0].point(0.5);let point=g.arcs[0].point(0.25);
+    let action=|phase,point|ProofAction::Dial{phase,size:256.,origin,point};
+    apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();
+    assert!(s.capture_project_recovery().is_err());
+    apply(&mut s,action(ContactPhase::Cancel,point)).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().sdr_rendition,original);
+    apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();apply(&mut s,action(ContactPhase::Up,point)).unwrap();
+    let dial=s.engine.document().sdr_rendition;assert!((dial.exposure+1.).abs()<1e-6);assert_eq!(dial.headroom,original.headroom);
+    s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);
+    s.dispatch(UiAction::Invoke{command:CommandId::Redo}).unwrap();assert_eq!(s.engine.document().sdr_rendition,dial);
+    s.dispatch(UiAction::Invoke{command:CommandId::SoftProof}).unwrap();assert_eq!(s.proof_panel_mode(),ProofMode::Sdr);assert!(s.state.requests.is_empty());
+    s.dispatch(UiAction::Invoke{command:CommandId::SdrRendition}).unwrap();assert!(s.state.requests.is_empty());assert_eq!(s.engine.document().sdr_rendition,dial);
 }

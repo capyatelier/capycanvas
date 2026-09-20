@@ -54,6 +54,9 @@ impl<T> DocumentSessions<T> {
     pub fn parked(&self) -> impl Iterator<Item = (&u64, &ParkedDocument<T>)> {
         self.parked.iter()
     }
+    pub fn parked_mut(&mut self) -> impl Iterator<Item = (&u64, &mut ParkedDocument<T>)> {
+        self.parked.iter_mut()
+    }
     pub fn contains_parked(&self, id: u64) -> bool {
         self.parked.contains_key(&id)
     }

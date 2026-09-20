@@ -107,13 +107,7 @@ impl Fixture {
                 revision,
                 path: path.into(),
             },
-            None => DocumentAction::New {
-                id,
-                epoch,
-                revision,
-                width: 96,
-                height: 72,
-            },
+            None => DocumentAction::Create { id, epoch, revision, options: layer_ui::NewDocumentOptions { extent: [96, 72], ..Default::default() }, preset: String::new(), defaults: false },
         });
     }
 }

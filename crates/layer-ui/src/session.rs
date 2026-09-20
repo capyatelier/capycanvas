@@ -3442,6 +3442,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::SdrRendition if self.state.platform == Platform::Windows => {
+                let change = crate::proof_panel::reveal(self)?;
+                Ok((change.regions, change.canvas_wake))
+            }
             CommandId::SdrRendition => {
                 self.request(HostRequestKind::SdrRendition)?;
                 Ok((HOST, false))
@@ -3462,8 +3466,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let change = self.toggle_proof()?;
                 let mut regions = change.regions;
                 if self.proof_panel_mode() != ProofMode::Off {
-                    self.request(HostRequestKind::SoftProofSetup)?;
-                    regions |= HOST;
+                    if self.state.platform == Platform::Windows {
+                        regions |= crate::proof_panel::reveal(self)?.regions;
+                    } else {
+                        self.request(HostRequestKind::SoftProofSetup)?;
+                        regions |= HOST;
+                    }
                 }
                 Ok((regions, change.canvas_wake))
             }

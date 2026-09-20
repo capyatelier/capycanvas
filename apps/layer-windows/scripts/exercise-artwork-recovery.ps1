@@ -56,6 +56,7 @@ try {
     Invoke-Control 'Restore drawing'
     Wait-Until {$m=Model;$m.state.document_file.modified -and !$m.windows_recovery.offer -and !$m.windows_recovery.busy} 'Restored drawing did not get a durable replacement checkpoint' 60
     if((Model).state.document_file.location){throw 'Recovery incorrectly acknowledged a manual save'}
+    if(@((Model).windows_tabs.tabs).Count -ne 2){throw 'Restore did not retain the existing drawing in another tab'}
     if((@((Model).state.tabs[0].width,(Model).state.tabs[0].height) -join ',') -ne ($extent -join ',')){throw 'Recovered drawing extent changed'}
     if(Test-Path -LiteralPath $original){throw 'Original recovery copy remained after the durable replacement'}
     Crash-Review

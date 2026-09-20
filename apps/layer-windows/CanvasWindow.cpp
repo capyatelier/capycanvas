@@ -303,7 +303,8 @@ void CanvasWindow::Start() {
         },
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
-        },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);});
+        },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);},
+        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
     root.Children().Append(header->Root());
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
@@ -1089,7 +1090,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         }
     }
     auto preferencesClose=object(model,L"windows_settings_close");
-    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
+    if(flag(object(model,L"windows_tabs"),L"window_ready")&&flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))
         &&(!preferencesClose.Size()||flag(preferencesClose,L"ready"))
         &&(!object(model,L"windows_recovery").Size()||flag(object(model,L"windows_recovery"),L"ready"))){Stop();return;}
     if(!statusFailed){

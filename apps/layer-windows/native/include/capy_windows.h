@@ -93,7 +93,7 @@ __declspec(dllimport) int32_t capy_scroll(CapyHost*, float x, float y, float dx,
 __declspec(dllimport) int32_t capy_chrome(CapyHost*, uint32_t kind, float x, float y, bool canvas, bool popup_open, bool touch);
 __declspec(dllimport) int32_t capy_suspend(CapyHost*);
 __declspec(dllimport) uint64_t capy_view_revision(const CapyHost*);
-/* Acquisition: 2=UI-thread reconfiguration required. Can wait for DXGI. Drain newly arrived input after this call. */
+/* Acquisition: 0=wait, 1=image, 2=UI-thread reconfiguration, 3=commands only while a drawing renderer is unavailable. Can wait for DXGI. Drain newly arrived input after this call. */
 __declspec(dllimport) int32_t capy_acquire(CapyHost*);
 __declspec(dllimport) int32_t capy_frame(CapyHost*, uint64_t now_ns, uint64_t presentation_ns);
 /* Returned UTF-8 owned by Rust; release with capy_string_free. Null=no change. */
@@ -102,6 +102,10 @@ __declspec(dllimport) char* capy_query(CapyHost*, const char* json);
 /* Local-only DXGI identity for correlating a presentation probe with ETW. */
 __declspec(dllimport) char* capy_surface_info(CapyHost*);
 /* Pure numeric policy; does not touch the render owner's host. */
+__declspec(dllimport) bool capy_document_tabs_compact(float width, size_t count);
+__declspec(dllimport) char* capy_document_tab_drop(const char* json);
+__declspec(dllimport) char* capy_proof_dial(const char* json);
+__declspec(dllimport) bool capy_proof_texture(uint32_t edge, uint8_t* output, size_t length);
 __declspec(dllimport) char* capy_number(const char* json);
 __declspec(dllimport) void capy_string_free(char*);
 #ifdef __cplusplus

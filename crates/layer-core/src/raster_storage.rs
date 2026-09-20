@@ -358,15 +358,19 @@ pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 /// Hosts choose an appropriate private cache directory and run this on their
 /// file worker. Unlinked open files survive pathname eviction and disappear on
 /// final-owner release or process exit, without a compactor or orphan scan.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn spill_to_directory(
     tiles: &RetainedTiles,
     directory: &std::path::Path,
 ) -> Result<(), String> {
+    #[cfg(unix)]
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    #[cfg(windows)]
+    use std::os::windows::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     std::fs::create_dir_all(directory).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
+    #[cfg(unix)]
     std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
     let blobs: Vec<_> = tiles
@@ -389,13 +393,17 @@ pub fn spill_to_directory(
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        let file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .open(&path)
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).read(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        // Temporary private backing follows the final open handle on Windows.
+        // It is never a user file or a durable recovery destination.
+        #[cfg(windows)]
+        options.custom_flags(0x0400_0100).share_mode(0x7); // DELETE_ON_CLOSE | TEMPORARY; share read/write/delete
+        let file = options.open(&path)
             .map_err(|e| format!("Cannot create drawing cache: {e}"))?;
+        #[cfg(unix)]
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         spill_tiles(&blobs[start..end], file)?;
         start = end;
@@ -446,7 +454,7 @@ pub fn spill_tiles(blobs: &[Arc<TileBlob>], mut file: std::fs::File) -> Result<u
     Ok(offset as usize)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use crate::{Document, Edit, Project, ProjectLimits, raster::*};
@@ -663,9 +671,8 @@ mod tests {
         assert!(
             spill_tiles(
                 &[blob.clone()],
-                // A read-only descriptor rejects writes on every Unix host;
-                // macOS does not provide Linux's /dev/full device.
-                std::fs::File::open("/dev/null").unwrap()
+                // A read-only descriptor rejects the write on every native host.
+                std::fs::File::open(std::env::current_exe().unwrap()).unwrap()
             )
             .is_err()
         );
@@ -694,6 +701,18 @@ mod tests {
         let blob = Arc::new(TileBlob::encode(descriptor, &samples).unwrap());
         spill_tiles(&[blob.clone()], file()).unwrap();
         assert_eq!(blob.decode().unwrap(), samples);
+    }
+    #[test]
+    fn temporary_directory_backing_dies_with_the_final_owner() {
+        let path=std::env::temp_dir().join(format!("capy-private-backing-{}",std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let blob=blob(77);
+        let tiles=RetainedTiles { sources:vec![blob.clone()], ..Default::default() };
+        spill_to_directory(&tiles,&path).unwrap();assert_eq!(tiles.resident_bytes(),0);
+        assert_eq!(blob.decode().unwrap(),vec![77;256*256*4]);
+        drop(tiles);assert_eq!(blob.decode().unwrap(),vec![77;256*256*4]);drop(blob);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(),0);
+        std::fs::remove_dir(&path).unwrap();
     }
     #[test]
     fn final_tile_owner_releases_the_disk_chunk() {

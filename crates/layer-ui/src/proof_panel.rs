@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProofAction {
     Reveal,
+    Number { key: String, value: f64 },
+    Control { part: u8, edit: SdrControlEdit },
+    Dial { phase: crate::ContactPhase, size: f32, origin: [f32; 2], point: [f32; 2] },
     Mode { mode: crate::ProofMode },
     Rendition { phase: crate::ContactPhase, recipe: layer_core::color::hdr::SdrRendition },
     Pad { phase: crate::ContactPhase, values: [f64;2] },
@@ -48,6 +51,37 @@ pub fn sdr_control(mut recipe: layer_core::color::hdr::SdrRendition, part: u8, e
 pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, action: ProofAction) -> Result<crate::UiChange, String> {
     match action {
         ProofAction::Reveal => reveal(session),
+        ProofAction::Number { key, value } => {
+            let mut recipe = session.effective_sdr_rendition();
+            if !value.is_finite() { return Err("Invalid Proof value".into()); }
+            match key.as_str() {
+                "exposure" => recipe.exposure = value as f32,
+                "highlight_color" => recipe.highlight_color = value as f32,
+                "balance" | "contrast" => {
+                    if !(-1. ..=1.).contains(&value) { return Err("Invalid Proof value".into()); }
+                    let mut pad = sdr_pad_values(recipe);
+                    pad[usize::from(key == "contrast")] = value;
+                    recipe = sdr_from_pad(recipe, pad);
+                }
+                _ => return Err("Unknown Proof value".into()),
+            }
+            commit_control(session, recipe)
+        }
+        ProofAction::Control { part, edit } => {
+            let recipe = sdr_control(session.effective_sdr_rendition(), part, edit)?;
+            commit_control(session, recipe)
+        }
+        ProofAction::Dial { phase, size, origin, point } => {
+            if !origin.into_iter().chain(point).all(f32::is_finite) {
+                return Err("Invalid Proof contact".into());
+            }
+            let recipe = session.effective_sdr_rendition();
+            let hit = sdr_dial(size, recipe, Some(origin), None)?["hit"].as_u64();
+            let Some(part) = hit else { return session.edit_sdr_rendition(crate::ContactPhase::Cancel, recipe); };
+            let value = sdr_dial(size, recipe, Some(point), Some(part as u8))?;
+            let recipe = serde_json::from_value(value["recipe"].clone()).map_err(|e| e.to_string())?;
+            session.edit_sdr_rendition(phase, recipe)
+        }
         ProofAction::Mode { mode } => session.select_proof_mode(mode),
         ProofAction::Rendition { phase, recipe } => session.edit_sdr_rendition(phase, recipe),
         ProofAction::Pad { phase, values } => {
@@ -55,6 +89,12 @@ pub fn apply<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>,
             session.edit_sdr_rendition(phase,recipe)
         }
     }
+}
+
+fn commit_control<R: layer_render::CanvasRenderer>(session: &mut crate::UiSession<R>, recipe: layer_core::color::hdr::SdrRendition) -> Result<crate::UiChange, String> {
+    recipe.validate().map_err(str::to_string)?;
+    session.edit_sdr_rendition(crate::ContactPhase::Down, recipe)?;
+    session.edit_sdr_rendition(crate::ContactPhase::Up, recipe)
 }
 
 /// The reviewed GTK reveal behavior, shared by the other retained workspaces.

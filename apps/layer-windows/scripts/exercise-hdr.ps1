@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet("F16","F32")][string]$Depth="F16")
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -TypeDefinition @'
 using System;
@@ -37,6 +37,24 @@ function Model {
   if($snapshot.process_id -eq $review.Id -and $snapshot.model.windows_isolated_settings){return $snapshot.model}
  }catch{}
 }
+function Assert-CanvasInk([string]$Label){
+ $capture=Join-Path $run ($Label+'-canvas.png')
+ & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output $capture -ClientOnly *> (Join-Path $run ($Label+'-canvas.json'))
+ $bitmap=[Drawing.Bitmap]::new($capture)
+ try {
+  # This fixture uses an 1800x1300 window; these bounds lie inside the canvas,
+  # away from panels, title controls, overlays and the pointer. Orange HDR ink
+  # must survive presentation as well as the independently checked file exports.
+  $ink=0
+  for($y=[int]($bitmap.Height*.2);$y -lt [int]($bitmap.Height*.8);$y+=2){
+   for($x=[int]($bitmap.Width*.28);$x -lt [int]($bitmap.Width*.7);$x+=2){
+    $p=$bitmap.GetPixel($x,$y)
+    if($p.R -gt $p.G+12 -and $p.G -gt $p.B+8){$ink++}
+   }
+  }
+  if($ink -lt 20){throw "Visible HDR ink is missing after $Label ($ink samples)"}
+ }finally{$bitmap.Dispose()}
+}
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=15){
  $watch=[Diagnostics.Stopwatch]::StartNew()
  do {if(& $Condition){return};$review.Refresh();if($review.HasExited){throw "HDR review exited: $Message"};Start-Sleep -Milliseconds 65}while($watch.Elapsed.TotalSeconds -lt $Seconds)
@@ -50,7 +68,20 @@ function Find([string]$Value,[switch]$Name,$Type){
  }
 }
 function Control([string]$Value,[switch]$Name,$Type){
- $hit=@{item=$null};Wait-Until {$hit.item=Find $Value -Name:$Name -Type $Type;$null -ne $hit.item} "Missing HDR control: $Value";$hit.item
+ $hit=@{item=$null};Wait-Until {
+  $hit.item=Find $Value -Name:$Name -Type $Type
+  if(!$hit.item -and !$Name -and $Value.StartsWith('proof-')){
+   $entry=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Value))
+   if($entry){$scroll=$null;if($entry.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}else{$entry.SetFocus()}}
+  }
+  $null -ne $hit.item
+ } "Missing HDR control: $Value";$hit.item
+}
+function Open-Drawings {
+ $selector=Control 'drawing-selector'
+ Wait-Until {$selector.Current.ItemStatus -eq 'Closed'} 'Previous drawing popup is still closing'
+ Invoke 'drawing-selector'
+ Wait-Until {$selector.Current.ItemStatus -eq 'Open' -and (Find 'drawing-list')} 'Drawing selector did not open'
 }
 function Invoke([string]$Value,[switch]$Name){
  $item=Control $Value -Name:$Name
@@ -74,12 +105,13 @@ function Select-Choice([string]$Id,[string]$Name){
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
 function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'HDR/document operation did not finish' 60}
-function Sdr {
- Command 'sdr_rendition'
- Wait-Until {(Model).windows_document.kind -eq 'sdr' -and (Find 'sdr-exposure')} 'SDR Appearance did not open'
+function Sdr { ProofPanel;$null=Control 'proof-panel-exposure' }
+function ProofPanel {
+ if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}
+ $null=Control 'proof-panel-mode'
 }
 function Setup {
- Command 'soft_proof_setup'
+ ProofPanel;Invoke 'proof-panel-setup'
  Wait-Until {(Model).windows_document.kind -eq 'proof' -and (Find 'proof-profile')} 'Proof Setup did not open'
 }
 function Picker([string]$Name){
@@ -129,23 +161,89 @@ try {
  $null=$review.Handle;Write-Output "HDR review $($review.Id), $Depth, $run"
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'HDR app did not start' 60
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+ Button 'Test pen';Wait-Until {(Model).state.document_file.modified} 'Initial drawing did not become dirty' 60
  Command 'new_document' 'File';Set-Text 'document-width' '128';Set-Text 'document-height' '96'
  Select-Choice 'document-depth' $(if($Depth -eq 'F32'){'32-bit float HDR'}else{'16-bit float HDR'})
  Button 'Create';Idle
  Wait-Until {(Model).color_panel.hdr -and (Model).color_panel.document_depth -eq $Depth -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'HDR creation/analysis failed' 60
  if((Model).windows_display.format -ne 'Rgba16Float'){throw 'Expected native floating-point swap chain'}
+ if(@((Model).windows_tabs.tabs).Count -ne 2 -or !(Model).windows_tabs.tabs[0].modified){throw 'New did not retain the dirty first drawing'}
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1300
+ Wait-Until {(Find 'drawing-tab-1') -and (Find 'drawing-tab-2') -and (Model).windows_tabs.available} 'Full native drawing strip did not appear'
+ $tabWidget=(Control 'drawing-tab-1').GetRuntimeId() -join ':'
+ foreach($device in @('mouse','touch','pen')){
+  Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"
+  $beforeOrder=((Model).windows_tabs.tabs.id -join ',')
+  $from=(Control 'drawing-tab-1').Current.BoundingRectangle;$to=(Control 'drawing-tab-2').Current.BoundingRectangle
+  $dpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));[CapyRowPointer]::Initialize([uint32]$review.Id)
+  try {
+   [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
+   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2))
+   Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Dragging'} 'Tab movement did not capture'
+   if($device -eq 'mouse'){[CapyRowPointer]::Key([uint32]$review.Id,0x1B);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
+   Wait-Until {(Control 'drawing-tabs').Current.ItemStatus -eq 'Ready'} 'Tab cancellation retained capture'
+   if(((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder){throw 'Tab cancellation changed order'}
+   [CapyRowPointer]::Down($device,[int]($from.X+$from.Width/2),[int]($from.Y+$from.Height/2))
+   [CapyRowPointer]::Move([int]($to.X+$to.Width-8),[int]($to.Y+$to.Height/2));[CapyRowPointer]::Up()
+  }finally{[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
+  Wait-Until {((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder} 'A tab did not reorder immediately after slop'
+  if(((Control 'drawing-tab-1').GetRuntimeId() -join ':') -ne $tabWidget){throw 'Reorder rebuilt the native tab'}
+  foreach($history in @('undo','redo','undo')){
+   (Control 'drawing-tab-1').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D);Invoke ('drawing-order-'+$history)
+   $expected=if($history -eq 'redo'){'2,1'}else{'1,2'}
+   Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq $expected} 'Tab order history failed'
+  }
+ }
+ Invoke 'drawing-close-1';Button 'Cancel';Idle
+ Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Closing an inactive dirty tab did not activate and preserve it on Cancel' 60
+ if(@((Model).windows_tabs.tabs).Count -ne 2){throw 'Close cancellation removed a drawing'}
+ Command 'undo' 'Edit';Wait-Until {!(Model).state.document_file.modified} 'First drawing lost independent undo history'
+ Command 'redo' 'Edit';Wait-Until {(Model).state.document_file.modified} 'First drawing lost independent redo history'
+ Invoke 'drawing-tab-2';Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).brush_ready -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready} 'Returning to HDR tab failed' 60
+ if((Model).windows_tabs.parked_renderers -ne 0){throw 'Inactive drawing retained a renderer'}
+
+ # Three drawings force a compact selector at this DPI; two still fit the strip.
+ Command 'new_document' 'File';Set-Text 'document-width' '32';Set-Text 'document-height' '24';Button 'Create';Idle
+ Wait-Until {@((Model).windows_tabs.tabs).Count -eq 3 -and (Model).windows_tabs.available} 'Third drawing did not become available' 60
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 900 -Height 1100
+ Wait-Until {(Find 'drawing-selector')} 'Compact drawing selector did not appear'
+ foreach($device in @('mouse','touch','pen')){
+  Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"
+  Open-Drawings
+  $grip=(Control 'drawing-grip-1').Current.BoundingRectangle;$target=(Control 'drawing-row-2').Current.BoundingRectangle
+  $dpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));[CapyRowPointer]::Initialize([uint32]$review.Id)
+  try {
+   [CapyRowPointer]::Down($device,[int]($grip.X+$grip.Width/2),[int]($grip.Y+$grip.Height/2))
+   [CapyRowPointer]::Move([int]($target.X+$target.Width/2),[int]($target.Y+$target.Height-4));[CapyRowPointer]::Up()
+  }finally{[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
+  Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq '2,1,3'} 'Selector grip did not reorder immediately'
+  (Control 'drawing-row-1').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D);Invoke 'drawing-order-undo'
+  Wait-Until {((Model).windows_tabs.tabs.id -join ',') -eq '1,2,3'} 'Selector order undo failed'
+  Wait-Until {!(Find 'drawing-order-undo')} 'Tab order menu did not close'
+  (Control 'drawing-row-1').SetFocus()
+  [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+  Wait-Until {(Control 'drawing-selector').Current.ItemStatus -eq 'Closed' -and !(Find 'drawing-list')} 'Drawing selector did not dismiss'
+ }
+ Open-Drawings;(Control 'drawing-row-1').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Selector keyboard activation failed' 60
+ Open-Drawings;(Control 'drawing-row-2').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available} 'Selector did not restore the HDR drawing' 60
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1300
+ Wait-Until {(Find 'drawing-close-3')} 'Full strip did not return'
+ Invoke 'drawing-close-3'
+ Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and (Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available} 'Closing the clean selector fixture drawing failed' 60
  $display=(Model).windows_display
  Button 'Test SDR output';Wait-Until {(Model).windows_display.headroom -eq 1} 'Synthetic SDR fallback did not apply'
  $before=(Model).state.document_file|ConvertTo-Json -Compress
- Sdr;Set-Text 'sdr-exposure' '-1';Button 'Cancel';Idle
- if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'Cancelled SDR appearance edited the drawing'}
- Sdr;Set-Text 'sdr-exposure' '-1';Button 'Save appearance';Idle
  Sdr
- if((Model).windows_document.details.rendition.exposure -ne -1){throw 'Saved SDR appearance was lost'}
- Button 'Cancel';Idle
- Command 'undo' 'Edit';Sdr
- if((Model).windows_document.details.rendition.exposure -ne 0){throw 'SDR appearance undo failed'}
- Button 'Cancel';Idle;Command 'redo' 'Edit'
+ [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ (Control 'proof-panel-exposure').SetFocus();Set-Text 'proof-panel-exposure' '-25';[CapyRowPointer]::Key([uint32]$review.Id,0x1B);Idle
+ if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'Cancelled SDR field edited the drawing'}
+ (Control 'proof-panel-exposure').SetFocus();Set-Text 'proof-panel-exposure' '-25';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'Saved SDR appearance was lost'
+ Command 'undo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq 0} 'SDR appearance undo failed'
+ Command 'redo' 'Edit';Wait-Until {(Model).windows_proof_form.rendition.exposure -eq -1} 'SDR appearance redo failed'
+ Invoke 'panel-tab-color'
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  (Control 'color-readout').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
  Invoke 'edit-color-palettes';Select-Choice 'precise-color-model' 'Linear RGB'
@@ -176,7 +274,7 @@ try {
    [CapyRowPointer]::Down('mouse',[int]($box.X+$box.Width/2),[int]($box.Y+$box.Height/2));[CapyRowPointer]::Up()
   } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($previousDpi)|Out-Null}
  }
- Wait-Until {(Find 'proof-panel-exposure')} 'Native Proof panel did not appear'
+ $null=Control 'proof-panel-exposure'
  $field=Control 'proof-panel-exposure';$fieldId=$field.GetRuntimeId() -join ':'
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  $field.SetFocus();Set-Text 'proof-panel-exposure' 'invalid';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
@@ -192,6 +290,26 @@ try {
  Select-Choice 'proof-panel-mode' 'SDR';Wait-Until {(Model).state.preview_sdr} 'Proof panel SDR mode failed'
  Select-Choice 'proof-panel-mode' 'Off';Wait-Until {!(Model).state.preview_sdr} 'Proof panel Off failed'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $proofHistory){throw 'Proof panel modes edited history'}
+ # Real native capture with injected mouse/touch/pen; each edit has one history step.
+ $dialBefore=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress
+ foreach($device in @('mouse','touch','pen')){
+  Write-Output "Native contact: $device at line $($MyInvocation.ScriptLineNumber)"
+  $dial=Control 'proof-dial';$dial.SetFocus();Start-Sleep -Milliseconds 150;$box=$dial.Current.BoundingRectangle
+  $x=[int]($box.X+$box.Width/2);$y=[int]($box.Y+$box.Height/2)
+  $dpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));[CapyRowPointer]::Initialize([uint32]$review.Id)
+  try {
+   [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x+25,$y-15)
+   Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore} 'Dial drag did not preview'
+   if($device -eq 'mouse'){[CapyRowPointer]::Key([uint32]$review.Id,0x1B);[CapyRowPointer]::Up()}else{[CapyRowPointer]::Cancel()}
+   Wait-Until {$m=Model;!$m.state.sdr_appearance_preview -and (($m.windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore)} 'Dial cancellation did not restore the recipe'
+   [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x+25,$y-15);[CapyRowPointer]::Up()
+   Wait-Until {$m=Model;!$m.state.sdr_appearance_preview -and (($m.windows_proof_form.rendition|ConvertTo-Json -Compress) -ne $dialBefore)} 'Dial release did not commit'
+  } finally {[CapyRowPointer]::Dispose();[CapyRowPointer]::SetThreadDpiAwarenessContext($dpi)|Out-Null}
+  $dialAfter=(Model).windows_proof_form.rendition|ConvertTo-Json -Compress
+  Command 'undo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial did not undo in one step'
+  Command 'redo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialAfter} 'Dial redo failed'
+  Command 'undo' 'Edit';Wait-Until {((Model).windows_proof_form.rendition|ConvertTo-Json -Compress) -eq $dialBefore} 'Dial final undo failed'
+ }
  $plain=Delivery 'SDR.png' 'PNG'
  $pq=Delivery 'HDR.png' 'HDR PNG · BT.2020 PQ'
  $exr=Delivery 'HDR.exr' 'OpenEXR · 32-bit float'
@@ -206,14 +324,15 @@ try {
 
  $file=(Model).state.document_file|ConvertTo-Json -Compress
  Button 'Test HDR output';Wait-Until {(Model).windows_display.headroom -eq 5 -and (Model).state.hdr_display_available} 'Synthetic HDR switch did not apply'
- Command 'preview_sdr';Wait-Until {(Model).state.preview_sdr} 'SDR preview did not enable'
- Command 'preview_sdr';Button 'Test SDR output';Wait-Until {!(Model).state.hdr_display_available} 'Synthetic return to SDR failed'
+ Select-Choice 'proof-panel-mode' 'SDR';Wait-Until {(Model).state.preview_sdr} 'SDR preview did not enable'
+ Select-Choice 'proof-panel-mode' 'Off';Button 'Test SDR output';Wait-Until {!(Model).state.hdr_display_available} 'Synthetic return to SDR failed'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $file){throw 'Display switching modified artwork/history'}
  if((Delivery 'SDR-after-switch.png' 'PNG') -ne $plain){throw 'Display switching changed SDR export'}
  Setup;Button 'Apply';Idle;Wait-Until {(Model).windows_proof.bytes -gt 0} 'HDR print proof failed' 60
  if((Delivery 'proof-on.png' 'PNG') -ne $plain){throw 'Proof changed SDR export'}
  Command 'soft_proof'
  Command 'save_document_as' 'File';Picker 'Save As';$master=Join-Path $run 'HDR 日本語.capy';Path-In-Picker $master;Idle
+ Write-Output 'HDR device recovery and master reopen'
  $generation=(Model).windows_gpu_generation
  Button 'Test GPU loss'
  Wait-Until {(Model).windows_gpu_generation -gt $generation -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'HDR device recovery failed' 60
@@ -222,19 +341,27 @@ try {
  Wait-Until {(Model).windows_display.analysis.ready} 'Reopened HDR analysis failed' 60
  if((Model).color_panel.document_depth -ne $Depth -or (Model).state.soft_proof){throw 'Reopen lost precision or retained proof viewing'}
  if((Delivery 'reopened.exr' 'OpenEXR · 32-bit float') -ne $exr){throw 'Reopen changed float export'}
- Sdr;if((Model).windows_document.details.rendition.exposure -ne -1){throw 'Reopen lost saved SDR appearance'};Button 'Cancel';Idle
+ Assert-CanvasInk 'reopened-master'
+ Sdr;if((Model).windows_proof_form.rendition.exposure -ne -1){throw 'Reopen lost saved SDR appearance'};Idle
  Command 'export_document' 'File';Button 'Cancel';Idle
+ Write-Output 'HDR photo reopen and presentation'
  $import=Join-Path $run $(if($Depth -eq 'F32'){'HDR.exr'}else{'HDR.png'})
  Command 'open_document' 'File';Picker 'Open';Path-In-Picker $import;Idle
  Wait-Until {(Model).color_panel.document_depth -eq $Depth -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Exported HDR photo did not reopen as HDR' 60
  foreach($name in @('gain-map.jpg','gain-map.avif')){
-  Command 'open_document' 'File';Button 'Discard Changes';Picker 'Open';Path-In-Picker (Join-Path $run $name);Idle
+  Command 'open_document' 'File';Picker 'Open';Path-In-Picker (Join-Path $run $name);Idle
   Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
+  Assert-CanvasInk $name
  }
  & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly *> (Join-Path $run 'hdr.json')
+ $count=@((Model).windows_tabs.tabs).Count
+ $review.CloseMainWindow()|Out-Null;Button 'Cancel';Idle
+ if(@((Model).windows_tabs.tabs).Count -ne $count){throw 'Window close cancellation lost drawings'}
+ Command 'close_document' 'File';Button 'Discard Changes';Idle
+ Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count-1 -and (Model).windows_tabs.available} 'Close drawing did not retain the other tabs' 60
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $directory
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'HDR stderr requires inspection'}
- [pscustomobject]@{depth=$Depth;creation='passed';sdr_appearance_cancel_history='passed';painting='passed';painting_history='passed';numeric_hdr_color='passed';hdr_photo_open='passed';pq_exr_sdr_exports='passed';gainmap_exports_and_open='passed';proof_panel_numeric_modes_history='passed';synthetic_display_switching='passed';proof_export_separation='passed';device_recovery='passed';save_reopen='passed';physical_display=$display;scope='Native UIA/D3D12 functional checks. Injected display reports do not qualify physical HDR, mixed-monitor behavior, or performance.'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
+ [pscustomobject]@{depth=$Depth;creation='passed';sdr_appearance_cancel_history='passed';painting='passed';painting_history='passed';numeric_hdr_color='passed';hdr_photo_open='passed';reopened_canvas_presentation='passed';pq_exr_sdr_exports='passed';gainmap_exports_and_open='passed';proof_panel_numeric_modes_history='passed';proof_dial_mouse_touch_pen_cancel_history='passed';drawing_tabs_reorder_history_close_cancel='passed';synthetic_display_switching='passed';proof_export_separation='passed';device_recovery='passed';save_reopen='passed';physical_display=$display;scope='Native UIA/D3D12 functional checks. Injected display reports do not qualify physical HDR, mixed-monitor behavior, or performance.'}|ConvertTo-Json -Depth 8|Tee-Object -FilePath (Join-Path $run 'results.json')
 }catch{
  if($review -and !$review.HasExited){try{& (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure.json')}catch{}}
  [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

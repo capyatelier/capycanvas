@@ -342,16 +342,93 @@ the focused `non_normal_dry_material_uses_the_fragment_path` regression. Logs:
 `parity-current-build-final-main.log` and `parity-current-final-routing.log`.
 The full runtime evidence above is scoped to the preceding `e32ded49` build.
 
+## Retained drawings and Proof consolidation (2026-09-20)
+
+Continued from `a2bd2822` and fast-forwarded the independent codec cleanup
+`8bd5509e` and Apple parity work through `599a2ee6` while preserving the Windows
+changes. Overlapping shared APIs were consolidated on upstream `exchange_with`;
+Apple camera-generation changes remain intact. Rechecked current GTK
+`documents.rs`/`proof_dial.rs`, Android `native/src/document_tabs.rs`, Web
+`src/document_tabs.rs`, and the shared Rust drawing/Proof code. Those reference
+hosts were inspected in source; they were not run on this Windows machine.
+This section supersedes the single-document and separate SDR-dialog descriptions
+in the earlier dated evidence above.
+
+Windows now uses shared `DocumentSessions`/`DocumentTabs` for retained drawing
+membership, labels, admission, order history and inactive tile budgets. Native
+WinUI provides the retained strip, compact selector, capture, system slop and
+hold recognition. New/Open retain dirty drawings; each drawing keeps its view,
+artwork history, save checkpoint and recovery lease. Selecting an inactive drawing
+releases the outgoing renderer and builds its replacement on the file worker.
+Inactive tiles spill through shared Rust storage; Windows supplies temporary,
+last-handle-deleted backing files. Failed writes preserve resident data and can
+be retried from Drawing options. Closing one drawing and closing the window use
+the same Save/Discard/Cancel workflow, advancing through the retained drawings.
+Recovery publishes a new tab and retains the existing editor.
+
+The native Proof panel now includes the shared graphical SDR dial, native pointer
+capture/cancellation, keyboard steps and resets, and the existing numeric controls.
+Shared Rust owns geometry, hit mapping, recipe validation and one-step history.
+Numeric actions update one field against the live recipe so queued edits do not
+restore stale fields. Windows uses the consolidated Proof command and native print
+setup. The obsolete Windows SDR modal, width/height-only creation action and
+single-document host ownership path have been removed. Native request identities
+remain monotonic across drawing activation so retained dialog views cannot swallow
+a new request with an old ID.
+
+The product is unreleased: older project/recovery formats are deliberately rejected;
+migration and backward compatibility are not requirements. No compatibility reader,
+old-format data structure or migration shim was added.
+
+Validation runs use isolated profiles under ignored `artifacts/windows`. GPU and
+GUI checks run serially, without competing compilation. The integrated Rust
+library suites passed 106 core, 503 UI, 28 host and 119 Windows tests (756 total;
+16 explicitly ignored). Strict Windows/host Clippy also passed. Logs:
+`parity-tabs-integrated-cpu.log`, `parity-tabs-integrated-clippy.log`.
+
+Native validation exposed and corrected retained-button capture, selector keyboard
+selection, touch/pan arbitration in the Proof dial, an acquired DXGI image crossing
+a tab change, and a retained removed-device handle that blocked GPU recovery.
+Visual inspection also found that a redundant background-only startup frame could
+clear an already prepared drawing. The HDR fixture now checks visible canvas ink
+after reopening, in addition to independently comparing exported pixels.
+
+| Runtime check | Result and scope |
+| --- | --- |
+| Integrated Release build | Passed Rust and WinUI on `599a2ee6` plus this change. Logs: `parity-tabs-build11.log`, `parity-tabs-build12.log` (native popup accessibility state). |
+| F16/F32 native HDR journeys | Passed retained tabs/compact selector, synthetic mouse/touch/pen cancellation and order history, independent artwork history, graphical/numeric Proof controls, delivery formats, Unicode persistence, actual D3D12 removal/replacement, and visible reopened master/gain-map artwork. Logs: `parity-tabs-integrated-gui-f16.log`, `parity-tabs-integrated-gui-f32-4.log`. |
+| Native print-proof journey | Passed first-use/picker/library cancellation, recipe and artwork history, uncontaminated exports, device replacement and save/reopen. Log: `parity-tabs-integrated-proof-ui.log`. |
+| Crash/restart recovery | Passed restoring into a retained tab, durable origin retirement, Later across clean close/restart, and explicit discard. Log: `parity-tabs-integrated-recovery-ui.log`. |
+| Exhausted GPU recovery | Passed native Save/Save As and canceled pickers, committed raster preservation, queued-contact cancellation, dirty-close Cancel/Discard, Unicode persistence, corrupt Open preservation, retained New/Open cancellation and durable reopen with identical exported pixels. Log: `parity-tabs-integrated-documents-failed-gpu.log`. |
+
+The full GUI journeys above ran on `599a2ee6` plus this change. The later disjoint
+renderer commit `dd7b3ec9` was fast-forwarded without disturbing the Windows
+work. Its final Release rebuild and strict Clippy passed (`parity-tabs-build13.log`,
+`parity-tabs-final-clippy.log`). Final-integration checks:
+
+| Check | Result and scope |
+| --- | --- |
+| Windows library suite | 119 passed, 15 explicitly ignored; one test thread. Log: `parity-tabs-final-windows-cpu.log`. |
+| Cached/native raster restore | Three hardware regressions passed: cached/cold ordering, scalar masks, pixel preservation, reuse and late-failure atomicity. The performance benchmark remains ignored. Log: `parity-tabs-final-restore-gpu.log`. |
+| Retained drawing hardware workflow | Passed inactive backing spill failure/retry, exact pixels, independent artwork and order history, separate durable recovery copies, Save/Cancel/Close, accepted-Open cancellation, and selecting/saving an inactive CPU editor without a GPU. Log: `parity-tabs-final-tabs-gpu.log`. |
+| HDR hardware workflow | Passed F16/F32 delivery, tone-guide reconstruction, cancellation, history, persistence and device replacement on Intel Iris Xe / D3D12 / driver `32.0.101.6737` (166.80 s). Log: `parity-tabs-final-hdr-gpu.log`. |
+| Native C++ input/queue tests | Passed retained models, motion/camera ordering, completion boundaries, admission/refusal ownership and bounded query scheduling. Log: `parity-tabs-final-native-input.log`. |
+
+The final native document journey also passed two D3D12 replacements with queued
+and active pen strokes, exact exported pixels, recovered thumbnails, Undo/Redo,
+retained New/Open cancellation, corrupt-file preservation, Unicode Save/Save As,
+Preferences draft preservation and clean/dirty close flows. Log:
+`parity-tabs-final-documents-recovery-ui.log`.
+
+Run GPU tests individually with `--test-threads=1`, a fresh absolute
+`CAPY_SETTINGS_DIRECTORY`, and `RUST_MIN_STACK=8388608` (the existing native
+worker stack size). Run GUI fixtures serially against the Release executable.
+The HDR fixture waits for native popup Closed state and restores list-row focus
+after context-menu actions before sending Escape. These fixture synchronizations
+do not increase production recovery or close deadlines.
+
 ## Remaining gaps and acceptance
 
-- Retained drawing tabs on Windows, including per-drawing resource/recovery
-  ownership and native tab/selector interactions. GTK, Android and Web now use
-  the shared drawing-session implementation; separate Windows windows are not
-  equivalent.
-- The combined graphical Proof dial and consolidated Proof menu presentation.
-  The new native panel provides numeric SDR editing and the existing print setup.
-- Migration of pre-v6 project/recovery files; current shared storage deliberately
-  rejects older archives.
 - Physical pen/touch prediction, pressure/tilt/eraser, capture/cancellation and
   the full drag matrix; synthetic input does not qualify a digitizer.
 - Mixed-display/DPI, suspend/resume and actual sustained 120 Hz painting and

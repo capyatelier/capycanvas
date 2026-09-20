@@ -46,6 +46,7 @@ pub struct CapyHost {
     poisoned: bool,
     gpu: std::sync::Arc<crate::device::DeviceState>,
     gpu_generation: u64,
+    document_epoch: u64,
     window: usize,
     display: crate::display::Display,
     display_checked: Option<std::time::Instant>,
@@ -65,7 +66,6 @@ pub struct CapyHost {
     services: Option<crate::settings::SettingsService>,
     filters: Option<crate::filter_packages::FilterService>,
     documents: Option<crate::documents::DocumentService>,
-    recovery: Option<crate::recovery::Service>,
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
     blocked_contacts: std::collections::BTreeSet<u64>,
 }
@@ -76,7 +76,6 @@ impl CapyHost {
         }
         let mut native = NativeHost::new(layer_ui::Platform::Windows)?;
         crate::workspace::initialize(&mut native)?;
-        native.session.set_document_replacement(true);
         native.startup = Default::default();
         native.resize(width, height, scale)?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -96,6 +95,7 @@ impl CapyHost {
             poisoned: false,
             gpu: Default::default(),
             gpu_generation: 0,
+            document_epoch: native.session.state().document_file.epoch,
             window: 0,
             display: Default::default(),
             display_checked: None,
@@ -115,7 +115,6 @@ impl CapyHost {
             services: None,
             filters: None,
             documents: None,
-            recovery: None,
             workspaces: None,
             blocked_contacts: Default::default(),
         })
@@ -141,6 +140,18 @@ impl CapyHost {
                 .as_ref()
                 .is_none_or(|s| s.accepts_input(crate::workspace_service::now_ms()))
     }
+    fn sync_document(&mut self) {
+        let epoch = self.native.session.state().document_file.epoch;
+        if epoch != self.document_epoch {
+            self.document_epoch = epoch;
+            self.target = None;
+            self.presenter = None;
+            self.presenter_key = None;
+            self.cursor = Default::default();
+            // This window already presented. A prepared candidate owns its
+            // composite; submitting a background-only startup frame would clear it.
+        }
+    }
     fn poll_services(&mut self) -> Result<(), String> {
         if self.display_checked.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(500)) {
             self.display_checked = Some(std::time::Instant::now());
@@ -163,17 +174,18 @@ impl CapyHost {
                 service.tone.poll(&mut self.native, self.gpu_generation)?;
             }
         }
-        if let Some(service) = self.recovery.as_mut() { service.poll(&mut self.native)?; }
-        if let Some(service) = self.services.as_mut() {
+        self.sync_document();
+        if let Some(service) = self.services.as_mut()
+            && (!self.native.session.state().document_file.close_ready || self.documents.as_ref().is_none_or(|d| d.window_close_ready(&self.native))) {
             service.poll(&mut self.native)?;
         }
         if let Some(service) = self.filters.as_mut() {
             service.poll(&mut self.native);
         }
         if let Some(service) = self.workspaces.as_mut() {
-            if self.native.session.state().document_file.close_ready
+            if self.documents.as_ref().is_some_and(|d| d.window_close_ready(&self.native))
                 && self.services.as_ref().is_none_or(|s| s.close_status().ready)
-                && self.recovery.as_ref().is_none_or(|s| s.close_ready())
+                && self.documents.as_ref().and_then(|d| d.recovery.as_ref()).is_none_or(|s| s.close_ready())
                 && !service.status().close_requested
             {
                 service.request_close(&mut self.native);
@@ -201,11 +213,11 @@ impl CapyHost {
             // D3D12 devices are process/adapter singletons. Release the removed
             // renderer and presenter before requesting another device. Retained
             // CPU assets, history and input remain in the same UiSession.
-            if let Some(service) = &mut self.documents { service.tone.stop()?; }
+            if let Some(service) = &mut self.documents { service.renderer_unavailable(&mut self.native)?; }
             self.presenter = None;
             self.presenter_key = None;
             let renderer = layer_host::Renderer(self.native.session.renderer_mut().0.take());
-            if let Some(service) = &mut self.recovery { service.retire_renderer(renderer); } else { drop(renderer); }
+            if let Some(service) = self.documents.as_mut().and_then(|d| d.recovery.as_mut()) { service.retire_renderer(renderer); } else { drop(renderer); }
             self.native.startup = Default::default();
             // Completed document candidates may still own the removed device;
             // reject those while allowing an in-flight CPU Save to complete.
@@ -264,7 +276,7 @@ impl CapyHost {
             .session
             .replace_renderer(layer_host::Renderer(Some(renderer)))?;
         self.native.apply_change(revision, change);
-        if let Some(service) = &mut self.recovery { service.retire_renderer(retired); } else { drop(retired); }
+        if let Some(service) = self.documents.as_mut().and_then(|d| d.recovery.as_mut()) { service.retire_renderer(retired); } else { drop(retired); }
         if self.device_is_lost() {
             self.native.error = None;
         }
@@ -281,6 +293,14 @@ impl CapyHost {
 
     fn frame(&mut self, now: u64, presentation: u64) -> Result<i32, String> {
         self.gpu.check()?;
+        // A tab command can arrive after DXGI acquisition. Retire that image
+        // before touching the newly selected editor, including failed activation.
+        self.sync_document();
+        if self.native.session.engine().backend().0.is_none() {
+            self.target = None;
+            self.native.dirty = false;
+            return Ok(0);
+        }
         let Some(target) = self.target.take() else {
             return Ok(1);
         };
@@ -411,10 +431,7 @@ pub unsafe extern "C" fn capy_start_services(
                 },
             ));
         }
-        if host.recovery.is_none() {
-            let context = context as usize;
-            host.recovery = Some(crate::recovery::Service::open(move || { if let Some(wake) = wake { wake(context as *mut c_void); } })?);
-        }
+        host.documents.as_mut().unwrap().start_recovery()?;
         if host.filters.is_none() {
             let context = context as usize;
             let mut service = crate::filter_packages::FilterService::new(move || {
@@ -490,8 +507,7 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         } else {
             Ok(())
         };
-        let recovery = host.recovery.as_mut().map_or(Ok(()), |s| s.stop());
-        documents.and(settings).and(workspaces).and(filters).and(recovery)
+        documents.and(settings).and(workspaces).and(filters)
     })) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -541,9 +557,9 @@ pub unsafe extern "C" fn capy_resize(
                     .engine()
                     .backend()
                     .0
-                    .as_ref()
-                    .ok_or("GPU is not prepared")?
-                    .device(),
+                    .as_ref().map(|g| g.device())
+                    .or_else(|| host.documents.as_ref().and_then(|d| d.tab_device()))
+                    .ok_or("GPU is not prepared")?,
                 config,
             );
             set_composition_scale(&host.surface, scale)?;
@@ -728,14 +744,7 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
 pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
         let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
-        // The restore sheet owns the window until its candidate returns. A
-        // queued title-bar close must not retire that still-unadopted origin.
-        if matches!(action, crate::documents::DocumentAction::Close) && host.recovery.as_ref().is_some_and(|s| s.restoring()) { return Ok(0); }
-        let result = if let crate::documents::DocumentAction::Recovery { action } = action {
-            host.recovery.as_mut().ok_or("Recovery service is unavailable")?.dispatch(&mut host.native, action)
-        } else {
-            host.documents.as_mut().ok_or("Document service is unavailable")?.dispatch(&mut host.native, action)
-        };
+        let result = host.documents.as_mut().ok_or("Document service is unavailable")?.dispatch(&mut host.native, action);
         if let Err(error) = result {
             fail(error);
             return Ok(1);
@@ -846,6 +855,7 @@ pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
             return Err("The GPU device was lost".into());
         }
         host.gpu.check()?;
+        if host.native.session.engine().backend().0.is_none() { return Ok(3); }
         if host.config.is_none() {
             return Ok(2);
         }
@@ -893,7 +903,8 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .documents
                 .as_ref()
                 .and_then(|service| service.import_request()),
-            windows_recovery: host.recovery.as_ref().map(|service| service.status()),
+            windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
+            windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_document: host.documents.as_ref().and_then(|service| service.status()),
             windows_proof_form: layer_ui::proof_workflow::proof_form(&host.native.session),
             windows_proof: host.documents.as_mut().map(|s| s.proof.view.observe(&host.native.session)),
