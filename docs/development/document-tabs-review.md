@@ -32,8 +32,10 @@ adb -s G7DL2S300241 shell am start -a android.intent.action.VIEW -d http://127.0
 ```
 
 Both builds include upstream `a23c627a`, merged in `3a710bd6`. Each implementation
-milestone fetched/merged `origin/main`; the final check was already up to date.
-Later Web-only input and harness changes do not alter the installed Android APK.
+milestone fetched/merged `origin/main`. The final deployment milestone also merged
+`54ca69cc` in `1ff4f67a`; its additional changes on this branch affect only GTK/Arch
+packaging, so the deployed app code is unchanged. Later Web-only input and harness
+changes do not alter the installed Android APK.
 
 Review build identities:
 

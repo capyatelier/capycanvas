@@ -298,3 +298,10 @@ M3 final reruns:
   URL documented above. Standalone launcher installation is not claimed.
 - All implementation, GTK/shared qualification and Huion review deployment work
   is complete. The two unrelated color-management handoff edits remain untouched.
+- Final post-deployment fetch found new upstream `54ca69cc` (Arch packaging),
+  merged as `1ff4f67a`. Relative to the qualified implementation, only GTK package
+  generation, Arch PKGBUILD and packaging documentation changed. The two shared
+  fixture-budget changes in that upstream commit already existed identically on
+  this branch. No deployed application code changed or needed rebuilding.
+  All three GTK packaging tests pass (`m4-final-gtk-package-tests.log`), as do
+  syntax checks for the changed package generator and PKGBUILD.
