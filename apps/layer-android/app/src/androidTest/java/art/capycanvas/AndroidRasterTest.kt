@@ -1626,7 +1626,7 @@ class AndroidRasterTest {
         action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group, "collapsed" to false)))
         action(obj("type" to "select_panel_tab", "group" to group, "panel" to "stats"))
         action(obj("type" to "invoke", "command" to "fit_canvas"))
-        action(obj("type" to "select_brush", "id" to 1))
+        action(obj("type" to "select_brush", "id" to options.getString("wideBrushPreset", "1")!!.toInt()))
         action(obj("type" to "set_brush_size", "value" to options.getString("wideBrushSize", "2000")!!.toDouble()))
         action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, .7, 1.0))))
         // Injected stylus input has no hardware prediction capability. Keep
@@ -1648,7 +1648,9 @@ class AndroidRasterTest {
             "process_mappings" to File("/proc/self/maps").useLines { it.count() })
         val report = obj("state" to host.snapshot!!.getJSONObject("state"), "device" to android.os.Build.MODEL,
             "uid" to android.os.Process.myUid(),
-            "pressure" to options.getString("wideBrushPressure", "1"), "turns_per_second" to options.getString("wideBrushTurns", "2"))
+            "pressure" to options.getString("wideBrushPressure", "1"),
+            "preset" to options.getString("wideBrushPreset", "1"),
+            "turns_per_second" to options.getString("wideBrushTurns", "2"))
         val runs=org.json.JSONArray()
         report.put("runs", runs)
         val output=File(activity.getExternalFilesDir(null), "wide-brush-attribution.json")
