@@ -60,7 +60,10 @@ impl super::CommandEncoder {
         key: super::FramebufferKey,
     ) -> Result<vk::Framebuffer, crate::DeviceError> {
         Ok(match self.framebuffers.entry(key) {
-            Entry::Occupied(e) => *e.get(),
+            Entry::Occupied(mut e) => {
+                e.get_mut().used = true;
+                e.get().raw
+            }
             Entry::Vacant(e) => {
                 let super::FramebufferKey {
                     raw_pass,
@@ -77,7 +80,8 @@ impl super::CommandEncoder {
                     .attachments(attachment_views);
 
                 let raw = unsafe { self.device.raw.create_framebuffer(&vk_info, None).unwrap() };
-                *e.insert(raw)
+                e.insert(super::CachedFramebuffer { raw, used: true });
+                raw
             }
         })
     }
@@ -184,10 +188,35 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
-        // Delete framebuffers from the framebuffer cache
-        for (_, framebuffer) in self.framebuffers.drain() {
-            unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
-        }
+        // Wide sustained updates can grow retained driver pool storage even
+        // while completed command buffers are freed. Reclaim it occasionally,
+        // at the same all-completed boundary, without charging every frame.
+        let reclaim_storage = if cfg!(target_os = "android") && !self.free.is_empty() {
+            self.completed_resets = (self.completed_resets + 1) % 256;
+            self.completed_resets == 0
+        } else {
+            false
+        };
+        // Adreno framebuffer creation/destruction is expensive even when the
+        // attachment textures are reused. Keep a bounded working set across
+        // completed submissions; retire entries after one unused cycle. Large
+        // one-off passes cannot leave an unbounded cache on a pooled encoder.
+        // Keys include permanent view identities, so destroyed/recycled Vulkan
+        // handles cannot revive a framebuffer referencing an old attachment.
+        // Vulkan permits destroying an unused attachment before its framebuffer:
+        // destruction must not access the framebuffer's referenced objects.
+        let retain_framebuffers = cfg!(target_os = "android")
+            && !reclaim_storage
+            && self.framebuffers.len() <= 128;
+        self.framebuffers.retain(|_, framebuffer| {
+            let keep = retain_framebuffers && framebuffer.used;
+            framebuffer.used = false;
+            if !keep {
+                // reset_all is the all-completed boundary for this encoder.
+                unsafe { self.device.raw.destroy_framebuffer(framebuffer.raw, None) };
+            }
+            keep
+        });
         // Adreno can accumulate host mappings across pool resets until command
         // recording fails, even with ample RAM. Free every completed buffer:
         // resetting alone and periodic buffer reclamation were insufficient.
@@ -200,11 +229,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 self.free.clear();
             }
         }
-        let _ = unsafe {
-            self.device
-                .raw
-                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
+        let flags = if reclaim_storage {
+            vk::CommandPoolResetFlags::RELEASE_RESOURCES
+        } else {
+            vk::CommandPoolResetFlags::default()
         };
+        let _ = unsafe { self.device.raw.reset_command_pool(self.raw, flags) };
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)

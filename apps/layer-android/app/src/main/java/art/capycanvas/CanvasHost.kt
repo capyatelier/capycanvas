@@ -155,7 +155,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
     private var documentEpoch = 0L
-    private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 17) else null
+    private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 18) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
     private val frameCosts = if (BuildConfig.DEBUG) LongArray(11) else null
     private var frameCount = 0
@@ -450,6 +450,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (!attached || disposed) return
         attempt {
             val start = System.nanoTime()
+            val threadStart = if (measuredFrames != null) android.os.Debug.threadCpuTimeNanos() else 0L
             val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
             if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
                 awaitingSurfaceFrame = false
@@ -479,7 +480,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
             if (measuredFrames != null && frameCount < 8192) {
                 val end = System.nanoTime()
-                val offset = frameCount++ * 17
+                val offset = frameCount++ * 18
                 measuredFrames[offset] = frameTime
                 measuredFrames[offset + 1] = start
                 measuredFrames[offset + 2] = elapsed
@@ -488,6 +489,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 frameCosts.copyInto(measuredFrames, offset + 11, 5, 11)
                 measuredFrames[offset + 9] = end - publicationStart
                 measuredFrames[offset + 10] = end - start
+                measuredFrames[offset + 17] = android.os.Debug.threadCpuTimeNanos() - threadStart
             }
         }
     }
@@ -499,7 +501,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         val report = obj("startup_boot_ns" to JSONArray(startupTimes.toList()),
             "ui_first_draw_boot_ns" to firstUiDraw, "surface_ready_boot_ns" to firstSurfaceReady,
-            "frames" to rows(measuredFrames, frameCount, 17),
+            "frames" to rows(measuredFrames, frameCount, 18),
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
@@ -508,7 +510,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "publication_fields" to JSONArray(listOf("native_ns", "parse_ns", "prepare_ns", "utf16_units")),
             "panel_content_changes" to panelContentChanges,
             "pointer_allocations" to pointerAllocations,
-            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns", "prepare_ns", "committed_paint_ns", "capture_ns", "prediction_ns", "composition_ns", "submission_ns")),
+            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns", "prepare_ns", "committed_paint_ns", "capture_ns", "prediction_ns", "composition_ns", "submission_ns", "owner_thread_cpu_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
         if (reset) { publicationCount = 0; panelContentChanges = 0; frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
         main.post { reply(report) }

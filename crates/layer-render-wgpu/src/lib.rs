@@ -155,24 +155,65 @@ impl Uploads {
         offset: u64,
         bytes: &[u8],
     ) -> Result<(), GpuRasterError> {
-        let size =
-            wgpu::BufferSize::new(bytes.len() as u64).ok_or(GpuRasterError::SizeOverflow)?;
+        self.write_mapped(encoder, target, offset, bytes.len() as u64,
+            |mapped| mapped.copy_from_slice(bytes))
+    }
+    fn write_mapped(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Buffer,
+        offset: u64,
+        size: u64,
+        fill: impl FnOnce(&mut wgpu::BufferViewMut),
+    ) -> Result<(), GpuRasterError> {
+        let size = wgpu::BufferSize::new(size).ok_or(GpuRasterError::SizeOverflow)?;
         // StagingBelt::write_buffer unwraps mapping failures. Allocate the
         // same reusable slice and let device-loss errors reach the host.
         let slice = self.belt.allocate(
             size,
             wgpu::BufferSize::new(wgpu::COPY_BUFFER_ALIGNMENT).unwrap(),
         );
-        slice
-            .get_mapped_range_mut()
-            .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?
-            .copy_from_slice(bytes);
+        {
+            let mut mapped = slice.get_mapped_range_mut()
+                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?;
+            fill(&mut mapped);
+        }
         encoder.copy_buffer_to_buffer(
             slice.buffer(),
             slice.offset(),
             target,
             offset,
             size.get(),
+        );
+        Ok(())
+    }
+    /// Write directly into reusable mapped staging storage. The copy stays at
+    /// its point of use, before a decoder can reuse the same input texture.
+    fn write_texture(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        bytes_per_row: u32,
+        fill: impl FnOnce(&mut wgpu::BufferViewMut),
+    ) -> Result<(), GpuRasterError> {
+        let size = wgpu::BufferSize::new(u64::from(bytes_per_row) * u64::from(texture.height()))
+            .ok_or(GpuRasterError::SizeOverflow)?;
+        let slice = self.belt.allocate(size,
+            wgpu::BufferSize::new(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)).unwrap());
+        {
+            let mut mapped = slice.get_mapped_range_mut()
+                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?;
+            fill(&mut mapped);
+        }
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: slice.buffer(),
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: slice.offset(), bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(texture.height()),
+                },
+            },
+            texture.as_image_copy(), texture.size(),
         );
         Ok(())
     }
@@ -601,6 +642,15 @@ impl BrushReservoir {
     }
 }
 
+// Scratch descriptors retain capacity, but never retain page resources after encoding.
+struct MaterialJob {
+    coordinate: [u32; 2],
+    local: PixelRect,
+    destination_secondary: bool,
+    coverage_destination_secondary: Option<bool>,
+    has_scalar_state: bool,
+}
+
 struct LayerPage {
     coordinate: [u32; 2],
     primary: PageSurface,
@@ -828,6 +878,9 @@ pub struct WgpuRasterizer {
     target_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     material_source_meta: wgpu::Buffer,
+    dry_records: material_sources::DryRecords,
+    material_jobs: Vec<MaterialJob>,
+    dry_jobs: Vec<dry_material::Job>,
     material_gather: Option<material_sources::Gather>,
     edge_layout: wgpu::BindGroupLayout,
     watercolor_layout: wgpu::BindGroupLayout,
@@ -1200,6 +1253,9 @@ impl WgpuRasterizer {
             target_layout,
             material_layout,
             material_source_meta,
+            dry_records: Default::default(),
+            material_jobs: Vec::new(),
+            dry_jobs: Vec::with_capacity(SOURCE_SLOTS),
             material_gather: None,
             edge_layout,
             watercolor_layout,
@@ -1726,7 +1782,7 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         preview: bool,
         gathered: Option<(&wgpu::TextureView, &wgpu::Buffer)>,
-        metadata: Option<&wgpu::Buffer>,
+        metadata: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::BindGroup, GpuRasterError> {
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
@@ -1783,7 +1839,9 @@ impl WgpuRasterizer {
             &self.dab_buffer,
             coverage,
             gathered.map_or(auxiliary, |g| g.0),
-            metadata.unwrap_or_else(|| gathered.map_or(&self.material_source_meta, |g| g.1)),
+            metadata.map_or_else(
+                || gathered.map_or(&self.material_source_meta, |g| g.1).as_entire_binding(),
+                |index| wgpu::BindingResource::Buffer(self.dry_records.binding(index))),
         ))
     }
 
@@ -2692,15 +2750,7 @@ impl WgpuRasterizer {
         tiles: &[BrushTile],
         batch_dabs: &[Dab],
     ) -> Result<(), GpuRasterError> {
-        struct Job {
-            coordinate: [u32; 2],
-            local: PixelRect,
-            dabs: std::ops::Range<u32>,
-            destination_secondary: bool,
-            coverage_destination_secondary: Option<bool>,
-            has_scalar_state: bool,
-        }
-
+        self.prepare_dry_records(batch, tiles.iter().map(|tile| (tile.local, tile.dabs.clone())), encoder)?;
         let plan = BrushPassPlan::for_device(&batch.style, &self.device);
         let writes_full_page = batch.style.execution == BrushExecution::Dry;
         let layer_index = self
@@ -2767,7 +2817,7 @@ impl WgpuRasterizer {
             }
         }
 
-        let mut jobs = Vec::new();
+        let mut jobs = mem::take(&mut self.material_jobs);
         for tile in tiles {
             let coordinate = tile.coordinate;
             let local = tile.local;
@@ -2793,10 +2843,9 @@ impl WgpuRasterizer {
                 };
                 coverage.active().copy_to(destination, encoder);
             }
-            jobs.push(Job {
+            jobs.push(MaterialJob {
                 coordinate,
                 local,
-                dabs: tile.dabs.clone(),
                 destination_secondary: !page.active_secondary,
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
                 has_scalar_state: if plan.state.watercolor_wetness {
@@ -2813,10 +2862,10 @@ impl WgpuRasterizer {
             });
         }
         let texture_key = Self::texture_set_key(&batch.style);
-        let mut compute_jobs = Vec::new();
-        for job in &jobs {
+        let mut compute_jobs = mem::take(&mut self.dry_jobs);
+        for (record_index, job) in jobs.iter().enumerate() {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), false, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, record_index, false, encoder,
             )?;
             let page = self.paint_layers[layer_index]
                 .pages
@@ -2945,6 +2994,8 @@ impl WgpuRasterizer {
         }
 
         self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+        compute_jobs.clear();
+        self.dry_jobs = compute_jobs;
 
         // Reservoir exchange samples the immutable pre-batch canvas. Keep a
         // bind group to that generation before the page ping-pong state flips.
@@ -2974,7 +3025,7 @@ impl WgpuRasterizer {
             None
         };
 
-        for job in jobs {
+        for job in &jobs {
             let page = self.paint_layers[layer_index]
                 .pages
                 .iter_mut()
@@ -2990,6 +3041,8 @@ impl WgpuRasterizer {
                     .active_secondary = destination_secondary;
             }
         }
+        jobs.clear();
+        self.material_jobs = jobs;
         if let Some((coordinate, source_bind_group)) = reservoir_exchange {
             self.encode_reservoir_update(
                 encoder,
@@ -3436,17 +3489,9 @@ impl WgpuRasterizer {
         tiles: &[BrushTile],
         batch_dabs: &[Dab],
     ) -> Result<(), GpuRasterError> {
-        struct Job {
-            coordinate: [u32; 2],
-            local: PixelRect,
-            dabs: std::ops::Range<u32>,
-            destination_secondary: bool,
-            coverage_destination_secondary: Option<bool>,
-            has_watercolor_wetness: bool,
-        }
-
+        self.prepare_dry_records(batch, tiles.iter().map(|tile| (tile.local, tile.dabs.clone())), encoder)?;
         let plan = BrushPassPlan::for_device(&batch.style, &self.device);
-        let mut jobs = Vec::new();
+        let mut jobs = mem::take(&mut self.material_jobs);
         for tile in tiles {
             let coordinate = tile.coordinate;
             let local = tile.local;
@@ -3472,20 +3517,19 @@ impl WgpuRasterizer {
                 };
                 coverage.active().copy_to(destination, encoder);
             }
-            jobs.push(Job {
+            jobs.push(MaterialJob {
                 coordinate,
                 local,
-                dabs: tile.dabs.clone(),
                 destination_secondary: !page.active_secondary,
                 coverage_destination_secondary: coverage.map(|page| !page.active_secondary),
-                has_watercolor_wetness: plan.state.watercolor_wetness,
+                has_scalar_state: plan.state.watercolor_wetness,
             });
         }
 
         let texture_key = Self::texture_set_key(&batch.style);
-        for job in &jobs {
+        for (record_index, job) in jobs.iter().enumerate() {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, job.coordinate, job.local, job.dabs.clone(), true, encoder,
+                batch_index, batch, batch_dabs, job.coordinate, record_index, true, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3514,7 +3558,7 @@ impl WgpuRasterizer {
                     &coverage.primary.view
                 }
             });
-            let watercolor_wetness_view = job.has_watercolor_wetness.then(|| {
+            let watercolor_wetness_view = job.has_scalar_state.then(|| {
                 let page = self
                     .preview_watercolor_wetness_pages
                     .iter()
@@ -3587,7 +3631,7 @@ impl WgpuRasterizer {
             }
         }
 
-        for job in jobs {
+        for job in &jobs {
             self.preview_pages
                 .iter_mut()
                 .find(|page| page.coordinate == job.coordinate)
@@ -3601,6 +3645,8 @@ impl WgpuRasterizer {
                     .active_secondary = destination_secondary;
             }
         }
+        jobs.clear();
+        self.material_jobs = jobs;
         Ok(())
     }
 
@@ -3619,12 +3665,15 @@ impl WgpuRasterizer {
         let plan = BrushPassPlan::for_device(&batch.style, &self.device);
         let texture_key = Self::texture_set_key(&batch.style);
         let damage = damage.intersect(self.preview_damage);
-        let mut compute_jobs = Vec::new();
-        for coordinate in page_coordinates(damage) {
+        self.prepare_dry_records(batch, page_coordinates(damage).map(|coordinate| {
             let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
                 .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
+            (PixelRect::full([PAGE_SIZE; 2]), range)
+        }), encoder)?;
+        let mut compute_jobs = mem::take(&mut self.dry_jobs);
+        for (record_index, coordinate) in page_coordinates(damage).enumerate() {
             let source_bind_group = self.material_source_binding(
-                batch_index, batch, batch_dabs, coordinate, PixelRect::full([PAGE_SIZE; 2]), range, false, encoder,
+                batch_index, batch, batch_dabs, coordinate, record_index, false, encoder,
             )?;
             let page = self
                 .preview_pages
@@ -3694,6 +3743,8 @@ impl WgpuRasterizer {
             pass.draw(0..3, 0..1);
         }
         self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+        compute_jobs.clear();
+        self.dry_jobs = compute_jobs;
         Ok(())
     }
 
@@ -3894,7 +3945,8 @@ impl CanvasRenderer for WgpuRasterizer {
             + self.canvas_preview.storage_bytes()
             + self.thumbnails.storage_bytes()
             + self.portable_blend.byte_len()
-            + 160 + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
+            + 160 + self.dry_records.storage_bytes()
+            + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
             + self
                 .transforms
                 .as_ref()
@@ -5939,27 +5991,19 @@ fn create_material_bind_group(
     dabs: &wgpu::Buffer,
     coverage: &wgpu::TextureView,
     reservoir: &wgpu::TextureView,
-    sources: &wgpu::Buffer,
+    sources: wgpu::BindingResource<'_>,
 ) -> wgpu::BindGroup {
     debug_assert_eq!(views.len(), 9);
-    let mut entries = Vec::with_capacity(10);
-    for (binding, view) in views.iter().enumerate() {
-        entries.push(wgpu::BindGroupEntry {
-            binding: binding as u32,
-            resource: wgpu::BindingResource::TextureView(view),
-        });
-    }
-    entries.push(wgpu::BindGroupEntry {
-        binding: 9,
-        resource: dabs.as_entire_binding(),
+    let entries: [_; 13] = std::array::from_fn(|binding| wgpu::BindGroupEntry {
+        binding: binding as u32,
+        resource: match binding {
+            0..=8 => wgpu::BindingResource::TextureView(views[binding]),
+            9 => dabs.as_entire_binding(),
+            10 => wgpu::BindingResource::TextureView(coverage),
+            11 => wgpu::BindingResource::TextureView(reservoir),
+            _ => sources.clone(),
+        },
     });
-    for (binding, view) in [(10, coverage), (11, reservoir)] {
-        entries.push(wgpu::BindGroupEntry {
-            binding,
-            resource: wgpu::BindingResource::TextureView(view),
-        });
-    }
-    entries.push(wgpu::BindGroupEntry { binding: 12, resource: sources.as_entire_binding() });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("layer material source neighborhood"),
         layout,

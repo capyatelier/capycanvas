@@ -2,6 +2,8 @@
 //! evaluator together instead of opening a render pass for every page.
 use super::*;
 
+pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool);
+
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 2],
     pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
@@ -87,7 +89,7 @@ impl Pipelines {
         color: &wgpu::TextureView,
         coverage: Option<&wgpu::TextureView>,
     ) -> wgpu::BindGroup {
-        let mut entries = vec![
+        let entries = [
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -100,17 +102,15 @@ impl Pipelines {
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(color),
             },
-        ];
-        if let Some(view) = coverage {
-            entries.push(wgpu::BindGroupEntry {
+            wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(view),
-            });
-        }
+                resource: wgpu::BindingResource::TextureView(coverage.unwrap_or(color)),
+            },
+        ];
         r.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("dry material page output"),
             layout: &self.layouts[usize::from(coverage.is_some())],
-            entries: &entries,
+            entries: &entries[..2 + usize::from(coverage.is_some())],
         })
     }
 }
@@ -125,7 +125,7 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
-        jobs: &[(wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool)],
+        jobs: &[Job],
     ) {
         if jobs.is_empty() {
             return;

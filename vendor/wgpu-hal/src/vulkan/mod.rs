@@ -1023,6 +1023,11 @@ impl FramebufferKey {
     }
 }
 
+struct CachedFramebuffer {
+    raw: vk::Framebuffer,
+    used: bool,
+}
+
 /// A texture view paired with its identity.
 #[derive(Copy, Clone)]
 struct IdentifiedTextureView {
@@ -1080,7 +1085,8 @@ pub struct CommandEncoder {
     /// the given pool & location.
     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
 
-    framebuffers: FastHashMap<FramebufferKey, vk::Framebuffer>,
+    completed_resets: u16,
+    framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
 
     counters: Arc<wgt::HalCounters>,
@@ -1108,7 +1114,7 @@ impl Drop for CommandEncoder {
         }
 
         for (_, fb) in self.framebuffers.drain() {
-            unsafe { self.device.raw.destroy_framebuffer(fb, None) };
+            unsafe { self.device.raw.destroy_framebuffer(fb.raw, None) };
         }
 
         for (_, view) in self.temp_texture_views.drain() {

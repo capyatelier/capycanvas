@@ -303,6 +303,19 @@ fn blend_color(backdrop: vec3<f32>, source: vec3<f32>, mode: f32) -> vec3<f32> {
 
 fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f32) -> vec4<f32> {
     let da = destination.a;
+    // Normal blending has no backdrop-color term. Besides avoiding an
+    // unassociation and two redundant products, keep this direct form: the
+    // expanded general expression produces dark contact edges in specialized
+    // shaders on the Wacom's Adreno Vulkan driver (including native saved paint).
+    if style.render_mode.x < 0.5 {
+        if style.color.a > 0.5 {
+            return vec4<f32>(mix(destination.rgb, source_color * da, source_alpha), da);
+        }
+        return vec4<f32>(
+            destination.rgb * (1.0 - source_alpha) + source_color * source_alpha,
+            source_alpha + da * (1.0 - source_alpha),
+        );
+    }
     let backdrop = working_unassociate(destination);
     let blended = blend_color(backdrop, source_color, style.render_mode.x);
     if style.color.a > 0.5 {

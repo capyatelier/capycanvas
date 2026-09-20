@@ -1,0 +1,130 @@
+diff --git a/src/vulkan/command.rs b/src/vulkan/command.rs
+index 04b8667e..4bd37a24 100644
+--- a/src/vulkan/command.rs
++++ b/src/vulkan/command.rs
+@@ -60,7 +60,10 @@ impl super::CommandEncoder {
+         key: super::FramebufferKey,
+     ) -> Result<vk::Framebuffer, crate::DeviceError> {
+         Ok(match self.framebuffers.entry(key) {
+-            Entry::Occupied(e) => *e.get(),
++            Entry::Occupied(mut e) => {
++                e.get_mut().used = true;
++                e.get().raw
++            }
+             Entry::Vacant(e) => {
+                 let super::FramebufferKey {
+                     raw_pass,
+@@ -77,7 +80,8 @@ impl super::CommandEncoder {
+                     .attachments(attachment_views);
+ 
+                 let raw = unsafe { self.device.raw.create_framebuffer(&vk_info, None).unwrap() };
+-                *e.insert(raw)
++                e.insert(super::CachedFramebuffer { raw, used: true });
++                raw
+             }
+         })
+     }
+@@ -184,10 +188,35 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.free
+             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
+         self.free.append(&mut self.discarded);
+-        // Delete framebuffers from the framebuffer cache
+-        for (_, framebuffer) in self.framebuffers.drain() {
+-            unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
+-        }
++        // Wide sustained updates can grow retained driver pool storage even
++        // while completed command buffers are freed. Reclaim it occasionally,
++        // at the same all-completed boundary, without charging every frame.
++        let reclaim_storage = if cfg!(target_os = "android") && !self.free.is_empty() {
++            self.completed_resets = (self.completed_resets + 1) % 256;
++            self.completed_resets == 0
++        } else {
++            false
++        };
++        // Adreno framebuffer creation/destruction is expensive even when the
++        // attachment textures are reused. Keep a bounded working set across
++        // completed submissions; retire entries after one unused cycle. Large
++        // one-off passes cannot leave an unbounded cache on a pooled encoder.
++        // Keys include permanent view identities, so destroyed/recycled Vulkan
++        // handles cannot revive a framebuffer referencing an old attachment.
++        // Vulkan permits destroying an unused attachment before its framebuffer:
++        // destruction must not access the framebuffer's referenced objects.
++        let retain_framebuffers = cfg!(target_os = "android")
++            && !reclaim_storage
++            && self.framebuffers.len() <= 128;
++        self.framebuffers.retain(|_, framebuffer| {
++            let keep = retain_framebuffers && framebuffer.used;
++            framebuffer.used = false;
++            if !keep {
++                // reset_all is the all-completed boundary for this encoder.
++                unsafe { self.device.raw.destroy_framebuffer(framebuffer.raw, None) };
++            }
++            keep
++        });
+         // Adreno can accumulate host mappings across pool resets until command
+         // recording fails, even with ample RAM. Free every completed buffer:
+         // resetting alone and periodic buffer reclamation were insufficient.
+@@ -200,11 +229,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
+                 self.free.clear();
+             }
+         }
+-        let _ = unsafe {
+-            self.device
+-                .raw
+-                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
++        let flags = if reclaim_storage {
++            vk::CommandPoolResetFlags::RELEASE_RESOURCES
++        } else {
++            vk::CommandPoolResetFlags::default()
+         };
++        let _ = unsafe { self.device.raw.reset_command_pool(self.raw, flags) };
+     }
+ 
+     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
+diff --git a/src/vulkan/device.rs b/src/vulkan/device.rs
+index 948f77a5..74e2e075 100644
+--- a/src/vulkan/device.rs
++++ b/src/vulkan/device.rs
+@@ -1396,6 +1396,7 @@ impl crate::Device for super::Device {
+             discarded: Vec::new(),
+             rpass_debug_marker_active: false,
+             end_of_pass_timer_query: None,
++            completed_resets: 0,
+             framebuffers: Default::default(),
+             temp_texture_views: Default::default(),
+             counters: Arc::clone(&self.counters),
+diff --git a/src/vulkan/mod.rs b/src/vulkan/mod.rs
+index 51e7414b..c02650d1 100644
+--- a/src/vulkan/mod.rs
++++ b/src/vulkan/mod.rs
+@@ -1023,6 +1023,11 @@ impl FramebufferKey {
+     }
+ }
+ 
++struct CachedFramebuffer {
++    raw: vk::Framebuffer,
++    used: bool,
++}
++
+ /// A texture view paired with its identity.
+ #[derive(Copy, Clone)]
+ struct IdentifiedTextureView {
+@@ -1080,7 +1085,8 @@ pub struct CommandEncoder {
+     /// the given pool & location.
+     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
+ 
+-    framebuffers: FastHashMap<FramebufferKey, vk::Framebuffer>,
++    completed_resets: u16,
++    framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
+     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
+ 
+     counters: Arc<wgt::HalCounters>,
+@@ -1108,7 +1114,7 @@ impl Drop for CommandEncoder {
+         }
+ 
+         for (_, fb) in self.framebuffers.drain() {
+-            unsafe { self.device.raw.destroy_framebuffer(fb, None) };
++            unsafe { self.device.raw.destroy_framebuffer(fb.raw, None) };
+         }
+ 
+         for (_, view) in self.temp_texture_views.drain() {
