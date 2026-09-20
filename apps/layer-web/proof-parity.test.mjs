@@ -43,12 +43,15 @@ export async function checkProofStartingLayout({call,evaluate,settle}) {
 export async function checkProofKeys({call,evaluate,settle,invoke}) {
   const recipe=()=>evaluate('layerApp.app.proof_form().rendition');
   const focus=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
-  const key=(type,name,extra={})=>call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:{ArrowRight:39,ArrowUp:38,Escape:27}[name],...extra});
+  const key=(type,name,extra={})=>call('Input.dispatchKeyEvent',{type,key:name,code:name,windowsVirtualKeyCode:{ArrowLeft:37,ArrowRight:39,ArrowUp:38,Escape:27}[name],...extra});
   const before=await recipe();
+  // The preceding pen gesture may leave balance at either endpoint. Exercise
+  // an actual edit so Undo cannot consume that earlier gesture instead.
+  const direction=before.balance>.9?-1:1,arrow=direction<0?'ArrowLeft':'ArrowRight';
   await focus('.proof-dial-reset');await focus('.proof-tone-pad');
-  for(let i=0;i<3;i++)await key('keyDown','ArrowRight',{autoRepeat:i>0});
-  await key('keyUp','ArrowRight');await settle();
-  assert.ok(Math.abs((await recipe()).balance-Math.min(1,before.balance+.03))<1e-6,JSON.stringify({before,after:await recipe()}));
+  for(let i=0;i<3;i++)await key('keyDown',arrow,{autoRepeat:i>0});
+  await key('keyUp',arrow);await settle();
+  assert.ok(Math.abs((await recipe()).balance-(before.balance+direction*.03))<1e-6,JSON.stringify({before,after:await recipe()}));
   await invoke('undo');assert.deepEqual(await recipe(),before,'Held arrow is one undo');
   await key('keyDown','ArrowUp',{modifiers:8});await key('keyDown','Escape');await key('keyUp','Escape');await key('keyUp','ArrowUp');
   assert.deepEqual(await recipe(),before,'Escape restores the complete gesture');

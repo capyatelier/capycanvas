@@ -200,6 +200,39 @@ class AndroidRasterTest {
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    @Test fun hdrBlackIntensityMarkerVisible() {
+        val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
+        requireNotNull(sourcePath){"Supply -e hdrFile"}
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val input=File(files,"hdr-marker.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
+        open(input)
+        native { Native.dispatch(it,obj("type" to "color","action" to obj("op" to "set_slot_intensity","slot" to "foreground","color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"stops" to 2)).toString()) }
+        tick();compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
+        automation.takeScreenshot()?.let{shot->File(activity.getExternalFilesDir(null),"black-ev-marker.png").outputStream().use{shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};shot.recycle()}
+        val image=compose.onNodeWithTag("color-hdr-intensity").captureToImage().toPixelMap()
+        val density=activity.resources.displayMetrics.density
+        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to image.width/density,"fraction" to .5).toString()))
+        val point=arc.getJSONArray("point");val x=point.getDouble(0)*density;val y=point.getDouble(1)*density;val radius=arc.getJSONObject("geometry").getDouble("marker_radius")*density
+        assertTrue("EV handle fits within the panel: ${image.width} x ${image.height}, center=($x,$y), radius=$radius",x-radius>=0&&x+radius<image.width&&y-radius>=0&&y+radius<image.height)
+        val center=image[x.toInt(),y.toInt()]
+        assertTrue("Exposure preserves black",center.red<.02f&&center.green<.02f&&center.blue<.02f)
+        for(i in 0 until 16){
+            val angle=i*Math.PI/8
+            val pixel=image[kotlin.math.round(x+radius*kotlin.math.cos(angle)).toInt(),kotlin.math.round(y+radius*kotlin.math.sin(angle)).toInt()]
+            assertTrue("Black EV handle has a visible white ring at $i: $pixel",pixel.red>.85f&&pixel.green>.85f&&pixel.blue>.85f)
+        }
+        fun point(fraction:Double):androidx.compose.ui.geometry.Offset {
+            val p=JSONObject(Native.colorUi(obj("type" to "arc","size" to image.width/density,"fraction" to fraction).toString())).getJSONArray("point")
+            return androidx.compose.ui.geometry.Offset(p.getDouble(0).toFloat()*density,p.getDouble(1).toFloat()*density)
+        }
+        compose.onNodeWithTag("color-hdr-intensity").performTouchInput { swipe(point(.3),point(.7),300) }
+        compose.waitForIdle()
+        assertEquals("EV drag follows the visible arc",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+        compose.onNodeWithTag("color-hdr-intensity").performTouchInput { down(point(.7));moveTo(point(.4));cancel() }
+        compose.waitForIdle()
+        assertEquals("Cancelled EV drag restores its value",3.6,host.panelContent!!.getJSONObject("color_panel").getDouble("intensity"),.06)
+    }
+
     @Test fun hdrEditingProofDeliveryAndRecovery() {
         val sourcePath=InstrumentationRegistry.getArguments().getString("hdrFile")
         Assume.assumeTrue("Supply an independently encoded PQ PNG with -e hdrFile",sourcePath!=null)

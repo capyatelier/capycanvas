@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
@@ -71,11 +72,25 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     var edit by remember {mutableStateOf(false)}
     Column {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val side = minOf(maxWidth, availableHeight.coerceAtLeast(128.dp)).coerceAtLeast(128.dp)
-
         val hdr=view.optBoolean("hdr")
-        val layout = remember(side,hdr) { JSONObject(Native.colorUi(obj("type" to "layout","size" to side.value,"hdr" to hdr).toString())) }
-        SideEffect {onHeight(layout.number("height"),layout.number("height"))}
+        val (side,layout,naturalHeight)=remember(maxWidth,availableHeight,hdr) {
+            fun layout(size:Float)=JSONObject(Native.colorUi(obj("type" to "layout","size" to size,"hdr" to hdr).toString()))
+            val width=maxWidth.value.coerceAtLeast(128f)
+            val natural=layout(width)
+            var fitted=natural;var fittedWidth=width
+            // HDR extends below the square wheel. Fit the complete shared
+            // layout, including its EV arc and swatches, into the dock height.
+            if(natural.number("height")>availableHeight.value) {
+                var low=128f;var high=width
+                repeat(12) {
+                    val middle=(low+high)/2f
+                    if(layout(middle).number("height")<=availableHeight.value)low=middle else high=middle
+                }
+                fittedWidth=low;fitted=layout(low)
+            }
+            Triple(fittedWidth.dp,fitted,natural.number("height"))
+        }
+        SideEffect {onHeight(naturalHeight,layout.number("height"))}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")) {
                 if(hdr)ColorIntensityArc(view,Modifier.matchParentSize(),::color)
@@ -389,12 +404,13 @@ private class ReadoutCorner(private val radius: Float) : Shape {
 @Composable private fun ColorIntensityArc(view:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
-    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}.pointerInput(Unit) {
+    val density=LocalDensity.current.density
+    Canvas(modifier.testTag("color-hdr-intensity").semantics {contentDescription="Color intensity";stateDescription="${view.number("intensity")} EV";progressBarRangeInfo=ProgressBarRangeInfo(view.number("intensity").coerceIn(-2f,6f),-2f..6f);setProgress{action(obj("op" to "hdr_intensity","stops" to it.coerceIn(-2f,6f)));true}}.pointerInput(density) {
         var lastTap=0L
         var lastPoint=Offset.Zero
         awaitEachGesture {
             val down=awaitFirstDown(requireUnconsumed=false)
-            fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width,"point" to JSONArray(listOf(point.x,point.y))).toString()))
+            fun query(point:Offset)=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width/density,"point" to JSONArray(listOf(point.x/density,point.y/density))).toString()))
             if(!query(down.position).getBoolean("hit"))return@awaitEachGesture
             val original=current.number("intensity");var complete=false
             val doubleTap=down.uptimeMillis-lastTap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position-lastPoint).getDistance()<viewConfiguration.touchSlop
@@ -404,12 +420,20 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             finally{if(!complete)action(obj("op" to "hdr_intensity","stops" to original))}
         }
     }) {
-        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to size.width,"fraction" to ((view.number("intensity")+2f)/8f)).toString()))
-        val g=arc.getJSONObject("geometry");val center=g.array("center").point(1f);val radius=g.number("radius");val angle=g.number("end_angle")*180f/PI.toFloat()
-        val path=arc.array("path");val ramp=view.array("intensity_ramp")
-        for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f),path.getJSONArray(i+1).point(1f),g.number("width"),cap=StrokeCap.Round)
-        val font=(size.width*.044f).coerceIn(9f,12f);val labelRadius=radius+g.number("width")/2f+font+3f;val x=center.x+labelRadius*cos(76f*PI.toFloat()/180f);val y=center.y+labelRadius*sin(76f*PI.toFloat()/180f)
-        drawIntoCanvas{canvas->val native=canvas.nativeCanvas;native.save();native.rotate(-14f,x,y);native.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER});native.restore()}
-        val p=arc.array("point").point(1f);drawCircle(view.array("marker_color").color(),g.number("marker_radius"),p);drawCircle(Color.Black,g.number("marker_radius"),p,style=Stroke(2f))
+        // The surrounding layout uses dp. Query and paint in that same space;
+        // shared geometry has fixed-size margins and cannot be queried in pixels.
+        val side=size.width/density
+        val arc=JSONObject(Native.colorUi(obj("type" to "arc","size" to side,"fraction" to ((view.number("intensity")+2f)/8f)).toString()))
+        scale(density,pivot=Offset.Zero) {
+            val g=arc.getJSONObject("geometry");val center=g.array("center").point(1f);val radius=g.number("radius")
+            val path=arc.array("path");val ramp=view.array("intensity_ramp")
+            for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f),path.getJSONArray(i+1).point(1f),g.number("width"),cap=StrokeCap.Round)
+            val font=(side*.044f).coerceIn(9f,12f);val labelRadius=radius+g.number("width")/2f+font+3f;val x=center.x+labelRadius*cos(76f*PI.toFloat()/180f);val y=center.y+labelRadius*sin(76f*PI.toFloat()/180f)
+            drawIntoCanvas{canvas->val native=canvas.nativeCanvas;native.save();native.rotate(-14f,x,y);native.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER});native.restore()}
+            val p=arc.array("point").point(1f);val markerRadius=g.number("marker_radius")
+            drawCircle(view.array("marker_color").color(),markerRadius,p)
+            drawCircle(Color.Black.copy(alpha=.5f),markerRadius,p,style=Stroke(4f))
+            drawCircle(Color.White,markerRadius,p,style=Stroke(2f))
+        }
     }
 }

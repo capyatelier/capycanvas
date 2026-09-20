@@ -125,7 +125,7 @@ import kotlin.math.roundToInt
                 when (item.getString("control")) {
                     "brushes" -> ToolSetControls(host, state)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host, availableHeight) { natural, displayed -> colorHeightDeficit = natural - displayed }
+                    "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> colorHeightDeficit = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> navigatorHeightDeficit = natural - displayed }
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))

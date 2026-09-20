@@ -58,6 +58,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await evaluate(`[...document.querySelectorAll('.dock-tab[data-panel="color"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);
     await wait(`!![...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0)`);
     assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
+    await checkBlackIntensityMarker({evaluate,settle});
     await capture('color-panel');
     await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
     await wait(`!!document.querySelector('dialog[aria-label="Edit Color"][open]')`);
@@ -236,4 +237,31 @@ export async function checkHdr({call,evaluate,settle}) {
   } finally {
     await evaluate('clearInterval(hdrTest.dismiss);window.showOpenFilePicker=hdrTest.open;window.showSaveFilePicker=hdrTest.save');
   }
+}
+
+// Black correctly stays black at any exposure, but the handle must remain visible.
+export async function checkBlackIntensityMarker({evaluate,settle}) {
+  await evaluate(`layerApp.dispatch({type:'color',action:{op:'set_slot_intensity',slot:'foreground',color:{space:'Srgb',rgba:[0,0,0,1]},stops:2}})`);
+  await settle();
+  const result=await evaluate(`(async()=>{
+    const view=layerApp.app.color_panel();
+    const arc=[...document.querySelectorAll('.color-intensity')].find(n=>n.getBoundingClientRect().width>0);
+    const bounds=arc.getBoundingClientRect(),stage=arc.parentElement.getBoundingClientRect();
+    const geometry=layerApp.app.color_ui({type:'arc',size:stage.width,fraction:(view.intensity+2)/8});
+    const svg=arc.cloneNode(true);svg.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)],{type:'image/svg+xml'}));
+    try {
+      const image=new Image();image.src=url;await image.decode();
+      const canvas=document.createElement('canvas');canvas.width=Math.ceil(bounds.width*2);canvas.height=Math.ceil(bounds.height*2);
+      const context=canvas.getContext('2d');context.scale(2,2);context.drawImage(image,0,0);
+      const [x,y]=geometry.point,radius=geometry.geometry.marker_radius;
+      const pixel=(x,y)=>Array.from(context.getImageData(Math.round(x*2),Math.round(y*2),1,1).data);
+      return {size:[bounds.width,bounds.height],stage:[stage.width,stage.height],blackRamp:view.intensity_ramp.every(c=>c.slice(0,3).every(v=>v===0)),center:pixel(x,y),ring:Array.from({length:16},(_,i)=>pixel(x+radius*Math.cos(i*Math.PI/8),y+radius*Math.sin(i*Math.PI/8)))};
+    }finally{URL.revokeObjectURL(url)}
+  })()`);
+  for(let i=0;i<2;i++)assert.ok(Math.abs(result.size[i]-result.stage[i])<1,'EV viewport covers the color control');
+  assert.ok(result.blackRamp,'Exposure preserves black');
+  assert.deepEqual(result.center,[0,0,0,255]);
+  assert.ok(result.ring.every(p=>p.slice(0,3).every(v=>v>220)&&p[3]>240),'Black EV handle has a visible white ring');
+  return result;
 }
