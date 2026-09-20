@@ -288,10 +288,13 @@ fn encode(
     drop(base);
     let retained =
         master.capacity() * 12 + grid_bytes(&base_grid) + alpha_grid.as_ref().map_or(0, grid_bytes);
+    // Log-gain errors multiply into HDR brightness. Give the gain map a smaller
+    // quality deficit than the SDR base, using the same delivery control.
+    // Every quality below 100 stays lossy; 100 preserves the 12-bit samples.
     let gain_grid = grid(
         layout,
         Some(GAIN),
-        100,
+        100 - (100 - quality).div_ceil(4),
         budget.checked_sub(retained).ok_or(MEMORY)?,
         cancel,
         |i| {
