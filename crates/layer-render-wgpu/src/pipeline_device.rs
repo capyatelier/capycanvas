@@ -132,6 +132,18 @@ impl PipelineDevice {
             )),
         }
     }
+    pub fn create_texture(&self, descriptor: &wgpu::TextureDescriptor<'_>) -> wgpu::Texture {
+        let _trace = crate::performance_trace::Span::new(c"capy.allocate_texture");
+        self.device.create_texture(descriptor)
+    }
+    pub fn create_buffer(&self, descriptor: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
+        let _trace = crate::performance_trace::Span::new(c"capy.allocate_buffer");
+        self.device.create_buffer(descriptor)
+    }
+    pub fn create_bind_group(&self, descriptor: &wgpu::BindGroupDescriptor<'_>) -> wgpu::BindGroup {
+        let _trace = crate::performance_trace::Span::new(c"capy.allocate_binding");
+        self.device.create_bind_group(descriptor)
+    }
     pub fn create_render_pipeline(
         &self,
         descriptor: &wgpu::RenderPipelineDescriptor<'_>,

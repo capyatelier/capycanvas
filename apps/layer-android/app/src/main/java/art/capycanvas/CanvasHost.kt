@@ -268,7 +268,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun dispatch(action: JSONObject) = post {
         val type=action.optString("type")
         if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("complete_request", "system_theme_changed", "window_fullscreen")) return@post
-        Native.dispatch(handle, action.toString())
+        val tracing = android.os.Trace.isEnabled()
+        if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
+        try { Native.dispatch(handle, action.toString()) }
+        finally { if (tracing) android.os.Trace.endSection() }
         refreshChrome()
         publish(true)
         wake()
@@ -310,8 +313,15 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun customize(action: JSONObject) = dispatch(obj("type" to "customize", "action" to action))
     fun preference(action: JSONObject) = dispatch(obj("type" to "preferences", "action" to action))
     fun query(query: JSONObject, reply: (Any?) -> Unit) = post {
-        val value = org.json.JSONTokener(Native.query(handle, query.toString())).nextValue()
-        main.post { reply(if (value == JSONObject.NULL) null else value) }
+        val tracing = android.os.Trace.isEnabled()
+        if (tracing) android.os.Trace.beginSection("capy.query." + query.optString("type"))
+        try {
+            val serialized = Native.query(handle, query.toString())
+            if (tracing) android.os.Trace.beginSection("capy.query.parse")
+            val value = try { org.json.JSONTokener(serialized).nextValue() }
+                finally { if (tracing) android.os.Trace.endSection() }
+            main.post { reply(if (value == JSONObject.NULL) null else value) }
+        } finally { if (tracing) android.os.Trace.endSection() }
     }
     /** Validate and apply on the same native owner turn. A delayed main-thread
      * reply must never apply an old drop after Done, cancellation or a switch. */
@@ -444,6 +454,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 if (disposed || handle == 0L) return@post
                 attempt {
                     val started = System.nanoTime()
+                    android.os.Trace.setCounter("Capy input queue ns", started - arrival)
+                    android.os.Trace.setCounter("Capy input age ns", started - samples[count - 2].toLong())
+                    android.os.Trace.setCounter("Capy input samples", (count / 9).toLong())
                     val phase = samples[count - 1].toInt()
                     if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
                     if (phase == 1 && !predicted && !documentInputBlocked) {
@@ -483,48 +496,51 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         scheduled = false
         if (!attached || disposed) return
         attempt {
-            val start = System.nanoTime()
-            val threadStart = if (measuredFrames != null) android.os.Debug.threadCpuTimeNanos() else 0L
-            val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
-            if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
-                awaitingSurfaceFrame = false
-                val generation = activeSurfaceGeneration
-                main.post {
-                    if (generation == surfaceGeneration) {
-                        surfaceReady = true
-                        if (firstSurfaceReady == 0L) {
-                            firstSurfaceReady = SystemClock.elapsedRealtimeNanos()
-                            Log.i("CapyStartup", "surface_ready boot_ns=$firstSurfaceReady")
+            android.os.Trace.beginSection("capy.callback")
+            try {
+                val start = System.nanoTime()
+                val threadStart = if (measuredFrames != null) android.os.Debug.threadCpuTimeNanos() else 0L
+                val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
+                if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
+                    awaitingSurfaceFrame = false
+                    val generation = activeSurfaceGeneration
+                    main.post {
+                        if (generation == surfaceGeneration) {
+                            surfaceReady = true
+                            if (firstSurfaceReady == 0L) {
+                                firstSurfaceReady = SystemClock.elapsedRealtimeNanos()
+                                Log.i("CapyStartup", "surface_ready boot_ns=$firstSurfaceReady")
+                            }
                         }
                     }
                 }
-            }
-            val elapsed = System.nanoTime() - start
-            if (frameCosts != null) Native.frameCost(handle, frameCosts)
-            val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
-            if (again || awaitingSurfaceFrame) wake()
-            publish(!again)
-            if (!startupCacheFinished && lastCanvasReady) {
-                val resources = filterResources
-                filterResources = null
-                if (resources != null) attempt(canvas = false) { Native.query(handle, resources.toString()) }
-                Native.finishStartupCache(handle)
-                startupCacheFinished = true
-                wake()
-            }
-            if (measuredFrames != null && frameCount < 8192) {
-                val end = System.nanoTime()
-                val offset = frameCount++ * 18
-                measuredFrames[offset] = frameTime
-                measuredFrames[offset + 1] = start
-                measuredFrames[offset + 2] = elapsed
-                measuredFrames[offset + 3] = expectedPresentation
-                frameCosts!!.copyInto(measuredFrames, offset + 4, 0, 5)
-                frameCosts.copyInto(measuredFrames, offset + 11, 5, 11)
-                measuredFrames[offset + 9] = end - publicationStart
-                measuredFrames[offset + 10] = end - start
-                measuredFrames[offset + 17] = android.os.Debug.threadCpuTimeNanos() - threadStart
-            }
+                val elapsed = System.nanoTime() - start
+                if (frameCosts != null) Native.frameCost(handle, frameCosts)
+                val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
+                if (again || awaitingSurfaceFrame) wake()
+                publish(!again)
+                if (!startupCacheFinished && lastCanvasReady) {
+                    val resources = filterResources
+                    filterResources = null
+                    if (resources != null) attempt(canvas = false) { Native.query(handle, resources.toString()) }
+                    Native.finishStartupCache(handle)
+                    startupCacheFinished = true
+                    wake()
+                }
+                if (measuredFrames != null && frameCount < 8192) {
+                    val end = System.nanoTime()
+                    val offset = frameCount++ * 18
+                    measuredFrames[offset] = frameTime
+                    measuredFrames[offset + 1] = start
+                    measuredFrames[offset + 2] = elapsed
+                    measuredFrames[offset + 3] = expectedPresentation
+                    frameCosts!!.copyInto(measuredFrames, offset + 4, 0, 5)
+                    frameCosts.copyInto(measuredFrames, offset + 11, 5, 11)
+                    measuredFrames[offset + 9] = end - publicationStart
+                    measuredFrames[offset + 10] = end - start
+                    measuredFrames[offset + 17] = android.os.Debug.threadCpuTimeNanos() - threadStart
+                }
+            } finally { android.os.Trace.endSection() }
         }
     }
     /** Debug-build measurement only. CPU submission is deliberately not labelled

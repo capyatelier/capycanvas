@@ -61,6 +61,7 @@ mod effect_validation;
 mod effects;
 mod flood;
 mod frame_timing;
+mod performance_trace;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
@@ -175,7 +176,7 @@ impl Uploads {
         );
         {
             let mut mapped = slice.get_mapped_range_mut()
-                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?;
+                .map_err(|error| GpuRasterError::MapFailed(format!("upload buffer staging: {error}")))?;
             fill(&mut mapped);
         }
         encoder.copy_buffer_to_buffer(
@@ -202,7 +203,7 @@ impl Uploads {
             wgpu::BufferSize::new(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)).unwrap());
         {
             let mut mapped = slice.get_mapped_range_mut()
-                .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?;
+                .map_err(|error| GpuRasterError::MapFailed(format!("upload texture staging: {error}")))?;
             fill(&mut mapped);
         }
         encoder.copy_buffer_to_texture(
@@ -4099,6 +4100,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
         if let Some(native) = &self.native_edit {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
@@ -4553,6 +4555,8 @@ impl CanvasRenderer for WgpuRasterizer {
         )?;
 
         if let Some(started) = started { cpu_phases[0] = started.elapsed().as_secs_f64() * 1000.; }
+        trace_phase.next(c"capy.paint");
+        self.telemetry.phase_begin(0, &self.device, &self.queue, &mut encoder);
         // Persistent work is encoded before preview copies so prediction sees
         // this frame's committed ink.
         for (index, batch) in packet
@@ -4635,8 +4639,12 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         if let Some(started) = started { cpu_phases[1] = started.elapsed().as_secs_f64() * 1000.; }
+        trace_phase.next(c"capy.capture");
+        self.telemetry.phase_end(0, &mut encoder);
         let native_commit = self.encode_native_rasters(packet.layers, &mut encoder)?;
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
+        trace_phase.next(c"capy.prediction");
+        self.telemetry.phase_begin(1, &self.device, &self.queue, &mut encoder);
 
         self.preview_damage = new_preview_damage;
         self.preview_contact_tiles = new_preview_contact_tiles;
@@ -4868,6 +4876,9 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
+        trace_phase.next(c"capy.composition");
+        self.telemetry.phase_end(1, &mut encoder);
+        self.telemetry.phase_begin(2, &self.device, &self.queue, &mut encoder);
         self.preview_layer_id = new_preview_layer;
         self.preview_requires_base = new_preview_requires_base;
         self.preview_direct_to_composite = new_preview_direct_to_composite;
@@ -5255,6 +5266,8 @@ impl CanvasRenderer for WgpuRasterizer {
 
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
+        trace_phase.next(c"capy.publication");
+        self.telemetry.phase_end(2, &mut encoder);
         self.telemetry.end(&mut encoder);
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted(&self.queue);
@@ -5267,6 +5280,19 @@ impl CanvasRenderer for WgpuRasterizer {
         self.artwork_frame = Some(Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)));
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
+        performance_trace::counter(c"Capy renderer frames", self.metrics.submissions);
+        performance_trace::counter(c"Capy dabs", self.metrics.dabs);
+        performance_trace::counter(c"Capy composited pixels", self.metrics.composited_pixels);
+        performance_trace::counter(c"Capy display batches", self.metrics.display_composition_submissions);
+        performance_trace::counter(c"Capy upload drains", self.metrics.source_upload_submissions);
+        performance_trace::counter(c"Capy restore batches", self.metrics.native_restore_submissions);
+        performance_trace::counter(c"Capy paint pages", self.metrics.paint_pages);
+        performance_trace::counter(c"Capy preview pages", self.metrics.preview_pages);
+        if let Some(scene) = &self.scene {
+            let [hits, misses] = scene.source_cache_work();
+            performance_trace::counter(c"Capy source hits", hits);
+            performance_trace::counter(c"Capy source misses", misses);
+        }
         if let Some(started) = started {
             cpu_phases[5] = started.elapsed().as_secs_f64() * 1000.;
             for i in (1..cpu_phases.len()).rev() { cpu_phases[i] -= cpu_phases[i - 1]; }

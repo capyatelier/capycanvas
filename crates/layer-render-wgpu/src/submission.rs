@@ -106,9 +106,9 @@ impl CommandEncoder {
     /// belong to the final encoder, after every earlier chunk on this queue.
     pub fn submit(self, queue: &wgpu::Queue) -> wgpu::SubmissionIndex {
         for encoder in self.earlier {
-            queue.submit([encoder.finish()]);
+            submit_traced(queue, encoder);
         }
-        queue.submit([self.current.finish()])
+        submit_traced(queue, self.current)
     }
     #[cfg(test)]
     pub fn submit_timed(self, queue: &wgpu::Queue) -> [f64; 2] {
@@ -141,4 +141,11 @@ impl DerefMut for CommandEncoder {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.current
     }
+}
+
+fn submit_traced(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+    let mut trace = crate::performance_trace::Span::new(c"capy.command_finish");
+    let commands = encoder.finish();
+    trace.next(c"capy.queue_submit");
+    queue.submit([commands])
 }

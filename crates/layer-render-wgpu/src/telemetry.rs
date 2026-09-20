@@ -7,6 +7,7 @@ use std::sync::Mutex;
 struct GpuSamples {
     timer: Option<GpuFrameTimer>,
     samples: TimingSamples,
+    phases: Vec<GpuFrameTimer>,
 }
 
 pub(super) struct Telemetry {
@@ -40,7 +41,7 @@ impl Telemetry {
             .timer
             .get_or_insert_with(|| GpuFrameTimer::new(device, queue));
         timer.poll(device, queue);
-        timer.begin_encoded(encoder, 0);
+        timer.begin_encoded(encoder, timer.stats().requested + 1);
     }
     pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(timer) = &mut self.gpu.get_mut().unwrap().timer {
@@ -50,6 +51,35 @@ impl Telemetry {
     pub fn submitted(&mut self, queue: &wgpu::Queue) {
         if let Some(timer) = &mut self.gpu.get_mut().unwrap().timer {
             timer.submitted(queue);
+        }
+        for timer in &mut self.gpu.get_mut().unwrap().phases {
+            timer.submitted(queue);
+        }
+    }
+    // Diagnostic-only GPU intervals. They include inter-submission scheduling
+    // gaps, not hardware occupancy. Slots drop observations instead of waiting.
+    pub fn phase_begin(
+        &mut self,
+        index: usize,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        if !self.enabled || !self.supported || !crate::performance_trace::enabled() {
+            return;
+        }
+        let gpu = self.gpu.get_mut().unwrap();
+        if gpu.phases.is_empty() {
+            gpu.phases = (0..3).map(|_| GpuFrameTimer::new(device, queue)).collect();
+        }
+        let frame = gpu.timer.as_ref().map_or(0, |t| t.stats().requested);
+        let timer = &mut gpu.phases[index];
+        timer.poll(device, queue);
+        timer.begin_encoded(encoder, frame);
+    }
+    pub fn phase_end(&mut self, index: usize, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(timer) = self.gpu.get_mut().unwrap().phases.get_mut(index) {
+            timer.end_encoded(encoder);
         }
     }
     pub fn snapshot(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> RendererTelemetry {
@@ -65,7 +95,36 @@ impl Telemetry {
                     let count = timer.take_into(&mut ready);
                     for sample in &ready[..count] {
                         if sample.status == 1 {
+                            crate::performance_trace::counter(
+                                c"Capy GPU observation",
+                                sample.frame,
+                            );
+                            crate::performance_trace::counter(
+                                c"Capy GPU elapsed ns",
+                                sample.elapsed_ns,
+                            );
                             gpu.samples.push(sample.elapsed_ns as f32 / 1_000_000.);
+                        }
+                    }
+                }
+                for (index, timer) in gpu.phases.iter_mut().enumerate() {
+                    timer.poll(device, queue);
+                    let mut ready = [GpuFrameSample::default(); 256];
+                    let count = timer.take_into(&mut ready);
+                    for sample in &ready[..count] {
+                        if sample.status == 1 {
+                            crate::performance_trace::counter(
+                                c"Capy GPU phase observation",
+                                sample.frame,
+                            );
+                            crate::performance_trace::counter(
+                                [
+                                    c"Capy GPU paint ns",
+                                    c"Capy GPU prediction ns",
+                                    c"Capy GPU composition ns",
+                                ][index],
+                                sample.elapsed_ns,
+                            );
                         }
                     }
                 }

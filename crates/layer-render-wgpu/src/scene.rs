@@ -251,6 +251,7 @@ impl Scene {
         previous.submit(&r.queue)
     }
     fn wait_submission(r: &WgpuRasterizer, submission: wgpu::SubmissionIndex) -> Result<(), GpuRasterError> {
+        let _trace = crate::performance_trace::Span::new(c"capy.bounded_wait");
         // Native hosts run this work on their render owner. Wait for this exact
         // chunk before releasing/replacing resources charged to its ceiling.
         #[cfg(not(target_arch = "wasm32"))]
@@ -405,6 +406,7 @@ impl Scene {
         self.jobs.insert(index, Job::DecodedTile(std::sync::Arc::new(pending)));
     }
     fn source_tile(&mut self, r: &WgpuRasterizer, layer: &Layer, coordinate: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
+        let _trace = crate::performance_trace::Span::new(c"capy.source_tile");
         if let Some(blob) = r.native_color_tile(layer.id, coordinate)? {
             let space = r.document_color().space;
             let (tile, pending) = self.source_tiles.plan_raster(r, &blob, space, space)?;

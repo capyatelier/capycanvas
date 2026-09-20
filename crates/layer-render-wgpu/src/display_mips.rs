@@ -216,6 +216,7 @@ impl CompleteUpdates {
 
     pub fn flush(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.pending.is_empty() { return; }
+        let _trace = crate::performance_trace::Span::new(c"capy.mip_encode");
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce retained display tiles"), timestamp_writes: None,
         });

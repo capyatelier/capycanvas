@@ -1083,6 +1083,7 @@ impl WgpuRasterizer {
         previous: &RasterData,
         data: &RasterData,
     ) -> Result<(), GpuRasterError> {
+        let _trace = crate::performance_trace::Span::new(c"capy.restore");
         let index = self.paint_layers.iter().position(|l| l.id == target);
         let mask = index.is_none();
         data.validate_index(self.target_extent(target), mask, self.document_color())
