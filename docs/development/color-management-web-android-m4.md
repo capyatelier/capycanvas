@@ -264,5 +264,27 @@ Chrome journeys pass, including pen-contact guide retention and late-result
 rejection. A test removes canvas configuration inspection to simulate an older
 browser: both views fall back to SDR and recover HDR when the API returns.
 Chrome ignores `dynamic-range` emulation, so physical display switching remains
-unqualified. Fingerprinted production assets are tested on a clean origin after
-stale development worker modules caused a Print startup failure during integration.
+unqualified. Print preparation passed on the fingerprinted production package,
+but the original illustration check only verified opacity and missed its gray
+placeholder. The earlier attribution to a stale worker cache did not establish
+that the SDR illustration loaded correctly.
+
+## Web SDR Proof illustration packaging fix — 2026-09-19
+
+The illustration worker URL used single quotes while the package rewrite matched
+double quotes. Production therefore requested an absent `assets/proof-worker.js`
+instead of the fingerprinted worker; the failed promise left the gray placeholder
+visible. Print preparation had a separate, correctly rewritten URL and could pass
+while the illustration was broken. Both now use one package-rewritten URL.
+
+The package dependency test checks literal worker URLs as well as module imports.
+The browser HDR workflow compares visible inner-circle pixels with GTK's shared
+Rust texture, replacing the insufficient opacity check. On the attached Wacom
+Chrome, the old package produced one gray color and a maximum channel error of
+99. The fixed production build produced 22 distinct samples with maximum error
+1 (Canvas2D scaling). Print preparation and return to SDR also pass. With network
+disabled, the cached versioned worker starts and returns all 1,048,576 texture
+bytes exactly matching the shared Rust output. Evidence,
+the screenshot and runnable package are in `artifacts/web-proof-pattern/review/`.
+The corrected build is open at `http://localhost:8140/` with a lossless copy of
+the current drawing; the original tab and its undo history remain intact.

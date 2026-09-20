@@ -358,3 +358,9 @@ restores the starting value. Review evidence covers mouse/touch/pen, submitted
 HDR/SDR pixels, proof switching, save/reopen, delivery and GPU recovery. Color
 controls, layer thumbnails and export comparisons remain SDR previews; this does
 not close whole phase 4 or qualify physical screen luminance.
+
+The subsequent [SDR illustration packaging fix](../development/color-management-web-android-m4.md#web-sdr-proof-illustration-packaging-fix--2026-09-19)
+corrects a worker URL that escaped fingerprinting and left the inner circle gray.
+Production dependency checks now include worker URLs; tablet checks compare
+actual pattern pixels with GTK's shared texture and verify offline worker startup.
+The earlier opacity-only visual assertion did not qualify the illustration.

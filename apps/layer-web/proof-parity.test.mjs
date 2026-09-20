@@ -1,5 +1,41 @@
 import assert from 'node:assert/strict';
 
+// Verify the worker-loaded illustration against GTK's shared Rust texture.
+// An opaque gray placeholder used to pass the browser's visual check.
+export async function checkProofPattern({evaluate}) {
+  const result=await evaluate(`(async()=>{
+    const canvas=document.querySelector('.proof-tone-pad');
+    if(!canvas?.getBoundingClientRect().width)throw Error('SDR Proof must be visible');
+    const source=document.createElement('canvas');source.width=source.height=512;
+    source.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(layerApp.app.proof_texture(512)),512,512),0,0);
+    const deadline=performance.now()+15000;
+    for(;;){
+      const size=canvas.getBoundingClientRect().width;
+      const d=layerApp.app.color_ui({type:'proof_dial',size,recipe:layerApp.app.proof_form().rendition});
+      const reference=document.createElement('canvas');reference.width=canvas.width;reference.height=canvas.height;
+      const ctx=reference.getContext('2d'),scale=canvas.width/size,[cx,cy]=d.center;
+      ctx.scale(scale,scale);ctx.drawImage(source,cx-d.radius,cy-d.radius,d.radius*2,d.radius*2);
+      const expected=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+      const actual=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+      let samples=0,maxError=0;const colors=new Set();
+      for(const x of [-.6,-.3,0,.3,.6])for(const y of [-.6,-.3,0,.3,.6]){
+        const px=cx+x*d.radius,py=cy+y*d.radius;
+        if(Math.hypot(px-d.marker[0],py-d.marker[1])<d.marker_radius+6)continue;
+        const offset=(Math.floor(py*scale)*canvas.width+Math.floor(px*scale))*4;
+        for(let channel=0;channel<4;channel++)maxError=Math.max(maxError,Math.abs(actual[offset+channel]-expected[offset+channel]));
+        colors.add(Array.from(actual.slice(offset,offset+3)).join(','));samples++;
+      }
+      const result={samples,distinctColors:colors.size,maxError};
+      if(samples>=16&&colors.size>=12&&maxError<=2)return result;
+      if(performance.now()>deadline)throw Error('Proof pattern differs from GTK texture: '+JSON.stringify(result));
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+  })()`);
+  assert.ok(result.samples>=16&&result.distinctColors>=12&&result.maxError<=2,JSON.stringify(result));
+  console.log('SDR Proof illustration matches the shared GTK texture:',result);
+  return result;
+}
+
 // GTK's restored arrangement and contact/history rules, through the host UI.
 export async function checkProofStartingLayout({call,evaluate,settle}) {
   const touch=await evaluate("navigator.maxTouchPoints>0");

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {checkGpuTone} from './gpu-tone.test.mjs';
-import {checkProofStartingLayout,checkProofKeys} from './proof-parity.test.mjs';
+import {checkProofStartingLayout,checkProofKeys,checkProofPattern} from './proof-parity.test.mjs';
 import {checkHdrDisplay,checkHdrCapabilityFallback} from './hdr-display.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -172,7 +172,7 @@ export async function checkHdr({call,evaluate,settle}) {
     const master=await save();assert.deepEqual(master.blobs,master0.blobs);assert.deepEqual(master.document.layers,master0.document.layers);
     mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
     await settle();await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
-    assert.ok(await evaluate(`(()=>{const c=document.querySelector('.proof-tone-pad');return c.getContext('2d').getImageData(c.width/2,c.height/2,1,1).data[3]===255})()`),await evaluate(`document.querySelector('.proof-panel').innerText`));
+    results.proofPattern=await checkProofPattern({evaluate});
     await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'proof',visible:false}})`);
     await evaluate(`hdrTest.files.set('hdr-master.capy',hdrTest.last.slice())`);
     await open('hdr-master.capy');await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
