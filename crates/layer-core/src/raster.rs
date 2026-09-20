@@ -17,6 +17,8 @@ use std::{
 
 pub const TILE_SIZE: u32 = 256;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 16) as usize;
+pub(crate) const MAX_COMPRESSED_TILE_BYTES: usize =
+    lz4_flex::block::get_maximum_output_size(MAX_TILE_BYTES);
 mod compression;
 pub const MAX_CAPTURE_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
@@ -148,19 +150,11 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 }
 
 impl TileBlob {
+    /// Worst-case encoded ownership reserved before a tile is published.
+    pub fn max_compressed_len(descriptor: PixelDescriptor) -> Option<usize> {
+        descriptor.byte_len([TILE_SIZE; 2]).map(lz4_flex::block::get_maximum_output_size)
+    }
     pub fn encode(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_with_policy(descriptor, bytes, true)
-    }
-    /// Immutable imported samples are compressed on the file worker. Unlike
-    /// interactive capture, favor source residency over minimum commit latency.
-    pub fn encode_source(descriptor: PixelDescriptor, bytes: &[u8]) -> Result<Self, String> {
-        Self::encode_with_policy(descriptor, bytes, false)
-    }
-    fn encode_with_policy(
-        descriptor: PixelDescriptor,
-        bytes: &[u8],
-        interactive: bool,
-    ) -> Result<Self, String> {
         let expected = descriptor
             .byte_len([TILE_SIZE; 2])
             .ok_or("Unsupported raster pixels")?;
@@ -177,7 +171,6 @@ impl TileBlob {
             descriptor,
             compressed: Arc::<[u8]>::from(compression::compress(
                 shuffled.as_deref().unwrap_or(bytes),
-                interactive,
             )?).into(),
         })
     }
@@ -203,10 +196,10 @@ impl TileBlob {
             .ok_or("Unsupported raster pixels")?;
         let compressed = self.compressed()?;
         let mut bytes = compression::decompress(&compressed, size)?;
-        if bytes.len() == size && self.descriptor.bits_per_channel > 8 {
+        if self.descriptor.bits_per_channel > 8 {
             bytes = unshuffle_samples(self.descriptor, &bytes);
         }
-        if bytes.len() != size || Self::digest(self.descriptor, &bytes) != self.digest {
+        if Self::digest(self.descriptor, &bytes) != self.digest {
             return Err("Raster tile integrity check failed".into());
         }
         self.descriptor.validate_samples(&bytes)?;
@@ -217,7 +210,7 @@ impl TileBlob {
         digest: [u8; 32],
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
-        if bytes.len() > MAX_TILE_BYTES + 1024 {
+        if bytes.len() > MAX_COMPRESSED_TILE_BYTES {
             return Err("Oversized compressed raster tile".into());
         }
         let result = Self {
@@ -239,7 +232,7 @@ impl TileBlob {
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
         if bytes.is_empty()
-            || bytes.len() > MAX_TILE_BYTES + 1024
+            || bytes.len() > MAX_COMPRESSED_TILE_BYTES
             || descriptor.byte_len([TILE_SIZE; 2]).is_none()
         {
             return Err("Invalid raster worker blob".into());
@@ -472,7 +465,8 @@ mod tests {
         for (bits, expected_undo) in [(8, 4), (16, 2), (32, 1)] {
             // Even while the current document is still sRGB8, old revision
             // tickets own their layout. No pixel allocation/readback is needed
-            // to enforce the 512 MiB history ceiling.
+            // to enforce the 512 MiB history ceiling. 450 tiles leave room
+            // for the codec's worst-case expansion within that ceiling.
             let mut editor = Editor::new(Document::new("pending history", 6400, 5120));
             let descriptor = DocumentColor {
                 space: RgbSpace::ProPhoto,
@@ -480,7 +474,7 @@ mod tests {
             }.paint_descriptor();
             for _ in 0..3 {
                 let data = RasterData {
-                    tiles: (0..500)
+                    tiles: (0..450)
                         .map(|i| {
                             (
                                 TileKey {

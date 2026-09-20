@@ -182,7 +182,7 @@ impl RetainedTiles {
                         if let Some(Ok(blob)) = tile.try_backing() {
                             charge(&blob);
                         } else {
-                            pending = pending.saturating_add(crate::raster::MAX_TILE_BYTES + 1024);
+                            pending = pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);
                         }
                     }
                 }

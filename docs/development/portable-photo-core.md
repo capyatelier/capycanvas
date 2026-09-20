@@ -174,51 +174,59 @@ replacements are verified. The native JPEG routines are retained temporarily
 as an independent test oracle alongside that path; production JPEG dispatch
 always uses Rust.
 
-## Raster storage milestone — 2026-09-19
+## Raster storage simplification — 2026-09-19
 
-Raster tiles use Rust Zstd (`zrip-core` 0.10.1, encode/decode 0.8.7) with the
-bounds-checked `paranoid` feature throughout. The
-[vendor patch](../../vendor/README.md#portable-zstd-raster-storage) fixes periodic
-byte-plane compression, full-alphabet Huffman weights, and block table state.
-Interactive capture uses a short-stride fast match search and raw literals;
-imported source tiles use level 1 with entropy coding.
+The initial Zrip migration in `5ba9d1a9` preserved Zstd archives by maintaining
+local encoder fixes. That decision is superseded: `.capy` compatibility is not a
+requirement, and simplicity takes precedence over compression ratio.
 
-The `.capy` format, multibyte sample shuffle and SHA-256 tile identities remain
-unchanged. Decode admits at most one tile, requires exactly one complete frame,
-rejects dictionaries, malformed sizes and trailing/concatenated data, and keeps
-the existing digest verification. Spare decode capacity is released before cache
-admission so the cache's existing capacity accounting remains valid.
+Raster storage now uses unmodified crates.io `lz4_flex` 0.14.0, with `std`,
+`safe-encode`, `safe-decode`, and `checked-decode`; framing and its optional hash
+dependency are disabled. Painted and imported tiles share one encoder. The Zrip
+vendor trees, patches, decoder dependency, native Zstd oracle, old fixtures,
+frame parser and separate source-compression policy are removed.
 
-SHA-256 uses `sha2` 0.11, removing the former ARM `sha2-asm` build dependency.
-Workspace content IDs retain their lowercase hexadecimal representation. Core
-dependency graphs for WebAssembly and Android contain no `cc`, `zstd-sys`, or
-`sha2-asm`. Native GTK/GPU APIs and the pending AVIF/HEIC codec bridge are outside
-this storage milestone.
+Only `.capy` version 6 is read or written. It fixes the tile codec to LZ4 blocks;
+there is no migration reader or v4/v5 writer selection. Multibyte shuffling,
+SHA-256 sample verification, placement, source profiles and immutable backing
+remain. The descriptor sets the exact output allocation (at most 1 MiB); the
+library's maximum encoded size also governs archive and worker admission.
+SHA-256 still uses `sha2` 0.11 without the former ARM assembly dependency.
+
+Before replacement, a local release comparison fed identical shuffled tile bytes
+to LZ4 and both patched Zrip policies, and verified every decoded byte. These are
+codec-only timings on this Linux host, excluding validation, shuffling and hashing.
+
+| Corpus / codec | Stored bytes | Encode MB/s | Decode MB/s |
+| --- | ---: | ---: | ---: |
+| Photo, 8 tiles / LZ4 | 70,499 | 7,639 | 3,470 |
+| Photo / Zrip capture | 65,795 | 4,001 | 4,014 |
+| Photo / Zrip source | 29,176 | 2,556 | 3,368 |
+| 60 MP, 928 tiles / LZ4 | 549,970,843 | 5,378 | 5,881 |
+| 60 MP / Zrip capture | 546,152,132 | 3,333 | 4,837 |
+| 60 MP / Zrip source | 492,886,175 | 568 | 1,466 |
+
+The 60 MP corpus gains encode speed at a 0.7% size increase over capture and
+11.6% over source compression. The small periodic photo is 2.4 times the previous
+source size, an increase of 41 KiB. These fixtures are not a general ratio or
+device-latency guarantee. Local comparison: `/tmp/capy-compression-choice.log`.
 
 Verification:
 
-- Core: 104 tests passed; workspace: 2 passed. Permanent C-generated fixtures
-  cover U8, U16, F16 and F32 samples, both encoding policies and unchanged IDs.
-- Color: 93 tests passed, 7 existing optional tests ignored.
-- Vendored core: 59 tests passed, including full-alphabet Huffman tables.
-- `layer-color` checks passed for `wasm32-unknown-unknown` and
-  `aarch64-linux-android`.
-- The [separate native oracle](../../tools/validation/portable-zstd/README.md)
-  passed 256 mixed-entropy/boundary cases, 257 forced Huffman blocks, and all 936
-  old frames from the local photo and 60 MP project fixtures. Both projects were
-  read, written and reopened. C Zstd is confined to that validation workspace.
-- The release GTK `portable_jpeg_gainmap_export_without_codec_bundle` journey
-  passed on private Mutter/Wayland with NVIDIA Vulkan after the storage change:
-  actual export selection, encoded SDR/HDR preview, save and HDR reopen, with
-  an empty codec directory and unchanged document/history.
-
-On this Linux host, synthetic tile encode/validation/shuffle/hash throughput was
-about 392–2090 MB/s with Rust and 409–2356 MB/s with C using the same Rust hash.
-U16 was the largest throughput difference (roughly 1.45–1.52 times the C time).
-Source compressed sizes were within 2% of C for U8/F16/F32; U16 source grew 25%.
-Interactive F16/F32 sizes improved; interactive U16 grew 45%. These measurements
-describe this corpus and host, not browser/device drawing latency. No archive
-migration or lossy sample conversion is involved.
+- 104 core and 2 workspace tests pass, including exact integer/float samples,
+  malformed blocks, file integrity, source/profile ownership, spill and history.
+  The color suite also passes.
+- GTK, WebAssembly and Android NDK target builds pass. Core's dependency graph
+  contains neither Zrip nor a native compression dependency. License/source
+  policy checks pass; the packaged Web notices include LZ4's original MIT text.
+- The release GTK rasterization journey passes on private Mutter/Wayland and
+  NVIDIA Vulkan: paint, placed off-canvas sources, masks, Undo/Redo and v6 reopen.
+  Local log: `/tmp/capy-lz4-raster-ui.log`.
+- The packaged Web raster journey passes with actual WebGPU, codec workers and
+  IndexedDB: exact PNG pixels after save/reopen and GPU replacement, Undo/Redo,
+  corrupt-file retention, and recovery after reload. Local log:
+  `/tmp/capy-lz4-web-raster.log`. Android runtime storage remains to be exercised
+  during its host integration; target compilation is not device qualification.
 
 ## AV1 portability qualification — 2026-09-19
 

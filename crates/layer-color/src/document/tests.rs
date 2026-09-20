@@ -26,10 +26,10 @@ fn fixture(color: DocumentColor) -> Project {
     let mut document = Document::new("document-color", TILE_SIZE, TILE_SIZE);
     document.color = color;
     let rgba = Arc::new(
-        TileBlob::encode_source(color.paint_descriptor(), &samples(color.depth, 4)).unwrap(),
+        TileBlob::encode(color.paint_descriptor(), &samples(color.depth, 4)).unwrap(),
     );
     let scalar = Arc::new(
-        TileBlob::encode_source(color.coverage_descriptor(), &samples(color.depth, 1)).unwrap(),
+        TileBlob::encode(color.coverage_descriptor(), &samples(color.depth, 1)).unwrap(),
     );
     let root = RasterRevision::backed(RasterData {
         tiles: [
@@ -437,7 +437,7 @@ fn explicit_attachment_assignment_recovers_declared_straight_codes_before_retagg
     let mut data = (*project.document.layers[0].raster.wait_data().unwrap()).clone();
     data.tiles.insert(
         key(RasterPlane::Color),
-        RasterTile::backed(TileBlob::encode_source(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap()),
+        RasterTile::backed(TileBlob::encode(PixelDescriptor::SRGB8_PAINT, &bytes).unwrap()),
     );
     project.document.layers[0].raster = RasterRevision::backed(data);
     let prepared = prepare_document_color(

@@ -24,7 +24,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   }
   await wait('layerApp.state().document_file.modified');
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-  assert.equal(await evaluate('new TextDecoder().decode([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,11))'),'CAPYRASTER\x04');
+  assert.equal(await evaluate('new TextDecoder().decode([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,11))'),'CAPYRASTER\x06');
   console.log('Captured raster archive',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length}))'));
   await evaluate(`window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
     window.rasterManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));

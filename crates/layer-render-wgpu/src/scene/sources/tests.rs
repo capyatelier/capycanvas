@@ -458,7 +458,7 @@ fn equal_native_samples_share_decoded_pixels_across_allocations_and_encodings() 
     let scene = Scene::new(&r);
     let mut cache = DecodedTiles::default();
     let (first, bytes) = raster_fixture(SampleDepth::U16, AlphaAssociation::Straight, Some(32767));
-    let second = Arc::new(TileBlob::encode_source(first.descriptor, &bytes).unwrap());
+    let second = Arc::new(TileBlob::encode(first.descriptor, &bytes).unwrap());
     assert!(!Arc::ptr_eq(&first, &second));
     assert_eq!(first.digest, second.digest);
     let weak = Arc::downgrade(&first);
