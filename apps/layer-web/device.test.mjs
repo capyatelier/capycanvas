@@ -1,3 +1,4 @@
+import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {checkDrawingTabsOffline} from "./drawing-tabs-offline.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
@@ -71,7 +72,9 @@ try {
   await reload();
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>${process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?240000:55000})reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})`);
   await workspaceIdle();
-  if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
+  if (process.argv.includes('--ui-speed') || process.argv.includes('--editor'))
+    assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Start with a clean fixture without recovery or other dialogs');
+  if (['--ui-speed','--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
     const original=(await workspaceIdle()).id;
     const capture=await evaluate('layerApp.app.workspace_capture()');
     await workspaceInput({type:'form',kind:'new'});
@@ -80,7 +83,14 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if(process.argv.includes("--drawing-tabs-offline")){
+  if (process.argv.includes("--ui-speed")) {
+    await checkStagedStartup({call,evaluate,settle,canvasPixels,uiOnly:true});
+    await checkUiUpdates({evaluate});
+    await checkSettingsUpdates({evaluate,settle});
+    await checkTitleBarFeedback({call,evaluate,settle});
+    await checkWorkspaceResize({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--drawing-tabs-offline")) {
     await checkDrawingTabsOffline({call,evaluate,settle});assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--drawing-tabs-recovery")){
     await checkDrawingTabRecovery({call,evaluate,settle});assert.deepEqual(errors,[]);

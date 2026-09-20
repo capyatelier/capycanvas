@@ -71,8 +71,9 @@ export function createProof({app,element,button,icon,applyChange,wake}) {
     if(!app.gpu_ready())return;
     syncDisplay();
     const status=app.tone_status();
-    hdrLabel.hidden=!status.hdr;
-    hdrLabel.textContent=status.hdr_output?'HDR':status.error?"SDR preview unavailable":!status.retained?"Preparing SDR…":status.proof_mode==='print'?'Print proof':status.display_hdr?'SDR preview':'Showing SDR';
+    if(hdrLabel.hidden!==!status.hdr)hdrLabel.hidden=!status.hdr;
+    const text=status.hdr_output?'HDR':status.error?"SDR preview unavailable":!status.retained?"Preparing SDR…":status.proof_mode==='print'?'Print proof':status.display_hdr?'SDR preview':'Showing SDR';
+    if(hdrLabel.textContent!==text)hdrLabel.textContent=text;
     if(status.generation!==toneGeneration){toneGeneration=status.generation;toneChanged=performance.now();tone?.cancel();wake();}
     if(document.hidden||!status.idle){tone?.cancel();toneChanged=performance.now();return;}
     if(!status.needed||tone||performance.now()-toneChanged<180)return;

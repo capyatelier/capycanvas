@@ -189,7 +189,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     dock.density = density
     dock.enabled = snapshot?.optBoolean("partial_zen") != true && snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
-    val panels = host.panelContent?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
+    val panelModels = host.panelContent?.optJSONArray("panels")
+    val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
     var shownPanel by remember { mutableStateOf<String?>(null) }
@@ -249,7 +250,20 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
         if (snapshot != null && state != null) {
             val hidden = snapshot.optBoolean("chrome_hidden")
-            if (!hidden && snapshot.objectOrNull("preferences") == null) WorkspaceHeader(host, snapshot, header)
+            if (!hidden) {
+                val shown = snapshot.objectOrNull("preferences") == null
+                // Settings hides the header without destroying its text/icon
+                // caches or interactive nodes. Unplaced content cannot draw or
+                // receive input; clear its accessibility subtree while hidden.
+                Layout(content = { WorkspaceHeader(host, snapshot, header) },
+                    modifier = Modifier.fillMaxSize().zIndex(300f)
+                        .then(if (shown) Modifier else Modifier.clearAndSetSemantics {})) { children, constraints ->
+                    val child = children.single().measure(constraints)
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        if (shown) child.place(0, 0)
+                    }
+                }
+            }
             if (snapshot.objectOrNull("preferences") == null && (hidden && snapshot.optBoolean("keep_zen_button"))) {
                 ZenButton(host, state, dock, hidden)
             }
@@ -265,7 +279,10 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                   val z = if (source) 199 else (if (group.optBoolean("floating")) 180 else 100) + index
                   CompositionLocalProvider(LocalWorkspaceZ provides z) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }
-                    val base = group.getJSONObject("bounds")
+                    // Full transport baselines need not recreate unchanged
+                    // controls after a preferences or chrome publication.
+                    val retainedGroup = remember(group.toString()) { group }
+                    val base = retainedGroup.getJSONObject("bounds")
                     val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging, host, group.getInt("id")) else base
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
@@ -275,7 +292,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
-                        val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(group.toString()).put("tiles", it) } ?: group
+                        val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(retainedGroup.toString()).put("tiles", it) } ?: retainedGroup
                         PanelGroup(host, host.panelContent?.getJSONObject("state") ?: state, projected, panels, dock, mod)
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {

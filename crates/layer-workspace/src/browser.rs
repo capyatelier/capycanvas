@@ -255,6 +255,14 @@ impl BrowserDatabase {
         *self = transaction;
         Ok(response)
     }
+    /// Consume a transaction-local database without copying its retained history.
+    /// On failure the candidate is dropped; the caller must reload its durable
+    /// snapshot. Callers retaining this instance across failure use `execute`.
+    pub fn execute_owned(mut self, request: StoreRequest, now: u64) -> Result<(Self, StoreResponse)> {
+        let response = self.apply(request, now)?;
+        Ok((self, response))
+    }
+
     fn apply(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         use StoreRequest::*;
         Ok(match request {

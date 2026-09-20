@@ -25,6 +25,11 @@ export async function checkWorkspaceStore({evaluate}) {
         try { results.push(normalize(JSON.parse(await store.execute(JSON.stringify(fixture.request))))); }
         catch (e) { results.push({error:JSON.parse(e).kind}); }
       }
+      // A cached read must still reject an invalid pending-delivery request.
+      glue.workspace_database(undefined, '{"type":"list"}', false, now);
+      let invalidPending;
+      try { glue.workspace_database(undefined, '{"type":"list"}', true, now); }
+      catch(e) { invalidPending=JSON.parse(e).kind; }
       // Successful individual requests do not acknowledge a transaction that
       // subsequently aborts. The previous database bytes must remain intact.
       let abortNext = true;
@@ -99,7 +104,7 @@ export async function checkWorkspaceStore({evaluate}) {
       let unavailableError; try { await unavailable.execute('{"type":"list"}'); } catch(e) { unavailableError=JSON.parse(e).kind; }
       const quota = createWorkspaceStore(reduce, {indexedDB:{open(){throw new DOMException('Storage is full','QuotaExceededError');}}});
       let quotaError; try { await quota.execute('{"type":"list"}'); } catch(e) { quotaError=JSON.parse(e).kind; }
-      return {results, abortError, unchanged, upgradeError, unavailableError, quotaError,
+      return {results, invalidPending, abortError, unchanged, upgradeError, unavailableError, quotaError,
         recovered,resetAbort,resetUnchanged,resetDurable,customUnchanged,customError,ownedError};
     } finally { store.close(); indexedDB.deleteDatabase(name); }
   })().catch(e=>{throw new Error(typeof e==='string'?e:(e?.stack||String(e)));})`);
@@ -108,6 +113,7 @@ export async function checkWorkspaceStore({evaluate}) {
   // string counters/fences and integer identities.
   const floats = value => JSON.parse(JSON.stringify(value, (_, v) => typeof v === "number" && !Number.isInteger(v) ? Math.fround(v) : v));
   assert.deepEqual(floats(result.results), floats(fixtures.map(f=>f.expected)));
+  assert.equal(result.invalidPending, "invalid_data");
   assert.equal(result.abortError, "failed_write"); assert.ok(result.unchanged);
   assert.equal(result.upgradeError, "unsupported_schema");
   assert.equal(result.unavailableError, "unavailable"); assert.equal(result.quotaError, "storage_full");

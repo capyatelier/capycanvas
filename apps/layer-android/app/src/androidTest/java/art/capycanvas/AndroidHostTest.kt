@@ -1766,6 +1766,34 @@ class AndroidHostTest {
         } finally { compose.mainClock.autoAdvance = true }
     }
 
+    @Test fun retainedSettingsReleasePopupsFocusAndInvalidDrafts() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("setting-choice-theme").performScrollTo().performClick()
+        compose.onAllNodes(isPopup()).assertCountEquals(1)
+        action(obj("type" to "close_settings"))
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        val value = compose.onNodeWithTag("number-value-pressure", useUnmergedTree = true)
+        value.performScrollTo()
+        val before = state().getJSONObject("settings").number("pressure_gamma")
+        value.performClick()
+        compose.onNodeWithTag("setting-number-pressure").performTextReplacement("invalid")
+        compose.onNodeWithTag("setting-number-pressure").performImeAction()
+        action(obj("type" to "close_settings"))
+        compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
+        assertFalse("Hidden settings release text input ownership", host.editingText)
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.onNodeWithTag("number-value-pressure", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        assertEquals(before, state().getJSONObject("settings").number("pressure_gamma"))
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
     @Test fun settingsPanesShareTopEdgeAndUseAppScale() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
@@ -1881,20 +1909,21 @@ class AndroidHostTest {
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("preference-prediction_horizon").performScrollTo()
-        compose.onNodeWithTag("settings-content-page:input").assertIsDisplayed()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.onNodeWithTag("preference-prediction_horizon", useUnmergedTree = true).performScrollTo()
+        compose.onNodeWithTag("settings-content-page:input", useUnmergedTree = true).assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        val slider = compose.onNodeWithTag("setting-slider-pressure").performScrollTo().assertTouchHeightIsEqualTo(48.dp)
+        val slider = compose.onNodeWithTag("setting-slider-pressure", useUnmergedTree = true).performScrollTo().assertTouchHeightIsEqualTo(48.dp)
         val track = slider.captureToImage().toPixelMap()
         val trackX = track.width * 9 / 10
         assertTrue("Inactive slider track remains visible on the light settings surface",
             track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
         capture("32-inline-numbers")
         val before = state().getJSONObject("settings").number("prediction_ms")
-        compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
-        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("1/0")
-        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
+        compose.onNodeWithTag("number-value-prediction_horizon", useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performTextReplacement("1/0")
+        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performImeAction()
         compose.onNodeWithText("Enter a finite number", substring = true).assertExists()
         assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
         capture("33-number-invalid")
@@ -1903,11 +1932,12 @@ class AndroidHostTest {
         waitState { it.getJSONObject("settings").number("pressure_gamma") != 1f }
         val dragged = state().getJSONObject("settings").number("pressure_gamma")
         assertTrue("A slider drag changes the value inside its range ($dragged)", dragged in .25f..4f)
-        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("32*2")
-        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
+        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performTextReplacement("32*2")
+        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
         assertTrue(preferences().isNull("error"))
-        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("64 ms")
+        compose.onNode(hasText("64 ms") and hasAnyAncestor(hasTestTag("number-value-prediction_horizon")),
+            useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("About").performClick()
         val collected = CountDownLatch(1)
         host.measurements(true) { collected.countDown() }
@@ -1919,16 +1949,18 @@ class AndroidHostTest {
             result.countDown()
         }
         assertTrue(result.await(10, TimeUnit.SECONDS))
-        compose.onNodeWithTag("settings-done").performClick()
+        compose.onNodeWithTag("settings-done", useUnmergedTree = true).performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("number-value-prediction_horizon").assertTextEquals("64 ms")
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.onNode(hasText("64 ms") and hasAnyAncestor(hasTestTag("number-value-prediction_horizon")),
+            useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         // Return this shared preference to its original accepted value.
         compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
         waitState { it.getJSONObject("settings").number("prediction_ms") == before }
-        compose.onNodeWithTag("settings-done").performClick()
+        compose.onNodeWithTag("settings-done", useUnmergedTree = true).performClick()
     }
 
     @Test fun settingDefaultsResetFromContextAndEmptyCommits() {
@@ -2432,8 +2464,7 @@ class AndroidHostTest {
     }
 
     @Test fun settingChoicesStayOnPageAndDismissNatively() {
-        val settingsLabel = state().array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")
-        compose.onNodeWithContentDescription(settingsLabel).performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         fun kind(page: String, id: String) = preferences().array("pages").objects().first { it.getString("id") == page }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == id }.getJSONObject("kind")
         // The same renderer handles ordinary choices and choices with previews.

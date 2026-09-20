@@ -24,31 +24,91 @@ fn store_error(value: JsValue) -> StoreError {
     let text = value.as_string().unwrap_or_else(|| format!("{value:?}"));
     serde_json::from_str(&text).unwrap_or_else(|_| StoreError::new(ErrorKind::Unavailable, text))
 }
-/// Called synchronously from an IndexedDB request callback; no promise/await can
-/// yield the transaction between the read, comparisons, and atomic publication.
+// Keep one decoded database, keyed by the exact bytes read inside the current
+// IndexedDB transaction. Compare JS strings before copying UTF-8 into Wasm.
+// External writes and aborted writes change the key; reducer errors drop it.
+struct CachedDatabase {
+    source: JsValue,
+    bytes: usize,
+    database: BrowserDatabase,
+    list: Option<String>,
+}
+thread_local! {
+    static DATABASE_CACHE: std::cell::RefCell<Option<CachedDatabase>> =
+        const { std::cell::RefCell::new(None) };
+}
+#[derive(Serialize)]
+struct DatabaseReply<'a> {
+    snapshot: Option<&'a str>,
+    response: String,
+}
+
+/// Called synchronously inside an IndexedDB transaction. Return the strings
+/// directly rather than JSON-escaping an entire snapshot across the bridge.
 #[wasm_bindgen]
 pub fn workspace_database(
-    snapshot: Option<String>,
+    snapshot: JsValue,
     request: String,
     pending: bool,
     now: f64,
-) -> Result<String, JsValue> {
-    let result = (|| -> Result<String, StoreError> {
-        let mut database = snapshot
-            .map(|s| BrowserDatabase::decode(&s))
-            .transpose()?
-            .unwrap_or_default();
-        let request: StoreRequest = serde_json::from_str(&request)?;
-        let response = if pending {
-            let StoreRequest::Commit { batch } = request else {
-                return Err(StoreError::invalid("Expected a workspace delivery."));
-            };
-            database.prepare_delivery(&batch)?;
-            StoreResponse::Done
-        } else {
-            database.execute(request, now.max(0.) as u64)?
+) -> Result<JsValue, JsValue> {
+    let result = (|| -> Result<JsValue, StoreError> {
+        let cached = DATABASE_CACHE.with(|cache| cache.borrow_mut().take());
+        let mut cached = match cached {
+            Some(cached) if js_sys::Object::is(&cached.source, &snapshot) => cached,
+            _ => {
+                let source = snapshot.as_string();
+                if source.is_none() && !snapshot.is_null() && !snapshot.is_undefined() {
+                    return Err(StoreError::invalid("Invalid workspace database snapshot."));
+                }
+                CachedDatabase {
+                    database: source.as_deref().map(BrowserDatabase::decode).transpose()?.unwrap_or_default(),
+                    bytes: source.as_ref().map_or(0, String::len),
+                    source: snapshot,
+                    list: None,
+                }
+            }
         };
-        Ok(serde_json::json!({ "snapshot": database.encoded()?, "response": serde_json::to_string(&response)? }).to_string())
+        let request: StoreRequest = serde_json::from_str(&request)?;
+        let read_only = !pending && matches!(&request,
+            StoreRequest::List | StoreRequest::Load { .. } | StoreRequest::Raw { .. }
+            | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
+            | StoreRequest::LegacyImport { .. } | StoreRequest::Pending
+            | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder
+            | StoreRequest::Maintenance { apply: false, .. });
+        let listing = !pending && matches!(&request, StoreRequest::List);
+        let response = if listing && let Some(reply) = &cached.list {
+            reply.clone()
+        } else {
+            let response = if pending {
+                let StoreRequest::Commit { batch } = request else {
+                    return Err(StoreError::invalid("Expected a workspace delivery."));
+                };
+                cached.database.prepare_delivery(&batch)?;
+                StoreResponse::Done
+            } else {
+                let (database, response) = cached.database.execute_owned(request, now.max(0.) as u64)?;
+                cached.database = database;
+                response
+            };
+            serde_json::to_string(&response)?
+        };
+        if listing { cached.list = Some(response.clone()); }
+        // Read transactions never publish a replacement snapshot. Mutations
+        // invalidate cached validation even if their catalog looks unchanged.
+        let encoded = if read_only { None } else {
+            cached.list = None;
+            Some(cached.database.encoded()?)
+        };
+        let result = serialize(&DatabaseReply { snapshot: encoded.as_deref(), response }).map_err(store_error)?;
+        if let Some(encoded) = encoded {
+            cached.bytes = encoded.len();
+            cached.source = js_sys::Reflect::get(&result, &JsValue::from_str("snapshot")).map_err(store_error)?;
+        }
+        if cached.bytes <= 8 * 1024 * 1024 {
+            DATABASE_CACHE.with(|cache| *cache.borrow_mut() = Some(cached));
+        }
+        Ok(result)
     })();
     result.map_err(|e| JsValue::from_str(&serde_json::to_string(&e).unwrap()))
 }

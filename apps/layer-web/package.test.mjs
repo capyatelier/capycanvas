@@ -84,10 +84,11 @@ function runtimeFixture(t, changes = {}) {
     "document-recovery.js": "export const recovery = {};",
     "document-storage.js": "export const storage = {};",
     "workspace-store.js": "export const store = {};",
+    "workspace-preload.js": 'import {store} from "./workspace-store.js"; new URL("./workspace-worker.js", import.meta.url); new URL("./pkg/layer_web_bg.wasm", import.meta.url);',
     "workspace-switcher.js": "export const switcher = {};",
     "workspace-manager.js": 'import {switcher} from "./workspace-switcher.js"; export const manager = {};',
     "workspace-worker.js": 'import init from "./pkg/layer_web.js"; import {store} from "./workspace-store.js";',
-    "app.js": 'import {storage} from "./document-storage.js"; import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-store.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nconst assetPaths = {};',
+    "app.js": 'import {storage} from "./document-storage.js"; import {createRasterWorker} from "./raster-worker-client.js"; import {store} from "./workspace-preload.js"; import {manager} from "./workspace-manager.js"; import init from "./pkg/layer_web.js";\nimport {createSystemStatus} from "./system-status.js";\nimport {createHeader} from "./header.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nimport {installTooltips} from "./tooltips.js";\nconst assetPaths = {};',
     "system-status.js": "export const status = true;",
     "header.js": "import {switcher} from './workspace-switcher.js'; export const header = true;",
     "editor-panels.js": "import {chooseColor} from './color-controls.js'; export function createEditorPanels() {}",
@@ -110,6 +111,7 @@ function runtimeFixture(t, changes = {}) {
     "pkg/layer_web_bg.wasm": Buffer.from([0, 97, 115, 109]),
     "style.css": 'body { color: black; mask: url("icons/pen.svg"); }',
     "icons/pen.svg": "<svg/>",
+    "icons.svg": '<svg><svg data-asset="pen"/></svg>',
     "brush-previews/1-dark.png": Buffer.from([137, 80, 78, 71]),
     "filters/manifest.json": '{"format":1,"filters":[]}',
     "filters/example.wgsl": "fn example() {}",
@@ -132,7 +134,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
   for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
     assert.ok(app.includes(`from "./${names[path]}"`));
-  for (const path of ["icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"])
+  for (const path of ["icons/pen.svg", "icons.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"])
     assert.ok(app.includes(JSON.stringify(names[path])));
   for (const path of ["workspace-manager.js", "header.js"])
     assert.ok(readFileSync(join(dir, names[path]), "utf8").includes(`from "./${names["workspace-switcher.js"]}"`));

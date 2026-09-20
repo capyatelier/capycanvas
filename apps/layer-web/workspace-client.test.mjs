@@ -48,3 +48,31 @@ test('storage completion wakes the controller after replies, errors and reconnec
     assert.equal(await next,'items'); assert.equal(wakes,7);
   } finally { globalThis.Worker=previous; }
 });
+
+test('preloaded storage receives its compiled module and reuses it after reconnect', async () => {
+  const previous=globalThis.Worker, workers=[];
+  class Worker {
+    requests=[];
+    constructor() { workers.push(this); }
+    postMessage(request) { this.requests.push(request); }
+    terminate() {}
+  }
+  globalThis.Worker=Worker;
+  const module=new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0]));
+  try {
+    const client=createWorkspaceClient('workspace-worker.js',{preload:true});
+    assert.equal(workers.length,1,'Load storage modules while Wasm compiles');
+    assert.deepEqual(workers[0].requests,[]);
+    client.initialize(module);
+    assert.deepEqual(workers[0].requests,[{module}]);
+    const failed=client.execute('{"type":"list"}');
+    workers[0].onerror({message:'worker lost'});
+    await assert.rejects(failed);
+    const reopened=client.execute('{"type":"reopen"}');
+    assert.equal(workers.length,2);
+    const [init,request]=workers[1].requests;
+    assert.equal(init.module,module,'Reconnect retains the compiled application');
+    workers[1].onmessage({data:{id:request.id,response:'ready'}});
+    assert.equal(await reopened,'ready');
+  } finally { globalThis.Worker=previous; }
+});

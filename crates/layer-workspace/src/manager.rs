@@ -389,6 +389,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// After catalog initialization, resume this window's workspace or reuse an
     /// available one. Explicit user switches must still use `prepare_switch`.
     pub async fn prepare_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
+        self.prepare_startup_inner(preferred, now, false).await
+    }
+    /// Restoring this window's existing selection still acquires a fenced claim,
+    /// but does not make that workspace a new selection in other windows.
+    pub(crate) async fn resume_startup(&self, preferred: &str, now: u64) -> Result<StoredEntity> {
+        self.prepare_startup_inner(preferred, now, true).await
+    }
+    async fn prepare_startup_inner(&self, preferred: &str, now: u64, resume: bool) -> Result<StoredEntity> {
         self.refresh().await?;
         let mut candidates = self.items();
         candidates.retain(|item| {
@@ -410,7 +418,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             )
         });
         for candidate in &candidates {
-            match self.prepare_switch(&candidate.id, now).await {
+            match self.prepare_switch_inner(&candidate.id, now, resume && candidate.id == preferred).await {
                 Ok(incoming) => return Ok(incoming),
                 // Claims, rather than the catalog's lease snapshot, decide
                 // availability when several windows open at the same time.
@@ -596,6 +604,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.load(&id).await
     }
     pub async fn prepare_switch(&self, id: &str, now: u64) -> Result<StoredEntity> {
+        self.prepare_switch_inner(id, now, false).await
+    }
+    async fn prepare_switch_inner(&self, id: &str, now: u64, resume: bool) -> Result<StoredEntity> {
         self.flush().await?;
         let mut incoming = self.claim(id).await?;
         let outcome = async {
@@ -610,6 +621,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     migration::updated_photographer_default(&incoming.entity, self.platform)
                 })
                 .or_else(|| migration::updated_painter_default(&incoming.entity, self.platform));
+            // The durable window binding already names this workspace. A
+            // reload needs its claim and validation, not another metadata /
+            // binding delivery and acknowledgement. Migrations still publish.
+            if resume && content.is_none() {
+                return Ok(incoming.clone());
+            }
             let mut metadata = incoming.entity.metadata.clone();
             metadata.last_used_ms = now;
             let mut batch = CommitBatch::prepare(

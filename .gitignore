@@ -39,6 +39,7 @@ Thumbs.db
 *.log
 *.profraw
 *.profdata
+/apps/layer-web/icons.svg
 
 # Apple generated resources, Xcode user state and build products.
 /apps/layer-apple/Generated/

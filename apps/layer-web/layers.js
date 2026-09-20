@@ -223,6 +223,9 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const pending = thumbnailPending, revisions = new Map();
   const owned = new Set();
   const thumbnailTimer = setInterval(() => {
+    // A modal Settings session cannot edit layers. Defer thumbnail geometry
+    // and uploads until it closes instead of forcing layout behind the modal.
+    if (state().settings_open) return;
     if (!panel.isConnected || !panel.clientHeight) return;
     try {
       for (let image; (image = app.take_layer_thumbnail());) {

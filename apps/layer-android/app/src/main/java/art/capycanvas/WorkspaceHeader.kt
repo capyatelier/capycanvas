@@ -56,7 +56,9 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
     val editing = view.optBoolean("editing")
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
-    val text = rememberTextMeasurer()
+    // Menus alone occupy the default eight entries. Retain workspace labels,
+    // document title and clock too, so every publication does not evict them.
+    val text = rememberTextMeasurer(cacheSize = 64)
     val textStyle = LocalTextStyle.current
     fun measure(label: String, bold: Boolean = false): Float = text.measure(label,
         style = textStyle.copy(fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal), maxLines = 1).size.width / density
@@ -90,7 +92,7 @@ private fun JSONObject.headerEntries() = array("zones").values().flatMap { (it a
         input.finish(true); input.overflow = null; input.context = null
         if (!editing || entries.none { it.getInt("id") == input.selected }) input.selected = null
     }
-    BackHandler(editing && snapshot.objectOrNull("picker") == null) {
+    BackHandler(editing && snapshot.objectOrNull("preferences") == null && snapshot.objectOrNull("picker") == null) {
         if (input.held != null) input.finish(true)
         else if (input.overflow != null) input.overflow = null
         else host.headerEdit(obj("type" to "cancel"))

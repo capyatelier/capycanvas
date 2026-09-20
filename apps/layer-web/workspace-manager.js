@@ -118,7 +118,18 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     }
     recoveryText.textContent = text; if (!recovery.open) recovery.showModal();
   }
-  function tick() { if (observePending) { observePending = false; app.workspace_observe(); } applyChange(app.workspace_tick()); render(); }
+  let startupReady = false;
+  let resolveReady;
+  const ready = new Promise(resolve => { resolveReady = resolve; });
+  function tick() {
+    if (observePending) { observePending = false; app.workspace_observe(); }
+    applyChange(app.workspace_tick()); render();
+    if (!startupReady && view?.ready && !view.busy) {
+      startupReady = true;
+      performance.mark("capy.startup.workspace");
+      resolveReady();
+    }
+  }
   let wakeTimer;
   function wake() {
     // JsFuture must observe the settled reply before the controller polls it.
@@ -142,6 +153,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   window.addEventListener("pageshow", () => send({ type: "resume" }));
   window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });
   return {
+    ready,
     wake,
     observe() { observePending = true; },
     send,

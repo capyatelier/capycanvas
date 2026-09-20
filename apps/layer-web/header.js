@@ -20,7 +20,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   });
   let view, modelKey, geometry, metrics, insets = [0,0], size, editing = false, selected = null;
   let contact, ghost, frame = 0, measured = '', suppressed = null;
-  let buttonContact, colorKey, measurementTheme;
+  let buttonContact, colorKey, measurementTheme, refreshKey;
   function clearButtonPress(e) {
     if(!buttonContact||(e&&e.pointerId!==buttonContact.id))return;
     buttonContact.node.removeAttribute('data-header-pressed');buttonContact=null;
@@ -154,7 +154,11 @@ export function createHeader({app, state, workspace, element, button, icon, plac
     options.append(choices,label,cancel,done); bank.append(options);
   }
   function refresh() {
-    view=app.header_view(); size=view.sizes.find(s=>s.id===view.model.size);
+    view=app.header_view();
+    const nextKey=JSON.stringify([view,state().theme,state().commands,state().colors.foreground,state().colors.background,state().workspace.layout.canvas_info.visible]);
+    if(nextKey===refreshKey)return;
+    refreshKey=nextKey;
+    size=view.sizes.find(s=>s.id===view.model.size);
     const key=JSON.stringify([view.model,view.editing]);
     const remeasure=key!==modelKey || measurementTheme!==state().theme;
     measurementTheme=state().theme;
@@ -168,7 +172,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
         r.root.remove();records.delete(id);
       }
       for(const entry of entries())if(!records.has(entry.id))records.set(entry.id,build(entry));
-      if(!chips.size)buildBank();
+      if(editing&&!chips.size)buildBank();
       root.classList.toggle('header-editing',editing); bank.hidden=!editing;
       if(!editing||!entries().some(e=>e.id===selected))selected=null;
       select(selected,focused&&editing);
@@ -207,7 +211,8 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       node.inert=entries().length>=128;
     }
     for(const b of bank.querySelectorAll('[data-header-size]'))b.setAttribute('aria-pressed',String(b.dataset.headerSize===size.id));
-    bank.querySelector('#header-canvas-info').checked=state().workspace.layout.canvas_info.visible;
+    const footer = bank.querySelector('#header-canvas-info');
+    if(footer)footer.checked=state().workspace.layout.canvas_info.visible;
     document.querySelector('#canvas-status').hidden=!state().workspace.layout.canvas_info.visible;
     for(const m of root.querySelectorAll('details[open]'))m.refreshMenu?.();
     // Resize/content observers cover the native clock, battery and workspace
@@ -216,27 +221,31 @@ export function createHeader({app, state, workspace, element, button, icon, plac
   }
   function measure() {
     const extra=editing?20:0;
-    return entries().map(entry=>{
-      const r=records.get(entry.id),kind=entry.item.kind;
-      if(r.status&&!editing&&r.status.hidden)return{id:entry.id,width:0,compact:0};
-      // Natural text widths are measured independently of allocated/animated
-      // neighbors. The compact selector keeps the same workspace choices.
-      const wasHidden=r.root.hidden; r.root.hidden=false;r.root.classList.add('header-measuring');
-      const fullHidden=r.full?.hidden,compactHidden=r.compact?.hidden;
+    const items=entries().map(entry=>{
+      const r=records.get(entry.id);
+      return {entry,r,hidden:r.root.hidden,full:r.full?.hidden,compact:r.compact?.hidden,
+        omitted:r.status&&!editing&&r.status.hidden};
+    });
+    // Prepare every natural-size item before reading any of their widths.
+    for(const {r,omitted} of items)if(!omitted){
+      r.root.hidden=false;r.root.classList.add('header-measuring');
       if(r.compact){r.full.hidden=false;r.compact.hidden=true;}
+    }
+    const result=items.map(({entry,r,omitted})=>{
+      if(omitted)return{id:entry.id,width:0,compact:0};
+      const kind=entry.item.kind;
       let width=size.tile,compact;
       if(kind==='workspaces'){width=Math.max(144,switcher.scrollWidth);compact=144;}
       else if(kind==='document_title'){width=180;compact=80;}
-      // Fold the labels inside their original item before shared whole-item
-      // overflow can hide that item and the rest of its region.
-      // Popovers overflow their labels; they must not enlarge the title-bar item
-      // and make allocation hide the very menu the user just opened.
       else if(kind==='menu_labels'){width=Math.max(width,r.full.offsetWidth);compact=size.tile;}
       else if(['clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
-      if(r.compact){r.full.hidden=fullHidden;r.compact.hidden=compactHidden;}
-      r.root.classList.remove('header-measuring');r.root.hidden=wasHidden;
       return{id:entry.id,width:width+extra,compact:(compact??width)+extra};
     });
+    for(const {r,hidden,full,compact,omitted} of items)if(!omitted){
+      if(r.compact){r.full.hidden=full;r.compact.hidden=compact;}
+      r.root.classList.remove('header-measuring');r.root.hidden=hidden;
+    }
+    return result;
   }
   function present(g, dragging=false) {
     let focus;

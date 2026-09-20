@@ -187,6 +187,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val measuredPublications = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 4) else null
     private var publicationCount = 0
     private var panelContentChanges = 0L
+    private var panelContentKey: String? = null
     private var snapshotAttempts = 0L
     private var snapshotsPublished = 0L
     private var workspaceUpdatesPublished = 0L
@@ -565,7 +566,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val packet = JSONObject(serialized)
         val updates = packet.optJSONArray("model_update")
         fun contentPath(path: JSONArray): Boolean = when (path.optString(0)) {
-            "state" -> path.optString(1) !in listOf("workspace", "revision")
+            // Settings navigation is consumed by PreferencesOverlay. Applied
+            // settings still invalidate panels normally (theme, size, etc.).
+            "state" -> path.optString(1) !in listOf("workspace", "revision", "settings_open", "preferences")
             "panels", "color_panel" -> true
             else -> false
         }
@@ -669,13 +672,19 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
         }
         val contentState = JSONObject().apply {
-            state.keys().forEach { key -> if (key != "workspace" && key != "revision") put(key, state.get(key)) }
+            state.keys().forEach { key -> if (key !in listOf("workspace", "revision", "settings_open", "preferences")) put(key, state.get(key)) }
         }
         val content = obj("state" to contentState, "panels" to next.array("panels"), "color_panel" to next.objectOrNull("color_panel"))
-        if (changedContent && measuredPublications != null) panelContentChanges++
+        // A geometry packet resets the transport's patch baseline; its next
+        // full model can still contain exactly the same panel content. Retain
+        // that content across the full publication too.
+        val contentKey = if (changedContent) content.toString() else panelContentKey
+        val publishContent = changedContent && contentKey != panelContentKey
+        if (publishContent) panelContentKey = contentKey
+        if (publishContent && measuredPublications != null) panelContentChanges++
         recordPublication()
         main.post {
-            if (changedContent) panelContent = content
+            if (publishContent) panelContent = content
             snapshot = next
             drawingTabs.refresh()
             workspaceContentRevision = next.objectOrNull("workspace_update")?.optLong("content_revision", -1L) ?: -1L

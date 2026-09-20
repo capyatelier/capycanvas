@@ -1,3 +1,4 @@
+import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
 import {checkGainmapInterchange} from "./gainmap-interchange.test.mjs";
@@ -237,7 +238,10 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
-  if (process.argv.includes("--drawing-tabs-recovery")) {
+  if (process.argv.includes("--ui-speed")) {
+    await checkUiUpdates({evaluate});
+    await checkSettingsUpdates({evaluate,settle}); assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--drawing-tabs-recovery")) {
     await checkDrawingTabRecovery({call,evaluate,settle});checkRasterErrors();
   } else if (process.argv.includes("--drawing-tabs")) {
     await checkDrawingTabs({call,evaluate,settle});checkRasterErrors();

@@ -33,7 +33,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
         const store = tx.objectStore("workspace"), read = store.get("database");
         read.onsuccess = () => {
           try {
-            const result = JSON.parse(reduce(read.result?.snapshot, request, pending, Date.now()));
+            const result = reduce(read.result?.snapshot, request, pending, Date.now());
             response = result.response;
             if (!readonly) store.put({ id: "database", snapshot: result.snapshot });
           } catch (e) { failure = typeof e === "string" ? e : error(e); tx.abort(); }
@@ -55,18 +55,22 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
 
 // Keep validation/serialization of retained history off the editor thread too.
 // The worker uses the same Wasm policy and the same IndexedDB adapter as tests.
-export function createWorkspaceClient(url, { onSettled = () => {} } = {}) {
+export function createWorkspaceClient(url, { onSettled = () => {}, module, preload = false } = {}) {
   let worker, sequence = 0, failed;
   const pending = new Map();
   function start() {
     worker = new Worker(url, {type:"module", name:"workspace-storage"}); failed = null;
     worker.onmessage = ({data}) => { const p = pending.get(data.id); if (!p) return; pending.delete(data.id); data.error ? p.reject(data.error) : p.resolve(data.response); };
+    if (module) worker.postMessage({module});
     worker.onerror = e => {
       failed = JSON.stringify({kind:"unavailable",message:e.message || "Workspace storage stopped. Retry to reconnect."});
       for (const p of pending.values()) p.reject(failed); pending.clear(); worker.terminate(); worker = null;
     };
   }
+  // Overlap worker instantiation with construction of the editor controls.
+  if (module || preload) start();
   return {
+    initialize(compiledModule) { module = compiledModule; worker?.postMessage({module}); },
     execute(request) {
       return new Promise((resolve,reject) => {
         try {

@@ -1,7 +1,7 @@
 import init, { WebApp, WebGpu, configure_raster_worker } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createDocumentStorage } from "./document-storage.js";
-import { createWorkspaceClient } from "./workspace-store.js";
+import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
@@ -31,6 +31,9 @@ const $ = (id) =>
 const workspace = $("workspace"),
   canvas = $("canvas"),
   center = $("center");
+// Workspace extent changes only with its viewport, not with panel content.
+// Retain it so chrome notifications do not force style/layout after DOM writes.
+let workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
 const commands = new Map(), sizeButtons = new Map();
 let app,
   catalog,
@@ -47,6 +50,7 @@ const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
 let compilerScheduled = false, compilerFailed = false, compilerEpoch = 0;
+let compilerResumeAt = 0, compilerResumeTimer;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
 installTooltips();
 let startupNotice;
@@ -57,9 +61,13 @@ let savedWorkspace = "";
 let workspaceManager;
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+let appliedTheme;
 applyTheme(systemTheme.matches ? "dark" : "light");
 
 function applyTheme(theme, palette) {
+  const key = JSON.stringify([theme, palette]);
+  if (key === appliedTheme) return;
+  appliedTheme = key;
   document.body.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
   document.querySelector('meta[name="color-scheme"]').content = theme;
@@ -93,6 +101,20 @@ function numberField(control, label, onChange, inline = false) {
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
+// Read all dirty scrollbar geometry before changing any thumb. Mutation and
+// resize observers can report several panels in one update.
+const dirtyScrollbars = new Set();
+let scrollbarFrame;
+function queueScrollbar(read) {
+  dirtyScrollbars.add(read);
+  if (scrollbarFrame) return;
+  scrollbarFrame = requestAnimationFrame(() => {
+    scrollbarFrame = null;
+    const writes = [...dirtyScrollbars].map(read => read());
+    dirtyScrollbars.clear();
+    for (const write of writes) write();
+  });
+}
 function panelFrame(panel, scrollable = true) {
   const frame = element("div", "panel-frame");
   frame.append(panel);
@@ -101,17 +123,17 @@ function panelFrame(panel, scrollable = true) {
   thumb.setAttribute("aria-hidden", "true");
   frame.append(thumb);
   let origin;
-  const update = () => {
-    if (!panel.clientHeight) {
-      thumb.hidden = true;
-      return;
-    }
-    const overflow = panel.scrollHeight - panel.clientHeight;
-    thumb.hidden = overflow <= 1;
-    const height = Math.max(28, panel.clientHeight ** 2 / panel.scrollHeight);
-    thumb.style.height = `${height}px`;
-    thumb.style.top = `${overflow > 0 ? (panel.scrollTop / overflow) * (panel.clientHeight - height) : 0}px`;
+  const read = () => {
+    const visible = panel.clientHeight, total = panel.scrollHeight, top = panel.scrollTop;
+    const overflow = total - visible;
+    const height = total ? Math.max(28, visible ** 2 / total) : 0;
+    return () => {
+      thumb.hidden = !visible || overflow <= 1;
+      thumb.style.height = `${height}px`;
+      thumb.style.top = `${overflow > 0 ? (top / overflow) * (visible - height) : 0}px`;
+    };
   };
+  const update = () => queueScrollbar(read);
   panel.addEventListener("scroll", update);
   new ResizeObserver(update).observe(panel);
   new MutationObserver(update).observe(panel, {
@@ -143,20 +165,15 @@ function commandButton(id, text) {
 }
 const icons = new Map();
 async function loadIcons() {
-  await Promise.all(
-    [...new Set([...catalog.icons, "colors"]), "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
-      const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
-      if (!response.ok) throw new Error(`Cannot load icon ${name}`);
-      const svg = new DOMParser().parseFromString(
-        await response.text(),
-        "image/svg+xml",
-      ).documentElement;
-      svg.dataset.asset = name;
-      svg.setAttribute("aria-hidden", "true");
-      svg.setAttribute("focusable", "false");
-      icons.set(name, svg);
-    }),
-  );
+  const response = await fetch(asset("icons.svg"));
+  if (!response.ok) throw new Error("Cannot load application icons");
+  const document = new DOMParser().parseFromString(await response.text(), "image/svg+xml");
+  if (document.querySelector("parsererror")) throw new Error("Invalid application icons");
+  for (const svg of document.documentElement.children) {
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    icons.set(svg.dataset.asset, svg);
+  }
 }
 function icon(name) {
   return icons.get(name).cloneNode(true);
@@ -201,7 +218,7 @@ function dispatch(action) {
     if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
         ...action,
-        viewport: [workspace.clientWidth, workspace.clientHeight],
+        viewport: workspaceViewport,
       };
     const animated = ["double_click_panel_handle", "select_panel_tab"].includes(action.type) ? groups.get(action.group) : null;
     const before = animated?.getBoundingClientRect();
@@ -232,9 +249,25 @@ function applyChange(change) {
         workspaceContentRevision = presentation.content_revision;
         workspaceLayoutPending = null;
         workspacePresentation = null;
-        state = app.state();
+        const patch = app.state_update();
+        const reopeningCanvas = state.settings_open && patch.settings_open === false;
+        Object.assign(state, patch);
         // A concurrent model change rebases retained placement too.
-        update(change.regions | (moving ? 1 : 0));
+        if (!moving && !(change.regions & ~(16 | 128)) &&
+            Object.keys(patch).every(key => key === "revision" || key === "settings_open")) {
+          // Opening, closing, searching and navigating Settings do not change
+          // the workspace behind it. Keep its controls and geometry intact.
+          refreshPreferences(app.preferences_cached());
+          updateZen();
+        } else update(change.regions | (moving ? 1 : 0));
+        if (reopeningCanvas && startupTimes.complete === null) {
+          // Let dismissal paint and a burst of UI interactions finish before
+          // admitting another shader job. Drawing frames remain independent.
+          compilerResumeAt = performance.now() + 500;
+          clearTimeout(compilerResumeTimer);
+          compilerResumeTimer = setTimeout(wake, 500);
+          wake();
+        }
       }
     } else if (change.regions & 32) {
       // Camera-only publications intentionally retain the model revision.
@@ -255,8 +288,8 @@ function scheduleCursor() {
     cursorScheduled = false;
     const view = app.canvas_cursor();
     for (const kind of ["outline", "marker"])
-      for (const node of document.querySelectorAll(
-        `#canvas-cursor .cursor-${kind}-back, #canvas-cursor .cursor-${kind}-front`,
+      for (const node of $("canvas-cursor").querySelectorAll(
+        `.cursor-${kind}-back, .cursor-${kind}-front`,
       ))
         node.setAttribute("d", view?.[kind] || "");
   });
@@ -289,6 +322,9 @@ function wake() {
 }
 function frame(now) {
   scheduled = false;
+  // During startup the modal editor owns interaction. Resume preparation on
+  // dismissal instead of competing with Settings for the UI thread/GPU.
+  if (state.settings_open && startupTimes.complete === null) return;
   try {
     flushWorkspacePresentation();
     while (pending.length) {
@@ -321,18 +357,20 @@ function refreshStartup() {
     startupNotice.setAttribute("role", "status");
     workspace.append(startupNotice);
   }
-  startupNotice.hidden = !stages.canvas || app.brush_ready();
-  startupNotice.textContent = documentReady ? "Preparing brush…" : "Preparing canvas…";
+  const hidden = !stages.canvas || app.brush_ready();
+  const text = documentReady ? "Preparing brush…" : "Preparing canvas…";
+  if (startupNotice.hidden !== hidden) startupNotice.hidden = hidden;
+  if (startupNotice.textContent !== text) startupNotice.textContent = text;
 }
 function scheduleCompiler() {
-  if (!gpuReady || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
+  if (!gpuReady || state.settings_open || performance.now() < compilerResumeAt || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
   compilerScheduled = true;
   const epoch=compilerEpoch;
   // Start after this display callback can present. The next job is scheduled
   // by a later frame, with input/UI opportunities between each GPU scope.
   setTimeout(async () => {
     try {
-      if(epoch!==compilerEpoch)return;
+      if(epoch!==compilerEpoch || state.settings_open || performance.now()<compilerResumeAt)return;
       if (!firstCanvasRendered) {
         // A display callback alone does not mean the GPU has rendered paper.
         // Starting document compilation sooner can hold up Chrome's GPU-process
@@ -342,7 +380,7 @@ function scheduleCompiler() {
         firstCanvasRendered = true;
         await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
       }
-      if(epoch!==compilerEpoch)return;
+      if(epoch!==compilerEpoch || state.settings_open || performance.now()<compilerResumeAt)return;
       await gpuOperation(() => app.compile_startup_step());
       if(epoch!==compilerEpoch)return;
       refreshStartup();
@@ -371,7 +409,7 @@ function arrange(nextLayout, layoutOnly = false) {
   if (!app) return;
   clearWorkspacePlacement();
   if (workspaceGesture) workspaceGesture.hits = null;
-  layout = layoutOnly ? nextLayout : app.layout(workspace.clientWidth, workspace.clientHeight);
+  layout = layoutOnly ? nextLayout : app.layout(...workspaceViewport);
   workspace.style.setProperty("--tab-bar-height", `${layout.tab_bar_height}px`);
   const live = new Set();
   for (const group of layout.groups) {
@@ -508,6 +546,8 @@ function arrange(nextLayout, layoutOnly = false) {
 const panelMeasurements = new Map();
 let measuringPanels = false;
 const measureBox = element("div", "panel-measure");
+measureBox.hidden = true;
+measureBox.inert = true;
 measureBox.setAttribute("aria-hidden", "true"); workspace.append(measureBox);
 // An isolated tree retains measurement controls without exposing duplicate IDs
 // to application lookup. It uses the same CSS and inherits the workspace theme.
@@ -566,22 +606,27 @@ function measurePanels() {
       pending.push([config.id, cached]);
     }
   }
-  for (const [id, cached] of pending) {
-    const content_height = cached.content?.getBoundingClientRect().height || 0;
-    // The unconstrained copy lays out every row, including offscreen rows.
-    // Subtract the list itself to keep headers/footers outside the scroll budget.
-    const list = cached.content?.querySelector(".layer-rows, .filter-picker-list");
-    const row = list?.querySelector(".layer-row, .filter-row");
-    cached.value = {
-      panel: id,
-      tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
-      content_height,
-      ...(cached.content && id !== "color" ? { scroll: {
-        fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
-        unit_height: row?.getBoundingClientRect().height || 0,
-      }} : {}),
-    };
-  }
+  // Retain the copies and their measured values, but lay them out only when
+  // measuring. An always-laid-out shadow tree also joins modal style/layout.
+  if (pending.length) measureBox.hidden = false;
+  try {
+    for (const [id, cached] of pending) {
+      const content_height = cached.content?.getBoundingClientRect().height || 0;
+      // The unconstrained copy lays out every row, including offscreen rows.
+      // Subtract the list itself to keep headers/footers outside the scroll budget.
+      const list = cached.content?.querySelector(".layer-rows, .filter-picker-list");
+      const row = list?.querySelector(".layer-row, .filter-row");
+      cached.value = {
+        panel: id,
+        tab_width: cached.value?.tab_width ?? cached.tab.getBoundingClientRect().width,
+        content_height,
+        ...(cached.content && id !== "color" ? { scroll: {
+          fixed_height: list ? Math.max(0, content_height - list.getBoundingClientRect().height) : 0,
+          unit_height: row?.getBoundingClientRect().height || 0,
+        }} : {}),
+      };
+    }
+  } finally { measureBox.hidden = true; }
   for (const id of panelMeasurements.keys()) if (!panels.has(id)) invalidatePanelMeasurement(id);
   const measurements = state.workspace.layout.panels.map(config => panelMeasurements.get(config.id).value);
   // Compare against the shared publication, not a second authoritative cache.
@@ -667,17 +712,16 @@ function contentPanel(id) {
 function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
   if (regions & 2) {
-    for (const [size, button] of sizeButtons)
-      button.setAttribute(
-        "aria-pressed",
-        String(size === state.brush.diameter),
-      );
+    for (const [size, button] of sizeButtons) {
+      const pressed = String(size === state.brush.diameter);
+      if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+    }
     $("size-number").update(state.brush.diameter);
   }
   if (regions & 4) {
     const tab = state.tabs[0];
-    $("document-title").textContent =
-      `${tab.title} · ${tab.width} × ${tab.height}`;
+    const title = `${tab.title} · ${tab.width} × ${tab.height}`;
+    if ($("document-title").textContent !== title) $("document-title").textContent = title;
     layerPanel.refresh();
     effectPanels.refresh();
   }
@@ -690,10 +734,12 @@ function update(regions) {
   if (regions & (4 | 8))
     for (const command of state.commands)
       for (const node of commands.get(command.id) || []) {
-        node.disabled = !command.enabled || (command.id === "fullscreen" && !document.fullscreenEnabled);
-        node.title = command.tooltip;
-        node.setAttribute("aria-label", command.label);
-        node.setAttribute("aria-pressed", String(command.selected));
+        const disabled = !command.enabled || (command.id === "fullscreen" && !document.fullscreenEnabled);
+        if (node.disabled !== disabled) node.disabled = disabled;
+        if (node.title !== command.tooltip) node.title = command.tooltip;
+        if (node.getAttribute("aria-label") !== command.label) node.setAttribute("aria-label", command.label);
+        const pressed = String(command.selected);
+        if (node.getAttribute("aria-pressed") !== pressed) node.setAttribute("aria-pressed", pressed);
         if (node.dataset.icon === "true") {
           const glyph = node.querySelector("svg");
           if (glyph?.dataset.asset !== command.icon) {
@@ -702,21 +748,25 @@ function update(regions) {
             node.replaceChildren(next);
           }
         } else {
-          if (node.querySelector(".command-label")) {
-            node.querySelector(".command-label").textContent = command.label;
-            node.querySelector(".shortcut-hint").textContent = command.shortcut;
-          } else node.textContent = command.label;
+          const label = node.querySelector(".command-label");
+          if (label) {
+            const shortcut = node.querySelector(".shortcut-hint");
+            if (label.textContent !== command.label) label.textContent = command.label;
+            if (shortcut.textContent !== command.shortcut) shortcut.textContent = command.shortcut;
+          } else if (node.textContent !== command.label) node.textContent = command.label;
         }
       }
   if (regions & 16) {
     applyTheme(state.theme, state.palette);
     systemStatus?.sync();
-    refreshPreferences(app.preferences());
+    refreshPreferences(app.preferences_cached());
   }
-  if (regions & 32)
-    $("view-info").textContent =
-      `${Math.round(state.camera.zoom * 100)}% · ${Math.round((state.camera.rotation * 180) / Math.PI)}°`;
+  if (regions & 32) {
+    const info = `${Math.round(state.camera.zoom * 100)}% · ${Math.round((state.camera.rotation * 180) / Math.PI)}°`;
+    if ($("view-info").textContent !== info) $("view-info").textContent = info;
+  }
   if (regions & (1 | 16)) updateZen();
+  editor.flushPaint();
   if (regions & 64) {
     documents?.refresh();
     if (state.host_error) message(state.host_error);
@@ -839,7 +889,7 @@ function queueWorkspaceLayout(presentation) {
     if (!workspaceLayoutPending) return;
     workspaceLayoutPending = null;
     // Fetch only the latest absolute layout, after all queued input reached Rust.
-    const packet = app.layout_update(workspace.clientWidth, workspace.clientHeight);
+    const packet = app.layout_update(...workspaceViewport);
     const update = packet.workspace_update;
     if (update.content_revision !== workspaceContentRevision) return;
     workspaceModelRevision = update.model_revision;
@@ -918,7 +968,7 @@ function workspaceGestureEvent(phase, e) {
     drag.hits = null;
   }
   dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],
-    viewport: [workspace.clientWidth, workspace.clientHeight],
+    viewport: workspaceViewport,
     ...(drag.action.type === "drag_workspace" ? { tabs: drag.hits ??= tabHits() } : {}),
   });
 }
@@ -1074,7 +1124,7 @@ function chromeInput(event) {
   return input({
     type: "chrome",
     event,
-    viewport: [workspace.clientWidth, workspace.clientHeight],
+    viewport: workspaceViewport,
     facts: {
       expanded_panel: customization?.placement(),
       ...workspaceChrome?.facts(),
@@ -1084,15 +1134,18 @@ function chromeInput(event) {
       held: chromeHeld,
       dragging: dragItem !== null,
       popup_open:
-        !!document.querySelector("details[open], :popover-open:not(.hover-tooltip), dialog[open]") ||
+        !!(document.querySelector("dialog[open], details[open]") || document.querySelector(":popover-open:not(.hover-tooltip)")) ||
         !!document.activeElement?.matches("select"),
     },
   });
 }
 function updateZen() {
+  const hidden = workspace.classList.contains("zen-hidden");
   chromeInput({ kind: "refresh" });
-  workspaceChrome?.refresh();
-  editor?.queuePositions();
+  if (hidden !== workspace.classList.contains("zen-hidden")) {
+    workspaceChrome?.refresh();
+    editor?.queuePositions();
+  }
 }
 function buildHeader() {
   systemStatus = createSystemStatus({element, changed:fullscreen => {
@@ -1353,7 +1406,7 @@ function tabHits() {
 function dropHint(e, item) {
   try {
     return app.drop_hint({
-      viewport: [workspace.clientWidth, workspace.clientHeight],
+      viewport: workspaceViewport,
       position: [e.clientX, e.clientY],
       tabs: tabHits(),
       item,
@@ -1408,7 +1461,17 @@ workspace.addEventListener("drop", (e) => {
   dropItem(item, hint);
 });
 try {
-  await init();
+  // Compile once and share the immutable module with workspace storage. Its
+  // independent instance keeps validation off the UI thread without fetching
+  // and compiling the whole application a second time.
+  performance.mark("capy.startup.module");
+  setWorkspaceWake(() => workspaceManager?.wake());
+  const [wasmModule] = await Promise.all([modulePromise, loadIcons()]);
+  workspaceStore.initialize(wasmModule);
+  await init({module_or_path: wasmModule});
+  performance.mark("capy.startup.wasm");
+  // Let the browser start the worker while the main thread builds controls.
+  await new Promise(resolve => setTimeout(resolve, 0));
   const fileWorker = createRasterWorker(),documentStorage=createDocumentStorage();
   const rasterWorker = request=>request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request);
   configure_raster_worker(rasterWorker);
@@ -1436,13 +1499,16 @@ try {
     catch (error) { message(`Cannot restore preferences: ${error}`); }
   });
   systemTheme.addEventListener("change", () => dispatch(themeAction()));
-  state = app.state();
+  state = app.state_update();
   catalog = app.catalog();
+  performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = `${catalog.app_name} — drawing workspace`;
-  await loadIcons();
-  refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences() });
+  refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences_cached() });
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
+  // Issue the first storage request before constructing panel controls. Replies
+  // run in later tasks, after this synchronous UI construction is complete.
+  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   buildHeader();
   buildPanels();
@@ -1452,15 +1518,25 @@ try {
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas});
   documents.mountProof(panels.get("proof"));
-  workspaceManager = createWorkspaceManager({ app, store: createWorkspaceClient(asset("workspace-worker.js"), { onSettled: () => workspaceManager?.wake() }), applyChange, element, button, icon, message, dispatch, hasLegacy: !!savedWorkspace || !!workspaceRestoreError, legacyError: workspaceRestoreError });
   header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
+  performance.mark("capy.startup.controls");
   update(255);
   systemStatus.sync();
   $("status").textContent = "";
   if (restoreError) message(restoreError);
-  new ResizeObserver(() => arrange()).observe(workspace);
+  new ResizeObserver(() => {
+    workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
+    arrange();
+  }).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
   window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes, documents, restartGpu };
+  performance.mark("capy.startup.ui");
+  // Present the controls and let storage replies run before GPU setup starts.
+  await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  // Adopt the saved UI before competing with initial GPU allocation. A storage
+  // failure must still allow canvas startup and the workspace recovery UI.
+  await Promise.race([workspaceManager.ready, new Promise(resolve => setTimeout(resolve, 1000))]);
+  performance.mark("capy.startup.gpu");
   await startGpu();
   if (window.launchQueue?.setConsumer) {
     let launches=Promise.resolve();

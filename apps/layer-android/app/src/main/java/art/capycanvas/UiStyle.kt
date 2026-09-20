@@ -263,18 +263,25 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
         } else state.dismiss()
     }
     Box(modifier, propagateMinConstraints = true) {
-    TooltipBox(modifier = Modifier.hoverable(interaction),
-        positionProvider = position,
-        tooltip = {
-            // Adwaita tooltip colors and metrics, using the editor's readable
-            // text size in both themes. Padding includes its one-pixel border.
-            val shape = RoundedCornerShape(9.dp)
-            Box(Modifier.testTag("hover-tooltip").widthIn(max = 400.dp).background(Color(0xcc000006), shape)
-                .border(1.dp, Color.White.copy(alpha = .1f), shape).padding(horizontal = 11.dp, vertical = 7.dp)) {
-                Text(text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+        Box(Modifier.hoverable(interaction)) {
+            // Keep interactive content and pointer capture stable. Only the
+            // hovered item needs popup infrastructure. Its outer Box owns the
+            // match-parent constraint; TooltipBox applies modifiers internally.
+            content()
+            if (hovered || state.isVisible) Box(Modifier.matchParentSize()) {
+                TooltipBox(modifier = Modifier.fillMaxSize(),
+                    positionProvider = position,
+                    tooltip = {
+                        val shape = RoundedCornerShape(9.dp)
+                        Box(Modifier.testTag("hover-tooltip").widthIn(max = 400.dp).background(Color(0xcc000006), shape)
+                            .border(1.dp, Color.White.copy(alpha = .1f), shape).padding(horizontal = 11.dp, vertical = 7.dp)) {
+                            Text(text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }, state = state,
+                    focusable = false, enableUserInput = false,
+                    content = { Box(Modifier.fillMaxSize()) })
             }
-        }, state = state,
-        focusable = false, enableUserInput = false, content = content)
+        }
     }
 }
 

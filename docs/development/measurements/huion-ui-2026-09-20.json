@@ -1,0 +1,218 @@
+{
+  "device": {
+    "serial": "G7DL2S300241",
+    "model": "Huion KP1202",
+    "android": 16,
+    "chrome": 143,
+    "web_viewport_css": [
+      1200,
+      680
+    ],
+    "device_pixel_ratio": 2
+  },
+  "android": {
+    "baseline_debug": {
+      "first_ui_median_ms": 2352,
+      "settings_median_ms": 291
+    },
+    "baseline_nondebug": {
+      "first_ui_median_ms": 1041,
+      "settings_median_ms": 144
+    },
+    "optimized_runs": [
+      {
+        "label": "final-1",
+        "first_ui_ms": 682.409923,
+        "settings_ms": [
+          65.420231,
+          65.901538,
+          65.070923,
+          71.383615
+        ],
+        "early_settings_ms": [
+          89.659538,
+          61.983
+        ],
+        "frame_interval_p95_ms": 13.799308,
+        "frame_interval_max_ms": 78.004692
+      },
+      {
+        "label": "final-2",
+        "first_ui_ms": 564.018077,
+        "settings_ms": [
+          67.782924,
+          74.934769,
+          50.431769,
+          67.300692
+        ],
+        "early_settings_ms": [
+          123.791154,
+          66.85
+        ],
+        "frame_interval_p95_ms": 13.921616,
+        "frame_interval_max_ms": 97.743077
+      },
+      {
+        "label": "final-3",
+        "first_ui_ms": 560.690231,
+        "settings_ms": [
+          55.433538,
+          67.601461,
+          46.400692,
+          53.997615
+        ],
+        "early_settings_ms": [
+          101.771231,
+          69.678693
+        ],
+        "frame_interval_p95_ms": 12.835154,
+        "frame_interval_max_ms": 96.130923
+      }
+    ],
+    "installed_release_cold_am_start_ms": 838
+  },
+  "web": {
+    "baseline_warm_ranges_ms": {
+      "ui": [
+        1363,
+        1602
+      ],
+      "workspace": [
+        1904,
+        2232
+      ]
+    },
+    "optimized_medians_ms": {
+      "ui_ms": 556.2000000029802,
+      "workspace_ms": 973.8000000044703,
+      "settings_ms": 55,
+      "settings_during_startup_ms": 45.19999999552965,
+      "panels_ms": 45.30000000447035
+    },
+    "optimized_runs": [
+      {
+        "label": "final-1",
+        "marks_ms": {
+          "capy.startup.module": 204.80000000447035,
+          "capy.startup.wasm": 383.30000000447035,
+          "capy.startup.model": 405.1000000014901,
+          "capy.startup.controls": 476.40000000596046,
+          "capy.startup.ui": 568.8000000044703,
+          "capy.startup.workspace": 971.7000000029802,
+          "capy.startup.gpu": 974.2000000029802,
+          "capy.startup.canvas": 1709.5,
+          "capy.startup.document": 3661.10000000149,
+          "capy.startup.brush": 6517.4000000059605,
+          "capy.startup.complete": 44080.70000000298
+        },
+        "workspace_database_bytes_after_probes": 1063689,
+        "settings_during_startup_ms": [
+          56,
+          124,
+          45.19999999552965,
+          52.099999994039536
+        ],
+        "steady_settings_ms": [
+          55,
+          56.70000000298023,
+          57.600000001490116,
+          56.30000000447035
+        ],
+        "panels": []
+      },
+      {
+        "label": "final-2",
+        "marks_ms": {
+          "capy.startup.module": 244.60000000149012,
+          "capy.startup.wasm": 369,
+          "capy.startup.model": 390.20000000298023,
+          "capy.startup.controls": 459.6000000014901,
+          "capy.startup.ui": 556.2000000029802,
+          "capy.startup.workspace": 973.8000000044703,
+          "capy.startup.gpu": 974,
+          "capy.startup.canvas": 1761.9000000059605,
+          "capy.startup.document": 3888.7000000029802,
+          "capy.startup.brush": 6666.4000000059605,
+          "capy.startup.complete": 44383.30000000447
+        },
+        "workspace_database_bytes_after_probes": 1063689,
+        "settings_during_startup_ms": [
+          47.20000000298023,
+          61.5,
+          41.399999998509884,
+          41.79999999701977
+        ],
+        "steady_settings_ms": [
+          54.19999999552965,
+          59.30000000447035,
+          44.19999999552965,
+          53
+        ],
+        "panels": []
+      },
+      {
+        "label": "final-3",
+        "marks_ms": {
+          "capy.startup.module": 219.5,
+          "capy.startup.wasm": 342.19999999552965,
+          "capy.startup.model": 365.19999999552965,
+          "capy.startup.controls": 428.29999999701977,
+          "capy.startup.ui": 532.6999999955297,
+          "capy.startup.workspace": 1014.6000000014901,
+          "capy.startup.gpu": 1014.7999999970198,
+          "capy.startup.canvas": 1719.1000000014901,
+          "capy.startup.document": 3697.5,
+          "capy.startup.brush": 6453.29999999702,
+          "capy.startup.complete": 44291.5
+        },
+        "workspace_database_bytes_after_probes": 1079741,
+        "settings_during_startup_ms": [
+          65.20000000298023,
+          124.10000000149012,
+          44.099999994039536,
+          44.70000000298023
+        ],
+        "steady_settings_ms": [
+          55.70000000298023,
+          55,
+          51.19999999552965,
+          46.600000001490116
+        ],
+        "panels": [
+          {
+            "panel": "sizes",
+            "sync_ms": 35.400000005960464,
+            "frame_ms": 45.30000000447035
+          },
+          {
+            "panel": "tool_settings",
+            "sync_ms": 24.799999997019768,
+            "frame_ms": 41.69999999552965
+          },
+          {
+            "panel": "proof",
+            "sync_ms": 18.100000001490116,
+            "frame_ms": 66.10000000149012
+          },
+          {
+            "panel": "color",
+            "sync_ms": 19.399999998509884,
+            "frame_ms": 31.599999994039536
+          }
+        ]
+      }
+    ],
+    "fixture": {
+      "workspace": "Paint",
+      "theme": "light",
+      "retained_history": true,
+      "delivery": "local USB, normal warm browser cache"
+    },
+    "caveats": [
+      "Targets apply to medians; one workspace sample was 1015 ms.",
+      "UI marks measure completed controls/layout, not display scanout.",
+      "Initial controls paint and canvas shader compilation still produce long tasks; this is not a zero-jank claim.",
+      "The historical baseline includes different upstream and uncommitted source; see the audit controlled experiments."
+    ]
+  }
+}

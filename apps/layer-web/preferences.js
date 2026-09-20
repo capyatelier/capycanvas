@@ -234,7 +234,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
           });
-          line.append(widget); list.append(line); fields.set(row.id, { line, input, widget });
+          line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
       if(page.id==="color")node.append(button("Manage Color Profiles…",()=>chooseProfileLibrary({app,element,button,manage:true})));
@@ -272,13 +272,14 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (!row?.visible) dismissContext();
       else context.querySelector("[data-reset]").disabled = !row.reset.enabled;
     }
-    empty.hidden = !model.empty;
-    title.textContent = model.pages.find((p) => p.id === model.page).title;
+    if (empty.hidden !== !model.empty) empty.hidden = !model.empty;
+    const pageTitle = model.pages.find((p) => p.id === model.page).title;
+    if (title.textContent !== pageTitle) title.textContent = pageTitle;
     if (search.value !== model.query) search.value = model.query;
     const openingSearch = search.hidden && model.searching;
-    search.hidden = !model.searching;
-    searchToggle.setAttribute("aria-pressed", String(model.searching));
-    navigation.hidden = !!model.query;
+    if (search.hidden !== !model.searching) search.hidden = !model.searching;
+    if (searchToggle.getAttribute("aria-pressed") !== String(model.searching)) searchToggle.setAttribute("aria-pressed", String(model.searching));
+    if (navigation.hidden !== !!model.query) navigation.hidden = !!model.query;
     if (openingSearch) search.focus();
     if (searchFocus !== model.search_focus) {
       searchFocus = model.search_focus;
@@ -298,28 +299,33 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       searchSignature = resultsSignature;
     }
     if (shortcutSearch.value !== model.shortcut_query) shortcutSearch.value = model.shortcut_query;
-    for (const [id, node] of pageNodes) node.hidden = id !== model.page;
-    for (const [id, tab] of tabs) tab.setAttribute("aria-selected", String(id === model.page));
+    for (const [id, node] of pageNodes) if (node.hidden !== (id !== model.page)) node.hidden = id !== model.page;
+    for (const [id, tab] of tabs) if (tab.getAttribute("aria-selected") !== String(id === model.page)) tab.setAttribute("aria-selected", String(id === model.page));
     const visible = new Set();
     for (const row of model.pages.flatMap((p) => p.groups.flatMap((g) => g.rows))) {
-      const { line, input, widget } = fields.get(row.id);
-      line.hidden = !row.visible; if (row.visible) visible.add(row.id);
+      const field = fields.get(row.id), { line, input, widget, controls } = field;
+      if (line.hidden !== !row.visible) line.hidden = !row.visible;
+      if (row.visible) visible.add(row.id);
       line.classList.toggle("disabled", !row.enabled);
-      for (const control of [input, ...widget.querySelectorAll("button")]) control.disabled = !row.enabled;
+      if (row.kind.type !== "number") for (const control of controls) if (control.disabled !== !row.enabled) control.disabled = !row.enabled;
       if (row.kind.type === "number") { input.setDisabled(!row.enabled); input.update(row.kind.value); }
       else if (row.kind.type === "choice") {
-        input.value = row.kind.selected;
+        if (input.value !== String(row.kind.selected)) input.value = row.kind.selected;
         if (row.kind.presentation.type === "image_tiles") {
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-pressed", String(Number(choice.dataset.choice) === row.kind.selected));
-        } else if (row.kind.icons.length) {
+        } else if (row.kind.icons.length && field.selection !== row.kind.selected) {
+          field.selection = row.kind.selected;
           widget.querySelector("summary").replaceChildren(icon(row.kind.icons[row.kind.selected]), element("span", "", row.kind.options[row.kind.selected]), icon("chevron-down"));
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === row.kind.selected));
         }
       }
-      else if (row.kind.type === "switch") input.checked = row.kind.active;
-      else if (row.kind.type === "text" && document.activeElement !== input) input.value = row.kind.value;
+      else if (row.kind.type === "switch" && input.checked !== row.kind.active) input.checked = row.kind.active;
+      else if (row.kind.type === "text" && document.activeElement !== input && input.value !== row.kind.value) input.value = row.kind.value;
     }
-    for (const [ids, section] of groups) section.hidden = !ids.some((id) => visible.has(id));
+    for (const [ids, section] of groups) {
+      const hidden = !ids.some((id) => visible.has(id));
+      if (section.hidden !== hidden) section.hidden = hidden;
+    }
     const shortcutIds = new Set(model.shortcuts.map((spec) => spec.id));
     for (const [id, { row }] of shortcuts) {
       if (!shortcutIds.has(id)) { row.remove(); shortcuts.delete(id); }
@@ -333,10 +339,11 @@ export function createPreferences({ app, element, button, icon, numberField, pan
         row.append(choose); shortcutList.append(row); shortcuts.set(spec.id, { row, text, binding });
       }
       const { row, binding } = shortcuts.get(spec.id);
-      row.hidden = !spec.visible; binding.textContent = spec.shortcut;
+      if (row.hidden !== !spec.visible) row.hidden = !spec.visible;
+      if (binding.textContent !== spec.shortcut) binding.textContent = spec.shortcut;
       row.classList.toggle("modified", spec.modified);
     }
-    error.textContent = model.error || "";
+    if (error.textContent !== (model.error || "")) error.textContent = model.error || "";
     if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }
     if (revealed !== model.reveal) {
       revealed = model.reveal;

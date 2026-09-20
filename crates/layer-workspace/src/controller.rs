@@ -255,7 +255,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 .await?;
             Ok(Outcome::adopt(
                 if let StoreResponse::Binding(Some(id)) = resume {
-                    m.prepare_startup(&id, now).await?
+                    m.resume_startup(&id, now).await?
                 } else {
                     m.initialize(now).await?
                 },

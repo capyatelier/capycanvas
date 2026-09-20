@@ -69,6 +69,10 @@ import org.json.JSONObject
         return true
     }
     LaunchedEffect(value, editing) { if (!editing) text = TextFieldValue(shown.getString(displayKey)) }
+    if (editing) {
+        val settingsOpen = LocalPreferencesOpen.current
+        LaunchedEffect(settingsOpen) { if (!settingsOpen) finish(cancel = true) }
+    }
     LaunchedEffect(editing) { if (editing && ranged) requester.requestFocus() }
     DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
     val step: @Composable (Int, String) -> Unit = { direction, name ->

@@ -44,6 +44,8 @@ debug = 1
 inherits = "release"
 debug = 0
 strip = "debuginfo"
+lto = "thin"
+codegen-units = 1
 
 
 # WGSL parsing and validation run during interactive startup. Keep application

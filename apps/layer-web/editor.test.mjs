@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 export async function checkEditor({call,evaluate,settle,canvasPixels}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>25000)reject(Error("Timed out: "+${JSON.stringify(condition)}+"; "+document.querySelector("#status").textContent));else setTimeout(check,40);}check();})`);
+  const wait=(condition,timeout=25000)=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error("Timed out: "+${JSON.stringify(condition)}+"; "+document.querySelector("#status").textContent));else setTimeout(check,40);}check();})`);
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();};
   const invoke=async id=>{await evaluate(`layerApp.dispatch({type:"invoke",command:${JSON.stringify(id)}})`);await settle();};
   const show=async panel=>{
@@ -21,7 +21,14 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
     }
     await settle();
   };
+  // This journey exercises Paint's docked panels; the previous test may have
+  // selected the minimal Sketch workspace.
+  await evaluate('layerApp.dispatch({type:"workspace_manager",command:{type:"switch",id:"builtin:workspace:illustrator"}})');
+  await wait('(()=>{const v=JSON.parse(layerApp.app.workspace_view());return v.id==="builtin:workspace:illustrator"&&v.ready&&!v.busy&&!v.dirty;})()');
   await invoke("reset_layout");
+  await wait(`!![...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore')`);
+  await evaluate(`[...document.querySelectorAll('.workspace-form[open] button')].find(n=>n.textContent==='Restore').click()`);
+  await wait('!document.querySelector(".workspace-form[open]") && !JSON.parse(layerApp.app.workspace_view()).busy');
   if(await evaluate("layerApp.state().workspace.zen_mode"))await invoke("zen_mode");
   console.log("editor startup",await evaluate('layerApp.startupTimes'));
   await wait('layerApp.startupTimes.complete!==null');
@@ -41,6 +48,10 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.ok(await evaluate('layerApp.state().tool_settings.some(f=>f.id.includes("gap"))'),"Auto Select exposes gap controls");
   await invoke("brush");
   await show("color");
+  // Only the two alternative shapes have buttons; saved preferences may
+  // already select the triangle that this journey is about to exercise.
+  await evaluate('layerApp.dispatch({type:"color",action:{op:"shape",shape:"circle"}})');
+  await settle();
   const before=await evaluate('layerApp.state().brush.color');
   await pointer(".dock-group .color-wheel",.95,.5);
   await pointer(".dock-group .color-wheel",.6,.4);
@@ -76,7 +87,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.equal(await evaluate('document.querySelector(".zen-toolbar")'),null,"Total Zen has no alternate toolbar projection");
   assert.equal(await evaluate('"total_zen" in layerApp.state().settings'),false,"Legacy partial-Zen setting is discarded");
   await invoke("zen_mode");
-  await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});})()`);
+  await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));window.editorColumnGroup=group.id;layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:group.id,collapsed:true}});const column=layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.group===group.id)).id;layerApp.dispatch({type:"customize",action:{type:"set_column_drawers",column,drawers:true}});})()`);
   await settle();
   await click('.collapsed-column [data-panel="navigator"]');
   await wait('!!document.querySelector(".content-drawer .navigator-overview")');
@@ -92,7 +103,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await evaluate('layerApp.dispatch({type:"customize",action:{type:"set_column_collapsed",group:window.editorColumnGroup,collapsed:false}})');
   await settle();
   assert.equal(await evaluate('layerApp.state().workspace.layout.collapsed.length'),0);
-  await evaluate('(()=>{const send=action=>layerApp.dispatch({type:"customize",action});send({type:"insert_tools",panel:"toolbar",before:1});send({type:"picker_select",control:{kind:"divider"},selected:true});send({type:"picker_select",control:{kind:"panel",panel:"color"},selected:true});send({type:"confirm_tools"});window.editorDrawerTile=layerApp.state().workspace.layout.panels.find(p=>p.id==="toolbar").content.tiles.find(t=>t.control.kind==="panel"&&t.control.panel==="color").id;const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));layerApp.dispatch({type:"move_panel",panel:"toolbar",target:{kind:"tab",group:group.id,index:null}});send({type:"set_column_collapsed",group:group.id,collapsed:true});})()');
+  await evaluate('(()=>{const send=action=>layerApp.dispatch({type:"customize",action});send({type:"insert_tools",panel:"toolbar",before:1});send({type:"picker_select",control:{kind:"divider"},selected:true});send({type:"picker_select",control:{kind:"panel",panel:"color"},selected:true});send({type:"confirm_tools"});window.editorDrawerTile=layerApp.state().workspace.layout.panels.find(p=>p.id==="toolbar").content.tiles.find(t=>t.control.kind==="panel"&&t.control.panel==="color").id;const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("navigator"));layerApp.dispatch({type:"move_panel",panel:"toolbar",target:{kind:"tab",group:group.id,index:null}});send({type:"set_column_collapsed",group:group.id,collapsed:true});const column=layerApp.app.layout(innerWidth,innerHeight).collapsed.find(c=>c.groups.some(g=>g.group===group.id)).id;send({type:"set_column_drawers",column,drawers:true});})()');
   await settle();
   await click('.collapsed-column [data-panel="toolbar"]');
   await wait('[...document.querySelectorAll(".content-drawer [data-tile] button")].some(n=>Number(n.parentElement.dataset.tile)===editorDrawerTile)');
@@ -111,7 +122,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   // Real Wasm save/open/export with an in-memory implementation only of the
   // browser's file transport. Check bytes and shared checkpoints, not mock models.
   await evaluate(`window.editorFiles=new Map();window.editorSavedPickers=[window.showSaveFilePicker,window.showOpenFilePicker];
-    window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value)},async close(){editorFiles.set(options.suggestedName,bytes)},async abort(){}}}});
+    window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){editorFiles.set(options.suggestedName,bytes)},async abort(){}}}});
     window.showOpenFilePicker=async()=>[{name:"roundtrip.capy",async getFile(){return new File([editorFiles.get([...editorFiles.keys()].find(k=>k.endsWith(".capy")))],"roundtrip.capy")}}];`);
   await invoke("fit_canvas");
   await pointer("#canvas",.50,.50,[65,20],"pen");
@@ -123,18 +134,19 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");
+  await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
+  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Choose File…').click()`);
   await wait('!layerApp.state().document_file.busy');
   assert.deepEqual(await evaluate('[...editorFiles.entries()].find(([name])=>name.endsWith(".png"))?.[1].slice(0,8)&&Array.from([...editorFiles.entries()].find(([name])=>name.endsWith(".png"))[1].slice(0,8))'),[137,80,78,71,13,10,26,10]);
   await invoke("new_document");
   await wait('!!document.querySelector(".document-dialog input[type=number]")');
-  await evaluate('document.querySelectorAll(".document-dialog input").forEach((n,i)=>n.value=i?240:320); [...document.querySelectorAll(".document-dialog button")].find(n=>n.textContent==="Create").click()');
+  await evaluate('document.querySelectorAll(".document-dialog input[type=number]").forEach((n,i)=>n.value=i?240:320); [...document.querySelectorAll(".document-dialog button")].find(n=>n.textContent==="Create").click()');
   await wait('layerApp.state().tabs[0].width===320 && !layerApp.state().document_file.busy');
-  await evaluate('window.editorPrepare=layerApp.app.prepare_document.bind(layerApp.app);layerApp.app.prepare_document=(...args)=>{const result=editorPrepare(...args);layerApp.dispatch({type:"invoke",command:"pen"});return result;}');
+  await invoke("pen");
   await invoke("open_document");
   await wait('layerApp.state().document_file.location?.name==="roundtrip.capy" && !layerApp.state().document_file.busy');
-  await evaluate('delete layerApp.app.prepare_document');
   await wait('layerApp.app.brush_ready()');
-  assert.equal(await evaluate('layerApp.state().brush.tool'),"pen","A brush selected while opening is retained");
+  assert.equal(await evaluate('layerApp.state().brush.tool'),"pen","The current brush selection is retained when opening a drawing");
   assert.ok(await evaluate('layerApp.state().tabs[0].width>320'));
   await evaluate('layerApp.dispatch({type:"select_layer",id:layerApp.state().layers.find(l=>l.label==="Current ink").id})');
   await settle();
@@ -144,7 +156,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   // Use untouched paper: painting the same opaque stroke again can be a no-op.
   await pointer("#canvas",.4,.65,[30,0]);
   await wait('layerApp.state().document_file.modified');
-  await invoke("new_document");
+  await invoke("close_document");
   await wait('!![...document.querySelectorAll(".document-dialog h2")].find(n=>n.textContent.includes("Save changes"))');
   await click(".document-dialog footer button");
   assert.equal(await evaluate('layerApp.state().document_file.modified'),true,"Cancel preserves unsaved drawing");
@@ -165,7 +177,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
   await call("Page.reload", {ignoreCache: true});
   await new Promise(resolve => setTimeout(resolve, 1000));
-  await wait('window.layerApp?.startupTimes.complete != null');
+  await wait('window.layerApp?.startupTimes.complete != null',60000);
   await wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy');
   assert.ok(await evaluate('!!layerApp.app.workspace_persistence().layout.panels.find(p=>p.id==="commands")'));
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));

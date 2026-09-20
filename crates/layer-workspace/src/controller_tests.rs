@@ -105,6 +105,43 @@ impl Fixture {
     }
 }
 #[test]
+fn restoring_a_bound_window_claims_without_republishing_its_selection() {
+    let mut f = Fixture::new();
+    let id = f.controller.view.id.clone().unwrap();
+    let owner = f.controller.manager.owner.clone();
+    let before = f.controller.manager.current_record().unwrap();
+    let other_id = DEFAULT_WORKSPACES[1].0;
+    assert_ne!(id, other_id);
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    let selected = pollster::block_on(other.prepare_switch(other_id, 1500)).unwrap();
+    other.activate(selected);
+    let deliveries = f.backend.deliveries.borrow().len();
+    f.backend.now.set(2000);
+    f.controller = WorkspaceController::new_owned(
+        Store(f.backend.clone()), Platform::Web, "legacy:test".into(), None, owner.clone(), 2000,
+    );
+    f.pump();
+    assert!(f.controller.view.ready, "{:?}", f.controller.view.error);
+    assert_eq!(f.controller.view.id.as_deref(), Some(id.as_str()));
+    let restored = f.controller.manager.current_record().unwrap();
+    assert_eq!(restored.entity, before.entity);
+    assert_eq!(restored.generations, before.generations);
+    assert_eq!(restored.claim.as_ref().unwrap().owner, owner);
+    assert!(restored.claim.as_ref().unwrap().expires_at_ms > before.claim.as_ref().unwrap().expires_at_ms);
+    assert_eq!(f.backend.deliveries.borrow().len(), deliveries);
+    let binding = f.backend.database.borrow_mut().execute(
+        StoreRequest::Binding { key: "last_workspace".into() }, 2000,
+    ).unwrap();
+    assert!(matches!(binding, StoreResponse::Binding(Some(bound)) if bound == other_id));
+    // Explicit selection still updates recency and durably publishes bindings.
+    f.backend.now.set(3000);
+    let switched = pollster::block_on(f.controller.manager.prepare_switch(&id, 3000)).unwrap();
+    assert_eq!(switched.entity.metadata.last_used_ms, 3000);
+    assert!(switched.generations.metadata > before.generations.metadata);
+    assert!(f.backend.deliveries.borrow().len() > deliveries);
+}
+
+#[test]
 fn startup_with_an_occupied_window_binding_reuses_an_available_default() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();

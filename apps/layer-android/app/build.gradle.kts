@@ -17,16 +17,26 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testProguardFiles("test-proguard-rules.pro")
         buildConfigField("boolean", "WORKSPACE_BENCHMARK", "false")
         ndk.abiFilters.addAll(capyAbis)
     }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
         create("benchmark") {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             matchingFallbacks += "release"
+            // White-box regression APKs keep their existing unminified ABI.
+            // The self-instrumenting runner also tests full release optimization.
+            isMinifyEnabled = providers.gradleProperty("capyOptimize").isPresent
+            isShrinkResources = isMinifyEnabled
             buildConfigField("boolean", "WORKSPACE_BENCHMARK", "true")
         }
     }
@@ -134,4 +144,5 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    "benchmarkImplementation"("androidx.compose.ui:ui-test-manifest")
 }

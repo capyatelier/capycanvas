@@ -1,7 +1,7 @@
 import { chooseColor } from './color-controls.js';
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
-  const updates = new Map(), navigators = new Set();
+  const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
   const color = action => dispatch({ type: "color", action });
   const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
@@ -198,8 +198,11 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     // Preserve native button activation instead of treating Space as canvas pan.
     for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});
     for(const name of ["focus","blur"])readout.addEventListener(name,draw);
-    let resizeFrame;const resize=new ResizeObserver(()=>{if(!resizeFrame)resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;draw()})});resize.observe(stage);
-    root.navigatorDispose=()=>{resize.disconnect();cancelAnimationFrame(resizeFrame)};
+    let resizeFrame;
+    function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
+    function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
+    const resize=new ResizeObserver(queuePaint);resize.observe(stage);
+    root.navigatorDispose=()=>{resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       view=app.color_panel();
       edit.disabled=state().colors.slot==="transparent";
@@ -210,7 +213,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
         paint.style.background=`linear-gradient(${rgba(swatch.rgba)},${rgba(swatch.rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`;
       });
       shapes.forEach((node,i)=>{const shape=view.other_shapes[i];if(node.dataset.colorShape!==shape){node.dataset.colorShape=shape;node.replaceChildren(icon(`color-${shape}`));}node.title=`Use ${shape==="triangle"?"HLS":shape==="circle"?"Okhsv":"HSV"} ${shape}`;node.setAttribute("aria-label",node.title);});
-      readout.setAttribute("aria-label",view.readout_description);draw();
+      readout.setAttribute("aria-label",view.readout_description);queuePaint();
     };
   }
   function navigatorPanel(root) {
@@ -219,7 +222,10 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     const buttons=["zoom_out","zoom_in","rotate_left","rotate_right","flip_horizontal","flip_vertical"].map(id=>{const node=button("",()=>dispatch({type:"invoke",command:id}));node.dataset.navigatorCommand=id;controls.append(node);return[id,node];});
     const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.add(record);
     app.navigator_surface(record.id,surface);
-    const resize=new ResizeObserver(queuePositions);resize.observe(overview);
+    const resize=new ResizeObserver(([entry])=>{
+      record.extent={width:entry.contentRect.width,height:entry.contentRect.height};
+      queuePositions();
+    });resize.observe(overview);
     root.navigatorDispose=()=>{resize.disconnect();navigators.delete(record);app.remove_navigator_surface(record.id);};
     let contact=null;
     const send=(e,phase)=>{const r=overview.getBoundingClientRect();dispatch({type:"navigator",phase,position:[e.clientX-r.x,e.clientY-r.y],viewport:[r.width,r.height]});};
@@ -234,13 +240,20 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
       queuePositions();
     };
   }
-  function measurePositions() {
+  function measurePositions(synchronous=false) {
     let resized=false;
-    for(const record of navigators) {
+    // Observer geometry is sufficient for content/camera publications. Live
+    // resize explicitly flushes once, batching reads before surface writes.
+    const measured=[...navigators].map(record=>[record,
+      synchronous || !record.extent ? record.overview.getBoundingClientRect() : record.extent]);
+    for(const [record,r] of measured) {
+      // A live drag can flush before ResizeObserver delivers its next entry.
+      // Subsequent scheduled work must not briefly restore the older extent.
+      record.extent={width:r.width,height:r.height};
       const {overview,hole}=record;
       // CSS transforms do not resize this native GPU canvas. DOM compositing
       // supplies scrolling, stacking and clipping without per-motion JS/GPU work.
-      const r=overview.getBoundingClientRect(),scale=devicePixelRatio||1;
+      const scale=devicePixelRatio||1;
       const size=JSON.stringify([r.width,r.height,scale]);
       if(size!==record.size){
         record.size=size;
@@ -259,7 +272,11 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
   }
   function updatePositions(){positioning=0;if(measurePositions()&&app.reflow_navigators())wake();}
   function queuePositions(){if(!positioning)positioning=requestAnimationFrame(updatePositions);}
-  function flushPositions(){if(positioning)cancelAnimationFrame(positioning);positioning=0;return measurePositions();}
+  function flushPositions(){if(positioning)cancelAnimationFrame(positioning);positioning=0;return measurePositions(true);}
   window.addEventListener("resize",queuePositions);
-  return {control,queuePositions,flushPositions,refresh(){for(const fn of updates.values())fn();}};
+  return {control,queuePositions,flushPositions,
+    // Paint UI rasters after controls, geometry and theme writes have settled.
+    // This avoids rasterizing the old color-wheel size before arrange() resizes it.
+    flushPaint(){for(const paint of [...pendingPaints])paint();},
+    refresh(){for(const fn of updates.values())fn();}};
 }

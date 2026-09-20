@@ -26,6 +26,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
+    state_cache: std::collections::BTreeMap<&'static str, Vec<u8>>,
+    preferences_cache: Option<(Vec<u8>, JsValue)>,
     tone: hdr::ToneState,
     proof: layer_ui::proof_workflow::ProofView,
     workspaces: Option<layer_workspace::WorkspaceController<workspaces::BrowserStore>>,
@@ -33,6 +35,7 @@ pub struct WebApp {
     documents: layer_ui::DocumentSessions<UiSession<WebRenderer>>,
     document_gpu: Option<document_tabs::DocumentGpu>,
     canvas: web_sys::HtmlCanvasElement,
+    viewport_scale: f32,
     sequence: u64,
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
@@ -418,8 +421,11 @@ impl WebApp {
             document_gpu: None,
             workspaces: None,
             canvas,
+            viewport_scale: 1.,
             sequence: 0,
             startup: StartupProgress::default(),
+            state_cache: Default::default(),
+            preferences_cache: None,
             deferred_contacts: Default::default(),
             overviews: Default::default(),
             header_drag: None,
@@ -697,6 +703,95 @@ impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
     }
+    /// Incremental UI transport. Each field retains its original Serde type
+    /// (including u64 BigInts); unchanged catalogs never cross the Wasm/JS
+    /// boundary again. `state()` remains an independent full snapshot.
+    pub fn state_update(&mut self) -> Result<JsValue, JsValue> {
+        let state = self.session.state();
+        // Exhaustive destructuring makes newly added UI fields a compile error
+        // until this transport includes them.
+        let layer_ui::UiState {
+            soft_proof,
+            preview_sdr,
+            hdr_display_available,
+            sdr_appearance_preview,
+            gamut_warning,
+            revision,
+            fullscreen,
+            workspace,
+            brush,
+            colors,
+            tool_settings,
+            tool_actions,
+            tool_set,
+            layers,
+            layer_tools,
+            adjustments,
+            filter_picker,
+            filter_categories,
+            filter_catalog_revision,
+            filter_load,
+            layer_properties,
+            tabs,
+            document_file,
+            commands,
+            settings,
+            theme,
+            palette,
+            settings_open,
+            preferences,
+            customization,
+            platform,
+            requests,
+            host_error,
+            camera,
+        } = state;
+        let result = js_sys::Object::new();
+        macro_rules! field {
+            ($name:ident) => {{
+                let bytes = serde_json::to_vec($name).map_err(js)?;
+                if self.state_cache.get(stringify!($name)) != Some(&bytes) {
+                    js_sys::Reflect::set(&result, &JsValue::from_str(stringify!($name)), &serialize($name)?)?;
+                    self.state_cache.insert(stringify!($name), bytes);
+                }
+            }};
+        }
+        field!(soft_proof);
+        field!(preview_sdr);
+        field!(hdr_display_available);
+        field!(sdr_appearance_preview);
+        field!(gamut_warning);
+        field!(revision);
+        field!(fullscreen);
+        field!(workspace);
+        field!(brush);
+        field!(colors);
+        field!(tool_settings);
+        field!(tool_actions);
+        field!(tool_set);
+        field!(layers);
+        field!(layer_tools);
+        field!(adjustments);
+        field!(filter_picker);
+        field!(filter_categories);
+        field!(filter_catalog_revision);
+        field!(filter_load);
+        field!(layer_properties);
+        field!(tabs);
+        field!(document_file);
+        field!(commands);
+        field!(settings);
+        field!(theme);
+        field!(palette);
+        field!(settings_open);
+        field!(preferences);
+        field!(customization);
+        field!(platform);
+        field!(requests);
+        field!(host_error);
+        field!(camera);
+        Ok(result.into())
+    }
     pub fn document_color(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.engine().document().color)
     }
@@ -729,6 +824,20 @@ impl WebApp {
     }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
+    }
+    /// Retained, read-only view for the DOM adapter. `preferences()` still
+    /// returns an independent snapshot for callers that need ownership.
+    pub fn preferences_cached(&mut self) -> Result<JsValue, JsValue> {
+        let Some(view) = self.session.preferences() else { return Ok(JsValue::UNDEFINED) };
+        let key = serde_json::to_vec(&view).map_err(js)?;
+        if let Some((previous, value)) = &self.preferences_cache
+            && *previous == key
+        {
+            return Ok(value.clone());
+        }
+        let value = serialize(&view)?;
+        self.preferences_cache = Some((key, value.clone()));
+        Ok(value)
     }
     pub fn renderer_stats(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.renderer_stats())
@@ -899,6 +1008,7 @@ impl WebApp {
             .session
             .set_viewport([logical_width, logical_height], [width, height])
             .map_err(js)?;
+        self.viewport_scale = width as f32 / logical_width.max(1.);
         if let Some(gpu) = &mut self.session.renderer_mut().0
             && [width, height] != [gpu.config.width, gpu.config.height]
         {
@@ -1042,7 +1152,9 @@ impl WebApp {
                     .map_err(js)?;
             }
         }
-        change.canvas_wake |= !self.startup.complete;
+        // Compiler completions wake the browser explicitly. Once the brush is
+        // usable, optional compilation does not require continuous redraws.
+        change.canvas_wake |= !self.startup.brush_ready;
         let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
         let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);
@@ -1070,7 +1182,7 @@ impl WebApp {
         let surround = self.session.state().palette.surround_linear;
         let mut overlay = Vec::new();
         self.session.append_layer_overlay(&mut overlay);
-        let scale = self.canvas.width() as f32 / self.canvas.client_width().max(1) as f32;
+        let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter

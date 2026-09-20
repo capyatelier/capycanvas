@@ -49,7 +49,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
+  const modules = ["drawing-tabs.js","document-recovery.js","document-storage.js","workspace-store.js","workspace-preload.js","workspace-switcher.js","workspace-manager.js","system-status.js","header.js","color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "pkg/layer_web.js", "raster-worker-client.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path) && path !== "workspace-worker.js" && path !== "raster-worker.js" && path !== "proof-worker.js")
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -103,10 +103,15 @@ export function fingerprintAssets(directory) {
   for (const path of ["pkg/layer_web.js", "workspace-store.js"])
     worker = replaceRequired(worker, `from "./${path}"`, `from "./${names[path]}"`);
   publish("workspace-worker.js", worker);
+  let preload = read(join(directory, "workspace-preload.js"));
+  preload = replaceRequired(preload, 'from "./workspace-store.js"', `from "./${names["workspace-store.js"]}"`);
+  for (const path of ["workspace-worker.js", "pkg/layer_web_bg.wasm"])
+    preload = replaceRequired(preload, `"./${path}"`, JSON.stringify(`./${names[path]}`));
+  publish("workspace-preload.js", preload);
   let app = read(join(directory, "app.js"));
-  for (const path of modules.slice(0, -1).filter(path => path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
+  for (const path of modules.slice(0, -1).filter(path => path !== "workspace-store.js" && path !== "drawing-tabs.js" && path !== "document-recovery.js" && path !== "filter-previews.js" && path !== "workspace-switcher.js" && path !== "color-controls.js" && path !== "export-controls.js" && path !== "histogram.js" && path !== "document-color.js" && path !== "image-import.js" && path !== "proof.js"))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
-  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path) || path === "workspace-worker.js"));
+  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path) || path === "icons.svg" || path === "pkg/layer_web_bg.wasm" || path === "workspace-worker.js"));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
   publish("app.js", app);
   return names;
@@ -170,7 +175,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "app.js", "raster-worker-client.js", "raster-worker.js", "proof-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "style.css"])
+    for (const path of ["drawing-tabs.js", "document-recovery.js", "document-storage.js", "app.js", "raster-worker-client.js", "raster-worker.js", "proof-worker.js", "workspace-worker.js", "workspace-store.js", "workspace-preload.js", "workspace-switcher.js", "workspace-manager.js", "system-status.js","header.js", "color-controls.js","export-controls.js","histogram.js","document-color.js","proof.js","image-import.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "filter-previews.js", "effects.js", "tooltips.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));
@@ -222,13 +227,22 @@ export function packageWeb() {
       display: "standalone", background_color: "#333333", theme_color: "#333333",
       icons: [192, 512].map((size) => ({ src: asset(`icon-${size}.png`), sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
     }, null, 2) + "\n");
-    const metadata = `<link rel="manifest" href="./manifest.webmanifest" />
+    // Discover the whole UI module graph from the HTML, instead of waiting for
+    // successive import fetches through the service worker on each navigation.
+    const preloads = Object.keys(names).filter(path => path.endsWith(".js") &&
+      path !== "app.js" && !path.endsWith("-worker.js")).map(path =>
+      `<link rel="modulepreload" href="${asset(path)}" />`).join("\n    ");
+    const metadata = `${preloads}
+    <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" type="image/png" href="${appleIcon}" />
     <meta name="apple-mobile-web-app-title" content="Capy Canvas" />
     <link rel="license" href="./licenses.html" />`;
     writeFileSync(join(site, "index.html"), read(join(web, "index.html"))
       .replace('href="data:,"', `type="image/png" sizes="32x32" href="${asset("icon-32.png")}"`)
       .replace('href="style.css"', `href="${asset("style.css")}"`)
+      .replace('href="icons.svg"', `href="${asset("icons.svg")}"`)
+      .replace('href="pkg/layer_web_bg.wasm"', `href="${asset("pkg/layer_web_bg.wasm")}"`)
+      .replace('src="workspace-preload.js"', `src="${asset("workspace-preload.js")}"`)
       .replace('src="app.js"', `src="${asset("app.js")}"`)
       .replace("<!-- Packager inserts install metadata here; development never registers a worker. -->", metadata)
       .replace("</body>", `<script>addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", {updateViaCache: "none"}).catch(console.error); });</script>\n  </body>`));

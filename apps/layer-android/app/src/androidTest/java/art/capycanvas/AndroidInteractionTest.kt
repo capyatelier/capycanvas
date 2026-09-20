@@ -940,6 +940,9 @@ class AndroidInteractionTest {
         val layout = fixture.getJSONObject("layout")
         val bands = layout.array("bands").objects()
         val toolbarBand = bands.first { it.getInt("id") == 44 }
+        val settingsId = layout.getJSONObject("header").array("zones").values()
+            .flatMap { (it as JSONArray).objects() }
+            .first { it.getJSONObject("item").getString("kind") == "settings" }.getInt("id")
         val tile = layout.array("panels").objects().first { it.getString("id") == "toolbar" }
             .getJSONObject("content").array("tiles").objects().first { it.getJSONObject("control").getString("kind") != "divider" }.getInt("id")
         fun hover(at: Offset, pointer: Int, exit: Boolean = false) {
@@ -966,7 +969,7 @@ class AndroidInteractionTest {
                     restore()
                     if (placement.startsWith("column-")) customize(obj("type" to "set_column_collapsed", "group" to if (placement == "column-left") 41 else 43, "collapsed" to true))
                     val tag = when (placement) {
-                        "right" -> "header-settings"
+                        "right" -> "header-control-$settingsId"
                         "column-left" -> "column-icon-brushes"
                         "column-right" -> "column-icon-navigator"
                         else -> "tile-toolbar-$tile"
@@ -985,13 +988,16 @@ class AndroidInteractionTest {
                         assertTrue("Tooltip does not take window focus", owner.view.hasWindowFocus())
                     }
                     val button = anchor.translate(Offset(origin[0].toFloat(), origin[1].toFloat()))
-                    if (placement == "above") assertEquals("Bottom tooltip flips above its tile", button.top - 4 * density, tip.bottom, 2f)
-                    else assertEquals("Tooltip is below its tile", button.bottom + 4 * density, tip.top, 2f)
                     if (placement in listOf("below", "above")) assertEquals("Tooltip centers on the tile", button.center.x, tip.center.x, 2f)
                     val image = instrumentation.uiAutomation.takeScreenshot()
                     try {
                         val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/tooltips/$theme-$pointer-$placement.png")
                         file.parentFile!!.mkdirs(); file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        // A bottom dock may still leave room below it because of
+                        // window insets. Flip only when the actual tooltip cannot fit.
+                        if (button.bottom + 4 * density + tip.height > image.height)
+                            assertEquals("Tooltip flips above when it cannot fit below", button.top - 4 * density, tip.bottom, 2f)
+                        else assertEquals("Tooltip is below its tile", button.bottom + 4 * density, tip.top, 2f)
                         assertTrue("Tooltip stays on screen", tip.left >= 0 && tip.top >= 0 && tip.right <= image.width && tip.bottom <= image.height)
                         val backdrop = image.getPixel(tip.center.x.toInt(), (tip.top + 3 * density).toInt())
                         assertTrue("Tooltip has a dark backdrop in either theme", listOf(0, 8, 16).all { (backdrop shr it and 255) < 100 })

@@ -7,6 +7,11 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import kotlin.math.roundToInt
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clipToBounds
@@ -53,28 +58,42 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import org.json.JSONObject
 
-/** Retain only the outgoing view during the exit animation; Rust owns the
- * settings session. The full-size input surface also blocks the exposed canvas
- * while the settings sheet is entering or leaving. */
+// This value changes on every open/close. Track its readers so unrelated
+// retained controls can skip recomposition when interaction ownership changes.
+internal val LocalPreferencesOpen = compositionLocalOf { true }
+
+/** Keep the settings nodes after their first use. Closing still finishes the
+ * native slide and releases input/focus; hidden nodes are neither placed nor
+ * exposed to accessibility. Rust owns the settings session and every value. */
 @Composable internal fun PreferencesOverlay(host: CanvasHost, view: JSONObject?) {
     val visible = remember { MutableTransitionState(false) }
     visible.targetState = view != null
     var retained by remember { mutableStateOf<JSONObject?>(null) }
-    if (view != null) SideEffect { retained = view }
-    val model = view ?: retained
-    if (visible.currentState || visible.targetState) {
-        Box(Modifier.fillMaxSize()) {
-            // A background sibling blocks exposed canvas, not an ancestor
-            // that would cancel a child's drag before it crosses touch slop.
-            Box(Modifier.matchParentSize().pointerInput(Unit) {
-                awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-            })
-            AnimatedVisibility(visible,
-                enter = slideInVertically(tween(240, easing = FastOutSlowInEasing)) { -it },
-                exit = slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { -it }) {
-                ProvideTextStyle(LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 22.sp)) {
-                    model?.let { PreferencesScreen(host, it) }
+    // A reopened session often publishes identical rows. Keep their identities
+    // as well as their nodes so Compose can skip unchanged controls.
+    val model = if (view != null && retained?.toString() == view.toString()) retained!!
+        else view ?: retained ?: return
+    if (view != null) SideEffect { retained = model }
+    val transition = updateTransition(visible, label = "preferences")
+    val slide by transition.animateFloat(transitionSpec = {
+        tween(if (targetState) 240 else 200, easing = FastOutSlowInEasing)
+    }, label = "preferences-slide") { if (it) 0f else -1f }
+    val active = visible.currentState || visible.targetState
+    Box(Modifier.fillMaxSize()) {
+        if (active) Box(Modifier.matchParentSize().pointerInput(Unit) {
+            awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+        })
+        Layout(content = {
+            ProvideTextStyle(LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 22.sp)) {
+                CompositionLocalProvider(LocalPreferencesOpen provides (view != null)) {
+                    PreferencesScreen(host, model, view != null)
                 }
+            }
+        }, modifier = Modifier.fillMaxSize()
+            .then(if (active) Modifier else Modifier.clearAndSetSemantics {})) { children, constraints ->
+            val child = children.single().measure(constraints)
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                if (active) child.place(0, (slide * child.height).roundToInt())
             }
         }
     }
@@ -83,14 +102,17 @@ import org.json.JSONObject
 private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") }
     ?: "page:" + getString("page")
 
-@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
+@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
     var profilesOpen by remember { mutableStateOf(false) }
-    if(profilesOpen) ProfileLibraryDialog({profilesOpen=false})
+    if(open && profilesOpen) ProfileLibraryDialog({profilesOpen=false})
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val paneFocus = remember { FocusRequester() }
-    LaunchedEffect(view.settingsRoute()) { paneFocus.requestFocus() }
+    LaunchedEffect(open, view.settingsRoute()) { if (open) paneFocus.requestFocus() else focus.clearFocus() }
     var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
+    LaunchedEffect(open) {
+        if (open) { showPage = view.getString("page") != "appearance"; profilesOpen = false }
+    }
     val reveal = view.optString("reveal").takeUnless { it.isEmpty() || it == "null" }
     LaunchedEffect(reveal) { if (reveal != null) showPage = true }
     LaunchedEffect(view.optLong("search_focus")) {
@@ -110,7 +132,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 else -> close()
             }
         }
-        BackHandler(onBack = ::back)
+        BackHandler(enabled = open, onBack = ::back)
         // Two full-height panes, not a global app bar stacked over two columns.
         Row(Modifier.fillMaxSize()) {
             if (wide || !showPage) PreferencesNavigation(host, view,
@@ -255,6 +277,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     val reset = row.objectOrNull("reset")
     if (reset == null) { PreferenceContent(host, row); return }
     var open by remember(row.getString("id")) { mutableStateOf(false) }
+    val visible = LocalPreferencesOpen.current
+    LaunchedEffect(visible) { if (!visible) open = false }
     val focus = LocalFocusManager.current
     val colors = LocalPalette.current
     val currentReset by rememberUpdatedState(reset)
@@ -292,7 +316,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
             }
         }) {
         PreferenceContent(host, row)
-        DropdownMenu(open, { open = false }, containerColor = colors.settingsCard) {
+        DropdownMenu(open && visible, { open = false }, containerColor = colors.settingsCard) {
             val enabled = currentReset.getBoolean("enabled")
             DropdownMenuItem(text = {
                 Row(Modifier.widthIn(min = 240.dp, max = 380.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -362,6 +386,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                     val id = row.getString("id")
                     val selected = kind.getInt("selected")
                     var open by remember(id, enabled) { mutableStateOf(false) }
+                    val visible = LocalPreferencesOpen.current
+                    LaunchedEffect(visible) { if (!visible) open = false }
                     val focus = LocalFocusManager.current
                     Box(Modifier.widthIn(max = controlWidth)) {
                         Row(Modifier.heightIn(min = 48.dp)
@@ -376,7 +402,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                                 color = if (enabled) colors.text else colors.settingsSecondary)
                             SharedIcon("chevron-down", null, Modifier.size(16.dp), tint = colors.settingsSecondary)
                         }
-                        DropdownMenu(open, { open = false }, Modifier.testTag("setting-choice-menu-$id"),
+                        DropdownMenu(open && visible, { open = false }, Modifier.testTag("setting-choice-menu-$id"),
                             containerColor = colors.settingsCard) {
                             kind.array("options").values().forEachIndexed { index, name ->
                                 val icon = kind.array("icons").optString(index).takeIf { it.isNotEmpty() }
@@ -438,7 +464,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
 @Composable private fun ShortcutEditor(host: CanvasHost, view: JSONObject, editor: JSONObject) {
     val capture = view.objectOrNull("capture")
     val focus = remember { FocusRequester() }
-    LaunchedEffect(capture != null) { if (capture != null) focus.requestFocus() }
+    val visible = LocalPreferencesOpen.current
+    LaunchedEffect(visible, capture != null) { if (visible && capture != null) focus.requestFocus() }
     Column(Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
         if (capture != null) { host.key(event.nativeKeyEvent); true } else false
     }.focusRequester(focus).focusable(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
