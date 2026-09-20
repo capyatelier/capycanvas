@@ -1,0 +1,16 @@
+
+running 1 test
+material comparison backend=Vulkan
+
+thread 'tests::material::specialized_material_matches_uniform_dispatch_across_pages_and_prediction' (27821) panicked at crates/layer-render-wgpu/src/tests/material.rs:249:17:
+operation=0, variant=0, phase=1, max channel error=93
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::material::specialized_material_matches_uniform_dispatch_across_pages_and_prediction ... FAILED
+
+failures:
+
+failures:
+    tests::material::specialized_material_matches_uniform_dispatch_across_pages_and_prediction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 339 filtered out; finished in 33.96s
+

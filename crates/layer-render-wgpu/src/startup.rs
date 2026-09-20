@@ -65,8 +65,9 @@ impl Requirements {
         let plan = BrushPassPlan::for_device(style, &r.device);
         if style.execution == BrushExecution::Dry && plan.direct.is_none()
             && let Some(dry) = &r.pipelines.dry_material {
-            self.compute.push(dry.kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
-            if preview { self.compute.push(dry.kernels[plan.material as usize * 2].clone()); }
+            let experiment = 4 * usize::from(swept_experiment::active(style));
+            self.compute.push(dry.kernels[experiment + plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+            if preview { self.compute.push(dry.kernels[experiment + plan.material as usize * 2].clone()); }
         }
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());

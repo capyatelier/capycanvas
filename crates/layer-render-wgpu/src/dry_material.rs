@@ -6,7 +6,7 @@ pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool);
 
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 2],
-    pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
+    pub kernels: [Deferred<wgpu::ComputePipeline>; 8],
 }
 
 impl Pipelines {
@@ -72,7 +72,8 @@ impl Pipelines {
                             "compute_coverage"
                         }),
                         compilation_options: wgpu::PipelineCompilationOptions {
-                            constants: &[("MATERIAL_OPERATION", (index / 2) as f64)],
+                            constants: &[("MATERIAL_OPERATION", ((index % 4) / 2) as f64),
+                                ("SWEPT_EXPERIMENT", f64::from(index >= 4))],
                             ..Default::default()
                         },
                         cache: None,
@@ -149,7 +150,8 @@ impl WgpuRasterizer {
         });
         for (output, source, coordinate, coverage) in jobs {
             let pipeline = &self.pipelines.dry_material.as_ref().unwrap().kernels
-                [operation as usize * 2 + usize::from(*coverage)];
+                [operation as usize * 2 + usize::from(*coverage)
+                    + 4 * usize::from(swept_experiment::active(&batch.style))];
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, output, &[batch_index as u32 * self.style_stride as u32]);
             pass.set_bind_group(

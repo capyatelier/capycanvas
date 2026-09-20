@@ -13,6 +13,8 @@ internal object Native {
     @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun resetGpu(handle: Long)
     external fun destroyGpuForTest(handle: Long)
+    external fun sweptBrushForTest(handle: Long, enabled: Boolean)
+    external fun sweptBrushCountsForTest(): String
     @JvmStatic external fun detach(handle: Long)
     @JvmStatic external fun resize(handle: Long, width: Int, height: Int, density: Float)
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)

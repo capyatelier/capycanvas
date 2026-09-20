@@ -36,6 +36,9 @@ mod source_access;
 mod material_sources;
 mod brush_tiles;
 mod dry_material;
+mod swept_experiment;
+#[doc(hidden)]
+pub use swept_experiment::{set_swept_brush_experiment_for_test, swept_brush_experiment_counts};
 use brush_tiles::BrushTile;
 mod export_readback;
 mod view_color;
@@ -495,7 +498,8 @@ impl BrushPassPlan {
         let state = BrushStateTargets {
             // Watercolor's physical shader always reads/writes stroke coverage,
             // independently of the ordinary brush accumulation preference.
-            coverage: style.rendering.accumulation == BrushAccumulation::Uniform
+            coverage: swept_experiment::active(style)
+                || style.rendering.accumulation == BrushAccumulation::Uniform
                 || style.rendering.edge_after_stroke
                 || style.execution == BrushExecution::Watercolor,
             canvas_wetness: style.wet_mix.wetness > 0.0,
@@ -4162,6 +4166,10 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
         }
+        let swept = swept_experiment::prepare(packet)?;
+        let packet = if let Some((dabs, batches)) = &swept {
+            FramePacket { dabs, dab_batches: batches, ..packet }
+        } else { packet };
         let original_batches = packet.dab_batches;
         let filtered: std::borrow::Cow<'_, [DabBatch]> = if original_batches
             .iter()
@@ -6217,6 +6225,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     &working_color::shader(&device),
                     include_str!("material_brush.wgsl"),
+                    include_str!("swept_experiment.wgsl"),
                     include_str!("brush_geometry.wgsl"),
                     include_str!("brush_coverage.wgsl"),
                     include_str!("contact.wgsl"),

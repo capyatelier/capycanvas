@@ -1613,6 +1613,9 @@ class AndroidRasterTest {
     @Test fun largePhotoWideBrushAttribution() {
         val options = InstrumentationRegistry.getArguments()
         Assume.assumeTrue(options.getString("wideBrush") == "true")
+        val swept = options.getString("wideBrushAlgorithm", "existing") == "swept"
+        native { Native.sweptBrushForTest(it, swept) }
+        try {
         val photo = File(activity.filesDir, "photo-benchmark.jpg")
         assertTrue("Copy the 61 MP test image into the isolated test app", photo.isFile)
         open(photo)
@@ -1650,6 +1653,7 @@ class AndroidRasterTest {
             "uid" to android.os.Process.myUid(),
             "pressure" to options.getString("wideBrushPressure", "1"),
             "preset" to options.getString("wideBrushPreset", "1"),
+            "algorithm" to if (swept) "swept" else "existing",
             "turns_per_second" to options.getString("wideBrushTurns", "2"))
         val runs=org.json.JSONArray()
         report.put("runs", runs)
@@ -1660,12 +1664,18 @@ class AndroidRasterTest {
             val run = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 180, 4752.0 to 3168.0, wideBrush = true)
             android.util.Log.i("CapyWidePen", "END stroke=$index")
             run.put("resources_before", before).put("resources_after", resources())
+            run.put("swept_counts", org.json.JSONArray(Native.sweptBrushCountsForTest()))
             runs.put(run)
             output.writeText(report.toString(2))
             println("WIDE_PEN stroke=$index cpu=${run.get("cpu_ms")} gpu=${run.get("gpu_ms")} storage=${run.get("tracked_canvas_bytes")}")
             assertNull(host.failure)
         }
         assertNull(host.failure)
+        InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { shot ->
+            try { File(activity.getExternalFilesDir(null), "wide-brush-result.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+            finally { shot.recycle() }
+        }
+        } finally { native { Native.sweptBrushForTest(it, false) } }
     }
 
     @Test fun largeJpegGpenPreservesPhotoThroughSaveAndRecovery() {

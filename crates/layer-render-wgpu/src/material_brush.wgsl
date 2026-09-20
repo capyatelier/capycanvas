@@ -28,6 +28,7 @@ struct Style {
 // compiler sees only that operation's control flow. Style retains its packed
 // operation field for the shared batch layout and reservoir pass.
 override MATERIAL_OPERATION: u32;
+override SWEPT_EXPERIMENT: bool = false;
 
 const OP_DEPOSIT: u32 = 0u;
 const OP_COVERAGE: u32 = 1u;
@@ -807,7 +808,9 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
             );
         }
     }
-    var result = paint_fragment(fragment_position);
+    var result: MaterialOutput;
+    if SWEPT_EXPERIMENT { result = swept_result(fragment_position); }
+    else { result = paint_fragment(fragment_position); }
     if style.color.a > 0.5 {
         let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
         let original = canvas_load(world);

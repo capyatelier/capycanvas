@@ -5,6 +5,10 @@ of the existing dab renderer: its strokes may intentionally look different.
 The existing dab pipeline remains the fallback for saved brushes and for media
 whose appearance depends on ordered simulation.
 
+Follow-up: [live 61 MP / 2048 px Wacom comparison](swept-brush-live-wacom.md)
+integrates the experiment into the primary app and measures actual drawing
+throughput, remaining stalls, and memory/appearance tradeoffs.
+
 ## Question
 
 The current G-Pen and Pencil already use short swept contacts:

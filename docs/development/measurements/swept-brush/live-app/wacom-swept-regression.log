@@ -1,0 +1,8 @@
+
+running 3 tests
+test swept_experiment::tests::merging_keeps_corners_pressure_and_empty_boundaries ... ok
+test swept_experiment::tests::merging_preserves_incoming_span_and_end ... ok
+test swept_experiment::tests::swept_gpu_batching_and_prediction ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 337 filtered out; finished in 24.12s
+

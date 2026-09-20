@@ -542,6 +542,25 @@ pub extern "system" fn Java_art_capycanvas_Native_finishStartupCache(
         gpu.finish_startup_cache();
     }
 }
+/// Research-only switch, allowed only in a debug/profiling test process.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sweptBrushForTest(
+    mut env: JNIEnv, _: JClass, handle: jlong, enabled: jboolean,
+) {
+    if !unsafe { app(handle) }.profiling {
+        fail(&mut env, Err("Swept brush experiment requires a debug test session".into()));
+        return;
+    }
+    layer_render_wgpu::set_swept_brush_experiment_for_test(enabled != 0);
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sweptBrushCountsForTest(
+    env: JNIEnv, _: JClass,
+) -> jstring {
+    env.new_string(format!("{:?}", layer_render_wgpu::swept_brush_experiment_counts()))
+        .map(|s| s.into_raw()).unwrap_or_default()
+}
+
 /// Instrumentation removes only this window's device, never a driver/global GPU.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_destroyGpuForTest(

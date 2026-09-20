@@ -1,0 +1,33 @@
+
+art.capycanvas.AndroidRasterTest:
+Error in largePhotoWideBrushAttribution(art.capycanvas.AndroidRasterTest):
+java.lang.AssertionError: expected null, but was:<canvas renderer failed: GPU readback mapping failed: Buffer view error: Validation Error
+
+Caused by:
+  Buffer with '(wgpu internal) StagingBelt staging buffer' label has been destroyed
+>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotNull(Assert.java:756)
+	at org.junit.Assert.assertNull(Assert.java:738)
+	at org.junit.Assert.assertNull(Assert.java:748)
+	at art.capycanvas.AndroidRasterTest.largePhotoWideBrushAttribution(AndroidRasterTest.kt:1671)
+
+
+Time: 20.545
+There was 1 failure:
+1) largePhotoWideBrushAttribution(art.capycanvas.AndroidRasterTest)
+java.lang.AssertionError: expected null, but was:<canvas renderer failed: GPU readback mapping failed: Buffer view error: Validation Error
+
+Caused by:
+  Buffer with '(wgpu internal) StagingBelt staging buffer' label has been destroyed
+>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotNull(Assert.java:756)
+	at org.junit.Assert.assertNull(Assert.java:738)
+	at org.junit.Assert.assertNull(Assert.java:748)
+	at art.capycanvas.AndroidRasterTest.largePhotoWideBrushAttribution(AndroidRasterTest.kt:1671)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
