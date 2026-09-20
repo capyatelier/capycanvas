@@ -2791,7 +2791,10 @@ impl WgpuRasterizer {
             });
         }
 
-        if plan.state.coverage {
+        // Full-page dry evaluation writes the new coverage page too. An old
+        // owner binds the shared zero scalar as its source, so no clear pass is
+        // needed before the first contact of a stroke reaches this tile.
+        if plan.state.coverage && !writes_full_page {
             for tile in tiles {
                 let coordinate = tile.coordinate;
                 let page = self.paint_layers[layer_index]
@@ -2833,7 +2836,8 @@ impl WgpuRasterizer {
             let coverage = self.paint_layers[layer_index]
                 .coverage_pages
                 .iter()
-                .find(|page| page.coordinate == coordinate && page.owner == Some(batch.stroke_id));
+                .find(|page| page.coordinate == coordinate && plan.state.coverage
+                    && (writes_full_page || page.owner == Some(batch.stroke_id)));
             // Nonlocal brushes preserve old generations before any tile draws.
             // Dry draws preserve untouched pixels while writing the new page.
             if !writes_full_page {
@@ -3037,12 +3041,13 @@ impl WgpuRasterizer {
                 .expect("destination page remains live after encoding");
             page.active_secondary = job.destination_secondary;
             if let Some(destination_secondary) = job.coverage_destination_secondary {
-                self.paint_layers[layer_index]
+                let coverage = self.paint_layers[layer_index]
                     .coverage_pages
                     .iter_mut()
                     .find(|page| page.coordinate == job.coordinate)
-                    .expect("stroke coverage page remains live after encoding")
-                    .active_secondary = destination_secondary;
+                    .expect("stroke coverage page remains live after encoding");
+                coverage.active_secondary = destination_secondary;
+                coverage.owner = Some(batch.stroke_id);
             }
         }
         jobs.clear();
@@ -3670,9 +3675,14 @@ impl WgpuRasterizer {
         let texture_key = Self::texture_set_key(&batch.style);
         let damage = damage.intersect(self.preview_damage);
         self.prepare_dry_records(batch, page_coordinates(damage).map(|coordinate| {
-            let range = tiles.iter().find(|tile| tile.coordinate == coordinate)
-                .map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
-            (PixelRect::full([PAGE_SIZE; 2]), range)
+            let tile = tiles.iter().find(|tile| tile.coordinate == coordinate);
+            let range = tile.map_or(batch.first_dab..batch.first_dab, |tile| tile.dabs.clone());
+            // Full preview pages still preserve committed pixels, but only the
+            // planned contact footprint needs the ordered contact evaluator.
+            let local = if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some() {
+                tile.map_or(PixelRect::EMPTY, |tile| tile.local)
+            } else { PixelRect::full([PAGE_SIZE; 2]) };
+            (local, range)
         }), encoder)?;
         let mut compute_jobs = mem::take(&mut self.dry_jobs);
         for (record_index, coordinate) in page_coordinates(damage).enumerate() {
@@ -7639,7 +7649,15 @@ mod tests {
 
     #[test]
     fn uniform_coverage_persists_across_frames_and_resets_per_stroke() {
-        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
+        check_uniform_coverage(WgpuRasterizer::new_headless().expect("physical GPU is required"));
+    }
+
+    #[test]
+    fn float_coverage_persists_across_frames_and_resets_per_stroke() {
+        check_uniform_coverage(WgpuRasterizer::new_float32().expect("physical GPU is required"));
+    }
+
+    fn check_uniform_coverage(mut renderer: WgpuRasterizer) {
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let dab = test_dab([64.0, 64.0], [0.0, 0.0, 0.0, 1.0], 0.45);

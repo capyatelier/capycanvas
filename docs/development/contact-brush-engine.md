@@ -7,10 +7,25 @@ to the [research proposal](../history/dry-media-brush-design.md).
 
 All twelve presets use one [contact evaluator](../../crates/layer-render-wgpu/src/contact.wgsl)
 and the existing sparse GPU rasterizer. The CPU resolves pressure curves,
-distance spacing, tilt and direction into pairs of contact poses. The GPU
+modeled input, tilt and direction into pairs of contact poses. The GPU
 interpolates the footprint between those poses, evaluates material contact,
 and deposits pigment. There is no per-frame bitmap generation or texture upload.
 The 128-byte contact record is an internal Rust/GPU contract, not the foreign ABI.
+
+Swept brushes no longer insert distance-spaced stamps between input samples.
+An online simplifier retains a modeled vertex when the path bends or pressure,
+tilt, or twist changes enough. The traveled-length/chord ellipse bounds geometric
+error without buffering a point list: tolerance is 0.25 document pixels or 1% of
+the previous minor radius, whichever is larger. Pressure uses the nominal-radius
+change against that tolerance; tilt and twist have separate pose thresholds.
+Straight steady runs advance at half the nominal brush diameter (at least 4 px),
+so large brushes keep coarse sampling. Pen-up flushes the pending endpoint.
+Decisions depend on input samples, not render frames, and prediction clones the
+same generator. Ordinary stamp brushes retain their distance-spacing loop.
+
+This changes contact density and procedural variation; it does not promise pixel
+identity with earlier contact rendering. See the
+[Huion optimization measurements](gpen-huion-sparse-strokes-2026-09-20.md).
 
 The nib sweep projects in the ellipse's metric. Projecting only by canvas
 distance produced scalloped edges on angled calligraphy nibs. A shared bound
@@ -75,10 +90,10 @@ zoom does not change tilt magnitude. Calligraphy uses a held nib angle, whose
 projected width naturally varies with the stroke direction. Brushed ink follows
 stroke direction. A device providing twist can use the existing twist mapping.
 
-Contact snapshots use schema 5. Schema 4 snapshots remain readable and retain
-legacy evaluation; missing taper sharpness defaults to 1. Saved raster revisions
-preserve existing artwork. These presets operate on paint layers; the existing
-visibility-mask painter retains its simpler coverage path.
+Contact snapshots use schema 5. All contact strokes use the current swept
+generator, including replay; there is no version-selected contact algorithm.
+Saved raster revisions preserve existing artwork. Ordinary stamp brushes and
+the visibility-mask painter remain separate current tools.
 
 ## Research used
 

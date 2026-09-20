@@ -23,9 +23,9 @@ fn display_batches_preserve_direct_and_fallback_submission_bounds() {
             let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
             r.native_edit.as_mut().unwrap().display_dense_bytes = 0;
             r.native_edit.as_mut().unwrap().display_complete_bytes = if complete { u64::MAX } else { 0 };
-            // Devices without Float32 attachment blending keep the eight-tile
-            // composition bound even when the complete pyramid is admitted.
-            let batch = if complete && !r.device.portable_blend() {
+            // Constant paper can write directly on every device, including
+            // Float32 devices without attachment blending.
+            let batch = if complete {
                 display_mips::CompleteUpdates::BATCH
             } else {
                 SOURCE_SLOTS / 2

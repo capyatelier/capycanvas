@@ -1,8 +1,8 @@
 //! Deterministic brush dynamics compiled into renderer-ready dabs.
 //!
 //! The sequential, low-volume work stays here on the CPU: input-derived
-//! sensors, curve evaluation, distance-based resampling, and deterministic
-//! variation. Render backends receive only resolved, fixed-size dab geometry.
+//! sensors, curve evaluation, swept-path simplification, stamp resampling, and
+//! deterministic variation. Render backends receive only resolved, fixed-size dab geometry.
 
 use layer_core::color::RgbSpace;
 use layer_core::{
@@ -64,7 +64,7 @@ pub struct DabGenerator {
     filtered_speed: f32,
     rng: u32,
     stroke_seed: u32,
-    last_contact_position: Option<Point>,
+    last_evaluated: Option<DynamicPoint>,
     last_emitted_dab: Option<Dab>,
     total_distance: Option<f32>,
     continuous_fraction: f32,
@@ -80,7 +80,7 @@ impl Default for DabGenerator {
             filtered_speed: 0.0,
             rng: 1,
             stroke_seed: 1,
-            last_contact_position: None,
+            last_evaluated: None,
             last_emitted_dab: None,
             total_distance: None,
             continuous_fraction: 0.0,
@@ -128,7 +128,7 @@ impl DabGenerator {
         self.filtered_speed = 0.0;
         self.rng = mix_seed(brush.seed, stroke_id.0);
         self.stroke_seed = self.rng;
-        self.last_contact_position = None;
+        self.last_evaluated = None;
         self.last_emitted_dab = None;
         self.total_distance = None;
         self.continuous_fraction = 0.0;
@@ -189,6 +189,12 @@ impl DabGenerator {
         }
         self.continuous_fraction = 0.0;
 
+        if brush.contact.is_some() {
+            self.append_swept(last, current, brush, output, &mut damage);
+            self.last = Some(current);
+            return damage;
+        }
+
         let mut traveled = self.distance_until_next;
         let mut emitted = 0;
         while traveled <= distance && emitted < MAX_DABS_PER_SEGMENT {
@@ -201,6 +207,57 @@ impl DabGenerator {
         self.distance_until_next = (traveled - distance).max(0.0);
         self.last = Some(current);
         damage
+    }
+
+    /// Swept contacts already cover the space between poses. Keep modeled input
+    /// vertices only when their path or pose matters, instead of inserting stamps
+    /// at a pressure-dependent distance. Decisions depend on input, not frames.
+    fn append_swept(
+        &mut self,
+        last: DynamicPoint,
+        current: DynamicPoint,
+        brush: &BrushSnapshot,
+        output: &mut Vec<Dab>,
+        damage: &mut Rect,
+    ) {
+        let start = self.last_evaluated.unwrap_or(last);
+        let radius = self.last_emitted_dab.map_or(brush.diameter * 0.5, |dab| {
+            dab.radii[0].min(dab.radii[1])
+        });
+        let tolerance = (radius * 0.01).max(0.25);
+        let traveled = f64::from((current.stroke_distance - start.stroke_distance).max(0.));
+        let dx = f64::from(current.position().x) - f64::from(start.position().x);
+        let dy = f64::from(current.position().y) - f64::from(start.position().y);
+        // Every intervening vertex lies inside the ellipse whose focal points
+        // are the endpoints and whose major axis is the traveled path length.
+        // Its minor radius bounds the error without retaining a point list.
+        let error2 = (traveled * traveled - dx * dx - dy * dy).max(0.) * 0.25;
+        if error2 > f64::from(tolerance).powi(2)
+            && last.stroke_distance > start.stroke_distance
+        {
+            let evaluated = self.evaluate(last, brush);
+            self.emit_contacts(evaluated, brush, output, damage);
+        }
+
+        let start = self.last_evaluated.unwrap_or(last);
+        let pressure_change = (current.point.pressure - start.point.pressure).abs()
+            * brush.diameter * 0.5;
+        let tilt_change = (current.point.tilt[0] - start.point.tilt[0])
+            .hypot(current.point.tilt[1] - start.point.tilt[1]);
+        let twist_change = (current.point.twist - start.point.twist + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        // Bound live spacing too: prediction can expose the pending endpoint,
+        // but committed ink must also advance when prediction is disabled.
+        // Large, steady brushes retain coarse sampling rather than emitting at
+        // the input rate. Pen-up flushes the final pending pose in finish().
+        if current.stroke_distance - start.stroke_distance >= (brush.diameter * 0.5).max(4.)
+            || pressure_change > tolerance
+            || tilt_change > 0.04
+            || twist_change.abs() > 0.04
+        {
+            let evaluated = self.evaluate(current, brush);
+            self.emit_contacts(evaluated, brush, output, damage);
+        }
     }
 
     pub fn generate(stroke: &Stroke, space: RgbSpace, output: &mut Vec<Dab>) -> Rect {
@@ -404,10 +461,10 @@ impl DabGenerator {
             }
         }
         let (rotation_sin, rotation_cos) = rotation.sin_cos();
-        let motion = self.last_contact_position.map_or([0.0; 2], |last| {
-            [point.position().x - last.x, point.position().y - last.y]
+        let motion = self.last_evaluated.map_or([0.0; 2], |last| {
+            [point.position().x - last.position().x, point.position().y - last.position().y]
         });
-        self.last_contact_position = Some(point.position());
+        self.last_evaluated = Some(point);
         let falloff = if brush.path.falloff_distance > 0.0 {
             (1.0 - point.stroke_distance / (brush.path.falloff_distance * diameter).max(0.01))
                 .clamp(0.0, 1.0)
@@ -915,6 +972,54 @@ mod tests {
         let mut replay = Vec::new();
         DabGenerator::generate(&stroke, RgbSpace::Srgb, &mut replay);
         assert_eq!(dabs, replay);
+    }
+
+    #[test]
+    fn swept_input_does_not_expand_a_fast_light_stroke_into_stamps() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut generator = DabGenerator::default();
+        let mut dabs = Vec::new();
+        for (i, x) in [0., 200., 400., 600., 800.].into_iter().enumerate() {
+            generator.append(point(x, 0.1, i as u32 * 4_000), &brush, &mut dabs);
+        }
+        generator.finish(&brush, &mut dabs);
+        assert_eq!(dabs.len(), 5);
+        for pair in dabs.windows(2) {
+            assert_eq!(pair[1].center.x - pair[1].motion[0], pair[0].center.x);
+        }
+    }
+
+    #[test]
+    fn swept_simplification_retains_corners_pressure_extrema_and_large_brush_spacing() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut generator = DabGenerator::default();
+        let mut dabs = Vec::new();
+        generator.append(point(0., 0.1, 0), &brush, &mut dabs);
+        generator.append(point(3., 0.1, 4_000), &brush, &mut dabs);
+        let mut corner = point(3., 0.1, 8_000);
+        corner.position.y = 3.;
+        generator.append(corner, &brush, &mut dabs);
+        generator.finish(&brush, &mut dabs);
+        assert!(dabs.iter().any(|dab| dab.center == Point { x: 3., y: 0. }));
+        assert_eq!(dabs.last().unwrap().center, corner.position);
+
+        generator.reset();
+        dabs.clear();
+        for (i, pressure) in [0.1, 0.9, 0.1].into_iter().enumerate() {
+            generator.append(point(i as f32, pressure, i as u32 * 4_000), &brush, &mut dabs);
+        }
+        assert!(dabs.iter().any(|dab| dab.contact[0] == 0.9));
+
+        let mut large = brush;
+        large.diameter = 1024.;
+        generator.reset();
+        dabs.clear();
+        for i in 0..=1000 {
+            generator.append(point(i as f32, 1., i * 4_000), &large, &mut dabs);
+        }
+        generator.finish(&large, &mut dabs);
+        assert!(dabs.len() <= 4, "large straight brushes retain coarse sampling: {}", dabs.len());
+        assert_eq!(dabs.last().unwrap().center.x, 1000.);
     }
 
     #[test]

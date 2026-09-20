@@ -31,7 +31,12 @@ fn scene_read(image:texture_2d<f32>,v:Vertex)->vec4<f32> {
     if WORKING_EXTENDED {
         let local=v.position.xy-settings.rect.xy;
         let dimensions=vec2<f32>(textureDimensions(image));
-        if all(dimensions==settings.rect.zw) {return working_sample_float(image,local);}
+        if all(dimensions==settings.rect.zw) {
+            if all(fract(settings.rect.xy)==vec2<f32>(0.)) {
+                return textureLoad(image,clamp(vec2<i32>(floor(local)),vec2<i32>(0),vec2<i32>(dimensions)-1),0);
+            }
+            return working_sample_float(image,local);
+        }
         return working_sample_float(image,local*(dimensions/settings.rect.zw));
     }
     return textureSampleLevel(image,sampling,v.uv,0.);
@@ -191,11 +196,8 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     }
     if op == 1u { return raw*settings.options.y; }
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
+    if op == 7u || op == 13u { return scene_normal(raw,v); }
     let dst = scene_read(back,v);
-    if op == 7u {
-        let m = select(settings.options.z, mix(dst.r,1.-dst.r,settings.options.w-2.), settings.options.w>=2.);
-        return raw * m * settings.options.y;
-    }
     if op == 3u { return raw*dst.r; }
     if op == 5u { let a = (1.-raw.r)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
     let src = raw*settings.options.y;
@@ -206,4 +208,15 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     }
     let rgb = (1.-src.a)*dst.rgb + (1.-dst.a)*src.rgb + src.a*dst.a*b;
     return vec4<f32>(rgb,src.a+dst.a*(1.-src.a));
+}
+
+fn scene_normal(raw: vec4<f32>, v: Vertex) -> vec4<f32> {
+    var m = settings.options.z;
+    if settings.options.w>=2. {
+        let mask=scene_read(back,v).r;
+        m=mix(mask,1.-mask,settings.options.w-2.);
+    }
+    let src = raw * m * settings.options.y;
+    if settings.options.x == 13. { return src + settings.source_over * (1. - src.a); }
+    return src;
 }

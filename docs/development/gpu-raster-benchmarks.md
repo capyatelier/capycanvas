@@ -9,6 +9,10 @@ The [GTK raster foundation qualification](../history/color-management-gtk-m1-val
 records the encoded sRGB8 replacement's baseline, repeated drawing comparison,
 dense-image/concurrent-save workloads, capture memory and native presentation.
 
+The [Huion swept-brush optimization](gpen-huion-sparse-strokes-2026-09-20.md)
+records the causes of G-Pen GPU tails, matched native Android benchmarks,
+on-device copy-bandwidth calibration, large-brush controls and CPU costs.
+
 ## What is measured
 
 `layer-bench` submits 15 legacy and 10 painter-focused 4096×4096 workloads

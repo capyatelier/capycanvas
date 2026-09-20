@@ -238,6 +238,7 @@ impl WgpuRasterizer {
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
+            if let Some((_, pipeline)) = &self.scene_pipelines.constant { required.compute.push(pipeline.clone()); }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {

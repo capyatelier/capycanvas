@@ -2628,9 +2628,10 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
             let together = r.readback_srgb_rgba8().unwrap();
             let paint = &r.paint_layers[0];
             assert_eq!(paint.pages.len(), 2, "native={native}");
-            let destination = BrushPassPlan::for_style(&stroke.style).requires_destination();
-            assert_eq!(paint.coverage_pages.len(), if destination { 2 } else { 0 }, "native={native}, preset={preset:?}");
-            assert!(paint.pages.iter().all(|p| p.secondary.is_some() == destination));
+            let plan = BrushPassPlan::for_device(&stroke.style, &r.device);
+            assert_eq!(paint.coverage_pages.len(), if plan.state.coverage { 2 } else { 0 }, "native={native}, preset={preset:?}");
+            assert!(paint.pages.iter().all(|p| p.secondary.is_some() == plan.requires_destination()),
+                "native={native}, preset={preset:?}");
             assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
             assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
             assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
@@ -3022,5 +3023,106 @@ fn layer_composition_latency() {
             "{name}: completed GPU frame ms p50={:.3} p95={:.3} p99={:.3}",
             times[60], times[114], times[118]
         );
+    }
+}
+
+#[test]
+fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
+    use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::Srgb, depth: SampleDepth::U8,
+    }).unwrap();
+    let layers = [Layer::paint(LayerId(1), "small swept preview")];
+    let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
+        r.submit(FramePacket {
+            view: view(), document_extent: [1024; 2], layers: &layers,
+            dabs, dab_batches: batches, restore_rasters: &[], reset_layers: reset,
+            time_seconds: 0., composite_all: true,
+        }).unwrap();
+    };
+    for preset in layer_core::CONTACT_BRUSH_PRESETS {
+        let mut base = dab([0.7, 0.1, 0.2, 0.8]);
+        base.center = Point { x: 512., y: 512. };
+        base.radii = [900.; 2];
+        let mut base_batch = batch(1);
+        base_batch.damage = base.bounds();
+        let mut first = dab([0.1, 0.3, 0.8, 0.7]);
+        first.center = Point { x: 260., y: 255. };
+        first.radii = [9., 4.];
+        first.previous = [0.6, 1.2, 0.8, 0.6];
+        first.motion = [29., -17.];
+        first.contact = [0.9, 0.7, 1., 0.3];
+        first.previous_contact = [0.1, 0.2, 0., 0.3];
+        let mut last = first;
+        last.center = Point { x: 770., y: 790. };
+        last.motion = [-21., 31.];
+        let mut stroke = batch(1);
+        stroke.stroke_id = StrokeId(2);
+        stroke.style = preset_style(preset);
+        stroke.dab_count = 2;
+        stroke.damage = first.bounds().union(last.bounds());
+        render(&mut r, &[base], &[base_batch.clone()], true);
+        let original = r.readback_srgb_rgba8().unwrap();
+        render(&mut r, &[first, last], &[stroke.clone()], false);
+        let committed = r.readback_srgb_rgba8().unwrap();
+        assert_ne!(original, committed, "{preset:?} must deposit");
+        render(&mut r, &[base], &[base_batch], true);
+        stroke.kind = DabBatchKind::Preview;
+        stroke.stroke_end = false;
+        render(&mut r, &[first, last], &[stroke], false);
+        let predicted = r.readback_srgb_rgba8().unwrap();
+        let maximum = predicted.iter().zip(&committed).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
+        assert!(maximum <= 1, "{preset:?}: predicted vs committed maximum error {maximum}");
+        for (x,y) in [(512,512), (100,100), (950,950)] {
+            let i = (y*1024+x)*4;
+            assert_eq!(&predicted[i..i+4], &original[i..i+4], "{preset:?}: untouched ({x}, {y})");
+        }
+        render(&mut r, &[], &[], false);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?}: cancel restores pixels");
+    }
+}
+
+#[test]
+fn constant_backdrop_sparse_updates_match_tiled_float_composition() {
+    // Odd extents cover partial edge tiles; sparse edits must preserve the
+    // distant tiles and the constant backdrop's premultiplied alpha.
+    let extent = [519, 391];
+    let mut r = WgpuRasterizer::new_float32().unwrap();
+    for masked in [false, true] {
+        let mut layer = Layer::paint(LayerId(1), "constant backdrop");
+        layer.opacity = 0.63;
+        if masked {
+            let mut mask = left_mask(9);
+            mask.inverted = true;
+            layer.mask = Some(mask);
+        }
+        let layers = [layer];
+        for (step, center) in [Point { x: 500., y: 365. }, Point { x: 251., y: 250. }, Point { x: 18., y: 22. }].into_iter().enumerate() {
+            let mut ink = dab([0.8, 0.1, 0.3, 0.7]);
+            ink.center = center;
+            ink.radii = [34.; 2];
+            ink.contact = [1., 0., 0., 0.];
+            let mut stroke = batch(1);
+            stroke.stroke_id = StrokeId(step as u64 + 1);
+            stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+            stroke.damage = ink.bounds();
+            let packet = FramePacket {
+                view: ViewState { width_px: extent[0], height_px: extent[1],
+                    background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                document_extent: extent, layers: &layers, dabs: &[ink], dab_batches: &[stroke],
+                restore_rasters: &[], reset_layers: step == 0, composite_all: step == 0, time_seconds: 0.,
+            };
+            if let Some(scene) = &mut r.scene { scene.set_tiled_composition(false); }
+            r.submit(packet).unwrap();
+            let sparse = page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            r.scene.as_mut().unwrap().set_tiled_composition(true);
+            r.submit(FramePacket { dabs: &[], dab_batches: &[], reset_layers: false,
+                composite_all: true, ..packet }).unwrap();
+            let tiled = page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            let error = sparse.chunks_exact(4).zip(tiled.chunks_exact(4))
+                .map(|(a,b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+                .fold(0., f32::max);
+            assert!(error < 0.00001, "masked={masked}, step={step}: error={error}");
+        }
     }
 }
