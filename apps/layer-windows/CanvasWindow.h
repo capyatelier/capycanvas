@@ -8,6 +8,7 @@
 #include "WorkspaceStorageView.h"
 #include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
+#include "CanvasLatencyTrace.h"
 #include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
 #include "native/include/capy_windows.h"
@@ -36,6 +37,7 @@ public:
     void Open();
     ~CanvasWindow();
 private:
+    CanvasLatencyTrace latencyTrace{GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0};
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
     uint64_t const windowId;

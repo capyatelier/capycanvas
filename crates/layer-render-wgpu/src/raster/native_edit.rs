@@ -71,9 +71,9 @@ impl NativeEdit {
             display_dense_bytes: crate::live_display::DENSE_BYTES,
             display_cache_bytes: crate::live_display::CACHE_BYTES,
             display_complete_bytes: {
-                #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
                 { crate::display_memory::complete_budget(&r.device) }
-                #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+                #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
                 { 0 }
             },
             image_pixel_bytes: crate::scene::windows::DEFAULT_IMAGE_PIXEL_BYTES,
@@ -136,6 +136,13 @@ impl Drop for NativeFrame {
 }
 
 impl WgpuRasterizer {
+    /// Admitted display, decoded-source and in-flight upload ceilings in bytes.
+    pub fn display_memory_limits(&self) -> [u64; 3] {
+        let display = self.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
+        let [sources, uploads] = self.scene.as_ref().map_or([0; 2], |s| s.source_cache_limits());
+        [display, sources, uploads]
+    }
+
     /// Host admission ceiling for retained display pixels. A partial allowance
     /// can preserve reduced levels alongside visible detail; zero selects the
     /// fixed tile fallback. This display cache never feeds edits or export.

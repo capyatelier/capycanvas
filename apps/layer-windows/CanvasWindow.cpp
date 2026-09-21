@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CanvasWindow.h"
+#include "CanvasPointerSample.h"
 #include "UiControls.h"
 #include "ExternalImages.h"
 #include <microsoft.ui.xaml.media.dxinterop.h>
@@ -81,6 +82,7 @@ CanvasWindow::~CanvasWindow() {
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
     if (renderer.joinable()) renderer.join();
+    latencyTrace.Dump("latency-"+std::to_string(windowId));
     if (host) capy_destroy(host);
 }
 void CanvasWindow::Open() {
@@ -446,6 +448,7 @@ void CanvasWindow::StartInput() {
 }
 
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint32_t phase) {
+    auto arrival=latencyTrace.enabled?Now():0;
     uint64_t view;float scale;
     {std::lock_guard lock(mutex);if(closing)return;view=revision;scale=inputScale;}
     std::vector<CapyPointer> samples;
@@ -471,6 +474,8 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         p.phase=phase;p.tool=tool;
         p.button=props.IsMiddleButtonPressed()?1:props.IsRightButtonPressed()?2:0;
         p.flags=(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
+        if(!PrepareCanvasPrediction(p))return true;
+        latencyTrace.Input(p,arrival);
         samples.push_back(p);
         if(GetEnvironmentVariableW(L"CAPY_TRACE_INPUT",nullptr,0)) std::ofstream("pointer-input.log",std::ios::app) << p.phase << " " << p.x << " " << p.y << " " << p.timestamp_ns << std::endl;
         if(samples.size()==CanvasWorkBuffer::PointerBatch) {
@@ -609,7 +614,9 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
             first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
         if(result>=0){
             if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
-            result=consumedContacts.contains(first.id)?0:capy_pointer(host,points->data(),points->size());
+            bool accepted=!consumedContacts.contains(first.id);
+            result=accepted?capy_pointer(host,points->data(),points->size()):0;
+            if(accepted&&result==0)latencyTrace.Consume(*points);
             if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
         }
         return result;
@@ -687,7 +694,9 @@ void CanvasWindow::Run() {
             // An idle service deadline can save/renew without submitting a frame.
             {std::lock_guard lock(mutex);if(!dirty&&!transportFailed&&work.Empty()&&!pendingHover&&previewWork.Empty())continue;}
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
+            auto acquireStart=latencyTrace.enabled?Now():0;
             auto acquired=capy_acquire(host);
+            auto acquiredAt=latencyTrace.enabled?Now():0;
             if(acquired<0) {if(capy_device_lost(host))continue;Fail(capy_error());break;}
             if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
             if(acquired==0) {
@@ -714,6 +723,10 @@ void CanvasWindow::Run() {
             if(capy_device_lost(host))continue;
             auto now=Now();
             auto result=capy_frame(host,now,now);
+            if(latencyTrace.enabled){
+                auto end=Now();uint64_t stats[6]{};auto error=capy_presentation_stats(host,stats);
+                latencyTrace.Frame(acquireStart,acquiredAt,now,end,stats,error);
+            }
             if(result<0){if(capy_device_lost(host))continue;Fail(capy_error());break;}
             dirty=result!=0;
             if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
@@ -732,7 +745,7 @@ void CanvasWindow::Run() {
                     captured=true;
                 }
             }
-            if(probe&&!probeReady&&result==0&&brushReady) {
+            if((probe||latencyTrace.enabled)&&!probeReady&&result==0&&brushReady) {
                 auto info=capy_surface_info(host);
                 if(!info){Fail(capy_error());break;}
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(info,capy_string_free);
@@ -758,7 +771,7 @@ void CanvasWindow::Run() {
             }
             // Opt-in baseline only: present unchanged content at DXGI cadence.
             // No timer, per-frame disk I/O, synthetic input or display-time claim.
-            if(probeReady)dirty=true;
+            if(probe&&probeReady)dirty=true;
             if(overflow)break;
         }
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}

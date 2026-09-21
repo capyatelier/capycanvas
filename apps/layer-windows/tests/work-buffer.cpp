@@ -1,4 +1,6 @@
 #include "../CanvasWorkBuffer.h"
+#include "../CanvasPointerSample.h"
+#include <limits>
 #include "../CanvasQueryQueue.h"
 #include "../CanvasSnapshotMailbox.h"
 #include "../WorkspacePublication.h"
@@ -6,6 +8,21 @@
 #include <iostream>
 
 int main() {
+    CapyPointer actual{};actual.pressure=0.37f;actual.x=42.25f;actual.timestamp_ns=12345;
+    auto real=actual;
+    assert(PrepareCanvasPrediction(real));
+    assert(real.pressure==actual.pressure&&real.x==actual.x&&real.timestamp_ns==actual.timestamp_ns);
+    auto prediction=actual;prediction.flags=1;prediction.pressure=1.0001f;
+    assert(PrepareCanvasPrediction(prediction)&&prediction.pressure==1.0f);
+    prediction.pressure=-0.001f;
+    assert(PrepareCanvasPrediction(prediction)&&prediction.pressure==0.0f);
+    prediction.x=std::numeric_limits<float>::quiet_NaN();
+    assert(!PrepareCanvasPrediction(prediction));
+    prediction=actual;prediction.flags=1;prediction.pressure=std::numeric_limits<float>::infinity();
+    assert(!PrepareCanvasPrediction(prediction));
+    actual.pressure=1.1f;
+    assert(PrepareCanvasPrediction(actual)&&actual.pressure==1.1f); // real validation remains in Rust
+    std::cout<<"Canvas predictions: extrapolated pressure bounded, invalid predictions rejected, real input preserved\n";
     WorkspacePublication publication;
     assert(!publication.Accept(false,10,4)); // Motion cannot establish models.
     assert(publication.Accept(true,10,4));

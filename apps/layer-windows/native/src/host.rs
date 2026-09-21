@@ -80,6 +80,10 @@ impl CapyHost {
         native.resize(width, height, scale)?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
+        if std::env::var_os("CAPY_LATENCY_TRACE").is_some()
+            && std::env::var_os("CAPY_WINDOWS_NO_VSYNC_WAIT").is_some() {
+            descriptor.backend_options.dx12.latency_waitable_object = wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+        }
         // GPU optimization is independent of Rust/C++ debugging. DXC's -Od
         // fragment storage-buffer code can be rejected by drivers; retain API
         // validation while using the same optimized shaders as Release.
@@ -251,6 +255,16 @@ impl CapyHost {
             .get_default_config(&adapter, width, height)
             .ok_or("D3D12 surface unsupported")?;
         config.present_mode = wgpu::PresentMode::Fifo;
+        if std::env::var_os("CAPY_LATENCY_TRACE").is_some() {
+            let mode = match std::env::var("CAPY_WINDOWS_PRESENT_MODE").as_deref() {
+                Ok("immediate") => wgpu::PresentMode::Immediate,
+                Ok("mailbox") => wgpu::PresentMode::Mailbox,
+                _ => wgpu::PresentMode::Fifo,
+            };
+            if self.surface.get_capabilities(&adapter).present_modes.contains(&mode) {
+                config.present_mode = mode;
+            }
+        }
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
         // Keep scRGB across monitor moves; only viewing changes, never artwork.
@@ -973,7 +987,8 @@ pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
             "density": host.scale,
             "present_mode": format!("{:?}", config.present_mode),
             "format": format!("{:?}", config.format),
-            "maximum_frame_latency": config.desired_maximum_frame_latency
+            "maximum_frame_latency": config.desired_maximum_frame_latency,
+            "no_vsync_wait": std::env::var_os("CAPY_LATENCY_TRACE").is_some() && std::env::var_os("CAPY_WINDOWS_NO_VSYNC_WAIT").is_some()
         });
         result = CString::new(info.to_string()).map_err(err)?.into_raw();
         Ok(0)
@@ -1271,4 +1286,27 @@ pub unsafe extern "C" fn capy_test_display(host: *mut CapyHost, hdr: bool) -> i3
         host.poll_services()?;
         Ok(0)
     })
+}
+
+/// Optional read-only presentation counters. A failed query is diagnostic only;
+/// it must not change document state or stop the renderer.
+/// # Safety
+/// `host` is exclusively owned by the render thread; `values` writes six u64s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_presentation_stats(host: *const CapyHost, values: *mut u64) -> i32 {
+    let Some(host) = (unsafe { host.as_ref() }) else { return -1; };
+    if values.is_null() { return -1; }
+    let Some(native) = (unsafe { host.surface.as_hal::<wgpu::hal::api::Dx12>() }) else { return -1; };
+    let Some(swapchain) = native.swap_chain() else { return -1; };
+    let output = unsafe { &mut *values.cast::<[u64; 6]>() };
+    *output = [0; 6];
+    let last = match unsafe { swapchain.GetLastPresentCount() } {
+        Ok(value) => value, Err(error) => return error.code().0,
+    };
+    output[0] = u64::from(last);
+    let mut stats = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
+    if let Err(error) = unsafe { swapchain.GetFrameStatistics(&mut stats) } { return error.code().0; }
+    output[1..].copy_from_slice(&[u64::from(stats.PresentCount), u64::from(stats.PresentRefreshCount),
+        u64::from(stats.SyncRefreshCount), stats.SyncQPCTime as u64, stats.SyncGPUTime as u64]);
+    0
 }

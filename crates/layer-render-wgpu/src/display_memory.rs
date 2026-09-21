@@ -162,3 +162,41 @@ fn unified_memory(device: &wgpu::Device) -> bool {
                 )
             })
 }
+
+#[cfg(target_os = "windows")]
+pub(super) fn complete_budget(device: &wgpu::Device) -> u64 {
+    allowance(dx12_headroom(device), 4)
+}
+
+#[cfg(target_os = "windows")]
+fn dx12_headroom(device: &wgpu::Device) -> Option<u64> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory4,
+        IDXGIAdapter3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL};
+    // The guard retains the renderer's live device. Query the matching adapter,
+    // not an arbitrary monitor or the amount of installed/shared video memory.
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() }?;
+    let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.ok()?;
+    let adapter: IDXGIAdapter3 = unsafe {
+        factory.EnumAdapterByLuid(hal.raw_device().GetAdapterLuid())
+    }.ok()?;
+    let mut memory = Default::default();
+    unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut memory) }.ok()?;
+    remaining_headroom(memory.Budget, memory.CurrentUsage,
+        layer_color::photo::PhotoMemoryBudget::available_memory())
+}
+
+#[cfg(target_os = "windows")]
+fn remaining_headroom(budget: u64, usage: u64, system: Option<u64>) -> Option<u64> {
+    system.map(|available| budget.saturating_sub(usage).min(available))
+}
+
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+fn windows_admission_respects_usage_and_available_memory() {
+    assert_eq!(remaining_headroom(4096, 1024, Some(8192)), Some(3072));
+    assert_eq!(remaining_headroom(4096, 1024, Some(512)), Some(512));
+    assert_eq!(remaining_headroom(4096, 8192, Some(8192)), Some(0));
+    assert_eq!(remaining_headroom(4096, 0, Some(0)), Some(0));
+    assert_eq!(remaining_headroom(4096, 0, None), None);
+    assert_eq!(remaining_headroom(0, 0, Some(8192)), Some(0));
+}

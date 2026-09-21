@@ -54,7 +54,10 @@ fn main() -> Result<()> {
     let project = Project::read(BufReader::new(std::fs::File::open(input)?), Default::default())?;
     let extent = [project.document.width, project.document.height];
     let mut gpu = WgpuRasterizer::new_native_headless(project.document.color)?;
-    gpu.set_complete_display_allowance(allowance * 1024 * 1024);
+    println!("Adapter: {:?}", gpu.adapter().get_info());
+    // u64::MAX selects the host admission policy instead of a benchmark override.
+    if allowance != u64::MAX { gpu.set_complete_display_allowance(allowance * 1024 * 1024); }
+    println!("Memory ceilings (display/source/upload bytes): {:?}", gpu.display_memory_limits());
     gpu.set_telemetry_enabled(true);
     let (mut input, consumer) = input_queue(samples as usize + 8);
     let (mut view, inverse) = camera(extent, DRAW_SCALE, 0.);
