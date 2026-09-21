@@ -254,6 +254,16 @@ retained render areas. Android's loader feature must be queried through the core
 Vulkan 1.1 entry point; its KHR alias returns false on both tested Mali and Adreno
 devices. Surface copies use the same shared layout for instrumented HDR readback.
 
+After the initial shared-image acquisition, the HAL skips the ordinary
+acquire-semaphore reuse wait: subsequent updates do not acquire the image or
+signal that semaphore again. Present-slot fences still protect every recycled
+presentation semaphore. The Android host bounds outstanding updates at two,
+allowing CPU encoding to overlap the preceding GPU update in queue order.
+The former single-update gate serialized the pipeline; widening it without
+removing the obsolete acquisition wait produced raster work followed by
+acquisition timeouts and no presentation. See the
+[Wacom admission measurements](../docs/development/gpen-drawing-admission-20260920.md).
+
 All Android builds require this path for SDR and HDR. Unsupported drivers report
 a canvas initialization error; there is no Android FIFO fallback or build flag.
 Other platform hosts retain their existing presentation modes. See

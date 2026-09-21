@@ -46,7 +46,28 @@ fn evolving_contact(
     let nib_motion = rotate(motion, middle_rotation.x, -middle_rotation.y) / middle_axes;
     let nib_offset = rotate(world - start, middle_rotation.x, -middle_rotation.y) / middle_axes;
     let projected = dot(nib_offset, nib_motion) / max(dot(nib_motion, nib_motion), 0.000001);
-    let progress = select(1.0, clamp(projected, 0.0, 1.0), distance2 > 0.000001);
+    var progress = select(1.0, clamp(projected, 0.0, 1.0), distance2 > 0.000001);
+    if distance2 > 0.000001 && any(abs(previous.xy - radii) > vec2<f32>(0.000001)) {
+        // Minimize |offset - motion*t|² / (r0 + (r1-r0)*t)².
+        // Center-line projection ignores changing radius and leaves necks
+        // between tapered spans. This is exact for a fixed-aspect nib; a
+        // changing aspect/orientation uses the same mean nib metric above.
+        let relative_start = previous.xy / middle_axes;
+        let relative_end = radii / middle_axes;
+        let r0 = max((relative_start.x + relative_start.y) * 0.5, 0.000001);
+        let r1 = max((relative_end.x + relative_end.y) * 0.5, 0.000001);
+        let slope = r1 - r0;
+        let a = dot(nib_offset, nib_motion);
+        let b = dot(nib_motion, nib_motion);
+        let c = dot(nib_offset, nib_offset);
+        let denominator = b * r0 + slope * a;
+        if denominator > 0.000001 {
+            progress = clamp((a * r0 + slope * c) / denominator, 0.0, 1.0);
+        } else {
+            // A stationary point here is a maximum; choose an endpoint.
+            progress = select(0.0, 1.0, (c - 2.0 * a + b) / (r1 * r1) < c / (r0 * r0));
+        }
+    }
     let axes = max(mix(previous.xy, radii, progress), vec2<f32>(0.005));
     let angle = mix(previous.zw, rotation, progress);
     let orientation = select(rotation, angle / max(length(angle), 0.00001), dot(angle, angle) > 0.00001);

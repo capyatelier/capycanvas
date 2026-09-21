@@ -92,9 +92,19 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("tip_sharpness");
+        json["stabilization"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pressure_fall_micros");
+        // Old experimental release fields are ignored, not reinterpreted.
+        json["taper"]["release_micros"] = serde_json::json!(16_000);
         let restored: BrushSnapshot = serde_json::from_value(json).unwrap();
         assert_eq!(old, restored);
         restored.validate().unwrap();
+        let mut invalid = default_brush(DefaultBrushPreset::GPen);
+        assert_eq!(invalid.stabilization.pressure_fall_micros, 34_133);
+        invalid.stabilization.pressure_fall_micros = 1_000_001;
+        assert!(invalid.validate().is_err());
         for preset in CONTACT_BRUSH_PRESETS {
             let brush = default_brush(preset);
             let decoded: BrushSnapshot =

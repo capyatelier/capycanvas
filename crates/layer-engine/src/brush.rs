@@ -12,6 +12,7 @@ use layer_core::{
 use layer_render::Dab;
 
 const SPEED_FILTER_SECONDS: f32 = 0.015;
+const PRESSURE_FALL_RESPONSE_SECONDS: f32 = 0.004;
 const MIN_DAB_DISTANCE: f32 = 0.25;
 const MAX_DABS_PER_SEGMENT: usize = 65_536;
 
@@ -60,6 +61,7 @@ pub struct DabGenerator {
     space: RgbSpace,
     last: Option<DynamicPoint>,
     stabilized_input: Option<StrokePoint>,
+    pressure_fall_target: f32,
     distance_until_next: f32,
     filtered_speed: f32,
     rng: u32,
@@ -76,6 +78,7 @@ impl Default for DabGenerator {
             space: RgbSpace::Srgb,
             last: None,
             stabilized_input: None,
+            pressure_fall_target: 0.0,
             distance_until_next: 0.0,
             filtered_speed: 0.0,
             rng: 1,
@@ -124,6 +127,7 @@ impl DabGenerator {
     pub fn reset_for_stroke(&mut self, stroke_id: StrokeId, brush: &BrushSnapshot) {
         self.last = None;
         self.stabilized_input = None;
+        self.pressure_fall_target = 0.0;
         self.distance_until_next = 0.0;
         self.filtered_speed = 0.0;
         self.rng = mix_seed(brush.seed, stroke_id.0);
@@ -232,7 +236,18 @@ impl DabGenerator {
         // are the endpoints and whose major axis is the traveled path length.
         // Its minor radius bounds the error without retaining a point list.
         let error2 = (traveled * traveled - dx * dx - dy * dy).max(0.) * 0.25;
-        if error2 > f64::from(tolerance).powi(2)
+        let pressure_change = (current.point.pressure - start.point.pressure).abs()
+            * brush.diameter * 0.5;
+        let tilt_change = (current.point.tilt[0] - start.point.tilt[0])
+            .hypot(current.point.tilt[1] - start.point.tilt[1]);
+        let twist_change = (current.point.twist - start.point.twist + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        let pose_changed = pressure_change > tolerance
+            || tilt_change > 0.04
+            || twist_change.abs() > 0.04;
+        // Keep the pose before a pressure/tilt transition just as we keep the
+        // vertex before a bend. Otherwise a release narrows an earlier span.
+        if (error2 > f64::from(tolerance).powi(2) || pose_changed)
             && last.stroke_distance > start.stroke_distance
         {
             let evaluated = self.evaluate(last, brush);
@@ -240,20 +255,12 @@ impl DabGenerator {
         }
 
         let start = self.last_evaluated.unwrap_or(last);
-        let pressure_change = (current.point.pressure - start.point.pressure).abs()
-            * brush.diameter * 0.5;
-        let tilt_change = (current.point.tilt[0] - start.point.tilt[0])
-            .hypot(current.point.tilt[1] - start.point.tilt[1]);
-        let twist_change = (current.point.twist - start.point.twist + std::f32::consts::PI)
-            .rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         // Bound live spacing too: prediction can expose the pending endpoint,
         // but committed ink must also advance when prediction is disabled.
         // Large, steady brushes retain coarse sampling rather than emitting at
         // the input rate. Pen-up flushes the final pending pose in finish().
         if current.stroke_distance - start.stroke_distance >= (brush.diameter * 0.5).max(4.)
-            || pressure_change > tolerance
-            || tilt_change > 0.04
-            || twist_change.abs() > 0.04
+            || pose_changed
         {
             let evaluated = self.evaluate(current, brush);
             self.emit_contacts(evaluated, brush, output, damage);
@@ -351,6 +358,7 @@ impl DabGenerator {
     fn stabilize(&mut self, point: StrokePoint, brush: &BrushSnapshot) -> StrokePoint {
         let Some(last) = self.stabilized_input else {
             self.stabilized_input = Some(point);
+            self.pressure_fall_target = point.pressure;
             return point;
         };
         let elapsed = point.elapsed_micros.saturating_sub(last.elapsed_micros) as f32 / 1_000_000.0;
@@ -371,12 +379,43 @@ impl DabGenerator {
             .clamp(0.04, 1.0);
         let pressure_response =
             (1.0 - brush.stabilization.pressure_smoothing * 0.92).clamp(0.04, 1.0);
+        let mut pressure = last.pressure + (point.pressure - last.pressure) * pressure_response;
+        if brush.stabilization.pressure_fall_micros > 0 && pressure < last.pressure {
+            if raw_distance > f32::EPSILON && elapsed > 0.0 {
+                let fall_seconds = brush.stabilization.pressure_fall_micros as f32 / 1_000_000.0;
+                let maximum_change = elapsed / fall_seconds;
+                let target = pressure.clamp(
+                    self.pressure_fall_target - maximum_change,
+                    (self.pressure_fall_target + maximum_change).min(last.pressure),
+                );
+                // Smooth the rate-limited target, not just its endpoint. Exact
+                // integration of a linear target keeps the fall velocity
+                // continuous at pressure steps and repeated sensor values.
+                // Keep the smoothing response independent of the maximum fall
+                // rate, so tuning the rate cannot also weaken the smoothing.
+                let response_seconds = PRESSURE_FALL_RESPONSE_SECONDS;
+                let slope = (target - self.pressure_fall_target) / elapsed;
+                let retained = (-elapsed / response_seconds).exp();
+                pressure = target - slope * response_seconds
+                    + (last.pressure - self.pressure_fall_target + slope * response_seconds)
+                        * retained;
+                pressure = pressure.clamp(target.min(last.pressure), last.pressure);
+                self.pressure_fall_target = target;
+            } else {
+                // A stationary up has no new segment in which to change size.
+                pressure = last.pressure;
+            }
+        } else {
+            // Increasing pressure remains immediate; each new contact also
+            // initializes both states from its actual pressure.
+            self.pressure_fall_target = pressure;
+        }
         let stabilized = StrokePoint {
             position: Point {
                 x: last.position.x + (point.position.x - last.position.x) * response,
                 y: last.position.y + (point.position.y - last.position.y) * response,
             },
-            pressure: last.pressure + (point.pressure - last.pressure) * pressure_response,
+            pressure,
             tilt: [
                 last.tilt[0] + (point.tilt[0] - last.tilt[0]) * response,
                 last.tilt[1] + (point.tilt[1] - last.tilt[1]) * response,
@@ -945,7 +984,9 @@ mod tests {
 
     #[test]
     fn contact_lift_closes_the_spacing_gap_and_replays_the_same_point() {
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        // Test explicit terminal pressure independently of pressure stabilization.
+        brush.stabilization.pressure_fall_micros = 0;
         let stroke = Stroke::new(
             StrokeId(17),
             layer_core::LayerId(1),
@@ -991,7 +1032,8 @@ mod tests {
 
     #[test]
     fn swept_simplification_retains_corners_pressure_extrema_and_large_brush_spacing() {
-        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        brush.stabilization.pressure_fall_micros = 0;
         let mut generator = DabGenerator::default();
         let mut dabs = Vec::new();
         generator.append(point(0., 0.1, 0), &brush, &mut dabs);
@@ -1009,6 +1051,16 @@ mod tests {
             generator.append(point(i as f32, pressure, i as u32 * 4_000), &brush, &mut dabs);
         }
         assert!(dabs.iter().any(|dab| dab.contact[0] == 0.9));
+
+        generator.reset();
+        dabs.clear();
+        for (i, (x, pressure)) in [(0., 1.), (2., 1.), (4., 1.), (6., 0.5)]
+            .into_iter().enumerate()
+        {
+            generator.append(point(x, pressure, i as u32 * 4_000), &brush, &mut dabs);
+        }
+        assert!(dabs.iter().any(|dab| dab.center.x == 4. && dab.contact[0] == 1.),
+            "keep the last full-pressure pose before narrowing");
 
         let mut large = brush;
         large.diameter = 1024.;
@@ -1129,6 +1181,7 @@ mod tests {
             stabilization: layer_core::BrushStabilization {
                 streamline: 1.0,
                 pressure_smoothing: 1.0,
+                pressure_fall_micros: 0,
                 stabilization: 0.5,
                 motion_filtering: 0.5,
                 expression: 1.0,
@@ -1142,6 +1195,123 @@ mod tests {
         assert_eq!(first.position.x, 0.0);
         assert!(second.position.x > 0.0 && second.position.x < 40.0);
         assert!(second.pressure > 0.0 && second.pressure < 0.1);
+    }
+
+    #[test]
+    fn falling_pressure_uses_input_time_without_moving_or_forcing_the_endpoint() {
+        for interval in [1000, 2000, 4000, 8000] {
+            for scale in [0.02, 1., 16.] {
+                for diameter in [18., 2048.] {
+                    let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+                    brush.diameter = diameter;
+                    let mut generator = DabGenerator::default();
+                    generator.stabilize(point(0., 0.6, 0), &brush);
+                    for time in (interval..=16000).step_by(interval as usize) {
+                        let raw = point(time as f32 * scale, 0., time);
+                        let modeled = generator.stabilize(raw, &brush);
+                        assert_eq!(modeled.position, raw.position);
+                        assert_eq!(modeled.elapsed_micros, raw.elapsed_micros);
+                        let seconds = time as f32 / 1_000_000.;
+                        let expected =
+                            0.6 - 29.29716 * (seconds - 0.004 * (1. - (-seconds / 0.004).exp()));
+                        assert!((modeled.pressure - expected).abs() < 0.00001);
+                    }
+                    let end = generator.stabilized_input.unwrap();
+                    assert!((end.pressure - 0.24628767).abs() < 0.00001);
+                    // A same-position zero-pressure up cannot spend more time
+                    // tapering ink that has already reached its endpoint.
+                    let up = generator.stabilize(point(end.position.x, 0., 20000), &brush);
+                    assert_eq!(up.pressure, end.pressure);
+                    let rebound =
+                        generator.stabilize(point(end.position.x + scale, 0.8, 24000), &brush);
+                    assert!((rebound.pressure - 0.8).abs() < 0.000001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn steady_light_is_literal_gradual_falls_have_bounded_lag_and_new_contacts_reset() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut generator = DabGenerator::default();
+        for light in [true, false] {
+            generator.reset_for_stroke(StrokeId(1), &brush);
+            for i in 0..=10 {
+                let pressure = if light { 0.04 } else { 0.6 - i as f32 * 0.04 };
+                let raw = point(i as f32, pressure, i * 8000);
+                let modeled = generator.stabilize(raw, &brush);
+                assert_eq!(modeled.position, raw.position);
+                if light {
+                    assert_eq!(modeled, raw);
+                } else {
+                    // A 5 pressure-unit/s ramp has at most 5 * 4 ms lag.
+                    assert!((raw.pressure..=raw.pressure + 0.020001).contains(&modeled.pressure));
+                }
+            }
+        }
+        generator.reset_for_stroke(StrokeId(2), &brush);
+        let light_start = point(0., 0.03, 0);
+        assert_eq!(generator.stabilize(light_start, &brush), light_start);
+    }
+
+    #[test]
+    fn repeated_pressure_reports_do_not_make_a_staircase_in_falling_size() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let size = |pressure| {
+            let mapping = &brush.mappings[0];
+            mapping.curve.sample(pressure) * mapping.output_scale + mapping.output_bias
+        };
+        let mut generator = DabGenerator::default();
+        let mut previous = 0.8_f32;
+        let mut old_sizes = vec![size(previous); 2];
+        let mut sizes = old_sizes.clone();
+        for i in 0..=20 {
+            // Wacom position reports at ~4 ms, pressure changes at ~8 ms.
+            let raw = point(i as f32 * 20., 0.8 - (i / 2) as f32 * 0.025, i * 4000);
+            previous = raw.pressure.max(previous - 0.05);
+            old_sizes.push(size(previous));
+            sizes.push(size(generator.stabilize(raw, &brush).pressure));
+        }
+        let curvature = |values: &[f32]| {
+            values.windows(3)
+                .map(|w| (w[2] - 2. * w[1] + w[0]).abs())
+                .fold(0_f32, f32::max)
+        };
+        assert!(curvature(&sizes) < curvature(&old_sizes) * 0.4);
+        // Once the fall begins, repeated raw readings must keep narrowing
+        // smoothly instead of alternating a shrinking span and a flat span.
+        assert!(sizes[4..].windows(2).all(|w| w[1] < w[0]));
+    }
+
+    #[test]
+    fn abrupt_lift_bounds_the_change_in_gpen_size_velocity() {
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mapping = &brush.mappings[0];
+        let size = |pressure| {
+            mapping.curve.sample(pressure) * mapping.output_scale + mapping.output_bias
+        };
+        for interval in [1000, 2000, 4000, 8000] {
+            let mut generator = DabGenerator::default();
+            generator.stabilize(point(0., 0.8, 0), &brush);
+            let mut sizes = vec![size(0.8); 2];
+            for time in (interval..=64000).step_by(interval as usize) {
+                let modeled = generator.stabilize(point(time as f32, 0., time), &brush);
+                sizes.push(size(modeled.pressure));
+            }
+            let dt = interval as f32 / 1_000_000.;
+            let max_acceleration = sizes.windows(3)
+                .map(|w| (w[2] - 2. * w[1] + w[0]).abs() / (dt * dt))
+                .fold(0_f32, f32::max);
+            // Check resolved G-Pen size, including its nonlinear sampled curve,
+            // rather than claiming a pressure bound is also a size bound.
+            // With the 34.133 ms fall limit and unchanged 4 ms response, the
+            // pressure acceleration ceiling is about 7324.29 units/s². This
+            // fixture's sampled size acceleration stays below 7500/s².
+            assert!(
+                max_acceleration < 7500.,
+                "dt={dt}, size acceleration={max_acceleration}"
+            );
+        }
     }
 
     #[test]

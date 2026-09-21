@@ -68,7 +68,7 @@ public final class AndroidPenMotion {
         if (args.length < 5 || args.length > 7) throw new IllegalArgumentException("centerX centerY radiusX radiusY [workflow|hover|stroke|undo|redo] [turnsPerSecond] [strokeSeconds]");
         double hz = args.length > 5 ? Double.parseDouble(args[5]) : 1;
         int seconds = args.length > 6 ? Integer.parseInt(args[6]) : 10;
-        if (!(hz > 0 && hz <= 2 && seconds >= 1 && seconds <= 30)) throw new IllegalArgumentException("Invalid rate/duration");
+        if (!(hz > 0 && hz <= 2 && seconds >= 1 && seconds <= 300)) throw new IllegalArgumentException("Invalid rate/duration");
         AndroidPenMotion p = new AndroidPenMotion(Float.parseFloat(args[0]), Float.parseFloat(args[1]),
             Float.parseFloat(args[2]), Float.parseFloat(args[3]));
         switch (args[4]) {

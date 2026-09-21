@@ -13,7 +13,7 @@ use raw_window_handle::{
 use std::ptr::NonNull;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 
 mod surface_capture;
@@ -34,10 +34,10 @@ pub(crate) struct Surface {
     hdr_capable: bool,
     presented_hdr: Option<bool>,
     presented_tone_generation: Option<u32>,
-    first_frame_complete: Option<Arc<AtomicBool>>,
     submitted_frames: u64,
     trace_timings: bool,
-    front_complete: Arc<AtomicBool>,
+    // One surface-owned completion source for startup and update admission.
+    completed_frames: Arc<AtomicU64>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
     _instance: wgpu::Instance,
@@ -289,10 +289,9 @@ impl App {
             hdr_capable,
             presented_hdr: None,
             presented_tone_generation: None,
-            first_frame_complete: None,
             submitted_frames: 0,
             trace_timings: false,
-            front_complete: Arc::new(AtomicBool::new(true)),
+            completed_frames: Arc::new(AtomicU64::new(0)),
             logical_extent: [width, height],
             quarter_turns: 0,
             _instance: instance,
@@ -354,9 +353,9 @@ impl App {
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
-        // Completion is polled before render(). Keep draining input while the
-        // preceding shared-image update is in flight; don't prepare stale work.
-        if self.surface.as_ref().is_some_and(|s| !s.front_complete.load(Ordering::Acquire)) { return Ok(true); }
+        // Bound pending updates while allowing CPU encoding to overlap the
+        // preceding GPU update on the same ordered queue.
+        if self.surface.as_ref().is_some_and(|s| s.submitted_frames.saturating_sub(s.completed_frames.load(Ordering::Acquire)) >= 2) { return Ok(true); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
         let _presentation = self.host.session.engine().backend().0.as_ref()
@@ -454,6 +453,7 @@ impl App {
                 return Ok(true);
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
+                unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas acquire timeout".as_ptr(), surface.submitted_frames as i64); }
                 self.host.dirty = true;
                 return Ok(true);
             }
@@ -481,11 +481,10 @@ impl App {
         gpu.queue().present(target);
         surface.submitted_frames += 1;
         {
-            surface.front_complete.store(false, Ordering::Release);
-            let complete = surface.front_complete.clone();
+            let complete = surface.completed_frames.clone();
             let frame = surface.submitted_frames;
             gpu.queue().on_submitted_work_done(move || {
-                complete.store(true, Ordering::Release);
+                complete.fetch_max(frame, Ordering::Release);
                 // Callback service time is an upper bound on GPU completion,
                 // not scanout or physical pen-to-photon latency.
                 unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }
@@ -500,12 +499,6 @@ impl App {
         }
         surface.presented_hdr = Some(hdr_output);
         surface.presented_tone_generation = self.tone.published_generation;
-        if surface.first_frame_complete.is_none() {
-            let complete = Arc::new(AtomicBool::new(false));
-            surface.first_frame_complete = Some(complete.clone());
-            gpu.queue()
-                .on_submitted_work_done(move || complete.store(true, Ordering::Release));
-        }
         self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         // Poll once before resource use, not again after submission. The next
@@ -832,11 +825,7 @@ pub extern "system" fn Java_art_capycanvas_Native_surfaceReady(
     handle: jlong,
 ) -> jboolean {
     let app = unsafe { app(handle) };
-    let Some(complete) = app
-        .surface
-        .as_ref()
-        .and_then(|s| s.first_frame_complete.as_ref())
-    else {
+    let Some(surface) = app.surface.as_ref() else {
         return 0;
     };
     if let Some(gpu) = app.host.session.renderer_mut().0.as_ref() {
@@ -845,7 +834,7 @@ pub extern "system" fn Java_art_capycanvas_Native_surfaceReady(
             return 0;
         }
     }
-    complete.load(Ordering::Acquire) as jboolean
+    (surface.completed_frames.load(Ordering::Acquire) > 0) as jboolean
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_snapshot(

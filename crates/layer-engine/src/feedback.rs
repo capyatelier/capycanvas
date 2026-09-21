@@ -155,10 +155,7 @@ impl PredictionState {
         }
         let &(start, first) = self.pressure.front()?;
         let &(end, last) = self.pressure.back()?;
-        if end - start < 6_000_000
-            || first - last < 0.04
-            || last >= self.pressure[self.pressure.len() - 2].1
-        {
+        if end - start < 6_000_000 || first - last < 0.04 {
             return None;
         }
         let n = self.pressure.len() as f64;

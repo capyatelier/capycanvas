@@ -67,6 +67,10 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         model.pressure_gain = 0.9;
         model.tilt_spread = 2.0;
         model.tilt_shading = 0.7;
+    } else {
+        // Limit falling pressure in the existing causal stabilization path.
+        // No tool-settings control is exposed for this yet.
+        brush.stabilization.pressure_fall_micros = 80_000;
     }
     match preset {
         Pencil => {}
@@ -97,7 +101,9 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             model.tilt_spread = 1.1;
             model.tilt_shading = 0.45;
         }
-        GPen => {}
+        GPen => {
+            brush.stabilization.pressure_fall_micros = 34_133;
+        }
         RoughGPen => {
             model.edge_roughness = 0.3;
             model.edge_scale = 1.7;

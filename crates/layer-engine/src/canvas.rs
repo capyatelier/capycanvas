@@ -1233,6 +1233,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     self.tool
                 };
                 let mut brush = self.brush.clone();
+                if !matches!(
+                    event.tool,
+                    ToolKind::Pen | ToolKind::Brush | ToolKind::Pencil | ToolKind::Airbrush
+                ) {
+                    brush.stabilization.pressure_fall_micros = 0;
+                }
                 let mut feedback = self.instant_feedback;
                 if is_mask {
                     // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
@@ -1550,6 +1556,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.dabs.extend_from_slice(&self.pending_smudge_dabs);
         }
         if !active.feedback.enabled {
+            // Only the current pending contact is provisional; pressure
+            // limiting needs no retained input window or endpoint prediction.
+            self.dab_generator
+                .clone()
+                .finish(&active.brush, &mut self.dabs);
             self.push_active_preview(start);
             return;
         }
@@ -1630,6 +1641,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         {
             generator.append(estimate.point, &active.brush, &mut self.dabs);
         }
+        // Flush the actual swept endpoint just as finalization does. Coverage
+        // by an earlier, wider contact is not the final pressure/pose.
+        generator.finish(&active.brush, &mut self.dabs);
 
         let modeled_endpoint = generator.modeled_position().unwrap_or(latest.position);
         let locked_endpoint = layer_core::Point {
@@ -2928,6 +2942,169 @@ mod tests {
             height_px,
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
+        }
+    }
+
+    #[test]
+    fn captured_rapid_lifts_match_replay_without_repainting_the_committed_prefix() {
+        let rows: Vec<Vec<f32>> = include_str!("../tests/fixtures/wacom-rapid-lift.csv")
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').map(|v| v.parse().unwrap()).collect())
+            .collect();
+        for capture in 0..5 {
+            let samples: Vec<_> = rows.iter().filter(|r| r[0] as usize == capture).collect();
+            let mut reference = None;
+            for (feedback, lag) in [(false, 0), (true, 0), (true, 8_000), (true, 32_000)] {
+                for cadence in [1, 4, 64] {
+                    let (mut input, consumer) = input_queue(128);
+                    let mut engine = CanvasEngine::new(
+                        RecordingRenderer::default(),
+                        Document::new("rapid lift", 1024, 512),
+                        consumer,
+                        view(1024, 512),
+                        ViewTransform::IDENTITY,
+                    )
+                    .unwrap();
+                    let mut brush = default_brush(DefaultBrushPreset::GPen);
+                    brush.diameter = samples[0][6];
+                    engine.set_brush(brush).unwrap();
+                    engine
+                        .set_instant_feedback(InstantFeedbackConfig {
+                            enabled: feedback,
+                            finalization_lag_micros: lag,
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    engine.render_frame().unwrap();
+                    engine.backend.saw_reset = false;
+                    let mut before_up = None;
+                    for (i, row) in samples.iter().enumerate() {
+                        let phase = if i == 0 {
+                            PenPhase::Down
+                        } else if i + 1 == samples.len() {
+                            PenPhase::Up
+                        } else {
+                            PenPhase::Move
+                        };
+                        input
+                            .push(PenEvent {
+                                timestamp_ns: 1_000_000_000 + row[5] as u64 * 1000,
+                                surface_position: Point {
+                                    x: row[2],
+                                    y: row[3],
+                                },
+                                pressure: row[4],
+                                ..event(i as u64 + 1, phase, row[2])
+                            })
+                            .unwrap();
+                        if (i + 1) % cadence == 0 || i + 1 == samples.len() {
+                            engine.render_frame().unwrap();
+                        }
+                        if cadence == 1 && i + 2 == samples.len() {
+                            let mut visible = engine.backend.persistent.clone();
+                            visible.extend_from_slice(&engine.backend.preview);
+                            before_up = Some(visible);
+                        }
+                    }
+                    let stroke = engine.completed_stroke.as_ref().unwrap();
+                    assert_eq!(stroke.points.len(), samples.len());
+                    for (point, row) in stroke.points.iter().zip(&samples) {
+                        assert_eq!(point.pressure, row[4], "raw pressure must survive release");
+                    }
+                    let mut replay = Vec::new();
+                    DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+                    assert_eq!(
+                        engine.backend.persistent, replay,
+                        "capture={capture}, cadence={cadence}, feedback={feedback}, lag={lag}"
+                    );
+                    assert_eq!(
+                        replay.last().unwrap().center,
+                        stroke.points.last().unwrap().position
+                    );
+                    assert!(replay.last().unwrap().contact[0] > 0.);
+                    if !feedback
+                        && let Some(preview) = before_up
+                    {
+                        assert_eq!(preview, replay, "preview capture={capture}, lag={lag}");
+                    }
+                    if let Some(reference) = &reference {
+                        assert_eq!(&replay, reference);
+                    } else {
+                        reference = Some(replay);
+                    }
+                    assert!(
+                        !engine.backend.saw_reset,
+                        "ordinary release must not repaint the stroke"
+                    );
+                    assert!(engine.backend.preview.is_empty());
+                    if !feedback {
+                        assert_eq!(engine.metrics.engine_prediction_frames, 0);
+                    }
+                    let raster = engine.document().layers[0].raster.identity();
+                    assert!(engine.undo().unwrap());
+                    assert!(engine.document().layers[0].raster.is_empty());
+                    assert!(!engine.undo().unwrap());
+                    assert!(engine.redo().unwrap());
+                    assert_eq!(engine.document().layers[0].raster.identity(), raster);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pressure_limiter_is_pressure_tool_only_and_cancellation_needs_no_release_tail() {
+        for tool in [
+            ToolKind::Pen,
+            ToolKind::Mouse,
+            ToolKind::Finger,
+            ToolKind::Eraser,
+        ] {
+            let (mut input, consumer) = input_queue(16);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("release tools", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform::IDENTITY,
+            )
+            .unwrap();
+            engine
+                .set_brush(default_brush(DefaultBrushPreset::GPen))
+                .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    enabled: false,
+                    ..Default::default()
+                })
+                .unwrap();
+            engine.render_frame().unwrap();
+            for (i, phase) in [PenPhase::Down, PenPhase::Move].into_iter().enumerate() {
+                input
+                    .push(PenEvent {
+                        tool,
+                        ..event(i as u64 + 1, phase, 16. + i as f32 * 20.)
+                    })
+                    .unwrap();
+                engine.render_frame().unwrap();
+            }
+            assert_eq!(
+                engine.active_stroke.as_ref().unwrap().brush.stabilization.pressure_fall_micros > 0,
+                tool == ToolKind::Pen
+            );
+            assert!(!engine.active_stroke.as_ref().unwrap().feedback.enabled);
+            assert!(engine.backend.preview.is_empty());
+            input
+                .push(PenEvent {
+                    tool,
+                    ..event(3, PenPhase::Cancel, 36.)
+                })
+                .unwrap();
+            engine.render_frame().unwrap();
+            assert!(!engine.has_active_stroke());
+            assert!(engine.backend.preview.is_empty());
+            assert_eq!(engine.metrics.committed_strokes, 0);
+            assert!(!engine.undo().unwrap());
         }
     }
 

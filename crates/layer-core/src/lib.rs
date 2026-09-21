@@ -508,6 +508,11 @@ impl Default for BrushPath {
 pub struct BrushStabilization {
     pub streamline: f32,
     pub pressure_smoothing: f32,
+    /// Minimum time for modeled pressure to fall by one full unit. Its fall
+    /// velocity eases with a 4 ms response to smooth repeated sensor values.
+    /// Zero disables the limiter. Uses input time, independent of zoom and DPI.
+    #[serde(default)]
+    pub pressure_fall_micros: u32,
     pub stabilization: f32,
     pub motion_filtering: f32,
     pub expression: f32,
@@ -518,6 +523,7 @@ impl Default for BrushStabilization {
         Self {
             streamline: 0.0,
             pressure_smoothing: 0.0,
+            pressure_fall_micros: 0,
             stabilization: 0.0,
             motion_filtering: 0.0,
             expression: 1.0,
@@ -993,6 +999,7 @@ impl BrushSnapshot {
         if unit
             .iter()
             .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+            || self.stabilization.pressure_fall_micros > 1_000_000
             || finite_nonnegative
                 .iter()
                 .any(|value| !value.is_finite() || *value < 0.0)

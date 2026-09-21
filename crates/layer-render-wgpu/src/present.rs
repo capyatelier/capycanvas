@@ -1037,6 +1037,10 @@ impl ViewportPresenter {
         } else {
             [view.height_px, view.width_px]
         };
+        // A retained target may be scanned out while this pass runs. Even a
+        // full camera redraw must preserve its old pixels until the fullscreen
+        // shader replaces them; a fast clear can otherwise flash on screen.
+        let preserve_target = !overview_only && self.retained.as_ref().is_some_and(|r| r.valid);
         let (regions, full) = if !overview_only && self.retained.is_some() {
             let previous = self.retained.as_ref().unwrap();
             let full = !previous.valid
@@ -1149,10 +1153,10 @@ impl ViewportPresenter {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if full {
-                            wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK })
-                        } else {
+                        load: if preserve_target {
                             wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK })
                         },
                         store: wgpu::StoreOp::Store,
                     },

@@ -514,7 +514,11 @@ impl Swapchain for NativeSwapchain {
         // thus waited for `locked_swapchain_semaphores.acquire`, wait for all
         // of them to finish, thus ensuring that it's okay to pass `acquire` to
         // `vkAcquireNextImageKHR` again.
-        let completed = self.device.wait_for_fence(
+        // Shared images are acquired only once, so their acquire semaphore
+        // is never signaled again. Reusing the retained image in queue order
+        // needs no host wait for semaphore reuse. The present-slot fence above
+        // still protects each recycled presentation semaphore.
+        let completed = (self.shared && self.shared_acquired) || self.device.wait_for_fence(
             fence,
             acquire_semaphore_guard.previously_used_submission_index,
             timeout_ns,
