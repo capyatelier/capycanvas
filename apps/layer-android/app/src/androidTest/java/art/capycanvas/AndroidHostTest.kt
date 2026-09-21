@@ -55,8 +55,12 @@ class AndroidHostTest {
         override fun before() {
             CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir,
                 "host-tests/${java.util.UUID.randomUUID()}").absolutePath
+            RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         }
-        override fun after() { CanvasHost.workspaceDirectoryForTest = null }
+        override fun after() {
+            CanvasHost.workspaceDirectoryForTest = null
+            RecoveryController.directoryForTest = null
+        }
     }).around(compose)
     private val host get() = compose.activity.host
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
@@ -1539,6 +1543,85 @@ class AndroidHostTest {
         action(obj("type" to "invoke", "command" to "zen_mode"))
     }
 
+    @Test fun cursorHidesWhileDrawingAndReturnsOnRelease() {
+        val saved = JSONObject(state().getJSONObject("settings").toString())
+        val brush = JSONObject(state().getJSONObject("brush").toString())
+        fun preference(id: String, value: Any) = action(obj("type" to "preferences",
+            "action" to obj("type" to "edit", "id" to id, "value" to value)))
+        val point = androidx.compose.ui.geometry.Offset(.5f, .5f)
+        fun send(phase: Int, tool: Int) = canvasEvent(phase, listOf(point), tool)
+        fun pixels(name: String): IntArray {
+            val image = capture("cursor-$name")
+            val origin = IntArray(2)
+            var x = 0; var y = 0
+            instrumentation.runOnMainSync {
+                val canvas = findCanvas(compose.activity.window.decorView)!!
+                canvas.getLocationOnScreen(origin)
+                x = origin[0] + canvas.width / 2 - 50
+                y = origin[1] + canvas.height / 2 - 50
+            }
+            return IntArray(100 * 100).also { image.getPixels(it, 0, 100, x, y, 100, 100) }
+        }
+        fun difference(a: IntArray, b: IntArray) = a.indices.count { i ->
+            listOf(0, 8, 16).any { shift -> kotlin.math.abs(((a[i] shr shift) and 255) - ((b[i] shr shift) and 255)) > 8 }
+        }
+        try {
+            action(obj("type" to "select_brush", "id" to 1))
+            action(obj("type" to "set_brush_size", "value" to 48))
+            preference("feedback", false)
+            preference("cursor", 0)
+            action(obj("type" to "preferences", "action" to obj("type" to "reset", "id" to "hide_cursor_while_drawing")))
+            action(obj("type" to "open_settings", "page" to "input"))
+            val toggle = compose.onNodeWithTag("preference-hide_cursor_while_drawing")
+            toggle.performScrollTo().assertIsOn().performClick()
+            waitState { !it.getJSONObject("settings").getBoolean("hide_cursor_while_drawing") }
+            toggle.assertIsOff()
+            assertFalse(state().getJSONObject("settings").getBoolean("hide_cursor_while_drawing"))
+            toggle.performClick()
+            waitState { it.getJSONObject("settings").getBoolean("hide_cursor_while_drawing") }
+            toggle.assertIsOn()
+            compose.onNodeWithTag("setting-choice-cursor").assertExists()
+            capture("cursor-input-settings")
+            action(obj("type" to "close_settings"))
+            for (tool in listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) {
+                send(MotionEvent.ACTION_HOVER_MOVE, tool)
+                val hover = pixels("$tool-hover")
+                preference("cursor", 4)
+                val empty = pixels("$tool-none")
+                assertTrue("Hover cursor reaches the GPU", difference(hover, empty) > 4)
+                preference("cursor", 0)
+                send(MotionEvent.ACTION_DOWN, tool)
+                send(MotionEvent.ACTION_MOVE, tool)
+                val hidden = pixels("$tool-drawing-hidden")
+                preference("hide_cursor_while_drawing", false)
+                val visible = pixels("$tool-drawing-visible")
+                assertTrue("Opting out shows the live cursor", difference(hidden, visible) > 4)
+                preference("hide_cursor_while_drawing", true)
+                assertEquals("Hiding clears the retained GPU cursor", 0, difference(hidden, pixels("$tool-hidden-again")))
+                preference("cursor", 4)
+                assertEquals("Hidden drawing matches No cursor", 0, difference(hidden, pixels("$tool-drawing-none")))
+                preference("cursor", 0)
+                send(MotionEvent.ACTION_UP, tool)
+                val released = pixels("$tool-released")
+                preference("cursor", 4)
+                val painted = pixels("$tool-ink")
+                assertTrue("Release restores hover", difference(released, painted) > 4)
+                assertTrue("Contact still deposits ink", difference(empty, painted) > 20)
+                action(obj("type" to "invoke", "command" to "undo"))
+                assertEquals("One undo removes the contact", 0, difference(empty, pixels("$tool-undo")))
+                preference("cursor", 0)
+            }
+        } finally {
+            send(MotionEvent.ACTION_CANCEL, MotionEvent.TOOL_TYPE_STYLUS)
+            action(obj("type" to "close_settings"))
+            action(obj("type" to "restore_settings", "settings" to saved))
+            action(obj("type" to "select_brush", "id" to brush.getInt("preset")))
+            action(obj("type" to "set_brush_size", "value" to brush.getDouble("diameter")))
+        }
+        assertNull(host.failure)
+        assertNull(host.actionError)
+    }
+
     @Test fun stylusDrawsAndUndoRedoChangePixels() {
         penStroke()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
@@ -2437,20 +2520,20 @@ class AndroidHostTest {
         compose.onNodeWithText("Fit canvas").performClick()
         compose.onNodeWithText("Fit canvas").assertDoesNotExist()
         compose.onNodeWithContentDescription("Settings").performClick()
-        compose.onNodeWithText("Canvas").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
-        capture("19-canvas-settings")
-        val row = preferences().array("pages").objects().first { it.getString("id") == "canvas" }
+        compose.onNodeWithText("Pen & Input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        capture("19-input-settings")
+        val row = preferences().array("pages").objects().first { it.getString("id") == "input" }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getJSONObject("kind").getString("type") == "choice" }
         val kind = row.getJSONObject("kind")
         compose.onNodeWithTag("setting-choice-${row.getString("id")}").performScrollTo().performClick()
         capture("20-cursor-choices")
         val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
         compose.onNodeWithTag("setting-choice-option-${row.getString("id")}-${selection}").performClick()
-        compose.waitUntil(10_000) { preferences().array("pages").objects().first { it.getString("id") == "canvas" }
+        compose.waitUntil(10_000) { preferences().array("pages").objects().first { it.getString("id") == "input" }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == row.getString("id") }
             .getJSONObject("kind").getInt("selected") == selection }
-        compose.onNodeWithTag("settings-content-page:canvas").assertIsDisplayed()
+        compose.onNodeWithTag("settings-content-page:input").assertIsDisplayed()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onNodeWithText("About").performClick()
@@ -2468,7 +2551,7 @@ class AndroidHostTest {
         fun kind(page: String, id: String) = preferences().array("pages").objects().first { it.getString("id") == page }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == id }.getJSONObject("kind")
         // The same renderer handles ordinary choices and choices with previews.
-        for ((page, id) in listOf("appearance" to "theme", "canvas" to "cursor")) {
+        for ((page, id) in listOf("appearance" to "theme", "input" to "cursor")) {
             action(obj("type" to "preferences", "action" to obj("type" to "page", "page" to page)))
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme))

@@ -549,6 +549,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.interaction.facts.popup_open
             || self.state.settings_open
             || self.touch.is_active()
+            // Contact ownership changes before queued ink is rendered, and ends
+            // on release/cancel without waiting for stroke backing to finish.
+            || (self.state.settings.hide_cursor_while_drawing
+                && self.layer_interaction.tool == LayerCanvasTool::Paint
+                && self.interaction.pointer.is_some_and(|p| p.paint))
         {
             return false;
         }
@@ -13950,6 +13955,53 @@ mod tests {
         assert!(s.canvas_cursor().is_none());
         let old: Settings = serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.0}"#).unwrap();
         assert_eq!(old.cursor, CursorMode::BrushSize);
+    }
+
+    #[test]
+    fn cursor_visibility_follows_contact_before_rendering_and_after_cancel() {
+        let mut s = session();
+        let mut view = CanvasCursor::default();
+        for kind in [PointerKind::Mouse, PointerKind::Pen] {
+            for hide in [true, false] {
+                s.state.settings.hide_cursor_while_drawing = hide;
+                for end in [ContactPhase::Up, ContactPhase::Cancel] {
+                    s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+                    assert!(s.update_canvas_cursor(&mut view));
+                    assert!(!view.segments.is_empty());
+                    for phase in [ContactPhase::Down, ContactPhase::Move, end] {
+                        s.input(UiInput::Pointer {
+                            id: 1,
+                            phase,
+                            kind,
+                            button: PointerButton::Primary,
+                            position: [225.0, 300.0],
+                        })
+                        .unwrap();
+                        let visible = !hide || phase == end;
+                        assert_eq!(s.update_canvas_cursor(&mut view), visible);
+                        assert_eq!(!view.segments.is_empty(), visible);
+                    }
+                }
+            }
+        }
+        s.state.settings.hide_cursor_while_drawing = true;
+        // Selection and transform tools retain their crosshair during contact.
+        s.layer_interaction.tool = LayerCanvasTool::Select;
+        pointer(
+            &mut s,
+            1,
+            ContactPhase::Down,
+            [225.0, 300.0],
+            PointerButton::Primary,
+        );
+        assert!(s.update_canvas_cursor(&mut view));
+        assert_eq!(view.mode, CursorMode::Cross);
+        s.input(UiInput::Blur).unwrap();
+        assert!(!s.update_canvas_cursor(&mut view));
+        assert!(view.segments.is_empty());
+        s.layer_interaction.tool = LayerCanvasTool::Paint;
+        s.cursor_input(Some(event(&s, 2, PenPhase::Hover, 0.0)));
+        assert!(s.update_canvas_cursor(&mut view));
     }
 
     #[test]

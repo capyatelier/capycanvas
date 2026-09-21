@@ -1352,6 +1352,8 @@ function canvasPointer(e, stage) {
   }
   const reply = pointerInput(sample, stage);
   if (reply.paint) queuePen(sample, stage);
+  // Normal release drops capture after pointerup already restored hover.
+  if (e.type === "lostpointercapture" && !reply.handled) return;
   cursorInput(e.type === "pointercancel" || e.type === "lostpointercapture" ? null : e);
 }
 for (const [name, stage] of [

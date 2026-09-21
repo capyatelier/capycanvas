@@ -6,7 +6,7 @@ import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 function harness({ raw = false, prediction = false } = {}) {
-  const listeners = new Map(), records = [], phases = [];
+  const listeners = new Map(), records = [], phases = [], cursors = [];
   let contact = null;
   const context = {
     canvas: {
@@ -22,10 +22,11 @@ function harness({ raw = false, prediction = false } = {}) {
       if (event.phase === "down" && contact === null && event.kind !== "touch")
         contact = { id: event.id, paint: event.button === "primary" };
       const paint = contact?.id === event.id && contact.paint;
+      const handled = contact?.id === event.id;
       if (contact?.id === event.id && ["up", "cancel"].includes(event.phase)) contact = null;
-      return { paint };
+      return { paint, handled };
     },
-    cursorInput() {}, wake() {},
+    cursorInput(event) { cursors.push(event?.type ?? null); }, wake() {},
   };
   if (raw) context.onpointerrawupdate = null;
   runInNewContext(source.slice(source.indexOf("function position("),
@@ -38,7 +39,7 @@ function harness({ raw = false, prediction = false } = {}) {
         timeStamp: ++timeStamp, cancelable: type !== "pointerrawupdate", preventDefault() {}, ...overrides });
     },
     samples: () => Array.from({ length: records.length / 11 }, (_, i) => records.slice(i * 11, i * 11 + 11)),
-    phases,
+    phases, cursors,
   };
 }
 
@@ -69,6 +70,17 @@ test("capture loss with missing pointer type still finishes the active pen", () 
   h.send("pointerdown");
   h.send("lostpointercapture", { pointerType: "", pressure: 0, buttons: 0 });
   assert.deepEqual(h.samples().map(s => s[1]), [1, 3]);
+  assert.equal(h.cursors.at(-1), null);
+});
+
+test("normal mouse and pen release preserves hover after capture ends", () => {
+  for (const pointerType of ["mouse", "pen"]) {
+    const h = harness();
+    h.send("pointerdown", { pointerType });
+    h.send("pointerup", { pointerType, pressure: 0, buttons: 0 });
+    h.send("lostpointercapture", { pointerType, pressure: 0, buttons: 0 });
+    assert.equal(h.cursors.at(-1), "pointerup");
+  }
 });
 
 test("foreign pointers cannot end the active stroke", () => {

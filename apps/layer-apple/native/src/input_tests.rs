@@ -12,6 +12,7 @@ fn mac_manual_prediction_paints_ahead_of_pen_and_mouse_without_committing_the_ti
             app.action(json!({"type":"set_brush_size","value":4}));
             app.action(json!({"type":"set_color","rgba":[0,0,1,1]}));
             app.invoke("settings");
+            app.action(json!({"type":"preferences","action":{"type":"edit","id":"hide_cursor_while_drawing","value":false}}));
             app.action(json!({"type":"preferences","action":{"type":"edit","id":"prediction_horizon","value":milliseconds}}));
             app.action(json!({"type":"close_settings"}));
             app.draw_until_idle();

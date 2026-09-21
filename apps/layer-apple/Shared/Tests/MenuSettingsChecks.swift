@@ -46,11 +46,11 @@ extension XCTestCase {
         choose("theme", "Light")
         reopen("appearance"); selected("theme", "Light")
 
-        page("canvas")
+        page("input")
         for label in ["Outline and crosshair", "Crosshair", "No cursor", "Brush outline", "Dot"] {
             choose("cursor", label)
         }
-        reopen("canvas"); selected("cursor", "Dot")
+        reopen("input"); selected("cursor", "Dot")
         attachEditor(in: app, name: "settings-dropdown-cursor")
 
         #if os(macOS)

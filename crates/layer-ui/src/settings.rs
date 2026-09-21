@@ -94,6 +94,7 @@ pub struct Settings {
     pub zen_reveal_at_edges: bool,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
+    pub hide_cursor_while_drawing: bool,
     pub pan_speed: f32,
     pub zoom_speed: f32,
     pub feedback: bool,
@@ -121,6 +122,7 @@ impl Default for Settings {
             zen_reveal_at_edges: false,
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
+            hide_cursor_while_drawing: true,
             pan_speed: 1.0,
             zoom_speed: 1.0,
             feedback: true,
@@ -272,6 +274,7 @@ pub enum PreferenceId {
     DarkBase,
     LightBase,
     Cursor,
+    HideCursorWhileDrawing,
     PanSpeed,
     ZoomSpeed,
     Pressure,
@@ -303,6 +306,7 @@ impl PreferenceId {
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Cursor => "cursor",
+            Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
             Self::Pressure => "pressure",
@@ -772,31 +776,6 @@ impl Settings {
             }],
             vec![
                 PreferenceGroup {
-                    title: "Pointer".into(),
-                    rows: vec![row(
-                        Cursor,
-                        "Canvas cursor",
-                        "",
-                        PreferenceKind::Choice {
-                            presentation: ChoicePresentation::Dropdown,
-                            options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
-                            icons: [
-                                "cursor-brush",
-                                "cursor-brush-cross",
-                                "cursor-cross",
-                                "cursor-dot",
-                                "cursor-none",
-                            ]
-                            .map(String::from)
-                            .to_vec(),
-                            selected: CursorMode::CHOICES
-                                .iter()
-                                .position(|c| c.0 == self.cursor)
-                                .unwrap() as u32,
-                        },
-                    )],
-                },
-                PreferenceGroup {
                     title: "Navigation".into(),
                     rows: vec![
                         number(
@@ -820,10 +799,47 @@ impl Settings {
                     ],
                 },
             ],
-            vec![PreferenceGroup {
-                title: "Pen response".into(),
-                rows: input,
-            }],
+            vec![
+                PreferenceGroup {
+                    title: "Pointer".into(),
+                    rows: vec![
+                        row(
+                            Cursor,
+                            "Canvas cursor",
+                            "",
+                            PreferenceKind::Choice {
+                                presentation: ChoicePresentation::Dropdown,
+                                options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
+                                icons: [
+                                    "cursor-brush",
+                                    "cursor-brush-cross",
+                                    "cursor-cross",
+                                    "cursor-dot",
+                                    "cursor-none",
+                                ]
+                                .map(String::from)
+                                .to_vec(),
+                                selected: CursorMode::CHOICES
+                                    .iter()
+                                    .position(|c| c.0 == self.cursor)
+                                    .unwrap() as u32,
+                            },
+                        ),
+                        row(
+                            HideCursorWhileDrawing,
+                            "Hide cursor while drawing",
+                            "",
+                            PreferenceKind::Switch {
+                                active: self.hide_cursor_while_drawing,
+                            },
+                        ),
+                    ],
+                },
+                PreferenceGroup {
+                    title: "Pen response".into(),
+                    rows: input,
+                },
+            ],
             Vec::new(),
             vec![PreferenceGroup {
                 title: APP_NAME.into(),
@@ -1010,6 +1026,9 @@ impl Settings {
                 self.show_clock = ClockVisibility::CHOICES[value.choice().unwrap() as usize].0
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
+            HideCursorWhileDrawing => {
+                self.hide_cursor_while_drawing = matches!(value, PreferenceValue::Bool(true))
+            }
             TotalZen => return Err("Zen mode no longer has a partial mode.".into()),
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             ZenShowCapy => self.zen_show_capy = matches!(value, PreferenceValue::Bool(true)),
@@ -1395,6 +1414,52 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn pointer_preferences_belong_to_input_on_every_platform() {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+            Platform::Windows,
+        ] {
+            let mut settings = Settings::default();
+            assert!(settings.hide_cursor_while_drawing);
+            for page in settings.pages(platform) {
+                for group in page.groups {
+                    for row in group.rows {
+                        if matches!(
+                            row.id,
+                            PreferenceId::Cursor | PreferenceId::HideCursorWhileDrawing
+                        ) {
+                            assert_eq!(page.id, SettingsPage::Input);
+                            assert_eq!(group.title, "Pointer");
+                        }
+                    }
+                }
+            }
+            let id = PreferenceId::HideCursorWhileDrawing;
+            assert!(
+                settings
+                    .edit(id, PreferenceValue::Number(0.0), platform)
+                    .is_err()
+            );
+            settings
+                .edit(id, PreferenceValue::Bool(false), platform)
+                .unwrap();
+            assert!(!settings.hide_cursor_while_drawing);
+            let restored: Settings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(settings, restored);
+            assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
+            settings
+                .edit(id, settings.default_value(id, platform).unwrap(), platform)
+                .unwrap();
+            assert!(settings.hide_cursor_while_drawing);
+        }
+    }
 
     #[test]
     fn clock_visibility_defaults_round_trips_and_resets() {

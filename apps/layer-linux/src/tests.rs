@@ -10520,6 +10520,39 @@ fn native_cursor_vectors() {
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
+    pump(200);
+    let toggle = find_named(w.window.upcast_ref(), "setting-hide-cursor-while-drawing")
+        .unwrap().downcast::<adw::SwitchRow>().unwrap();
+    assert!(toggle.is_active());
+    toggle.set_active(false);
+    assert!(!state(&w).settings.hide_cursor_while_drawing);
+    toggle.set_active(true);
+    capture_reference(&w, "../../artifacts/ui/cursors/gtk-input-settings.png", 1.0);
+    w.dispatch(UiAction::CloseSettings);
+    pump(200);
+    for kind in [PointerKind::Mouse, PointerKind::Pen] {
+        for end in [ContactPhase::Up, ContactPhase::Cancel] {
+            let contact = |phase| w.interact(UiInput::Pointer {
+                id: 123, phase, kind, button: PointerButton::Primary,
+                position: [600.0 * scale, 460.0 * scale],
+            });
+            contact(ContactPhase::Down);
+            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
+            contact(ContactPhase::Move);
+            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit {
+                id: PreferenceId::HideCursorWhileDrawing, value: PreferenceValue::Bool(false),
+            }});
+            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
+            w.dispatch(UiAction::Preferences { action: PreferenceAction::Reset {
+                id: PreferenceId::HideCursorWhileDrawing,
+            }});
+            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_none());
+            contact(end);
+            assert!(w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().is_some());
+        }
+    }
     w.cursor_input(None);
     assert!(
         w.gpu

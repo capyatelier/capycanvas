@@ -29,7 +29,17 @@ export async function checkPenRendering({ call, evaluate, settle }) {
   const brush = await evaluate("layerApp.state().brush");
   await action({ type: "select_brush", id: 1 });
   await action({ type: "set_brush_size", value: 18 });
-  await action({ type: "restore_settings", settings: { ...saved, cursor: "brush_size" } });
+  // Keep predicted ink from changing underneath cursor pixel comparisons.
+  await action({ type: "restore_settings", settings: { ...saved, cursor: "brush_size", hide_cursor_while_drawing: true, feedback: false } });
+  await action({ type: "open_settings", page: "input" });
+  assert.equal(await evaluate("document.querySelector('#setting-cursor').closest('[data-page]').dataset.page"), "input");
+  assert.equal(await evaluate("document.querySelector('#setting-hide-cursor-while-drawing').checked"), true);
+  await inPage(() => document.querySelector('#setting-hide-cursor-while-drawing').click());
+  await settle();
+  assert.equal(await evaluate("layerApp.state().settings.hide_cursor_while_drawing"), false);
+  await action({ type: "preferences", action: { type: "reset", id: "hide_cursor_while_drawing" } });
+  assert.equal(await evaluate("document.querySelector('#setting-hide-cursor-while-drawing').checked"), true);
+  await action({ type: "close_settings" });
   const point = await inPage(() => {
     const camera = layerApp.app.camera(), rect = layerApp.canvas.getBoundingClientRect(), area = camera.work_area;
     return { x: rect.x + (area[0] + area[2] / 2) * rect.width / camera.viewport[0],
@@ -76,15 +86,26 @@ export async function checkPenRendering({ call, evaluate, settle }) {
       for (let i = 1; i <= 6; i++)
         await send({ type: "mouseMoved", pointerType,
           x: point.x - 30 + i * 10, y: point.y, button: "left", buttons: 1, force: .3 + i * .1 });
+      const hidden = await pixels();
+      const preference = (id, value) => action({ type: "preferences", action: { type: "edit", id, value } });
+      await preference("hide_cursor_while_drawing", false);
+      assert.ok(difference(hidden, await pixels()) > 4, `${pointerType}: disabling hiding shows the live outline`);
+      await preference("hide_cursor_while_drawing", true);
+      assert.equal(difference(await pixels(), hidden), 0, `${pointerType}: enabling hiding clears the retained GPU cursor`);
+      await preference("cursor", 4);
+      assert.equal(difference(await pixels(), hidden), 0, `${pointerType}: hidden drawing matches No cursor pixels`);
+      await preference("cursor", 0);
       await send({ type: "mouseReleased", pointerType,
         x: point.x + 30, y: point.y, button: "left", buttons: 0, clickCount: 1, force: 0 });
+      const released = await pixels();
       await away(pointerType);
       const painted = await pixels();
+      assert.ok(difference(released, painted) > 4, `${pointerType}: release restores the hover cursor`);
       assert.ok(difference(before, painted) > 20, `${pointerType}: 18 px G Pen commits GPU ink`);
       await action({ type: "invoke", command: "undo" });
       assert.deepEqual(await pixels(), before, "one undo removes exactly this contact");
       await action({ type: "invoke", command: "redo" });
-      assert.deepEqual(await pixels(), painted, "redo restores the committed stroke");
+      assert.equal(difference(await pixels(), painted), 0, "redo restores the committed stroke");
       await action({ type: "invoke", command: "undo" });
     }
     assert.equal(await evaluate("penFeatures.calls"), 0, "drawing never remaps immutable GPUDevice features");
@@ -98,5 +119,5 @@ export async function checkPenRendering({ call, evaluate, settle }) {
     await action({ type: "select_brush", id: brush.preset });
     await action({ type: "set_brush_size", value: brush.diameter });
   }
-  console.log("GPU mouse/pen cursors, G Pen 18 px, undo/redo and cached device features passed");
+  console.log("GPU mouse/pen cursors, hide while drawing toggle/reset, G Pen 18 px, undo/redo and cached device features passed");
 }

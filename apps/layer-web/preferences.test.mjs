@@ -181,7 +181,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
       assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
-      if (page === "canvas") {
+      if (page === "input") {
         await click('.preference-choice summary');
         assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 5);
         await capture(`cursor-choices-${theme}`);
