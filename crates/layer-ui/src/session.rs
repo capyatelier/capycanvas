@@ -311,7 +311,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn platform_prediction_available(&self) -> bool {
         match self.state.platform {
             Platform::Ios => self.platform_prediction_available.unwrap_or(true),
-            Platform::Android | Platform::Web => {
+            Platform::Android | Platform::Web | Platform::Windows => {
                 self.platform_prediction_available.unwrap_or(false)
             }
             _ => false,
@@ -15747,6 +15747,7 @@ mod tests {
             Platform::Mac,
             Platform::Android,
             Platform::Web,
+            Platform::Windows,
         ] {
             for available in [false, true] {
                 for native in [false, true] {
@@ -15847,7 +15848,7 @@ mod tests {
         for (platform, title, supported) in [
             (Platform::Generic, "Use native stroke prediction", false),
             (Platform::Gtk, "Use Linux stroke prediction", false),
-            (Platform::Windows, "Use Windows stroke prediction", false),
+            (Platform::Windows, "Use Windows stroke prediction", true),
             (Platform::Mac, "Use macOS stroke prediction", false),
             (Platform::Ios, "Use iPadOS stroke prediction", true),
             (Platform::Android, "Use Android stroke prediction", true),

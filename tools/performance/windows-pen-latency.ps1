@@ -64,6 +64,7 @@ $app.WaitForExit(30000)|Out-Null
 if(!$app.HasExited){throw 'Benchmark app did not finish'}
 $prefix='latency-'+$meta.window_id
 Get-ChildItem (Join-Path $directory ($prefix+'-*'))|Copy-Item -Destination $OutputDirectory
+Get-ChildItem (Join-Path $directory ('prediction-'+$app.Id+'-*.json'))|Copy-Item -Destination $OutputDirectory
 if($app.ExitCode -ne 0){throw "Benchmark app exited with $($app.ExitCode)"}
 if((Test-Path (Join-Path $OutputDirectory 'errors.txt')) -and (Get-Item (Join-Path $OutputDirectory 'errors.txt')).Length -gt 0){throw 'Benchmark application reported an error; inspect errors.txt'}
 Write-Output "Captured $OutputDirectory"

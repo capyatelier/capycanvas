@@ -63,6 +63,7 @@ pub struct CapyHost {
     navigator: crate::navigator::Navigator,
     scale: f32,
     blank_presented: bool,
+    prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
     services: Option<crate::settings::SettingsService>,
     filters: Option<crate::filter_packages::FilterService>,
     documents: Option<crate::documents::DocumentService>,
@@ -116,6 +117,7 @@ impl CapyHost {
             navigator: Default::default(),
             scale,
             blank_presented: false,
+            prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
             services: None,
             filters: None,
             documents: None,
@@ -325,8 +327,14 @@ impl CapyHost {
         let Some(target) = self.target.take() else {
             return Ok(1);
         };
+        let prediction_before = self.prediction_frames.map(|_| self.native.session.engine().metrics());
         self.native
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;
+        if let (Some(total), Some(before)) = (&mut self.prediction_frames, prediction_before) {
+            let after = self.native.session.engine().metrics();
+            total[0] += after.platform_prediction_frames.saturating_sub(before.platform_prediction_frames);
+            total[1] += after.engine_prediction_frames.saturating_sub(before.engine_prediction_frames);
+        }
         self.gpu.check()?;
         self.native.dirty |= self.native.session.wants_continuous_frames();
         self.native
@@ -415,7 +423,20 @@ pub unsafe extern "C" fn capy_set_window(host: *mut CapyHost, window: *mut c_voi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_destroy(host: *mut CapyHost) {
     if !host.is_null() {
-        let _ = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(host)) }));
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let host = unsafe { Box::from_raw(host) };
+            // One opt-in write after input/rendering stop, never in the pen path.
+            if let Some([platform, engine]) = host.prediction_frames {
+                let report = serde_json::json!({
+                    "process_id": std::process::id(),
+                    "window": host.window,
+                    "platform_prediction_frames": platform,
+                    "engine_prediction_frames": engine,
+                });
+                let path = format!("prediction-{}-{}.json", std::process::id(), host.window);
+                let _ = std::fs::write(path, report.to_string());
+            }
+        }));
     }
 }
 #[unsafe(no_mangle)]

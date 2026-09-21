@@ -1,0 +1,800 @@
+{
+  "native_ui": {
+    "settings_toggle": true,
+    "survives_mouse_touch_pen": true,
+    "prediction": {
+      "engine_prediction_frames": 25,
+      "platform_prediction_frames": 428,
+      "process_id": 3464,
+      "window": 2885514
+    },
+    "evidence": "C:\\Users\\hogba\\code\\capycanvas\\artifacts\\windows\\prediction\\13f98f506801446da9a60ecc5941497f"
+  },
+  "ui_prediction_tests": 3,
+  "baseline_commit": "8a21ebd00e4a9fcaab202035e65fa6e7146157c2",
+  "runs": [
+    {
+      "csv_sha256": [
+        {
+          "sha256": "5431B756712886E6170D5EC904C16359FB624D1081BD62B2D96FBB64F97C8B71",
+          "file": "injected.csv"
+        },
+        {
+          "sha256": "F90C1B09C6AB94DC588C62124F08C4B471D019086F718A76D489101D97A29E79",
+          "file": "latency-4261006-consumed.csv"
+        },
+        {
+          "sha256": "2A3956E1780F6A239AF896FFD81909E0950B421B06060CD51A51B37D6897782A",
+          "file": "latency-4261006-frames.csv"
+        },
+        {
+          "sha256": "101543D11A6C363FD70E310DE53FBAE2903C7E6B75937337F89D985064FD7C71",
+          "file": "latency-4261006-input.csv"
+        }
+      ],
+      "name": "before",
+      "metadata": {
+        "process_id": 16476,
+        "brush_name": "G-Pen",
+        "diameter": 18,
+        "project_sha256": "2D480BADC27D63DE91A0D13235EA65B5932662BB73C9563027DADD2FB3DD31B6",
+        "exe_sha256": "0EC55DCAF584EF888830680F5BAAE637623BB1C2FF5A9601DE6DD0819D6E74CE",
+        "dll_sha256": "EC1F1E8F5D74C4E1631322FD4499022B079BA16E9CB010AC7144F01306408FA5",
+        "surface": {
+          "density": 1.5,
+          "format": "Rgba16Float",
+          "maximum_frame_latency": 1,
+          "no_vsync_wait": false,
+          "present_mode": "Immediate",
+          "scope": "steady_canvas_presentation_probe",
+          "swap_chain_addresses": [
+            "0x2000b552af0",
+            "0x2000b552af0"
+          ],
+          "viewport": [
+            1418,
+            988
+          ],
+          "process_id": 16476,
+          "ready_qpc_ns": "81757396147900",
+          "window_id": 4261006
+        },
+        "seconds": 10,
+        "rate_hz": 240,
+        "center": [
+          768,
+          543
+        ],
+        "radii": [
+          200,
+          120
+        ],
+        "qpc_frequency": 10000000,
+        "display": {
+          "device": "\\\\.\\DISPLAY1",
+          "adapter": "Intel(R) Iris(R) Xe Graphics",
+          "monitor": "Surface Panel",
+          "primary": true,
+          "x": 0,
+          "y": 0,
+          "width": 2256,
+          "height": 1504,
+          "refreshHz": 60
+        }
+      },
+      "summary": {
+        "scope": "OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response",
+        "timestamp_origin": "QPC immediately before each OS injection call",
+        "pointer_timestamp_offset_ms": {
+          "min": -0.457,
+          "max": 0.8845
+        },
+        "process_id": 16476,
+        "diameter": 18,
+        "present_mode": "Immediate",
+        "no_vsync_wait": false,
+        "inputs": 2401,
+        "consumed": 2401,
+        "unmatched": 0,
+        "stats_errors": [
+          0
+        ],
+        "valid_stats": 4619,
+        "observed_displayed_frames": 4294,
+        "refresh_period_ms": 16.6668,
+        "refresh_timestamp_applicable": false,
+        "delivery_ms": {
+          "count": 2401,
+          "mean_ms": 1.032833860891295,
+          "p50_ms": 0.9964,
+          "p95_ms": 1.3128,
+          "p99_ms": 1.5974,
+          "max_ms": 14.8664
+        },
+        "owner_queue_ms": {
+          "count": 2401,
+          "mean_ms": 1.6996769262807139,
+          "p50_ms": 1.2106,
+          "p95_ms": 3.633,
+          "p99_ms": 12.2171,
+          "max_ms": 29.0086
+        },
+        "input_to_frame_return_ms": {
+          "count": 2401,
+          "mean_ms": 5.190183090379003,
+          "p50_ms": 4.5778,
+          "p95_ms": 8.3995,
+          "p99_ms": 30.7358,
+          "max_ms": 58.4634
+        },
+        "host_frame_ms": {
+          "count": 2322,
+          "mean_ms": 2.1895661498707977,
+          "p50_ms": 2.231,
+          "p95_ms": 4.1712,
+          "p99_ms": 5.9546,
+          "max_ms": 28.4399
+        },
+        "acquire_wait_ms": {
+          "count": 2322,
+          "mean_ms": 0.2835153316106804,
+          "p50_ms": 0.2536,
+          "p95_ms": 0.7958,
+          "p99_ms": 1.5291,
+          "max_ms": 2.3202
+        },
+        "input_to_dxgi_display_ms": null,
+        "newest_input_to_dxgi_display_ms": null,
+        "display_matched_inputs": 0,
+        "input_to_presentation_observation_bound_ms": {
+          "count": 2182,
+          "mean_ms": 7.113579422740845,
+          "p50_ms": 5.5700999945402145,
+          "p95_ms": 12.578400000929832,
+          "p99_ms": 37.69299998879433,
+          "max_ms": 241.40060000121593
+        },
+        "newest_input_to_presentation_observation_bound_ms": {
+          "count": 2113,
+          "mean_ms": 6.437248746090966,
+          "p50_ms": 5.480800002813339,
+          "p95_ms": 11.708599999547005,
+          "p99_ms": 15.310000002384186,
+          "max_ms": 241.40060000121593
+        },
+        "observation_matched_inputs": 2182
+      },
+      "prediction": null
+    },
+    {
+      "csv_sha256": [
+        {
+          "sha256": "431C7251288827E6CE1ED607DA8BE5E08EEAA244BD410CBA813025612E495943",
+          "file": "injected.csv"
+        },
+        {
+          "sha256": "3B30554C2B298D02E536CF301634AEE6B15CD9DDDF353C81AC7AA651FCE50311",
+          "file": "latency-18548358-consumed.csv"
+        },
+        {
+          "sha256": "3CEEDEEC8750AB9E598D5018DBC237C69C428CF904F1E4B5ACDE31806AF06583",
+          "file": "latency-18548358-frames.csv"
+        },
+        {
+          "sha256": "310EF551468846B2312F2A9D68A88F6C827C20445D3C37323B2E0202F28D045E",
+          "file": "latency-18548358-input.csv"
+        }
+      ],
+      "name": "after",
+      "metadata": {
+        "process_id": 3164,
+        "brush_name": "G-Pen",
+        "diameter": 18,
+        "project_sha256": "2D480BADC27D63DE91A0D13235EA65B5932662BB73C9563027DADD2FB3DD31B6",
+        "exe_sha256": "B2296801B3E265673FBC87E50C57486404962DDCC87744ACFA7124AAC5E5F56F",
+        "dll_sha256": "94E622551409830DD5BF964FE53D6C57C0BC9DD0433CE0A39EF0760C7416865B",
+        "surface": {
+          "density": 1.5,
+          "format": "Rgba16Float",
+          "maximum_frame_latency": 1,
+          "no_vsync_wait": false,
+          "present_mode": "Immediate",
+          "scope": "steady_canvas_presentation_probe",
+          "swap_chain_addresses": [
+            "0x1ad00d13260",
+            "0x1ad00d13260"
+          ],
+          "viewport": [
+            1418,
+            988
+          ],
+          "process_id": 3164,
+          "ready_qpc_ns": "81841068369300",
+          "window_id": 18548358
+        },
+        "seconds": 10,
+        "rate_hz": 240,
+        "center": [
+          768,
+          543
+        ],
+        "radii": [
+          200,
+          120
+        ],
+        "qpc_frequency": 10000000,
+        "display": {
+          "device": "\\\\.\\DISPLAY1",
+          "adapter": "Intel(R) Iris(R) Xe Graphics",
+          "monitor": "Surface Panel",
+          "primary": true,
+          "x": 0,
+          "y": 0,
+          "width": 2256,
+          "height": 1504,
+          "refreshHz": 60
+        }
+      },
+      "summary": {
+        "scope": "OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response",
+        "timestamp_origin": "QPC immediately before each OS injection call",
+        "pointer_timestamp_offset_ms": {
+          "min": -0.4012,
+          "max": 0.908
+        },
+        "process_id": 3164,
+        "diameter": 18,
+        "present_mode": "Immediate",
+        "no_vsync_wait": false,
+        "inputs": 2401,
+        "consumed": 2401,
+        "unmatched": 0,
+        "stats_errors": [
+          0
+        ],
+        "valid_stats": 4602,
+        "observed_displayed_frames": 4280,
+        "refresh_period_ms": 16.6668,
+        "refresh_timestamp_applicable": false,
+        "delivery_ms": {
+          "count": 2401,
+          "mean_ms": 1.108840483132029,
+          "p50_ms": 1.0456,
+          "p95_ms": 1.4782,
+          "p99_ms": 1.8377,
+          "max_ms": 25.0214
+        },
+        "owner_queue_ms": {
+          "count": 2401,
+          "mean_ms": 1.6365205747605178,
+          "p50_ms": 1.2628,
+          "p95_ms": 3.5377,
+          "p99_ms": 7.0101,
+          "max_ms": 26.6744
+        },
+        "input_to_frame_return_ms": {
+          "count": 2401,
+          "mean_ms": 5.110676218242396,
+          "p50_ms": 4.8481,
+          "p95_ms": 8.8321,
+          "p99_ms": 14.6914,
+          "max_ms": 63.0172
+        },
+        "host_frame_ms": {
+          "count": 2324,
+          "mean_ms": 2.289605679862309,
+          "p50_ms": 2.4161,
+          "p95_ms": 4.5722,
+          "p99_ms": 6.3404,
+          "max_ms": 37.3782
+        },
+        "acquire_wait_ms": {
+          "count": 2324,
+          "mean_ms": 0.2965252151462995,
+          "p50_ms": 0.2415,
+          "p95_ms": 1.0321,
+          "p99_ms": 1.3607,
+          "max_ms": 2.8381
+        },
+        "input_to_dxgi_display_ms": null,
+        "newest_input_to_dxgi_display_ms": null,
+        "display_matched_inputs": 0,
+        "input_to_presentation_observation_bound_ms": {
+          "count": 2165,
+          "mean_ms": 6.69292822160842,
+          "p50_ms": 5.452299997210503,
+          "p95_ms": 12.553700000047684,
+          "p99_ms": 21.770900011062622,
+          "max_ms": 364.41019999980927
+        },
+        "newest_input_to_presentation_observation_bound_ms": {
+          "count": 2098,
+          "mean_ms": 6.345265300175596,
+          "p50_ms": 5.348999992012978,
+          "p95_ms": 11.82829999923706,
+          "p99_ms": 14.358700007200241,
+          "max_ms": 364.41019999980927
+        },
+        "observation_matched_inputs": 2165
+      },
+      "prediction": null
+    },
+    {
+      "csv_sha256": [
+        {
+          "sha256": "2DE01FC0583A62C0BC698E9EDB9B995A8C05FF455639D26511B4F486091AB0CC",
+          "file": "injected.csv"
+        },
+        {
+          "sha256": "54433E1F17811629DC328F6076E13D162D5321A2C7C8ED7B636823B61F0D2D26",
+          "file": "latency-12846978-consumed.csv"
+        },
+        {
+          "sha256": "51C8435C44480CA8973DF02C0AD9D016AA69DF6C9754F3F62639FC8946B8ECC4",
+          "file": "latency-12846978-frames.csv"
+        },
+        {
+          "sha256": "BB76E83F33CCA40F1B2D47D9FCB42FB5A8774425DF11FF4CF2E88DBBAE53BBFA",
+          "file": "latency-12846978-input.csv"
+        }
+      ],
+      "name": "verified",
+      "metadata": {
+        "process_id": 6500,
+        "brush_name": "G-Pen",
+        "diameter": 18,
+        "project_sha256": "2D480BADC27D63DE91A0D13235EA65B5932662BB73C9563027DADD2FB3DD31B6",
+        "exe_sha256": "6C192F953BF493CBAA81FAE41C18BCEDBF29A317DE1294B29139367126478E06",
+        "dll_sha256": "8C82D5C1A37BB7829365FF2B3D949B56EDEC1D333CAE1E1B3DDCEE0E455F6003",
+        "surface": {
+          "density": 1.5,
+          "format": "Rgba16Float",
+          "maximum_frame_latency": 1,
+          "no_vsync_wait": false,
+          "present_mode": "Immediate",
+          "scope": "steady_canvas_presentation_probe",
+          "swap_chain_addresses": [
+            "0x29c17a6f3b0",
+            "0x29c17a6f3b0"
+          ],
+          "viewport": [
+            1418,
+            988
+          ],
+          "process_id": 6500,
+          "ready_qpc_ns": "82234883063000",
+          "window_id": 12846978
+        },
+        "seconds": 10,
+        "rate_hz": 240,
+        "center": [
+          768,
+          543
+        ],
+        "radii": [
+          200,
+          120
+        ],
+        "qpc_frequency": 10000000,
+        "display": {
+          "device": "\\\\.\\DISPLAY1",
+          "adapter": "Intel(R) Iris(R) Xe Graphics",
+          "monitor": "Surface Panel",
+          "primary": true,
+          "x": 0,
+          "y": 0,
+          "width": 2256,
+          "height": 1504,
+          "refreshHz": 60
+        }
+      },
+      "summary": {
+        "scope": "OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response",
+        "timestamp_origin": "QPC immediately before each OS injection call",
+        "pointer_timestamp_offset_ms": {
+          "min": -0.371,
+          "max": 1.848
+        },
+        "process_id": 6500,
+        "diameter": 18,
+        "present_mode": "Immediate",
+        "no_vsync_wait": false,
+        "inputs": 2401,
+        "consumed": 2401,
+        "unmatched": 0,
+        "stats_errors": [
+          0
+        ],
+        "valid_stats": 2528,
+        "observed_displayed_frames": 596,
+        "refresh_period_ms": 16.6667,
+        "refresh_timestamp_applicable": false,
+        "delivery_ms": {
+          "count": 2401,
+          "mean_ms": 1.7609427321949178,
+          "p50_ms": 1.5971,
+          "p95_ms": 2.595,
+          "p99_ms": 4.3488,
+          "max_ms": 29.4652
+        },
+        "owner_queue_ms": {
+          "count": 2401,
+          "mean_ms": 3.0497161599333653,
+          "p50_ms": 2.1499,
+          "p95_ms": 7.7907,
+          "p99_ms": 19.0391,
+          "max_ms": 31.3392
+        },
+        "input_to_frame_return_ms": {
+          "count": 2401,
+          "mean_ms": 8.98922686380675,
+          "p50_ms": 7.8513,
+          "p95_ms": 18.1332,
+          "p99_ms": 34.5984,
+          "max_ms": 72.4884
+        },
+        "host_frame_ms": {
+          "count": 1842,
+          "mean_ms": 3.4878172095548314,
+          "p50_ms": 2.8154,
+          "p95_ms": 8.0413,
+          "p99_ms": 12.6321,
+          "max_ms": 32.9293
+        },
+        "acquire_wait_ms": {
+          "count": 1842,
+          "mean_ms": 0.816709283387622,
+          "p50_ms": 0.7458,
+          "p95_ms": 2.1717,
+          "p99_ms": 2.9886,
+          "max_ms": 3.8884
+        },
+        "input_to_dxgi_display_ms": null,
+        "newest_input_to_dxgi_display_ms": null,
+        "display_matched_inputs": 0,
+        "input_to_presentation_observation_bound_ms": {
+          "count": 741,
+          "mean_ms": 37.60399716591787,
+          "p50_ms": 35.90200001001358,
+          "p95_ms": 57.70889998972416,
+          "p99_ms": 75.11280000209808,
+          "max_ms": 257.68090000748634
+        },
+        "newest_input_to_presentation_observation_bound_ms": {
+          "count": 448,
+          "mean_ms": 33.87862968774113,
+          "p50_ms": 32.85660000145435,
+          "p95_ms": 44.711999997496605,
+          "p99_ms": 57.0029000043869,
+          "max_ms": 257.68090000748634
+        },
+        "observation_matched_inputs": 741
+      },
+      "prediction": {
+        "engine_prediction_frames": 0,
+        "platform_prediction_frames": 2504,
+        "process_id": 6500,
+        "window": 12846978
+      }
+    },
+    {
+      "csv_sha256": [
+        {
+          "sha256": "060EDA951DBAA7235E11106B7E23D5BB020B5C56268B7D840E1DD8F5EB0B4C9F",
+          "file": "injected.csv"
+        },
+        {
+          "sha256": "94E8CE59C51A04057F1F4A5990D62629E8F0F1B5B98960EFF97056F53A154DC6",
+          "file": "latency-20907754-consumed.csv"
+        },
+        {
+          "sha256": "1A4F892334728DB72DEA1864FEAB327FA98A5D125212C7B80F8D9F2DE69BD157",
+          "file": "latency-20907754-frames.csv"
+        },
+        {
+          "sha256": "CB52877D65B37EFA2CBDC76BAA9CA5E4D75ABF87D58FB93ADB94D46D7407EA4D",
+          "file": "latency-20907754-input.csv"
+        }
+      ],
+      "name": "control-final",
+      "metadata": {
+        "process_id": 5448,
+        "brush_name": "G-Pen",
+        "diameter": 18,
+        "project_sha256": "2D480BADC27D63DE91A0D13235EA65B5932662BB73C9563027DADD2FB3DD31B6",
+        "exe_sha256": "0EC55DCAF584EF888830680F5BAAE637623BB1C2FF5A9601DE6DD0819D6E74CE",
+        "dll_sha256": "EC1F1E8F5D74C4E1631322FD4499022B079BA16E9CB010AC7144F01306408FA5",
+        "surface": {
+          "density": 1.5,
+          "format": "Rgba16Float",
+          "maximum_frame_latency": 1,
+          "no_vsync_wait": false,
+          "present_mode": "Immediate",
+          "scope": "steady_canvas_presentation_probe",
+          "swap_chain_addresses": [
+            "0x201e867bef0",
+            "0x201e867bef0"
+          ],
+          "viewport": [
+            1418,
+            988
+          ],
+          "process_id": 5448,
+          "ready_qpc_ns": "82534916549200",
+          "window_id": 20907754
+        },
+        "seconds": 10,
+        "rate_hz": 240,
+        "center": [
+          768,
+          543
+        ],
+        "radii": [
+          200,
+          120
+        ],
+        "qpc_frequency": 10000000,
+        "display": {
+          "device": "\\\\.\\DISPLAY1",
+          "adapter": "Intel(R) Iris(R) Xe Graphics",
+          "monitor": "Surface Panel",
+          "primary": true,
+          "x": 0,
+          "y": 0,
+          "width": 2256,
+          "height": 1504,
+          "refreshHz": 60
+        }
+      },
+      "summary": {
+        "scope": "OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response",
+        "timestamp_origin": "QPC immediately before each OS injection call",
+        "pointer_timestamp_offset_ms": {
+          "min": -0.3817,
+          "max": 0.9557
+        },
+        "process_id": 5448,
+        "diameter": 18,
+        "present_mode": "Immediate",
+        "no_vsync_wait": false,
+        "inputs": 2401,
+        "consumed": 2401,
+        "unmatched": 0,
+        "stats_errors": [
+          0
+        ],
+        "valid_stats": 4713,
+        "observed_displayed_frames": 4388,
+        "refresh_period_ms": 16.6668,
+        "refresh_timestamp_applicable": false,
+        "delivery_ms": {
+          "count": 2401,
+          "mean_ms": 1.0374299458558918,
+          "p50_ms": 0.9917,
+          "p95_ms": 1.3271,
+          "p99_ms": 1.5989,
+          "max_ms": 17.3546
+        },
+        "owner_queue_ms": {
+          "count": 2401,
+          "mean_ms": 1.6075058309037897,
+          "p50_ms": 1.2023,
+          "p95_ms": 3.5933,
+          "p99_ms": 6.7212,
+          "max_ms": 17.9904
+        },
+        "input_to_frame_return_ms": {
+          "count": 2401,
+          "mean_ms": 4.888681466055814,
+          "p50_ms": 4.3705,
+          "p95_ms": 8.7244,
+          "p99_ms": 14.6977,
+          "max_ms": 37.7631
+        },
+        "host_frame_ms": {
+          "count": 2329,
+          "mean_ms": 2.163192099613573,
+          "p50_ms": 2.2382,
+          "p95_ms": 4.4219,
+          "p99_ms": 5.8317,
+          "max_ms": 15.2111
+        },
+        "acquire_wait_ms": {
+          "count": 2329,
+          "mean_ms": 0.27438441391155033,
+          "p50_ms": 0.2612,
+          "p95_ms": 0.802,
+          "p99_ms": 1.3149,
+          "max_ms": 2.1838
+        },
+        "input_to_dxgi_display_ms": null,
+        "newest_input_to_dxgi_display_ms": null,
+        "display_matched_inputs": 0,
+        "input_to_presentation_observation_bound_ms": {
+          "count": 2191,
+          "mean_ms": 6.780318028126499,
+          "p50_ms": 5.527199998497963,
+          "p95_ms": 12.909700006246567,
+          "p99_ms": 19.48710000514984,
+          "max_ms": 221.65499998629093
+        },
+        "newest_input_to_presentation_observation_bound_ms": {
+          "count": 2127,
+          "mean_ms": 6.42355646432623,
+          "p50_ms": 5.416400000452995,
+          "p95_ms": 12.154600009322166,
+          "p99_ms": 15.496399998664856,
+          "max_ms": 221.65499998629093
+        },
+        "observation_matched_inputs": 2191
+      },
+      "prediction": null
+    },
+    {
+      "csv_sha256": [
+        {
+          "sha256": "7977E7B4B9DF39E124DA57F2755EB33C12905AD974AB802F1BD703970EADA9D1",
+          "file": "injected.csv"
+        },
+        {
+          "sha256": "F4044D176E45449E3813B4DF72CC6A5AAEC6143B904566554CAD0BF907D1125F",
+          "file": "latency-22808168-consumed.csv"
+        },
+        {
+          "sha256": "CCF3342E53FF0C9AB0C4531A384012E1A41764DDB7DF47C6B6DB01C6D44CE9EE",
+          "file": "latency-22808168-frames.csv"
+        },
+        {
+          "sha256": "A656D7C858F86BA3CA41C59ABF8BF71BA2C35CD6790ADE1511FEB4AE30F07EA2",
+          "file": "latency-22808168-input.csv"
+        }
+      ],
+      "name": "verified-repeat",
+      "metadata": {
+        "process_id": 8640,
+        "brush_name": "G-Pen",
+        "diameter": 18,
+        "project_sha256": "2D480BADC27D63DE91A0D13235EA65B5932662BB73C9563027DADD2FB3DD31B6",
+        "exe_sha256": "6C192F953BF493CBAA81FAE41C18BCEDBF29A317DE1294B29139367126478E06",
+        "dll_sha256": "8C82D5C1A37BB7829365FF2B3D949B56EDEC1D333CAE1E1B3DDCEE0E455F6003",
+        "surface": {
+          "density": 1.5,
+          "format": "Rgba16Float",
+          "maximum_frame_latency": 1,
+          "no_vsync_wait": false,
+          "present_mode": "Immediate",
+          "scope": "steady_canvas_presentation_probe",
+          "swap_chain_addresses": [
+            "0x1d928d7db30",
+            "0x1d928d7db30"
+          ],
+          "viewport": [
+            1418,
+            988
+          ],
+          "process_id": 8640,
+          "ready_qpc_ns": "82655768645000",
+          "window_id": 22808168
+        },
+        "seconds": 10,
+        "rate_hz": 240,
+        "center": [
+          768,
+          543
+        ],
+        "radii": [
+          200,
+          120
+        ],
+        "qpc_frequency": 10000000,
+        "display": {
+          "device": "\\\\.\\DISPLAY1",
+          "adapter": "Intel(R) Iris(R) Xe Graphics",
+          "monitor": "Surface Panel",
+          "primary": true,
+          "x": 0,
+          "y": 0,
+          "width": 2256,
+          "height": 1504,
+          "refreshHz": 60
+        }
+      },
+      "summary": {
+        "scope": "OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response",
+        "timestamp_origin": "QPC immediately before each OS injection call",
+        "pointer_timestamp_offset_ms": {
+          "min": -0.4503,
+          "max": 1.396
+        },
+        "process_id": 8640,
+        "diameter": 18,
+        "present_mode": "Immediate",
+        "no_vsync_wait": false,
+        "inputs": 2401,
+        "consumed": 2401,
+        "unmatched": 0,
+        "stats_errors": [
+          0
+        ],
+        "valid_stats": 3516,
+        "observed_displayed_frames": 599,
+        "refresh_period_ms": 16.6667,
+        "refresh_timestamp_applicable": false,
+        "delivery_ms": {
+          "count": 2401,
+          "mean_ms": 1.0107993752603064,
+          "p50_ms": 0.9618,
+          "p95_ms": 1.3506,
+          "p99_ms": 1.731,
+          "max_ms": 14.8315
+        },
+        "owner_queue_ms": {
+          "count": 2401,
+          "mean_ms": 1.8988887963348604,
+          "p50_ms": 1.5068,
+          "p95_ms": 4.4699,
+          "p99_ms": 7.1777,
+          "max_ms": 26.3798
+        },
+        "input_to_frame_return_ms": {
+          "count": 2401,
+          "mean_ms": 5.132615951686795,
+          "p50_ms": 4.5911,
+          "p95_ms": 9.445,
+          "p99_ms": 14.9074,
+          "max_ms": 45.202
+        },
+        "host_frame_ms": {
+          "count": 2260,
+          "mean_ms": 2.0901413716814163,
+          "p50_ms": 1.9828,
+          "p95_ms": 4.3562,
+          "p99_ms": 5.9667,
+          "max_ms": 16.4343
+        },
+        "acquire_wait_ms": {
+          "count": 2260,
+          "mean_ms": 1.112226061946902,
+          "p50_ms": 0.9266,
+          "p95_ms": 2.7036,
+          "p99_ms": 3.3559,
+          "max_ms": 4.1074
+        },
+        "input_to_dxgi_display_ms": null,
+        "newest_input_to_dxgi_display_ms": null,
+        "display_matched_inputs": 0,
+        "input_to_presentation_observation_bound_ms": {
+          "count": 369,
+          "mean_ms": 31.02768048757137,
+          "p50_ms": 29.84690000116825,
+          "p95_ms": 37.96909999847412,
+          "p99_ms": 59.57479999959469,
+          "max_ms": 219.15999999642372
+        },
+        "newest_input_to_presentation_observation_bound_ms": {
+          "count": 344,
+          "mean_ms": 30.333151162623665,
+          "p50_ms": 29.67229999601841,
+          "p95_ms": 35.44929999113083,
+          "p99_ms": 47.21969999372959,
+          "max_ms": 219.15999999642372
+        },
+        "observation_matched_inputs": 369
+      },
+      "prediction": {
+        "engine_prediction_frames": 0,
+        "platform_prediction_frames": 3493,
+        "process_id": 8640,
+        "window": 22808168
+      }
+    }
+  ],
+  "engine_prediction_tests": 9,
+  "scope": "Windows native prediction capability regression; software timing, not physical input-to-photon",
+  "notes": [
+    "Startup and file loading are excluded.",
+    "The after run preceded the diagnostic fix for document-close resets; only verified runs retain reliable native frame totals.",
+    "control-repeat is excluded: startup timed out and its attempted continuation injected no pen data. control-final is the clean replacement.",
+    "The replacement control and final repeat allow 180 seconds for shader startup; the timed stroke remains identical."
+  ]
+}
