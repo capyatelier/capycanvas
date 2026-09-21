@@ -371,16 +371,26 @@ pub(crate) fn widget_point(
 
 impl Input {
     fn timestamp(&self, ms: u32) -> u64 {
-        let (previous, previous_ns) = self
-            .clock
-            .get()
-            .unwrap_or((ms, glib::monotonic_time().max(0) as u64 * 1000));
+        self.timestamp_at(ms, glib::monotonic_time().max(0) as u64 * 1000)
+    }
+    fn timestamp_at(&self, ms: u32, received_ns: u64) -> u64 {
+        let (previous, previous_ns) = self.clock.get().unwrap_or((ms, received_ns));
         let delta = ms.wrapping_sub(previous) as i32 as i64 * 1_000_000;
-        let ns = previous_ns.saturating_add_signed(delta);
+        let mapped = previous_ns.saturating_add_signed(delta);
         if delta >= 0 {
+            // Wayland's timestamp origin is unspecified. Receipt is an upper
+            // bound on sample time, so refine the offset with the minimum
+            // observed delivery delay instead of freezing the first latency.
+            // New receipts are monotonic: this can shorten a calibration-time
+            // interval, but cannot put a new sample before the preceding one.
+            let ns = mapped.min(received_ns);
             self.clock.set(Some((ms, ns)));
+            ns
+        } else {
+            // Older history uses the current batch's mapping and does not train
+            // clock alignment from its deliberately delayed delivery.
+            mapped
         }
-        ns
     }
     fn stylus(
         &self,
@@ -618,6 +628,45 @@ impl Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_clock_removes_initial_delivery_latency_without_reordering() {
+        for hz in [60u64, 120, 240, 480, 1000] {
+            for first_delay in [1_000_000u64, 8_625_000, 40_000_000] {
+                let input = Input::default();
+                let origin_ms = u32::MAX - 15;
+                let origin_ns = 100_000_000_000;
+                let mut last = 0;
+                let mut last_receipt = origin_ns;
+                for i in 0..100u64 {
+                    let elapsed_ms = i * 1000 / hz;
+                    let ms = origin_ms.wrapping_add(elapsed_ms as u32);
+                    let ideal = origin_ns + elapsed_ms * 1_000_000;
+                    // A slow first callback, subsequent batching, then a quiet
+                    // low-latency stream; this includes the real +8.625 ms case.
+                    let delay = if i == 0 {
+                        first_delay
+                    } else if i % 17 < 3 {
+                        6_000_000
+                    } else {
+                        300_000
+                    };
+                    let received = (ideal + delay).max(last_receipt);
+                    let mapped = input.timestamp_at(ms, received);
+                    assert!(mapped <= received);
+                    assert!(mapped >= last);
+                    let history = input.timestamp_at(ms.wrapping_sub(1), received);
+                    assert_eq!(history, mapped - 1_000_000);
+                    assert_eq!(input.timestamp_at(ms, received + 2_000_000), mapped);
+                    if i > 50 {
+                        assert_eq!(mapped, ideal + 300_000);
+                    }
+                    last = mapped;
+                    last_receipt = received;
+                }
+            }
+        }
+    }
+
     #[test]
     fn native_clock_preserves_history_and_u32_wrap() {
         let input = Input::default();

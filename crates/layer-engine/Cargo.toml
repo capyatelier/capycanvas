@@ -5,11 +5,21 @@ edition = "2024"
 description = "Portable input, brush, document orchestration, and render submission for Layer"
 license.workspace = true
 
+[features]
+prediction-bench = ["dep:serde_json", "dep:flate2"]
+
 [dependencies]
 web-time = "1.1.0"
 layer-core = { path = "../layer-core" }
 layer-render = { path = "../layer-render" }
 rtrb = "0.4.0"
+flate2 = { version = "1", optional = true }
+serde_json = { version = "1", optional = true, features = ["float_roundtrip"] }
+serde = { version = "1", features = ["derive"] }
 
 [lib]
 path = "src/lib.rs"
+
+[[example]]
+name = "prediction-replay"
+required-features = ["prediction-bench"]

@@ -4,7 +4,9 @@
 //! producer. Renderers receive one borrowed packet per display frame. The two
 //! queue halves may also run sequentially on one event loop.
 
-use crate::brush::{DabGenerator, dabs_cover_point, damage_for_dabs, lock_dab_tail};
+use crate::brush::{
+    DabGenerator, dabs_cover_point, damage_for_dabs, lock_dab_tail, taper_prediction,
+};
 use crate::feedback::{
     FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PredictionState,
     TipSource, estimate_tip, finalized_count, surface_distance,
@@ -1587,13 +1589,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .elapsed_micros
                     .saturating_add(active.feedback.prediction_horizon_micros)
             });
-        let Some(estimate) = active.prediction.estimate(
+        let now_elapsed = timestamp_ns
+            .and_then(|timestamp| self.builder.elapsed_micros_at(timestamp))
+            .unwrap_or(latest.elapsed_micros);
+        let estimate = active.prediction.estimate_for(
             self.builder.real_points(),
             self.builder.predicted_points(),
             requested_elapsed,
+            now_elapsed,
             self.view.document_to_surface,
             active.feedback,
-        ) else {
+        );
+        let Some(estimate) = estimate else {
             self.push_active_preview(start);
             return;
         };
@@ -1605,6 +1612,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         {
             generator.append(point, &active.brush, &mut self.dabs);
         }
+        let predicted_dab_start = self.dabs.len();
+        let taper_start = generator.modeled_distance() / active.brush.diameter.max(0.01);
+        let taper = estimate.source == TipSource::Engine;
         if estimate.source == TipSource::Platform {
             let raw_tip = estimate_tip(
                 self.builder.real_points(),
@@ -1636,6 +1646,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 generator.append(point, &active.brush, &mut self.dabs);
             }
         }
+        for point in active.prediction.engine_intermediates() {
+            generator.append(point, &active.brush, &mut self.dabs);
+        }
         if estimate.point.elapsed_micros > latest.elapsed_micros
             || estimate.point.position != latest.position
         {
@@ -1659,8 +1672,21 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             active.feedback.tip_lock,
             active.feedback.correction_easing,
         );
-        if !dabs_cover_point(&self.dabs[start..], locked_endpoint) {
+        if (taper
+            && self
+                .dabs
+                .last()
+                .is_none_or(|dab| dab.center != locked_endpoint))
+            || !dabs_cover_point(&self.dabs[start..], locked_endpoint)
+        {
             generator.append_terminal_copy(locked_endpoint, &mut self.dabs);
+        }
+        if taper {
+            taper_prediction(
+                &mut self.dabs[predicted_dab_start..],
+                taper_start,
+                generator.modeled_distance() / active.brush.diameter.max(0.01),
+            );
         }
         if self.dabs.len() > start {
             self.push_active_preview(start);
@@ -2044,6 +2070,7 @@ impl<E> From<DocumentError> for EngineError<E> {
 
 #[cfg(test)]
 mod tests {
+    include!("canvas_fullscreen_tests.rs");
     use super::*;
     use crate::input::{SampleFlags, ToolKind, input_queue};
     use layer_core::{AssetId, DefaultBrushPreset, Point, default_brush};
@@ -4332,6 +4359,168 @@ mod tests {
     }
 
     #[test]
+    fn trajectory_preview_renders_the_predicted_arc_and_expires_without_new_input() {
+        let (mut input, consumer) = input_queue(8);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("trajectory preview", 256, 256),
+            consumer,
+            view(256, 256),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        engine
+            .set_instant_feedback(InstantFeedbackConfig {
+                prediction_algorithm: crate::feedback::PredictionAlgorithm::Trajectory,
+                use_platform_prediction: false,
+                prediction_horizon_micros: 16_000,
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .set_brush(BrushSnapshot {
+                diameter: 2.,
+                spacing: 0.1,
+                ..Default::default()
+            })
+            .unwrap();
+        let position = |t: f32| Point {
+            x: 100. + 30. * (40. * t).cos(),
+            y: 100. + 30. * (40. * t).sin(),
+        };
+        let mut last = event(1, PenPhase::Down, 130.);
+        for i in 0..100 {
+            last = PenEvent {
+                timestamp_ns: 1_000_000_000 + i * 4_000_000,
+                surface_position: position(i as f32 * 0.004),
+                phase: if i == 0 {
+                    PenPhase::Down
+                } else {
+                    PenPhase::Move
+                },
+                sequence: i + 1,
+                ..last
+            };
+            input.push(last).unwrap();
+            engine
+                .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
+                .unwrap();
+        }
+        assert!(engine.metrics().engine_prediction_frames > 0);
+        let preview = &engine.backend().preview;
+        assert!(!preview.is_empty());
+        // A single future endpoint would draw a chord dipping 1.52 px inside
+        // this circle. Intermediate forecast samples must preserve the arc.
+        for dab in preview {
+            let radius = (dab.center.x - 100.).hypot(dab.center.y - 100.);
+            assert!((radius - 30.).abs() < 0.2, "radius={radius}");
+        }
+        let future = position(99. * 0.004 + 0.016);
+        let tip = preview.last().unwrap().center;
+        assert!((tip.x - future.x).hypot(tip.y - future.y) < 0.3);
+        engine
+            .render_frame_for(
+                last.timestamp_ns + 500_000_000,
+                last.timestamp_ns + 508_000_000,
+            )
+            .unwrap();
+        let tip = engine.backend().preview.last().unwrap().center;
+        assert!((tip.x - last.surface_position.x).hypot(tip.y - last.surface_position.y) < 0.3);
+    }
+
+    #[test]
+    fn trajectory_taper_changes_only_predicted_width_and_preserves_swept_joins() {
+        let render = |prediction, contact| {
+            let (mut input, consumer) = input_queue(8);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("taper", 256, 128),
+                consumer,
+                view(256, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_engine_prediction: prediction,
+                    use_platform_prediction: false,
+                    prediction_horizon_micros: 16_000,
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut brush = if contact {
+                layer_core::default_brush(layer_core::DefaultBrushPreset::GPen)
+            } else {
+                BrushSnapshot::default()
+            };
+            brush.diameter = 10.;
+            engine.set_brush(brush).unwrap();
+            let mut last = event(1, PenPhase::Down, 20.);
+            for i in 0..41 {
+                last = PenEvent {
+                    timestamp_ns: 1_000_000_000 + i * 4_000_000,
+                    surface_position: Point {
+                        x: 20. + 4. * i as f32,
+                        y: 40.,
+                    },
+                    phase: if i == 0 {
+                        PenPhase::Down
+                    } else {
+                        PenPhase::Move
+                    },
+                    sequence: i + 1,
+                    ..last
+                };
+                input.push(last).unwrap();
+                engine
+                    .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
+                    .unwrap();
+            }
+            let preview = engine.backend().preview.clone();
+            last.phase = PenPhase::Up;
+            last.timestamp_ns += 1_000_000;
+            input.push(last).unwrap();
+            engine
+                .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
+                .unwrap();
+            (preview, engine.backend().persistent.clone())
+        };
+        for contact in [false, true] {
+            let (plain, plain_ink) = render(false, contact);
+            let (tapered, tapered_ink) = render(true, contact);
+            assert_eq!(plain_ink, tapered_ink);
+            let tip = tapered.last().unwrap();
+            assert!((tip.center.x - 196.).abs() < 0.01);
+            for axis in 0..2 {
+                assert!((tip.radii[axis] / plain.last().unwrap().radii[axis] - 0.75).abs() < 0.001);
+            }
+            for dab in &tapered {
+                if let Some(original) = plain.iter().find(|p| p.center == dab.center) {
+                    assert_eq!(original.contact, dab.contact);
+                    assert_eq!(original.color_rgba_linear, dab.color_rgba_linear);
+                    if dab.center.x <= 180. {
+                        assert_eq!(
+                            original.radii, dab.radii,
+                            "measured tail keeps normal width"
+                        );
+                    }
+                }
+            }
+            if contact {
+                for pair in tapered.windows(2) {
+                    assert_eq!(&pair[1].previous[..2], &pair[0].radii, "swept join width");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn feedback_tail_reaches_platform_prediction_without_committing_it() {
         let (mut producer, consumer) = input_queue(32);
         let mut engine = CanvasEngine::new(
@@ -4395,7 +4584,7 @@ mod tests {
     }
 
     #[test]
-    fn lift_prediction_uses_raw_pressure_and_never_changes_commit_or_next_contact() {
+    fn native_lift_prediction_uses_raw_pressure_and_never_changes_commit_or_next_contact() {
         for gamma in [0.5, 2.0] {
             let (mut producer, consumer) = input_queue(32);
             let mut engine = CanvasEngine::new(
@@ -4428,6 +4617,13 @@ mod tests {
                 sample.pressure = pressure;
                 inputs.push(sample);
                 producer.push(sample).unwrap();
+                producer.push(PenEvent {
+                    timestamp_ns: sample.timestamp_ns + 8_000_000,
+                    surface_position: Point { x: sample.surface_position.x + 32., y: sample.surface_position.y },
+                    flags: SampleFlags::PREDICTED,
+                    phase: PenPhase::Move,
+                    ..sample
+                }).unwrap();
                 engine
                     .render_frame_for(sample.timestamp_ns, sample.timestamp_ns + 8_000_000)
                     .unwrap();
@@ -4468,6 +4664,12 @@ mod tests {
                 moved.timestamp_ns = 24_000_000;
                 producer.push(down).unwrap();
                 producer.push(moved).unwrap();
+                producer.push(PenEvent {
+                    timestamp_ns: 32_000_000,
+                    surface_position: Point { x: 52., y: 16. },
+                    flags: SampleFlags::PREDICTED,
+                    ..moved
+                }).unwrap();
                 engine.render_frame_for(24_000_000, 32_000_000).unwrap();
                 assert!(
                     dabs_cover_point(&engine.backend().preview, Point { x: 52., y: 16. }),
@@ -4517,7 +4719,7 @@ mod tests {
 
     #[test]
     fn finalized_contacts_are_independent_of_frame_cadence() {
-        let render = |one_event_per_frame: bool| {
+        let render = |one_event_per_frame: bool, prediction: bool| {
             let (mut producer, consumer) = input_queue(32);
             let mut engine = CanvasEngine::new(
                 RecordingRenderer::default(),
@@ -4530,6 +4732,12 @@ mod tests {
                 },
             )
             .unwrap();
+            engine
+                .set_instant_feedback(InstantFeedbackConfig {
+                    use_engine_prediction: prediction,
+                    ..Default::default()
+                })
+                .unwrap();
             let events = [
                 event(1, PenPhase::Down, 8.0),
                 event(2, PenPhase::Move, 19.0),
@@ -4550,7 +4758,11 @@ mod tests {
             }
             engine.backend().persistent.clone()
         };
-        assert_eq!(render(true), render(false));
+        let reference = render(true, false);
+        for prediction in [false, true] {
+            assert_eq!(reference, render(true, prediction));
+            assert_eq!(reference, render(false, prediction));
+        }
     }
 
     #[test]

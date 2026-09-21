@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 #[path = "settings_color.rs"]
 mod color;
 pub use color::{MissingProfilePolicy, PhotoOpenPolicy};
+pub use layer_engine::PredictionAlgorithm;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +101,7 @@ pub struct Settings {
     pub feedback: bool,
     pub platform_prediction: bool,
     pub prediction_ms: f32,
+    pub prediction_algorithm: PredictionAlgorithm,
     /// Retained for saved-settings compatibility; preview tracking is automatic.
     pub tip_lock: f32,
     /// Only overrides are stored. Empty keys disable an action's shortcut.
@@ -128,6 +130,7 @@ impl Default for Settings {
             feedback: true,
             platform_prediction: true,
             prediction_ms: 16.0,
+            prediction_algorithm: PredictionAlgorithm::Trajectory,
             tip_lock: 1.0,
             shortcuts: BTreeMap::new(),
             custom_actions: Vec::new(),
@@ -184,6 +187,7 @@ impl Settings {
             enabled: self.feedback,
             use_platform_prediction: self.platform_prediction,
             prediction_horizon_micros: (self.prediction_ms * 1000.0).round() as u32,
+            prediction_algorithm: self.prediction_algorithm,
             // Always track the predicted endpoint at full strength. Prediction
             // time alone controls how far ahead the preview should reach.
             ..Default::default()
@@ -191,9 +195,14 @@ impl Settings {
     }
     pub(crate) fn feedback_config_for(
         &self,
+        platform: Platform,
         native_available: bool,
     ) -> layer_engine::InstantFeedbackConfig {
         let mut config = self.feedback_config();
+        if platform == Platform::Gtk {
+            // GDK current-event and history timestamps are integer milliseconds.
+            config.timestamp_resolution_micros = 1_000;
+        }
         config.use_platform_prediction &= native_available;
         if config.use_platform_prediction {
             // Native samples carry their own lookahead. The fallback uses
@@ -281,6 +290,7 @@ pub enum PreferenceId {
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
+    PredictionAlgorithm,
     /// Retired preference ID, retained to decode old serialized actions.
     TipLock,
     Version,
@@ -313,6 +323,7 @@ impl PreferenceId {
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
             Self::PredictionHorizon => "prediction-horizon",
+            Self::PredictionAlgorithm => "prediction-algorithm",
             Self::TipLock => "tip-lock",
             Self::Version => "version",
             Self::License => "license",
@@ -709,8 +720,24 @@ impl Settings {
                 1.0,
             ),
         ];
+        if platform == Platform::Gtk {
+            input.push(row(
+                PredictionAlgorithm,
+                "Prediction algorithm",
+                "Predicts the pen path ahead of the latest input.",
+                PreferenceKind::Choice {
+                    presentation: ChoicePresentation::Dropdown,
+                    icons: Vec::new(),
+                    options: vec!["Trajectory".into()],
+                    selected: 0,
+                },
+            ));
+        }
         for r in &mut input {
-            if matches!(r.id, PredictionHorizon | PlatformPrediction) {
+            if matches!(
+                r.id,
+                PredictionHorizon | PlatformPrediction | PredictionAlgorithm
+            ) {
                 r.enabled = self.feedback;
             }
         }
@@ -1045,6 +1072,9 @@ impl Settings {
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
+            PredictionAlgorithm => {
+                self.prediction_algorithm = layer_engine::PredictionAlgorithm::Trajectory;
+            }
             TipLock => return Err("Pen tip tracking is automatic.".into()),
             Feedback => self.feedback = matches!(value, PreferenceValue::Bool(true)),
             PlatformPrediction => {
@@ -1515,6 +1545,70 @@ mod copy_tests {
                 .unwrap();
             assert!(settings.hide_cursor_while_drawing);
         }
+    }
+
+    #[test]
+    fn prediction_algorithm_defaults_migrates_and_round_trips() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        let id = PreferenceId::PredictionAlgorithm;
+        assert_eq!(
+            settings.prediction_algorithm,
+            PredictionAlgorithm::Trajectory
+        );
+        for old in [
+            "linear",
+            "kalman",
+            "trajectory",
+            "trajectory_tapered",
+            "trajectory_tapered_filtered",
+        ] {
+            let migrated: Settings = serde_json::from_value(serde_json::json!({
+                "prediction_algorithm": old, "prediction_ms": 23.0,
+            }))
+            .unwrap();
+            assert_eq!(
+                migrated.prediction_algorithm,
+                PredictionAlgorithm::Trajectory
+            );
+            assert_eq!(migrated.prediction_ms, 23.0);
+            let encoded = serde_json::to_value(&migrated).unwrap();
+            assert_eq!(encoded["prediction_algorithm"], "trajectory");
+            assert_eq!(
+                serde_json::from_value::<Settings>(encoded).unwrap(),
+                migrated
+            );
+        }
+        assert!(serde_json::from_str::<Settings>(r#"{"prediction_algorithm":"unknown"}"#).is_err());
+        settings
+            .edit(id, PreferenceValue::Choice(0), Platform::Gtk)
+            .unwrap();
+        assert!(
+            settings
+                .edit(id, PreferenceValue::Choice(1), Platform::Gtk)
+                .is_err()
+        );
+        let config = settings.feedback_config_for(Platform::Gtk, false);
+        assert_eq!(config.prediction_algorithm, PredictionAlgorithm::Trajectory);
+        assert_eq!(config.timestamp_resolution_micros, 1_000);
+        settings.feedback = false;
+        assert!(!settings.field(id, Platform::Gtk).unwrap().enabled);
+        assert!(
+            settings
+                .edit(id, PreferenceValue::Choice(0), Platform::Gtk)
+                .is_err()
+        );
+        settings.feedback = true;
+        settings
+            .edit(
+                id,
+                settings.default_value(id, Platform::Gtk).unwrap(),
+                Platform::Gtk,
+            )
+            .unwrap();
+        assert_eq!(
+            settings.prediction_algorithm,
+            PredictionAlgorithm::Trajectory
+        );
     }
 
     #[test]

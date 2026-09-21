@@ -113,7 +113,8 @@ pub use numeric::{
 };
 pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession};
 pub use settings::{
-    ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PreferenceAction,
+    ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PredictionAlgorithm,
+    PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
     SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, MissingProfilePolicy, PhotoOpenPolicy,

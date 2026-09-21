@@ -3,6 +3,8 @@
 //! Physical tablet/touch delivery remains a human test (not faked here).
 #[path = "native_penup_tests.rs"]
 mod native_penup;
+#[path = "prediction_tests.rs"]
+mod prediction;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
 #[path = "editing_tools_tests.rs"]

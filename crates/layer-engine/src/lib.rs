@@ -8,10 +8,12 @@ mod brush;
 mod canvas;
 mod feedback;
 mod input;
+#[cfg(feature = "prediction-bench")]
+pub mod prediction_bench;
 
 pub use brush::DabGenerator;
 pub use canvas::{CanvasEngine, EngineCapacity, EngineError, EngineMetrics};
-pub use feedback::{FeedbackConfigError, InstantFeedbackConfig};
+pub use feedback::{FeedbackConfigError, InstantFeedbackConfig, PredictionAlgorithm};
 pub use input::{
     InputConsumer, InputProducer, PenEvent, PenPhase, PressureCurve, SampleFlags, ToolKind,
     ViewTransform, input_queue,

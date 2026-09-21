@@ -322,7 +322,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .set_instant_feedback(
                 self.state
                     .settings
-                    .feedback_config_for(self.platform_prediction_available()),
+                    .feedback_config_for(self.state.platform, self.platform_prediction_available()),
             )
             .expect("stored feedback settings are valid");
     }
@@ -3916,7 +3916,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
         self.engine
             .set_instant_feedback(
-                settings.feedback_config_for(self.platform_prediction_available()),
+                settings.feedback_config_for(self.state.platform, self.platform_prediction_available()),
             )
             .map_err(error)?;
         self.engine.set_pressure_curve(PressureCurve {
@@ -16154,7 +16154,7 @@ mod tests {
             let config = s
                 .state
                 .settings
-                .feedback_config_for(s.platform_prediction_available());
+                .feedback_config_for(s.state.platform, s.platform_prediction_available());
             assert_eq!(config.use_platform_prediction, supported);
             assert_eq!(
                 config.prediction_horizon_micros,
@@ -16170,7 +16170,7 @@ mod tests {
                 let config = s
                     .state
                     .settings
-                    .feedback_config_for(s.platform_prediction_available());
+                    .feedback_config_for(s.state.platform, s.platform_prediction_available());
                 assert!(!config.use_platform_prediction);
                 assert_eq!(config.prediction_horizon_micros, 23_000);
                 assert_eq!(config.tip_lock, 1.0);

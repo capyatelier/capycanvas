@@ -19,6 +19,10 @@ pub enum PenPhase {
     Cancel,
 }
 
+#[cfg_attr(
+    feature = "prediction-bench",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ToolKind {
@@ -32,6 +36,10 @@ pub enum ToolKind {
     Unknown,
 }
 
+#[cfg_attr(
+    feature = "prediction-bench",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct SampleFlags(pub u16);

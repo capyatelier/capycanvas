@@ -299,6 +299,10 @@ impl DabGenerator {
         self.last.map(|point| point.point.position)
     }
 
+    pub(crate) fn modeled_distance(&self) -> f32 {
+        self.last.map_or(0., |point| point.stroke_distance)
+    }
+
     /// Add one preview-only contact centered exactly at the requested endpoint
     /// without advancing the committed generator or its random sequence.
     pub(crate) fn append_terminal_copy(&self, endpoint: Point, output: &mut Vec<Dab>) -> Rect {
@@ -672,6 +676,34 @@ pub(crate) fn lock_dab_tail(
         dab.motion[0] += correction.x * (weight - previous_weight);
         dab.motion[1] += correction.y * (weight - previous_weight);
         previous_weight = weight;
+    }
+}
+
+/// Width-only taper along predicted arc length. Coordinates use nominal brush
+/// diameters, matching each dab's recorded path distance. Keep both ends of a
+/// swept contact consistent; opacity, sensors and brush dynamics are unchanged.
+pub(crate) fn taper_prediction(dabs: &mut [Dab], start: f32, end: f32) {
+    if end <= start {
+        return;
+    }
+    let scale = |distance: f32| {
+        let t = ((distance - start) / (end - start)).clamp(0., 1.);
+        1. - 0.25 * t * t * (3. - 2. * t)
+    };
+    let last = dabs.len().saturating_sub(1);
+    for (index, dab) in dabs.iter_mut().enumerate() {
+        // A terminal copy inherits the preceding contact's sensor metadata,
+        // but is centered on the forecast endpoint and gets the full taper.
+        let size = if index == last {
+            0.75
+        } else {
+            scale(dab.contact[2])
+        };
+        dab.radii[0] *= size;
+        dab.radii[1] *= size;
+        let previous_size = scale(dab.previous_contact[2]);
+        dab.previous[0] *= previous_size;
+        dab.previous[1] *= previous_size;
     }
 }
 

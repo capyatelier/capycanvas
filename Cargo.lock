@@ -1368,9 +1368,12 @@ dependencies = [
 name = "layer-engine"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "layer-core",
  "layer-render",
  "rtrb",
+ "serde",
+ "serde_json",
  "web-time",
 ]
 
