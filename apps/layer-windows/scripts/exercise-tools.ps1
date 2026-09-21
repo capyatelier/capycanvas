@@ -234,6 +234,14 @@ Wait-Until {((Model).state.commands|Where-Object id -eq 'show_rulers').selected 
 Check-Projection
 $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 Select-Tool 'pen'
+# A toolbar selection can open a drawer; its outside-contact dismissal would
+# consume the controlled stroke. Dismiss it explicitly before testing artwork.
+if((Model).state.customization.drawer){
+    $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+    $canvas.SetFocus();[CapyNumberKeys]::Key($ProcessId,0x1B)
+    Wait-Until {$null -eq (Model).state.customization.drawer} 'Tool drawer did not dismiss before the stroke'
+}
+Wait-Until {(Model).brush_ready} 'Selected pen did not become ready'
 Invoke-Control 'Test stroke'
 Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'undo' -and $_.enabled}).Count -eq 1} 'Controlled stroke did not complete'
 Select-Tool 'scale_rotate'

@@ -735,8 +735,8 @@ supports comparison with `tools/visual/chrome-capture.mjs`.
 
 The editor styling pass aligns desktop header spacing, the shared grip asset,
 disabled icons, active-tab shoulders, compact layer opacity and property-choice
-rows. Tool Set follows the GTK/Android full-width preview arrangement; the Web
-reference differs there. Full visual parity remains unaccepted.
+rows. Tool Set follows the Web layout: full-width 40-DIP stroke previews above
+an icon and right-aligned name, with two-DIP row gaps.
 
 Attached tabs use shared frozen geometry and insertion thresholds. Native
 Composition animations slide neighboring copies without moving original hit
@@ -1086,8 +1086,13 @@ source/device and stable arranged bounds, then verifies early rejection, held
 release, same-contact movement, native cancellation and one-step Undo/Redo. It
 also exercises floating toolbars, divider/disabled tiles, collapsed-icon tear-off,
 toolbar drawers, nested drawer origins, native submenus, keyboard menus and
-minimization. Zen retains ordinary mouse button presses and pen/touch hold menus;
-its projected toolbars remain immovable and keep their native button identities.
+minimization. Drawer checks explicitly select Open individual panels, and Zen
+checks chrome hiding/restoration. Drifting short taps retain native button clicks
+while disarming reorder pickup; pen checks keep hover in range between contacts.
+`exercise-pen-buttons.ps1 -Executable <path>` additionally verifies six single-tap
+Clear actions immediately after pen strokes, including eight-pixel tap drift.
+The canvas cursor is hidden through InputPointerSource; native chrome keeps its
+normal cursor. See [Wacom input follow-up](../../docs/development/windows-pen-input-20260920.md).
 Existing `exercise-tab-drag.ps1`
 checks immediate tab movement and retained shared workspace publication.
 

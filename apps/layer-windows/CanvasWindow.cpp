@@ -417,6 +417,9 @@ void CanvasWindow::StartInput() {
         using namespace Microsoft::UI::Input;
         inputSource=panel.CreateCoreIndependentInputSource(
             InputPointerSourceDeviceKinds::Mouse|InputPointerSourceDeviceKinds::Pen|InputPointerSourceDeviceKinds::Touch);
+        // The renderer draws the brush cursor. Scope native cursor suppression
+        // to the canvas input target so XAML buttons and editors keep theirs.
+        inputSource.Cursor(nullptr);
         // The OS supplies prediction; shared Rust keeps it out of document truth.
         try {
             pointerPredictor=PointerPredictor::CreateForInputPointerSource(inputSource);

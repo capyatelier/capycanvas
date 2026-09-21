@@ -114,6 +114,33 @@ function Tap([string]$Id) {
     Start-Sleep -Milliseconds 35
     [CapyRowPointer]::Up()
 }
+function Drifting-Taps {
+    # A short button tap may drift past drag slop while remaining in its bounds.
+    # Disarm reordering without swallowing the native Button.Click. Keep the
+    # pen in range between contacts to cover physical tablet hover routing.
+    $script:case='drifting-short-taps'
+    $before=Settled-Layout
+    foreach($choice in @(1,2,1,2)){
+        $at=Point ('tile-toolbar-'+$choice)
+        if($Device -eq 'pen'){[CapyRowPointer]::PenHover($at.x,$at.y);Start-Sleep -Milliseconds 35}
+        [CapyRowPointer]::Down($Device,$at.x,$at.y)
+        Start-Sleep -Milliseconds 35
+        [CapyRowPointer]::Move($at.x+8,$at.y)
+        Start-Sleep -Milliseconds 35
+        [CapyRowPointer]::Up($Device -eq 'pen')
+        Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[$choice-1].selected} 'Small movement inside a button swallowed its short tap'
+        Wait-Until {(Gesture).phase -eq 'idle' -and !(Gesture).ignore_click} 'Short tap left gesture suppression active'
+        Intact $before
+    }
+}
+function Use-Drawers([string]$Id) {
+    $at=Point $Id
+    [CapyRowPointer]::RightClick($at.x,$at.y)
+    $item=Control 'Open individual panels' -Name
+    $toggle=$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$toggle.Toggle()}
+    Dismiss
+}
 function Source-Matches($Source,[string]$Id) {
     $tile=[regex]::Match($Id,'^(?:zen-)?tile-(.+)-(\d+)$')
     if($tile.Success){return $Source.kind -eq 'tile' -and $Source.panel -eq $tile.Groups[1].Value -and $Source.tile -eq [int]$tile.Groups[2].Value}
@@ -148,6 +175,9 @@ function Dismiss {
     Wait-Until {!(Gesture).menu_open} 'Native context menu did not close'
 }
 function WindowCommand([string]$Id) {
+    # Keep mouse hover away from the compact flyout while UIA opens its submenu.
+    $bounds=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    [CapyRowPointer]::Hover([int]($bounds.Right-16),[int]($bounds.Bottom-16))
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     Invoke $Id
 }
@@ -272,9 +302,20 @@ try {
     $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $null=Settled-Layout
+    $script:case='canvas-native-cursor'
+    $canvas=(Control 'Drawing canvas' -Name).Current.BoundingRectangle
+    $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
+    $canvasX=[int]($canvas.X+($area.x+$area.width*.5)*$density)
+    $canvasY=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
+    [CapyRowPointer]::Hover($canvasX,$canvasY)
+    Wait-Until {![CapyRowPointer]::CursorVisible()} 'Canvas left the Windows mouse cursor visible'
+    $at=Point 'tile-toolbar-2'
+    [CapyRowPointer]::Hover($at.x,$at.y)
+    Wait-Until {[CapyRowPointer]::CursorVisible()} 'Toolbar did not restore the Windows cursor'
     $script:case='short-click'
     Tap 'tile-toolbar-2'
     Wait-Until {@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles[1].selected} 'Short pointer tap did not activate Pencil'
+    Drifting-Taps
     $destination=Point 'tile-toolbar-4'
     $script:case='toolbar-early';Early-Motion 'tile-toolbar-1' $destination
     $script:case='toolbar-release';Held-Release 'tile-toolbar-1'
@@ -316,44 +357,29 @@ try {
     Wait-Until {(Gesture).phase -eq 'dragging' -and $null -ne (Presentation).workspace_update.drag.group} 'Toolbar did not reach shared floating placement'
     [CapyRowPointer]::Up()
     Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'toolbar' -and $_.floating}).Count -eq 1} 'Toolbar grip did not commit a floating panel'
+    Drifting-Taps
     $destination=Point 'tile-toolbar-4'
     $script:case='floating-early';Early-Motion 'tile-toolbar-1' $destination
     $script:case='floating-release';Held-Release 'tile-toolbar-1'
     $script:case='floating-drag';Held-Drag 'tile-toolbar-1' $destination
     WindowCommand 'undo_workspace'
     Wait-Until {(Layout) -eq $before} 'One Undo did not restore the toolbar dock'
-    $script:case='zen-context'
+    $script:case='zen-visibility'
     $before=Settled-Layout
     Toggle-Zen
-    Wait-Until {(Model).partial_zen -and $null -ne (Find 'zen-tile-toolbar-1')} 'Zen did not expose native tool buttons'
-    Tap 'zen-tile-toolbar-2'
-    Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'pencil' -and $_.selected}).Count -eq 1} 'Zen short tap did not activate Pencil'
-    $destination=Point 'zen-tile-toolbar-4'
-    if($Device -eq 'mouse'){
-        $at=Point 'zen-tile-toolbar-1'
-        [CapyRowPointer]::Down($Device,$at.x,$at.y)
-        Start-Sleep -Milliseconds 900
-        if((Gesture).menu_open){throw 'Zen mouse hold opened a menu'}
-        [CapyRowPointer]::Up()
-        Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'pen' -and $_.selected}).Count -eq 1} 'Zen lost ordinary long mouse button presses'
-    }else{
-        Early-Motion 'zen-tile-toolbar-1' $destination
-        Held-Release 'zen-tile-toolbar-1'
-        Hold 'zen-tile-toolbar-1'
-        if(!(Gesture).context_only){throw 'Zen incorrectly admitted workspace dragging'}
-        Move-To $destination
-        Wait-Until {$g=Gesture;$g.phase -eq 'idle' -and $g.last_cancel.reason -eq 'zen_motion'} 'Zen held motion did not cancel without moving the toolbar'
-        [CapyRowPointer]::Up()
-    }
+    Wait-Until {(Model).chrome_hidden} 'Zen did not hide chrome'
     Intact $before
     Toggle-Zen
-    Wait-Until {!(Model).chrome_hidden -and $null -eq (Find 'zen-tile-toolbar-1')} 'Leaving Zen did not restore the editor'
+    Wait-Until {!(Model).chrome_hidden} 'Zen did not restore chrome'
     Intact $before
     $script:case='collapsed-column'
     $at=Point 'panel-tab-sizes'
     [CapyRowPointer]::RightClick($at.x,$at.y)
-    Invoke 'Collapse column' -Name
+    if(Find 'Collapse column' -Name){Invoke 'Collapse column' -Name}
+    elseif(Find 'Expand column' -Name){Dismiss}
+    else{throw 'Column menu did not expose its collapse state'}
     Wait-Until {$null -ne (Find 'column-icon-sizes')} 'Panel context did not collapse its column'
+    Use-Drawers 'column-icon-sizes'
     Tap 'column-icon-sizes'
     Wait-Until {@((Model).state.customization.column_drawers).Count -gt 0} 'Short icon tap did not open its drawer'
     Tap 'column-icon-sizes'
@@ -373,11 +399,15 @@ try {
     Wait-Until {@((Model).layout.groups|Where-Object {$_.id -eq $group.id -and $_.panels -contains 'toolbar'}).Count -eq 1} 'Group menu did not place Tools in the column'
     $at=Point 'panel-tab-toolbar'
     [CapyRowPointer]::RightClick($at.x,$at.y)
-    Invoke 'Collapse column' -Name
+    if(Find 'Collapse column' -Name){Invoke 'Collapse column' -Name}
+    elseif(Find 'Expand column' -Name){Dismiss}
+    else{throw 'Column menu did not expose its collapse state'}
     Wait-Until {$null -ne (Find 'column-icon-toolbar')} 'Toolbar context did not collapse its column'
+    Use-Drawers 'column-icon-toolbar'
     Start-Sleep -Milliseconds 300
     Tap 'column-icon-toolbar'
     Wait-Until {$null -ne (Find 'drawer-panel-toolbar')} 'Collapsed toolbar did not open its contents'
+    Drifting-Taps
     $destination=Point 'tile-toolbar-4'
     $script:case='drawer-early';Early-Motion 'tile-toolbar-1' $destination
     $script:case='drawer-release';Held-Release 'tile-toolbar-1'
@@ -402,7 +432,7 @@ try {
     [CapyRowPointer]::Dispose()
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires review'}
-    [pscustomobject]@{device=$Device;column_mode=$ColumnMode;short_click='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_context_and_activation='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
+    [pscustomobject]@{device=$Device;column_mode=$ColumnMode;canvas_cursor='passed';short_click='passed';drifting_taps='passed';early_rejection='passed';hold_release_menu='passed';same_contact_drag='passed';immediate_grip='passed';native_cancellation='passed';one_step_undo_redo='passed';collapsed_icons='passed';floating_tiles='passed';divider_tiles='passed';disabled_commands='passed';drawer_tiles='passed';nested_drawer='passed';zen_visibility='passed';divider_keyboard='passed';held_blur='passed';native_submenu='passed';zero_exit='passed';scope='OS-delivered synthetic input; physical devices, full presentation matrix and timing remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
     @{case=$script:case;error=$failure.ToString();gesture=(Gesture)}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')

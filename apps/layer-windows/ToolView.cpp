@@ -19,13 +19,15 @@ hstring itemSchema(A const& items){
             {L"action",object(item,L"action")},{L"preview",item.GetNamedValue(L"preview",JsonValue::CreateNullValue())}}));
     }return keys.Stringify();
 }
-Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item,bool bold=true){
+Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item,bool bold=true,bool trailingName=false){
     Grid row;row.ColumnSpacing(6);
     ColumnDefinition glyph;glyph.Width({16,GridUnitType::Pixel});row.ColumnDefinitions().Append(glyph);
     ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
     row.Children().Append(icon(str(item,L"icon"),data->theme()));
     auto title=label(data,str(item,L"label"),bold);title.TextTrimming(TextTrimming::CharacterEllipsis);
-    title.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(title,1);row.Children().Append(title);return row;
+    title.VerticalAlignment(VerticalAlignment::Center);
+    if(trailingName){title.TextAlignment(TextAlignment::Right);title.LineHeight(24);}
+    Grid::SetColumn(title,1);row.Children().Append(title);return row;
 }
 struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::shared_ptr<WorkspaceData> data;
@@ -36,7 +38,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     double arrangedWidth=-1;
     explicit ToolSetView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){}
     void init(){
-        root.Spacing(8);list.Spacing(4);
+        root.Spacing(8);list.Spacing(2);
         auto weak=weak_from_this();
         root.Children().Append(groups);root.Children().Append(list);
         groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
@@ -46,7 +48,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         if(std::abs(arrangedWidth-width)<.01)return;arrangedWidth=width;
         int size=int(groupButtons.size());
         int count=std::max(1,std::min(size,int((width+4)/74.)));
-        double height=32+data->textSize()*.85*1.66;
+        double height=58; // 16px icon + 8px gap + 24px line + 10px padding.
         // Match the shared flex rows: 70 DIP minimum, four-DIP gaps, and equal
         // widths within each row, including a partially filled final row.
         for(int i=0;i<size;i++){
@@ -67,10 +69,10 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             auto item=items.GetObjectAt(i);auto action=object(item,L"action");
             auto pick=button(data,str(item,L"label"),[weak,action]{if(auto self=weak.lock())self->data->dispatch(action);});
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            pick.Padding({12,4,12,4});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
+            pick.Padding({17,5,17,5});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
             auto title=label(data,str(item,L"label"),true);
-            title.FontSize(data->textSize()*(group?.85:1.));title.LineHeight(title.FontSize()*1.66);
+            title.FontSize(data->textSize()*(group?.85:1.));title.LineHeight(24);
             title.TextTrimming(TextTrimming::CharacterEllipsis);title.VerticalAlignment(VerticalAlignment::Center);
             if(group){
                 StackPanel content;content.Spacing(8);
@@ -78,19 +80,21 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                 title.TextAlignment(TextAlignment::Center);content.Children().Append(glyph);content.Children().Append(title);
                 pick.Content(content);
             }else{
-                Grid content;content.ColumnSpacing(8);
+                // Match Web's full-width stroke over a compact icon/name row.
+                // A fixed preview column squeezes names in narrow dock columns.
+                pick.Padding({6,3,6,3});pick.MinHeight(34);
+                Grid content;
+                RowDefinition stroke;stroke.Height({1,GridUnitType::Auto});content.RowDefinitions().Append(stroke);
+                RowDefinition labelRow;labelRow.Height({1,GridUnitType::Auto});content.RowDefinitions().Append(labelRow);
                 auto preview=item.GetNamedValue(L"preview",JsonValue::CreateNullValue());
-                bool brush=preview.ValueType()==JsonValueType::Number;
-                ColumnDefinition glyph;glyph.Width({brush?82.:16.,GridUnitType::Pixel});content.ColumnDefinitions().Append(glyph);
-                ColumnDefinition text;text.Width({1,GridUnitType::Star});content.ColumnDefinitions().Append(text);
-                if(brush){
-                    Image image;image.Width(82);image.Height(32);image.Stretch(Stretch::Uniform);
+                if(preview.ValueType()==JsonValueType::Number){
+                    Image image;image.Height(40);image.Stretch(Stretch::Fill);
+                    image.HorizontalAlignment(HorizontalAlignment::Stretch);
                     image.Source(Imaging::BitmapImage(asset(L"brush-previews/"+std::to_wstring(int(preview.GetNumber()))+L"-"+std::wstring(data->theme().c_str())+L".png")));
-                    content.Children().Append(image);
-                }else content.Children().Append(icon(str(item,L"icon"),data->theme()));
-                auto caption=brush?toolLabel(data,item).as<FrameworkElement>():title.as<FrameworkElement>();
-                Grid::SetColumn(caption,1);content.Children().Append(caption);pick.Content(content);
-                pick.Height(8+std::max(brush?32.:16.,title.LineHeight()));
+                    Border frame;frame.CornerRadius({3,3,3,3});frame.Child(image);content.Children().Append(frame);
+                }
+                auto caption=toolLabel(data,item,true,true);
+                Grid::SetRow(caption,1);content.Children().Append(caption);pick.Content(content);
             }
             buttons.push_back(pick);if(group)groups.Children().Append(pick);else list.Children().Append(pick);
         }
@@ -99,7 +103,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     void refresh(){
         auto view=object(data->state,L"tool_set");
         for(bool group:{true,false}){
-            auto items=array(view,group?L"groups":L"subtools");auto key=itemSchema(items);
+            auto items=array(view,group?L"groups":L"subtools");auto key=itemSchema(items)+data->theme();
             auto& previous=group?groupKey:subtoolKey;
             if(previous!=key){previous=key;rebuild(items,group);}
             auto const& buttons=group?groupButtons:subtoolButtons;

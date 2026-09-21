@@ -44,7 +44,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     uint64_t generation=0,motion=0,menuGeneration=0;
     double slopX=4,slopY=4;
-    J lastRelease,lastCancel,lastCaptureLoss;
+    J lastRelease,lastCancel,lastCaptureLoss,lastDown;
     uint64_t contactVersion=0,contactToken=0;
     bool ownsFocus()const{return owner&&GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==owner&&!IsIconic(owner);}
     bool crossed(Point at)const{return std::abs(at.X-origin.X)>slopX||std::abs(at.Y-origin.Y)>slopY;}
@@ -63,6 +63,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             {L"pointer_id",pointer?N(*pointer):JsonValue::CreateNullValue()},
             {L"routed_pointer_id",contact?N(contact.PointerId()):JsonValue::CreateNullValue()},
             {L"recognizing",B(recognizing)}});
+        if(lastDown.Size())value.Insert(L"last_down",lastDown);
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
@@ -176,12 +177,12 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         restoreScrolling();action=J{};sourceTag=J{};source={};contextOnly=false;
         chrome(O({{L"kind",S(L"refresh")}}));deferClick();evidence();
     }
-    bool cancel(hstring reason=L"cancel"){
+    bool cancel(hstring reason=L"cancel",bool suppressClick=true){
         if(!pointer&&!dragging&&!menuOpen&&!menuPending)return false;
         if(trace)lastCancel=O({{L"generation",N(double(generation))},{L"reason",S(reason)},{L"source",object(action,L"item")}});
         // Dismissing a menu alone has no pointer click to suppress. In
         // particular, a menu action may be followed immediately by UIA Invoke.
-        if(pointer||dragging)ignoreClick=true;
+        if(pointer||dragging)ignoreClick=suppressClick;
         if(dragging)send(L"cancel");
         clear();return true;
     }
@@ -265,6 +266,15 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             if(element.Tag()==tag){source=make_weak(element);break;}
         }
         origin=position=p.Position();pointer=p.PointerId();contact=e.Pointer();device=p.PointerDeviceType();
+        if(trace)lastDown=O({{L"left",B(p.Properties().IsLeftButtonPressed())},{L"handled",B(e.Handled())},
+            {L"in_contact",B(p.IsInContact())},{L"position",point(p.Position())},{L"pointer",N(p.PointerId())}});
+        if(trace){
+            auto original=e.OriginalSource().try_as<FrameworkElement>();
+            lastDown.Insert(L"original",S(original?AutomationProperties::GetAutomationId(original):L""));
+            auto element=source.get();auto border=element.try_as<Border>();
+            auto button=border?border.Child().try_as<Button>():element.try_as<Button>();
+            if(button){lastDown.Insert(L"button_enabled",B(button.IsEnabled()));lastDown.Insert(L"button_pressed",B(button.IsPressed()));lastDown.Insert(L"button_captured",B(owns(button)));}
+        }
         contactToken=(++contactVersion<<32)|uint64_t(p.PointerId());
         owner=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
         auto dpi=GetDpiForWindow(owner);
@@ -299,7 +309,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         auto next=e.GetCurrentPoint(root).Position();
         if(recognizing&&!held)recognizer.ProcessMoveEvents(e.GetIntermediatePoints(root));
         if(!dragging&&crossed(next)){
-            if(needsHold&&!held){rejectedPointer=pointer;cancel(L"motion_before_hold");return;}
+            // Motion disarms pickup; the native Button still owns a short tap.
+            // Tablet jitter inside its bounds must not swallow its Click.
+            if(needsHold&&!held){rejectedPointer=pointer;cancel(L"motion_before_hold",false);return;}
             if(contextOnly){rejectedPointer=pointer;cancel(L"zen_motion");return;}
             begin();
         }
@@ -314,7 +326,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(!ownsFocus()){cancel(L"focus_lost");e.Handled(true);return;}
         auto p=e.GetCurrentPoint(root);
         if(p.Properties().IsCanceled()){cancel(L"pointer_canceled");e.Handled(true);return;}
-        if(needsHold&&!held&&!dragging&&crossed(p.Position())){cancel(L"motion_before_hold");e.Handled(true);return;}
+        if(needsHold&&!held&&!dragging&&crossed(p.Position())){cancel(L"motion_before_hold",false);return;}
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(p);}
         if(trace)lastRelease=O({{L"generation",N(double(generation))},{L"source",object(action,L"item")},
             {L"dragged",B(dragging)},{L"held",B(held)}});
@@ -416,7 +428,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 &&self->crossed(e.GetCurrentPoint(self->root).Position())){
                 // Disabled commands can lack Button capture. Leaving their
                 // hit target must retire pickup even over the canvas sibling.
-                self->rejectedPointer=self->pointer;self->cancel(L"motion_before_hold");
+                self->rejectedPointer=self->pointer;self->cancel(L"motion_before_hold",false);
             }
         })),true);
         root.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){

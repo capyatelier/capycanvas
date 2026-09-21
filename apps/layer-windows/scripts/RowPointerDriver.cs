@@ -34,6 +34,13 @@ public static class CapyRowPointer {
  [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
  [DllImport("user32.dll")] static extern int GetSystemMetrics(int code);
  [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
+ [StructLayout(LayoutKind.Sequential)] public struct CursorInfo {public uint size,flags;public IntPtr cursor;public Point position;}
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetCursorInfo(ref CursorInfo info);
+ public static bool CursorVisible() {
+  Guard(last);var info=new CursorInfo{size=(uint)Marshal.SizeOf(typeof(CursorInfo))};
+  if(!GetCursorInfo(ref info))throw new Win32Exception(Marshal.GetLastWin32Error());
+  return (info.flags&1)!=0;
+ }
  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
@@ -98,6 +105,13 @@ public static class CapyRowPointer {
    var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
   }
  }
+ // Keep a pen in hover between taps, as a physical tablet normally does.
+ public static void PenHover(int x,int y) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var point=new Point{x=x,y=y};Guard(point);kind=3;Send(point,0x20002);last=point;
+  }
+ }
  public static void Down(string device,int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
@@ -115,10 +129,10 @@ public static class CapyRowPointer {
    if(kind==4)MouseMove(point);else Send(point,0x20006);last=point;
   }
  }
- public static void Up() {
+ public static void Up(bool stayInRange=false) {
   lock(gate){
    Check();if(!active)return;Guard(last);Thread.Sleep(2);
-   if(kind==4)MouseButton(4);else Send(last,0x40000);
+   if(kind==4)MouseButton(4);else Send(last,kind==3&&stayInRange?0x40002u:0x40000u);
    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
   }
  }

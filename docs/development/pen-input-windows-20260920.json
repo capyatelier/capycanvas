@@ -1,0 +1,137 @@
+{
+  "baseline": "540d459b with cursor-only change",
+  "scenario": "OS-injected pen tap within toolbar button; four contacts per drift, with and without hover",
+  "results": [
+    {
+      "movement_px": 0,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": false
+    },
+    {
+      "movement_px": 2,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": false
+    },
+    {
+      "movement_px": 4,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": false
+    },
+    {
+      "movement_px": 6,
+      "after_passed": 4,
+      "before_passed": 0,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": false
+    },
+    {
+      "movement_px": 8,
+      "after_passed": 4,
+      "before_passed": 0,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": false
+    },
+    {
+      "movement_px": 0,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": true
+    },
+    {
+      "movement_px": 2,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": true
+    },
+    {
+      "movement_px": 4,
+      "after_passed": 4,
+      "before_passed": 4,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": true
+    },
+    {
+      "movement_px": 6,
+      "after_passed": 4,
+      "before_passed": 0,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": true
+    },
+    {
+      "movement_px": 8,
+      "after_passed": 4,
+      "before_passed": 0,
+      "after_total": 4,
+      "before_total": 4,
+      "hover": true
+    }
+  ],
+  "draw_then_clear": [
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 2,
+      "single_tap": true,
+      "stroke_revision": 1,
+      "movement_px": 0
+    },
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 4,
+      "single_tap": true,
+      "stroke_revision": 3,
+      "movement_px": 8
+    },
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 6,
+      "single_tap": true,
+      "stroke_revision": 5,
+      "movement_px": 0
+    },
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 8,
+      "single_tap": true,
+      "stroke_revision": 7,
+      "movement_px": 8
+    },
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 10,
+      "single_tap": true,
+      "stroke_revision": 9,
+      "movement_px": 0
+    },
+    {
+      "pen_remained_in_range": true,
+      "clear_revision": 12,
+      "single_tap": true,
+      "stroke_revision": 11,
+      "movement_px": 8
+    }
+  ],
+  "physical_wacom_verified": false,
+  "native_gesture_matrix": {
+    "pen": "passed",
+    "mouse": "passed",
+    "touch": "passed"
+  },
+  "tool_set_functional_suite": "passed"
+}
