@@ -1,10 +1,11 @@
 # GTK print proofing implementation record
 
-2026-09-17. **GTK app review accepted by the user.** The original
-[handoff](../development/color-management-m3-gtk-handoff.md) and the pre-implementation
+2026-09-17. **GTK app review accepted by the user.** The pre-implementation
 [design/tolerances](../development/color-management-m3-gtk-design.md) define the
-scope. Other hosts, HDR and the deferred regeneration redesign are outside
-this task. No calibrated display or physical print comparison has been performed.
+scope, and the [review record](../development/color-management-m3-gtk-review.md)
+documents the accepted GTK workflow. Other hosts, HDR and the deferred regeneration
+redesign are outside this task. No calibrated display or physical print comparison
+has been performed.
 
 ## Baseline before rendering changes
 
