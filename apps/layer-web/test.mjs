@@ -1,3 +1,4 @@
+import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {measureHdr} from "./hdr-performance.test.mjs";
@@ -440,6 +441,8 @@ try {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
     assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--contact-brushes")) {
+    await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
   } else if (process.argv.includes("--pen")) {
     await checkPenRendering({call, evaluate, settle});
     await checkPrediction({call, evaluate, settle});

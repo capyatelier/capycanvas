@@ -7,6 +7,19 @@ pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 2],
     pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
+    variants: std::collections::BTreeMap<u32, [Deferred<wgpu::ComputePipeline>; 4]>,
+}
+
+pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
+    let Some(c) = contact else {
+        return 0;
+    };
+    1 | (u32::from(c.paper > 0.) << 1)
+        | (u32::from(c.edge_roughness > 0.) << 2)
+        | (u32::from(c.fiber_strength > 0.) << 3)
+        | (u32::from(c.pooling > 0.) << 4)
+        | (u32::from(c.depletion > 0.) << 5)
+        | (u32::from(c.tip_bias > 0. || c.tilt_shading > 0.) << 6)
 }
 
 impl Pipelines {
@@ -47,40 +60,65 @@ impl Pipelines {
                 entries: &entries,
             })
         });
-        let kernels = std::array::from_fn(|index| {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("dry material pages"),
-                bind_group_layouts: &[
-                    Some(&layouts[index % 2]),
-                    Some(shared.target),
-                    Some(shared.material),
-                    Some(shared.advanced_texture),
-                ],
-                immediate_size: 0,
-            });
-            let (device, shader) = (device.clone(), shader.clone());
-            Deferred::pipeline(move |mode| {
-                mode.compute(
-                    &device,
-                    &wgpu::ComputePipelineDescriptor {
-                        label: Some("dry material pages"),
-                        layout: Some(&layout),
-                        module: &shader,
-                        entry_point: Some(if index % 2 == 0 {
-                            "compute_color"
-                        } else {
-                            "compute_coverage"
-                        }),
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants: &[("MATERIAL_OPERATION", (index / 2) as f64)],
-                            ..Default::default()
+        let make_kernels = |flags: u32| {
+            std::array::from_fn(|index| {
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("dry material pages"),
+                    bind_group_layouts: &[
+                        Some(&layouts[index % 2]),
+                        Some(shared.target),
+                        Some(shared.material),
+                        Some(shared.advanced_texture),
+                    ],
+                    immediate_size: 0,
+                });
+                let (device, shader) = (device.clone(), shader.clone());
+                Deferred::pipeline(move |mode| {
+                    mode.compute(
+                        &device,
+                        &wgpu::ComputePipelineDescriptor {
+                            label: Some("dry material pages"),
+                            layout: Some(&layout),
+                            module: &shader,
+                            entry_point: Some(if index % 2 == 0 {
+                                "compute_color"
+                            } else {
+                                "compute_coverage"
+                            }),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &[
+                                    ("MATERIAL_OPERATION", (index / 2) as f64),
+                                    ("CONTACT_FLAGS", f64::from(flags)),
+                                ],
+                                ..Default::default()
+                            },
+                            cache: None,
                         },
-                        cache: None,
-                    },
-                )
+                    )
+                })
             })
-        });
-        Self { layouts, kernels }
+        };
+        let kernels = make_kernels(u32::MAX);
+        let mut flags = layer_core::CONTACT_BRUSH_PRESETS
+            .into_iter()
+            .map(|p| contact_flags(layer_core::default_brush(p).contact))
+            .collect::<std::collections::BTreeSet<_>>();
+        flags.insert(0);
+        let variants = flags.into_iter().map(|f| (f, make_kernels(f))).collect();
+        Self {
+            layouts,
+            kernels,
+            variants,
+        }
+    }
+
+    pub fn for_contact(
+        &self,
+        contact: Option<layer_core::BrushContact>,
+    ) -> &[Deferred<wgpu::ComputePipeline>; 4] {
+        self.variants
+            .get(&contact_flags(contact))
+            .unwrap_or(&self.kernels)
     }
 
     pub fn output(
@@ -126,12 +164,8 @@ impl Pipelines {
 
 impl WgpuRasterizer {
     pub(super) fn compute_dry_material(&self, batch: &DabBatch) -> bool {
-        // Normal source-over stays on the compute evaluator. On Adreno, its
-        // specialized destination-blend variant disagrees with the legacy fragment path
-        // for a predicted Multiply batch.  Keep the established fragment
-        // route for every non-normal blend: it has the same ordered dab
-        // evaluation and avoids making preview correctness depend on that
-        // driver specialization.
+        // Adreno's compute destination-blend specialization corrupts predicted
+        // Multiply batches. Non-normal blends use the ordered fragment path.
         dry_material_compute_eligible(&batch.style) && self.pipelines.dry_material.is_some()
     }
 
@@ -159,8 +193,12 @@ impl WgpuRasterizer {
         pass.set_bind_group(3, &textures.bind_group, &[]);
         let mut active_coverage = None;
         for (output, source, coordinate, coverage, record_offset) in jobs {
-            let pipeline = &self.pipelines.dry_material.as_ref().unwrap().kernels
-                [operation as usize * 2 + usize::from(*coverage)];
+            let pipeline = &self
+                .pipelines
+                .dry_material
+                .as_ref()
+                .unwrap()
+                .for_contact(batch.style.contact)[operation as usize * 2 + usize::from(*coverage)];
             if active_coverage != Some(*coverage) {
                 pass.set_pipeline(pipeline);
                 active_coverage = Some(*coverage);

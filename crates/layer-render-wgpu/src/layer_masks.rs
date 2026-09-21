@@ -408,11 +408,11 @@ impl WgpuRasterizer {
                 if let BrushTip::Mask(id) = &batch.style.tip {
                     pass.set_bind_group(2, &self.mask(id)?.bind_group, &[]);
                 }
-                let start = batch.first_dab as u64 * mem::size_of::<Dab>() as u64;
+                let start = batch.first_dab as u64 * mem::size_of::<DabGpu>() as u64;
                 pass.set_vertex_buffer(
                     0,
                     self.dab_buffer.slice(
-                        start..start + batch.dab_count as u64 * mem::size_of::<Dab>() as u64,
+                        start..start + batch.dab_count as u64 * mem::size_of::<DabGpu>() as u64,
                     ),
                 );
                 pass.draw(0..4, if source.is_some() { dab..dab+1 } else { 0..batch.dab_count });

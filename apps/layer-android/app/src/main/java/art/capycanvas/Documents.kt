@@ -87,7 +87,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     private var approval = 0L to 0L
     fun observe(request: JSONObject?, file: JSONObject) {
-        if (BuildConfig.DEBUG && nativeFileJobsForTest) return
+        if ((BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) && nativeFileJobsForTest) return
         val id = request?.getInt("id")
         val key = id?.let { file.optLong("epoch") to it }
         if (key == activeId) return

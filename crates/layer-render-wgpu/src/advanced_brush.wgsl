@@ -61,6 +61,8 @@ struct VertexInput {
     @location(8) previous: vec4<f32>,
     @location(9) contact: vec4<f32>,
     @location(10) previous_contact: vec4<f32>,
+    @location(11) metric: vec4<f32>,
+    @location(12) invariants: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -117,6 +119,10 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
     output.texture_sign = input.texture_sign;
     output.world = world;
     output.material = input.material;
+    if style.contact_a.x > 0.5 {
+        output.material = input.metric;
+        output.texture_sign = input.invariants.xy;
+    }
     output.center = input.center;
     output.previous = input.previous;
     output.contact = input.contact;
@@ -129,11 +135,11 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if style.contact_a.x > 0.5 {
-        let coverage = evolving_contact(input.world, input.center, input.geometry.xy, input.geometry.zw,
-            input.motion, input.previous, input.contact, input.previous_contact, input.flow_hardness.y);
+        let coverage = evolving_contact_prepared(input.world, input.center, input.geometry.xy, input.geometry.zw,
+            input.motion, input.previous, input.contact, input.previous_contact, input.flow_hardness.y,
+            contact_field(input.world), input.material, input.texture_sign);
         if coverage <= 0.0 { discard; }
-        let exposure = contact_exposure(input.motion, input.geometry.xy, input.geometry.zw, input.flow_hardness.y);
-        let alpha = (1.0 - exp(-coverage * input.flow_hardness.x * input.color.a * exposure * 6.0))
+        let alpha = (1.0 - exp(-coverage * input.flow_hardness.x * input.color.a * 6.0))
             * brush_selection_at(brush_to_layer(input.world));
         return vec4<f32>(input.color.rgb * alpha, alpha);
     }

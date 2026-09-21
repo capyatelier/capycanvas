@@ -1,3 +1,4 @@
+import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
 import {checkDrawingTabsOffline} from "./drawing-tabs-offline.test.mjs";
@@ -35,6 +36,7 @@ if(!tab)throw Error(`Open ${url} on the tablet first`);
 const socket=new WebSocket(tab.webSocketDebuggerUrl);
 await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Tablet Chrome connection timed out')),10000);socket.onopen=()=>{clearTimeout(timeout);resolve();};socket.onerror=e=>{clearTimeout(timeout);reject(e);};});
 let sequence=0,onLoad;const pending=new Map(),errors=[];
+socket.onclose=()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error("Tablet CDP disconnected"));}pending.clear();};
 socket.onmessage=event=>{
   const m=JSON.parse(event.data);
   if(m.id){const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(`${p.method}: ${JSON.stringify(m.error)}`)):p.resolve(m.result);}
@@ -45,6 +47,7 @@ socket.onmessage=event=>{
   else if(m.method==="Runtime.consoleAPICalled"&&m.params.type==="error")errors.push(m.params.args.map(a=>a.value||a.description).join(" "));
 };
 const call=(method,params={})=>new Promise((resolve,reject)=>{
+  if(socket.readyState!==WebSocket.OPEN){reject(Error("Tablet CDP disconnected"));return;}
   const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Error(`CDP timeout: ${method}`));},process.argv.some(x=>['--drawing-tabs','--drawing-tabs-recovery','--drawing-tabs-offline'].includes(x))?300000:180000);
   pending.set(id,{resolve,reject,timer,method});socket.send(JSON.stringify({id,method,params}));
 });
@@ -85,7 +88,10 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--pen")) {
+  if (process.argv.includes("--contact-brushes")) {
+    await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--pen")) {
     await checkPenRendering({call,evaluate,settle});
     await checkPrediction({call,evaluate,settle});
     assert.deepEqual(errors,[]);

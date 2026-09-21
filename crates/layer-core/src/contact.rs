@@ -25,11 +25,11 @@ pub struct BrushContact {
     pub edge_roughness: f32,
     /// Document-space size of edge irregularities, in pixels.
     pub edge_scale: f32,
-    /// Number of coherent strand bands across the contact.
+    /// Strand count at 128 px diameter; larger tools retain fine bristles.
     pub fibers: f32,
     /// Strength of strand separation, 0 for an unbroken contact.
     pub fiber_strength: f32,
-    /// Peripheral ink deposition, using the same paper/contact threshold.
+    /// Wet-contact broadening.
     pub pooling: f32,
     /// Ink-load decay per nominal brush diameter of travel.
     pub depletion: f32,

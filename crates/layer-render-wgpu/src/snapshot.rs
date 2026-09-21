@@ -660,7 +660,7 @@ impl SnapshotRenderer {
             composite_all: true,
         };
         let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-        r.prepare_uploads(packet, true, &mut encoder)?;
+        r.prepare_uploads(packet, true, &mut [], &mut encoder)?;
         r.layer_masks.prepare_regions(
             &r.device,
             &mut encoder,

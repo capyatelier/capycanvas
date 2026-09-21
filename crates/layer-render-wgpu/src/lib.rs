@@ -16,9 +16,9 @@ mod submission;
 use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
-    AssetId, BRISTLE_GRAIN_TEXTURE_ASSET, BrushAccumulation, BrushBlendMode, BrushExecution,
+    AssetId, BrushAccumulation, BrushBlendMode, BrushExecution,
     BrushGrainBehavior, BrushTip, ColorMixSpace, DualCombineMode, Layer, LayerId, LayerKind,
-    LiquifyMode, PAINTBRUSH_TEXTURE_ASSET, PAPER_GRAIN_TEXTURE_ASSET, PENCIL_TEXTURE_ASSET,
+    LiquifyMode, PAPER_GRAIN_TEXTURE_ASSET,
     StrokeId, WATERCOLOR_TIP_TEXTURE_ASSET, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
     WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET, WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET,
     WATERCOLOR_TRANSPORT_SHORT_NARROW_ASSET,
@@ -545,7 +545,18 @@ impl BrushPassPlan {
 
     fn for_device(style: &layer_render::DabStyle, device: &PipelineDevice) -> Self {
         let mut plan = Self::for_style(style);
-        if device.portable_blend() { plan.direct = None; }
+        if device.portable_blend()
+            || (device.working_format() == wgpu::TextureFormat::Rgba32Float
+                && style.execution == BrushExecution::Dry
+                && style.rendering.blend_mode == BrushBlendMode::Normal
+                && style.rendering.wet_edge == 0. && style.rendering.burnt_edge == 0.)
+        {
+            // Native Flow paint uses the existing ordered dry compute pass too.
+            // Per-page blended draws and transparent-preview clears cost more
+            // to finalize on mobile than the pigment evaluation itself. A
+            // single predicted batch reads persistent paint directly.
+            plan.direct = None;
+        }
         plan
     }
     fn requires_destination(self) -> bool {
@@ -910,6 +921,7 @@ pub struct WgpuRasterizer {
     style_stride: u64,
     style_capacity: usize,
     style_upload: Vec<u8>,
+    dab_upload: Vec<DabGpu>,
     target_buffer: wgpu::Buffer,
     target_bind_group: wgpu::BindGroup,
     target_stride: u64,
@@ -1287,6 +1299,7 @@ impl WgpuRasterizer {
             style_stride,
             style_capacity,
             style_upload: Vec::with_capacity(style_stride as usize * style_capacity),
+            dab_upload: Vec::new(),
             target_buffer,
             target_bind_group,
             target_stride,
@@ -2197,7 +2210,7 @@ impl WgpuRasterizer {
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
         let dab_bytes = (dabs as u64)
-            .checked_mul(mem::size_of::<Dab>() as u64)
+            .checked_mul(mem::size_of::<DabGpu>() as u64)
             .ok_or(GpuRasterError::SizeOverflow)?;
         if dab_bytes > self.dab_capacity_bytes {
             self.dab_capacity_bytes = dab_bytes.next_power_of_two();
@@ -2227,6 +2240,7 @@ impl WgpuRasterizer {
         &mut self,
         packet: FramePacket<'_>,
         scene_required: bool,
+        batch_tiles: &mut [Vec<BrushTile>],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<usize, GpuRasterError> {
         // The direct compositor uses final layer opacity and surface position.
@@ -2234,13 +2248,42 @@ impl WgpuRasterizer {
         // when the displayed frame used that direct path.
         let scene_base = packet.dab_batches.len() + if scene_required { 0 } else { packet.layers.len() };
         let background_index = scene_base + packet.layers.len();
-        self.ensure_upload_capacity(packet.dabs.len(), background_index + 1)?;
+        self.dab_upload.clear();
+        self.dab_upload.extend(packet.dabs.iter().copied().map(DabGpu::from));
+        for batch in packet.dab_batches {
+            if batch.style.rendering.accumulation == BrushAccumulation::Uniform
+                && dry_material::contact_flags(batch.style.contact) == 1 {
+                // A solid fed contact is bounded by flow * opacity even when
+                // its film is translucent. Previously only alpha 1 could skip
+                // redundant contact evaluation on already loaded pixels.
+                let range = batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize;
+                let ceiling = self.dab_upload[range.clone()].iter()
+                    .map(|d| (d.dab.flow * d.dab.color_rgba_linear[3]).clamp(0., 1.))
+                    .fold(0_f32, f32::max);
+                for dab in &mut self.dab_upload[range] { dab.invariants[2] = ceiling; }
+            }
+        }
+        for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles) {
+            if batch.dab_count == 0 || batch.style.execution != BrushExecution::Dry
+                || BrushPassPlan::for_device(&batch.style, &self.device).direct.is_some() { continue; }
+            for tile in tiles {
+                if tile.indices.is_empty() || tile.indices.len() == tile.dabs.len() { continue; }
+                let start = u32::try_from(self.dab_upload.len()).map_err(|_| GpuRasterError::SizeOverflow)?;
+                for &index in &tile.indices {
+                    let dab = self.dab_upload[index as usize];
+                    self.dab_upload.push(dab);
+                }
+                let end = u32::try_from(self.dab_upload.len()).map_err(|_| GpuRasterError::SizeOverflow)?;
+                tile.dabs = start..end;
+            }
+        }
+        self.ensure_upload_capacity(self.dab_upload.len(), background_index + 1)?;
         if !packet.dabs.is_empty() {
             self.uploads.write(
                 encoder,
                 &self.queue,
                 &self.dab_buffer,
-                dab_bytes(packet.dabs),
+                dab_bytes(&self.dab_upload),
             )?;
         }
         let used = self.style_stride as usize * (background_index + 1);
@@ -2491,9 +2534,9 @@ impl WgpuRasterizer {
         binding: &wgpu::BindGroup,
         target_offset: u32,
     ) -> Result<(), GpuRasterError> {
-        let start = batch.first_dab as u64 * mem::size_of::<Dab>() as u64;
+        let start = batch.first_dab as u64 * mem::size_of::<DabGpu>() as u64;
         let end = start
-            .checked_add(batch.dab_count as u64 * mem::size_of::<Dab>() as u64)
+            .checked_add(batch.dab_count as u64 * mem::size_of::<DabGpu>() as u64)
             .ok_or(GpuRasterError::InvalidDabRange)?;
         if end > self.dab_capacity_bytes {
             return Err(GpuRasterError::InvalidDabRange);
@@ -3611,7 +3654,7 @@ impl CanvasRenderer for WgpuRasterizer {
         };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
-        let batch_tiles = original_batches.iter().map(|batch| {
+        let mut batch_tiles = original_batches.iter().map(|batch| {
             let start = batch.first_dab as usize;
             let end = start.checked_add(batch.dab_count as usize)
                 .ok_or(GpuRasterError::InvalidDabRange)?;
@@ -3703,7 +3746,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     WatercolorLayerStyle::from_dab_style(&batch.style).radius(),
                     packet.document_extent,
                 )
-            } else if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some() {
+            } else if batch.style.execution == BrushExecution::Dry && !batch.style.rendering.edge_after_stroke {
                 // Prediction retirement must use the same bounded footprint as
                 // painting, rather than reintroducing the generic brush halo.
                 tiles.iter().fold(PixelRect::EMPTY, |bounds, tile| {
@@ -3736,7 +3779,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 continue;
             }
             if batch.kind == DabBatchKind::Preview {
-                if batch.style.execution == BrushExecution::Dry && batch.style.contact.is_some()
+                if batch.style.execution == BrushExecution::Dry
                     && !batch.style.rendering.edge_after_stroke {
                     if let Some(sparse) = &mut new_preview_contact_tiles {
                         sparse.extend(tiles.iter().map(|tile| tile.coordinate));
@@ -3761,15 +3804,15 @@ impl CanvasRenderer for WgpuRasterizer {
                     .saturating_add(dab_candidate_pixels(*dab, self.target_extent(batch.layer_id)));
             }
         }
-        if let Some(preview_layer_id) = new_preview_layer
+        if !scene_required && let Some(preview_layer_id) = new_preview_layer
             && packet
                 .layers
                 .iter()
                 .find(|layer| layer.id == preview_layer_id)
                 .is_some_and(|layer| layer.opacity != 1.0)
         {
-            // Applying layer opacity independently to a base and overlay would
-            // not equal applying it once to their combined layer result.
+            // The simple compositor draws base and overlay independently.
+            // Scene composition resolves them together before layer opacity.
             new_preview_requires_base = true;
         }
         let new_preview_direct_to_composite = !scene_required
@@ -3806,7 +3849,7 @@ impl CanvasRenderer for WgpuRasterizer {
         } else if new_preview_direct_to_composite {
             self.preview_pages.clear();
         } else {
-            self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref().filter(|_| new_preview_from_persistent));
+            self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref());
             self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
             if new_preview_from_persistent {
                 // This pass reads committed coverage directly and writes only
@@ -3823,7 +3866,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(cache) = &self.live_display {
             self.uploads.write(&mut encoder, &self.queue, &cache.geometry, &cache.geometry_bytes())?;
         }
-        let background_offset = self.prepare_uploads(packet, scene_required, &mut encoder)?;
+        let background_offset = self.prepare_uploads(packet, scene_required, &mut batch_tiles, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
             &mut encoder,
@@ -4089,7 +4132,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 .find(|layer| layer.id == layer_id)
                 .ok_or(GpuRasterError::MissingPaintLayer(layer_id))?;
             if !copied.is_empty() && !new_preview_from_persistent {
-                for coordinate in page_coordinates(copied) {
+                for coordinate in page_coordinates(copied).filter(|c| self.preview_contact_tiles.as_ref().is_none_or(|set| set.contains(c))) {
                     let preview = self
                         .preview_pages
                         .iter()
@@ -4099,6 +4142,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     // Seed complete neighbor pages for a private prediction fork.
                     let local = if preview_is_watercolor
                         || scene_required
+                        || new_preview_requires_base
                         || destination_preview_batches > 0
                     {
                         page_rect(coordinate).page_local(coordinate)
@@ -4320,7 +4364,7 @@ impl CanvasRenderer for WgpuRasterizer {
             && watercolor_style_dirty.is_empty()
             && original_batches.iter().all(|b| {
                 matches!(b.kind, DabBatchKind::Persistent | DabBatchKind::Preview)
-                    && b.style.execution == BrushExecution::Dry && b.style.contact.is_some()
+                    && b.style.execution == BrushExecution::Dry
                     && !b.style.rendering.edge_after_stroke
             });
         let mut composite_tiles = (!reset && !packet.composite_all
@@ -4683,7 +4727,16 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         if !dirty.is_empty() || animated {
-            self.composite_damage = if needs_scene(packet) || animated { PixelRect::full(packet.document_extent) } else { dirty };
+            let pointwise_scene = packet.layers.iter().all(|layer| {
+                matches!(layer.kind, LayerKind::Paint | LayerKind::Background)
+                    && layer.effect.is_none()
+                    && layer_core::target_transform(packet.layers, layer.id) == layer_core::Affine::IDENTITY
+                    && layer.mask.as_ref().is_none_or(|mask|
+                        layer_core::target_transform(packet.layers, mask.id) == layer_core::Affine::IDENTITY)
+            });
+            self.composite_damage = if (needs_scene(packet) && !pointwise_scene) || animated {
+                PixelRect::full(packet.document_extent)
+            } else { dirty };
         }
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
@@ -4746,6 +4799,31 @@ impl CanvasRenderer for WgpuRasterizer {
 
     fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.pending_readback.take().map(Ok)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DabGpu {
+    dab: Dab,
+    // Rows of the midpoint nib metric. These depend on the contact, not pixels.
+    metric: [f32; 4],
+    // World travel, firm-nib feed, incoming film ceiling, padding.
+    invariants: [f32; 4],
+}
+
+impl From<Dab> for DabGpu {
+    fn from(dab: Dab) -> Self {
+        let axes = [(dab.previous[0] + dab.radii[0]) * 0.5,
+            (dab.previous[1] + dab.radii[1]) * 0.5].map(|v| v.max(0.005));
+        let angle = [dab.previous[2] + dab.rotation[0], dab.previous[3] + dab.rotation[1]];
+        let length2 = angle[0] * angle[0] + angle[1] * angle[1];
+        let rotation = if length2 > 0.00001 { angle.map(|v| v / length2.sqrt().max(0.00001)) }
+            else { dab.rotation };
+        let travel = dab.motion[0].hypot(dab.motion[1]);
+        Self { dab, metric: [rotation[0] / axes[0], rotation[1] / axes[0],
+            -rotation[1] / axes[1], rotation[0] / axes[1]],
+            invariants: [travel, dab.hardness.powi(12), 1., 0.] }
     }
 }
 
@@ -4954,7 +5032,8 @@ impl StyleGpu {
             ];
         }
         if let Some(contact) = style.contact {
-            result.contact_a = [1.0, contact.paper, contact.tip_bias, contact.edge_roughness];
+            let paper = contact.paper * grain.map_or(1., |grain| grain.depth);
+            result.contact_a = [1.0, paper, contact.tip_bias, contact.edge_roughness];
             result.contact_b = [
                 contact.edge_scale,
                 contact.fibers,
@@ -4965,7 +5044,7 @@ impl StyleGpu {
                 contact.pressure_gain,
                 contact.depletion,
                 contact.tilt_shading,
-                f32::from(style.rendering.accumulation == BrushAccumulation::Uniform),
+                0.,
             ];
         }
         // This lane is unused by dry and composite shaders and avoids growing
@@ -6179,10 +6258,11 @@ fn brush_pipeline_format_recipe(
     format: wgpu::TextureFormat,
     label: &'static str,
 ) -> Compilation<wgpu::RenderPipeline> {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
+    const ATTRIBUTES: [wgpu::VertexAttribute; 13] = wgpu::vertex_attr_array![
         0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
         4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4,
-        8 => Float32x4, 9 => Float32x4, 10 => Float32x4
+        8 => Float32x4, 9 => Float32x4, 10 => Float32x4,
+        11 => Float32x4, 12 => Float32x4
     ];
     mode.render(
         device,
@@ -6194,7 +6274,7 @@ fn brush_pipeline_format_recipe(
                 entry_point: Some("vertex_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: mem::size_of::<Dab>() as u64,
+                    array_stride: mem::size_of::<DabGpu>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &ATTRIBUTES,
                 })],
@@ -6350,32 +6430,9 @@ fn target_bytes(target: &TargetGpu) -> &[u8] {
     }
 }
 
-fn dab_bytes(dabs: &[Dab]) -> &[u8] {
-    // SAFETY: Dab is repr(C), exactly 80 bytes, has alignment four, and contains
-    // only f32-based fields. layer-render has a layout test guarding this ABI.
+fn dab_bytes(dabs: &[DabGpu]) -> &[u8] {
+    // SAFETY: DabGpu is repr(C), has no padding, and contains only f32 fields.
     unsafe { std::slice::from_raw_parts(dabs.as_ptr().cast::<u8>(), mem::size_of_val(dabs)) }
-}
-
-fn parse_ascii_pgm(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let text = std::str::from_utf8(bytes).ok()?;
-    let mut tokens = text
-        .lines()
-        .flat_map(|line| line.split('#').next().unwrap_or("").split_whitespace());
-    if tokens.next()? != "P2" {
-        return None;
-    }
-    let width: u32 = tokens.next()?.parse().ok()?;
-    let height: u32 = tokens.next()?.parse().ok()?;
-    let max: u32 = tokens.next()?.parse().ok()?;
-    if width == 0 || height == 0 || max == 0 {
-        return None;
-    }
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for _ in 0..width as usize * height as usize {
-        let value: u32 = tokens.next()?.parse().ok()?;
-        pixels.push(((value.min(max) * 255 + max / 2) / max) as u8);
-    }
-    Some((width, height, pixels))
 }
 
 /// Original paper-height recipe, generated once and cached/uploaded as R8.
@@ -6404,17 +6461,6 @@ fn procedural_paper_grain() -> Vec<u8> {
         let fibers = periodic_value_noise(x, y, 48, 12, 0x5f6a_d209);
         (0.18 + 0.82 * (coarse * 0.18 + medium * 0.34 + fine * 0.32 + fibers * 0.16))
             .clamp(0.0, 1.0)
-    })
-}
-
-fn procedural_bristle_grain() -> Vec<u8> {
-    procedural_grain(|x, y| {
-        // Anisotropic periodic noise makes continuous bristle channels without
-        // embedding the circular silhouette of a brush tip in the grain.
-        let broad = periodic_value_noise(x, y, 20, 3, 0x19ab_74c5);
-        let bristles = periodic_value_noise(x, y, 96, 4, 0xe371_2da9);
-        let breakup = periodic_value_noise(x, y, 40, 18, 0x48f2_c617);
-        (0.10 + 0.90 * (broad * 0.28 + bristles * 0.56 + breakup * 0.16)).clamp(0.0, 1.0)
     })
 }
 
@@ -7017,6 +7063,7 @@ mod tests {
     #[test]
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
+        assert_eq!(mem::size_of::<DabGpu>(), 160);
         assert_eq!(mem::size_of::<StyleGpu>(), 368);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
@@ -7827,19 +7874,9 @@ mod tests {
     }
 
     #[test]
-    fn bundled_masks_parse() {
-        assert!(
-            parse_ascii_pgm(include_bytes!("../../../assets/brushes/pencil-grain.pgm")).is_some()
-        );
-        assert!(
-            parse_ascii_pgm(include_bytes!("../../../assets/brushes/paint-bristles.pgm")).is_some()
-        );
-    }
-
-    #[test]
     fn procedural_grains_are_full_frame_and_have_useful_range() {
-        for grain in [procedural_paper_grain(), procedural_bristle_grain()] {
-            assert_eq!(grain.len(), PROCEDURAL_GRAIN_SIZE.pow(2) as usize);
+        for (grain, size) in [(procedural_paper_grain(), PROCEDURAL_GRAIN_SIZE), (procedural_contact_paper(), 1024)] {
+            assert_eq!(grain.len(), size.pow(2) as usize);
             let minimum = *grain.iter().min().unwrap();
             let maximum = *grain.iter().max().unwrap();
             assert!(minimum > 0, "grain must not contain a tip-mask border");
@@ -7908,7 +7945,7 @@ mod tests {
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Ink");
         let grain = BrushGrain {
-            asset: AssetId::from(PENCIL_TEXTURE_ASSET),
+            asset: AssetId::from(PAPER_GRAIN_TEXTURE_ASSET),
             behavior: BrushGrainBehavior::Canvas,
             scale: 2.0,
             depth: 0.8,
@@ -7916,7 +7953,7 @@ mod tests {
             offset_jitter: 0.0,
         };
         let dual = DualBrush {
-            tip: BrushTip::Mask(AssetId::from(PAINTBRUSH_TEXTURE_ASSET)),
+            tip: BrushTip::Mask(AssetId::from(WATERCOLOR_TIP_TEXTURE_ASSET)),
             grain: Some(grain.clone()),
             combine: DualCombineMode::Multiply,
             scale: 0.9,

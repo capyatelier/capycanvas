@@ -273,12 +273,12 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
 
 #[test]
 fn saturated_uniform_contacts_match_the_full_evaluator_exactly() {
-    // Compile the original evaluator with the shortcut disabled. Compare native
+    // Compile the current evaluator with the shortcut disabled. Compare native
     // Float32 working pixels, coverage and prediction, not just an 8-bit export.
     fn reference(r: &mut WgpuRasterizer) {
         let source = include_str!("../../material_brush.wgsl");
-        assert!(source.contains("&& stroke_coverage >= 1.0"));
-        let source = source.replace("&& stroke_coverage >= 1.0", "&& false");
+        assert!(source.contains("if stroke_coverage >= ceiling"));
+        let source = source.replace("if stroke_coverage >= ceiling", "if false");
         let device = r.device.clone();
         let shader = Deferred::new(move || device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("full uniform contact reference"),
@@ -305,15 +305,24 @@ fn saturated_uniform_contacts_match_the_full_evaluator_exactly() {
             .map(|(coordinate, texture)| (coordinate, crate::layer_tests::page_bytes(r, texture)))
             .collect()
     }
-    for (depth, alpha, large) in [(SampleDepth::U8, 1., false), (SampleDepth::U16, 0.37, false),
-        (SampleDepth::F16, 1., false), (SampleDepth::U8, 1., true)] {
+    use layer_core::DefaultBrushPreset::{GPen, Marker};
+    for (preset, depth, alpha, flow, large) in [
+        (GPen, SampleDepth::U8, 1., 1., false),
+        (GPen, SampleDepth::U16, 0.37, 1., false),
+        (GPen, SampleDepth::F16, 1., 1., false),
+        (GPen, SampleDepth::U8, 1., 1., true),
+        (Marker, SampleDepth::U8, 0.4, 0.3, false),
+        (Marker, SampleDepth::U16, 0.82, 0.72, false),
+        (Marker, SampleDepth::F16, 1., 1., false),
+    ] {
         let extent = if large { [4096, 3072] } else { [512, 384] };
         let mut document = layer_core::Document::new("saturated contact oracle", extent[0], extent[1]);
         document.color.depth = depth;
         let (mut input, mut live) = engine(document.clone());
         let (mut full_input, mut full) = engine(document);
         reference(full.backend_mut());
-        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        let mut brush = layer_core::default_brush(preset);
+        brush.flow = flow;
         brush.diameter = if large { 2048. } else { 224. };
         brush.color_rgba_linear = if large { [0.006, 0.006, 0.006, 1.] }
             else if depth.is_float() { [2., -0.125, 0.25, alpha] }

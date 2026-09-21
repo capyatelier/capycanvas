@@ -2,15 +2,12 @@ use crate::{
     AssetId, BrushAccumulation, BrushBlendMode, BrushColorDynamics, BrushCombine, BrushCurve,
     BrushDeform, BrushExecution, BrushGrain, BrushGrainBehavior, BrushMapping, BrushPath,
     BrushRendering, BrushSensor, BrushShape, BrushSnapshot, BrushTarget, BrushTip, BrushTransport,
-    BrushWetMix, ColorMixSpace, DualBrush, DualCombineMode, LiquifyMode,
+    BrushWetMix, ColorMixSpace, LiquifyMode,
 };
 use std::sync::Arc;
 
-pub const PENCIL_TEXTURE_ASSET: &str = "builtin:brush-tip/pencil-grain-v1";
-pub const PAINTBRUSH_TEXTURE_ASSET: &str = "builtin:brush-tip/paint-bristles-v1";
 pub const PAPER_GRAIN_TEXTURE_ASSET: &str = "builtin:brush-grain/paper-v1";
 pub const CONTACT_PAPER_TEXTURE_ASSET: &str = "builtin:brush-grain/contact-paper-v1";
-pub const BRISTLE_GRAIN_TEXTURE_ASSET: &str = "builtin:brush-grain/bristle-v1";
 pub const WATERCOLOR_TIP_TEXTURE_ASSET: &str = "builtin:brush-tip/watercolor-ragged-v1";
 pub const WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET: &str = "builtin:brush-transport/long-narrow-v1";
 pub const WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET: &str = "builtin:brush-transport/long-broad-v1";
@@ -74,6 +71,8 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         | DefaultBrushPreset::BlottyInk
         | DefaultBrushPreset::BrushedInk => crate::contact_presets::contact_brush(preset),
         DefaultBrushPreset::Eraser => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             tip: BrushTip::AnalyticEllipse,
             color_rgba_linear: [0.0, 0.0, 0.0, 1.0],
             diameter: 180.0,
@@ -86,14 +85,20 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Paintbrush => BrushSnapshot {
-            tip: BrushTip::Mask(AssetId::from(PAINTBRUSH_TEXTURE_ASSET)),
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.12, 0.025, 0.012, 1.0],
             diameter: 460.0,
-            opacity: 0.88,
-            hardness: 1.0,
-            flow: 0.32,
+            opacity: 0.95,
+            hardness: 0.9,
+            flow: 1.0,
             spacing: 0.20,
             aspect: 0.68,
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.5, 1., 0.)),
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..Default::default()
+            },
             seed: 0x5041_494e,
             mappings: Arc::from([
                 BrushMapping::pressure_size(),
@@ -103,10 +108,12 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Airbrush => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.04, 0.12, 0.42, 1.0],
             diameter: 320.0,
             hardness: 0.05,
-            flow: 0.08,
+            flow: 0.18,
             spacing: 0.055,
             seed: 0x4149_5242,
             path: BrushPath {
@@ -117,36 +124,33 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Chalk => BrushSnapshot {
-            tip: BrushTip::Mask(AssetId::from(PENCIL_TEXTURE_ASSET)),
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.62, 0.12, 0.045, 1.0],
             diameter: 110.0,
-            flow: 0.32,
+            flow: 0.85,
+            hardness: 0.85,
             spacing: 0.11,
             seed: 0x4348_414c,
-            grain: Some(BrushGrain {
-                asset: AssetId::from(PAPER_GRAIN_TEXTURE_ASSET),
-                behavior: BrushGrainBehavior::Canvas,
-                scale: 3.0,
-                depth: 0.72,
-                rotation_radians: 0.17,
-                offset_jitter: 0.15,
-            }),
-            color_dynamics: BrushColorDynamics {
-                stamp_lightness_jitter: 0.08,
-                ..BrushColorDynamics::default()
-            },
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 3., 1., 0.17)),
             mappings: Arc::from([BrushMapping::pressure_size(), pressure_flow(0.12, 0.72)]),
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Marker => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.72, 0.06, 0.16, 0.82],
             diameter: 180.0,
-            hardness: 0.78,
-            flow: 0.26,
+            hardness: 1.0,
+            flow: 0.72,
             spacing: 0.055,
             aspect: 0.42,
             angle_radians: -0.45,
-            mappings: Arc::from([BrushMapping::pressure_size(), direction_rotation()]),
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..Default::default()
+            },
+            mappings: Arc::from([BrushMapping::pressure_size()]),
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::Spray => BrushSnapshot {
@@ -172,29 +176,14 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             ..BrushSnapshot::default()
         },
         DefaultBrushPreset::DualTexture => BrushSnapshot {
-            tip: BrushTip::Mask(AssetId::from(PAINTBRUSH_TEXTURE_ASSET)),
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.08, 0.025, 0.42, 1.0],
             diameter: 260.0,
-            flow: 0.36,
+            flow: 0.7,
             spacing: 0.16,
             aspect: 0.72,
-            grain: Some(BrushGrain {
-                asset: AssetId::from(PAPER_GRAIN_TEXTURE_ASSET),
-                behavior: BrushGrainBehavior::Canvas,
-                scale: 2.4,
-                depth: 0.58,
-                rotation_radians: 0.0,
-                offset_jitter: 0.0,
-            }),
-            dual: Some(Arc::new(DualBrush {
-                tip: BrushTip::Mask(AssetId::from(PENCIL_TEXTURE_ASSET)),
-                grain: None,
-                combine: DualCombineMode::Multiply,
-                scale: 0.74,
-                aspect: 1.3,
-                angle_radians: 0.55,
-                offset: [0.08, -0.04],
-            })),
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 2.4, 1., 0.)),
             mappings: Arc::from([BrushMapping::pressure_size(), direction_rotation()]),
             ..BrushSnapshot::default()
         },
@@ -289,62 +278,113 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             mappings: Arc::from([BrushMapping::pressure_size(), pressure_flow(0.1, 0.72)]),
             ..BrushSnapshot::default()
         },
-        DefaultBrushPreset::TexturedFlat => painter_brush(PainterBrushSpec {
+        DefaultBrushPreset::TexturedFlat => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 360.0,
             aspect: 0.62,
-            flow: 0.42,
-            opacity: 0.72,
+            flow: 1.0,
+            opacity: 0.9,
             spacing: 0.16,
-            hardness: 0.38,
+            hardness: 0.97,
             execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(PAPER_GRAIN_TEXTURE_ASSET, 1.7, 0.62, 0.08)),
-            rendering: BrushRendering::default(),
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.7, 1., 0.08)),
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..Default::default()
+            },
             wet_mix: BrushWetMix::default(),
-        }),
-        DefaultBrushPreset::DryScumble => painter_brush(PainterBrushSpec {
+            color_dynamics: BrushColorDynamics {
+                stroke_saturation_jitter: 0.035,
+                ..Default::default()
+            },
+            mappings: Arc::from([
+                BrushMapping::pressure_size(),
+                pressure_flow(0.22, 0.78),
+                direction_rotation(),
+            ]),
+            ..Default::default()
+        },
+        DefaultBrushPreset::DryScumble => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 430.0,
             aspect: 0.72,
-            flow: 0.27,
+            flow: 0.95,
             opacity: 0.86,
             spacing: 0.22,
             hardness: 0.52,
             execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(PAPER_GRAIN_TEXTURE_ASSET, 3.4, 0.82, 0.21)),
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 3.4, 1., 0.21)),
             rendering: BrushRendering {
                 accumulation: BrushAccumulation::Uniform,
                 alpha_threshold: 0.08,
                 ..BrushRendering::default()
             },
             wet_mix: BrushWetMix::default(),
-        }),
-        DefaultBrushPreset::PastelBlock => painter_brush(PainterBrushSpec {
+            color_dynamics: BrushColorDynamics {
+                stroke_saturation_jitter: 0.035,
+                ..Default::default()
+            },
+            shape: BrushShape {
+                follow_direction: 1.,
+                ..Default::default()
+            },
+            mappings: Arc::from([BrushMapping::pressure_size()]),
+            ..Default::default()
+        },
+        DefaultBrushPreset::PastelBlock => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 280.0,
             aspect: 0.58,
-            flow: 0.34,
+            flow: 0.85,
             opacity: 0.78,
             spacing: 0.14,
-            hardness: 0.46,
+            hardness: 0.9,
             execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(PAPER_GRAIN_TEXTURE_ASSET, 5.2, 0.76, -0.13)),
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 5.2, 1., -0.13)),
             rendering: BrushRendering::default(),
             wet_mix: BrushWetMix::default(),
-        }),
-        DefaultBrushPreset::TransparentGlaze => painter_brush(PainterBrushSpec {
+            color_dynamics: BrushColorDynamics {
+                stroke_saturation_jitter: 0.035,
+                ..Default::default()
+            },
+            mappings: Arc::from([
+                BrushMapping::pressure_size(),
+                pressure_flow(0.22, 0.78),
+                direction_rotation(),
+            ]),
+            ..Default::default()
+        },
+        DefaultBrushPreset::TransparentGlaze => BrushSnapshot {
+            schema_version: 5,
+            contact: Some(crate::contact_presets::dry_material(preset)),
             diameter: 520.0,
             aspect: 0.52,
-            flow: 0.19,
+            flow: 0.25,
             opacity: 0.62,
             spacing: 0.08,
             hardness: 0.68,
             execution: BrushExecution::Dry,
-            grain: Some(canvas_grain(PAPER_GRAIN_TEXTURE_ASSET, 1.9, 0.34, 0.0)),
+            grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.9, 1., 0.0)),
             rendering: BrushRendering::default(),
             wet_mix: BrushWetMix {
                 wetness: 0.28,
                 wetness_jitter: 0.08,
                 ..BrushWetMix::default()
             },
-        }),
+            color_dynamics: BrushColorDynamics {
+                stroke_saturation_jitter: 0.035,
+                ..Default::default()
+            },
+            mappings: Arc::from([
+                BrushMapping::pressure_size(),
+                pressure_flow(0.22, 0.78),
+                direction_rotation(),
+            ]),
+            ..Default::default()
+        },
         DefaultBrushPreset::OpaqueGouache => painter_brush(PainterBrushSpec {
             diameter: 410.0,
             aspect: 0.68,
@@ -646,9 +686,11 @@ mod tests {
             assert_eq!(brush.tip, BrushTip::AnalyticEllipse, "{preset:?}");
             let grain = brush.grain.expect("painter preset must provide grain");
             assert_eq!(grain.behavior, BrushGrainBehavior::Canvas, "{preset:?}");
-            assert_eq!(
-                grain.asset.0.as_ref(),
-                PAPER_GRAIN_TEXTURE_ASSET,
+            assert!(
+                matches!(
+                    grain.asset.0.as_ref(),
+                    PAPER_GRAIN_TEXTURE_ASSET | CONTACT_PAPER_TEXTURE_ASSET
+                ),
                 "{preset:?}"
             );
             assert_eq!(grain.offset_jitter, 0.0, "{preset:?}");

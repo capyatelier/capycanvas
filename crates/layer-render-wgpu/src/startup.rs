@@ -65,8 +65,9 @@ impl Requirements {
         let plan = BrushPassPlan::for_device(style, &r.device);
         if style.execution == BrushExecution::Dry && plan.direct.is_none()
             && let Some(dry) = &r.pipelines.dry_material {
-            self.compute.push(dry.kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
-            if preview { self.compute.push(dry.kernels[plan.material as usize * 2].clone()); }
+            let kernels = dry.for_contact(style.contact);
+            self.compute.push(kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+            if preview { self.compute.push(kernels[plan.material as usize * 2].clone()); }
         }
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());
@@ -600,7 +601,8 @@ mod gpu_tests {
                 .all(Deferred::ready)
         );
         for index in [2, 3] {
-            assert!(renderer.pipelines.dry_material.as_ref().unwrap().kernels[index].ready(),
+            assert!(renderer.pipelines.dry_material.as_ref().unwrap()
+                .for_contact(layer_core::default_brush(layer_core::DefaultBrushPreset::GPen).contact)[index].ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
     }

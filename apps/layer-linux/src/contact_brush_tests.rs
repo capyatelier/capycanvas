@@ -30,17 +30,28 @@ fn native_contact_brushes() {
     w.dispatch(UiAction::SetColor {
         rgba: [0.006, 0.006, 0.006, 1.],
     });
-    let output = "../../artifacts/contact-brushes/gtk";
-    std::fs::create_dir_all(output).unwrap();
-    for (row, preset) in layer_core::CONTACT_BRUSH_PRESETS.into_iter().enumerate() {
+    let output = std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_| {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../artifacts/contact-brushes/gtk"
+        )
+        .into()
+    });
+    std::fs::create_dir_all(&output).unwrap();
+    for (row, preset) in layer_core::CONTACT_BRUSH_PRESETS
+        .into_iter()
+        .chain([layer_core::DefaultBrushPreset::Spray])
+        .enumerate()
+    {
         let id = preset as u32;
-        let group = if row < 3 {
-            layer_ui::ToolGroup::Pencil
-        } else if row == 3 {
-            layer_ui::ToolGroup::Pastel
-        } else {
-            layer_ui::ToolGroup::Pen
-        };
+        let category = layer_ui::brush_catalog()
+            .find(|b| b.id == id)
+            .unwrap()
+            .category;
+        let group = layer_ui::ToolGroup::ALL
+            .into_iter()
+            .find(|group| group.label() == category)
+            .unwrap();
         w.dispatch(UiAction::Invoke {
             command: group.tool().command(),
         });
@@ -65,7 +76,7 @@ fn native_contact_brushes() {
         }
         assert_eq!(state(&w).brush.preset, id);
         assert!(button.has_css_class("selected-tool"));
-        assert!(
+        assert_eq!(
             w.gpu
                 .borrow()
                 .as_ref()
@@ -74,7 +85,8 @@ fn native_contact_brushes() {
                 .engine()
                 .configured_brush()
                 .contact
-                .is_some()
+                .is_some(),
+            preset != layer_core::DefaultBrushPreset::Spray
         );
         w.dispatch(UiAction::SetBrushSize { value: 54. });
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -100,8 +112,20 @@ fn native_contact_brushes() {
         let m = camera.document_to_surface();
         for i in 0..=64 {
             let t = i as f32 / 64.;
-            let x = 600. + 850. * t;
-            let y = 480. + row as f32 * 80. + (t * std::f32::consts::TAU).sin() * 16.;
+            let column = if matches!(
+                preset,
+                layer_core::DefaultBrushPreset::Eraser | layer_core::DefaultBrushPreset::Spray
+            ) {
+                0
+            } else {
+                row / 11
+            };
+            let x = 200. + column as f32 * 900. + 700. * t;
+            let y = if preset == layer_core::DefaultBrushPreset::Spray {
+                1450.
+            } else {
+                210. + (row % 11) as f32 * 110.
+            } + (t * std::f32::consts::TAU).sin() * 16.;
             let now = glib::monotonic_time() as u64 * 1000;
             w.input.send(
                 &w,

@@ -84,6 +84,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "surface_quarter_turns": surface.quarter_turns,
                 // Submission progress is not proof that Android displayed a buffer.
                 "submitted_frames": surface.submitted_frames,
+                "completed_frames": surface.completed_frames.load(Ordering::Acquire),
                 "hdr_capable": a.hdr_capable(),
                 "hdr_output": a.hdr_output(),
                 "presented_hdr": surface.presented_hdr,

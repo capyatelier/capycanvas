@@ -223,6 +223,48 @@ fn cursor_triangle_and_single_pixel_dot_render_at_native_scale() {
 }
 
 #[test]
+fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_damage() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let make_target = || r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("retained scene viewport regression"),
+        size: wgpu::Extent3d { width: 512, height: 512, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+    });
+    let target = make_target();
+    let reference = make_target();
+    let mut layer = Layer::paint(LayerId(1), "scene paint");
+    layer.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
+    let layers = [layer];
+    let camera = ViewState { width_px: 512, height_px: 512,
+        background_rgba_linear: [0.2, 0.3, 0.4, 1.], ..view() };
+    let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    retained.retain_target();
+    for (i, (x, y, preview)) in [(85., 90., false), (365., 330., true),
+        (95., 370., true), (360., 100., false)].into_iter().enumerate() {
+        let mut ink = dab([0.8, 0.1, 0.2, 0.7]);
+        ink.center = Point { x, y };
+        ink.radii = [24.; 2];
+        ink.previous = [24., 24., 1., 0.];
+        ink.contact = [1., 0., 0., 0.];
+        let mut stroke = batch(1);
+        stroke.kind = if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent };
+        stroke.style = preset_style(layer_core::DefaultBrushPreset::Pencil);
+        stroke.damage = ink.bounds();
+        r.submit(FramePacket { view: camera, document_extent: [1024; 2], layers: &layers,
+            dabs: &[ink], dab_batches: &[stroke], restore_rasters: &[],
+            reset_layers: i == 0, composite_all: i == 0, time_seconds: 0., }).unwrap();
+        if i > 0 { assert!(r.composite_damage.area() < 1024 * 1024); }
+        retained.present(&r, &target.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+        let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+        full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+        assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
+    }
+}
+
+#[test]
 fn retained_viewport_matches_full_redraw_after_paint_and_preview_replacement() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "Ink")];
@@ -2917,6 +2959,8 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
             last.center = Point { x: 890., y: 890. };
             let mut stroke = batch(1);
             stroke.style = preset_style(preset);
+            // Measure every footprint on transparent backing, including the eraser.
+            stroke.style.mode = DabMode::Paint;
             stroke.dab_count = 2;
             stroke.damage = first.bounds().union(last.bounds());
             let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
@@ -2935,8 +2979,11 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
             assert!(paint.pages.iter().all(|p| p.secondary.is_some() == plan.requires_destination()),
                 "native={native}, preset={preset:?}");
             assert_eq!(&together[(512 * 1024 + 512) * 4..][..4], &[0; 4]);
-            assert!(together[(90 * 1024 + 90) * 4 + 3] > 0);
-            assert!(together[(890 * 1024 + 890) * 4 + 3] > 0);
+            for center in [90, 890] {
+                assert!((center - 20..center + 20).any(|y|
+                    (center - 20..center + 20).any(|x| together[(y * 1024 + x) * 4 + 3] > 0)),
+                    "native={native}, preset={preset:?}: footprint at {center} must deposit");
+            }
             // Independent per-contact submissions establish pixels, including the
             // untouched interior; no reference renderer or second runtime path.
             stroke.dab_count = 1;
@@ -2948,6 +2995,93 @@ fn sparse_contact_preparation_preserves_pixels_without_allocating_empty_corners(
             stroke.damage = last.bounds();
             render(&mut r, &[last], &[stroke], false);
             assert_eq!(together, r.readback_srgb_rgba8().unwrap(), "native={native}, preset={preset:?}");
+        }
+    }
+}
+
+#[test]
+fn normal_stack_fusion_matches_unfused_layers_with_opacity_and_preview() {
+    let mut r = WgpuRasterizer::new_float32().unwrap();
+    for masks in 0..4 {
+        let mut top = Layer::paint(LayerId(1), "top paint");
+        top.opacity = 0.43;
+        if masks & 1 != 0 { top.mask = Some(left_mask(8)); }
+        let mut lower = Layer::paint(LayerId(2), "lower paint");
+        lower.opacity = 0.61;
+        // A scalar mask forces scene composition on blendable Float32 GPUs.
+        lower.mask = Some(if masks & 2 != 0 { left_mask(9) }
+            else { LayerMask::reveal_all(LayerId(9), Point::default()) });
+        let layers = [top, lower];
+        let mut lower_dab = dab([0.2, 0.7, 0.4, 0.8]);
+        lower_dab.radii = [90.; 2];
+        let base = dab([0.8, 0.1, 0.3, 0.7]);
+        let mut lower_batch = batch(2);
+        lower_batch.first_dab = 1;
+        submit(&mut r, &layers, &[base, lower_dab], &[batch(1), lower_batch], true);
+        let mut ink = dab([0.1, 0.3, 0.9, 0.6]);
+        ink.radii = [24., 18.];
+        ink.contact = [0.7, 0., 0., 0.];
+        let mut stroke = batch(1);
+        stroke.stroke_id = StrokeId(2);
+        stroke.style = preset_style(layer_core::DefaultBrushPreset::Marker);
+        stroke.damage = ink.bounds();
+        stroke.kind = DabBatchKind::Preview;
+        for preview in [false, true] {
+            r.scene.as_mut().unwrap().set_tiled_composition(false);
+            submit(&mut r, &layers, if preview { std::slice::from_ref(&ink) } else { &[] },
+                if preview { std::slice::from_ref(&stroke) } else { &[] }, false);
+            let fused = page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            r.scene.as_mut().unwrap().set_tiled_composition(true);
+            submit(&mut r, &layers, if preview { std::slice::from_ref(&ink) } else { &[] },
+                if preview { std::slice::from_ref(&stroke) } else { &[] }, false);
+            let reference = page_bytes(&r, r.composite_texture.as_ref().unwrap());
+            let error = fused.chunks_exact(4).zip(reference.chunks_exact(4))
+                .map(|(a,b)| (f32::from_le_bytes(a.try_into().unwrap()) - f32::from_le_bytes(b.try_into().unwrap())).abs())
+                .fold(0., f32::max);
+            assert!(error < 0.00001, "masks={masks}, preview={preview}: {error}");
+        }
+        r.scene.as_mut().unwrap().set_tiled_composition(false);
+    }
+}
+
+#[test]
+fn flow_preview_matches_commit_with_layer_opacity_and_cancels_exactly() {
+    use layer_core::{DefaultBrushPreset::*, color::{DocumentColor, SampleDepth, RgbSpace}};
+    for native in [false, true] {
+        let mut r = if native {
+            WgpuRasterizer::new_native_headless(DocumentColor {
+                space: RgbSpace::Srgb, depth: SampleDepth::U8,
+            }).unwrap()
+        } else { WgpuRasterizer::new_headless().unwrap() };
+        for preset in [Airbrush, Pencil, Marker, TransparentGlaze] {
+            for masked in [false, true] {
+                let mut layer = Layer::paint(LayerId(1), "translucent Flow preview");
+                layer.opacity = 0.43;
+                if masked { layer.mask = Some(left_mask(9)); }
+                let layers = [layer];
+                let base = dab([0.8, 0.1, 0.2, 0.7]);
+                let mut ink = dab([0.1, 0.3, 0.9, 0.6]);
+                ink.radii = [24., 18.];
+                ink.contact = [0.7, 0., 0., 0.];
+                let mut stroke = batch(1);
+                stroke.stroke_id = StrokeId(2);
+                stroke.style = preset_style(preset);
+                stroke.damage = ink.bounds();
+                submit(&mut r, &layers, &[base], &[batch(1)], true);
+                let original = r.readback_srgb_rgba8().unwrap();
+                submit(&mut r, &layers, &[ink], &[stroke.clone()], false);
+                let committed = r.readback_srgb_rgba8().unwrap();
+                assert_ne!(committed, original, "{preset:?} must deposit");
+                submit(&mut r, &layers, &[base], &[batch(1)], true);
+                stroke.kind = DabBatchKind::Preview;
+                stroke.stroke_end = false;
+                submit(&mut r, &layers, &[ink], &[stroke], false);
+                let predicted = r.readback_srgb_rgba8().unwrap();
+                let error = predicted.iter().zip(&committed).map(|(a,b)| a.abs_diff(*b)).max().unwrap();
+                assert!(error <= 1, "{preset:?}, native={native}, masked={masked}: {error}; base={} scene={} center={:?}/{:?}", r.preview_requires_base, r.scene.is_some(), &predicted[(64*128+64)*4..][..4], &committed[(64*128+64)*4..][..4]);
+                submit(&mut r, &layers, &[], &[], false);
+                assert_eq!(r.readback_srgb_rgba8().unwrap(), original);
+            }
         }
     }
 }
@@ -3442,4 +3576,41 @@ fn constant_backdrop_sparse_updates_match_tiled_float_composition() {
             assert!(error < 0.00001, "masked={masked}, step={step}: error={error}");
         }
     }
+}
+
+#[test]
+fn dispersed_dry_stamps_keep_order_when_tile_ranges_are_compacted() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let extent = [1024, 256];
+    let layers = [Layer::paint(LayerId(1), "scattered translucent pigment")];
+    let dabs: Vec<_> = (0..96).map(|i| {
+        let color = [[0.8, 0.1, 0.2, 0.08], [0.1, 0.2, 0.8, 0.11], [0.1, 0.7, 0.2, 0.06]][(i / 3) % 3];
+        let mut d = dab(color);
+        d.center = Point { x: [128., 896., 512.][i % 3], y: 128. };
+        d.radii = [95., 72.];
+        d.hardness = 0.65;
+        d
+    }).collect();
+    let mut b = batch(1);
+    b.dab_count = dabs.len() as u32;
+    b.damage = Rect { min: Point::default(), max: Point { x: 1024., y: 256. } };
+    let render = |r: &mut WgpuRasterizer, dabs: &[Dab], b: &DabBatch, reset| {
+        r.submit(FramePacket {
+            view: ViewState { width_px: extent[0], height_px: extent[1], ..view() },
+            document_extent: extent, layers: &layers, dabs,
+            dab_batches: std::slice::from_ref(b), restore_rasters: &[],
+            reset_layers: reset, composite_all: reset, time_seconds: 0.,
+        }).unwrap();
+    };
+    render(&mut r, &dabs, &b, true);
+    assert!(r.dab_upload.len() > dabs.len(), "dispersed tiles use compact uploaded ranges");
+    let compact = r.readback_srgb_rgba8().unwrap();
+    b.dab_count = 1;
+    for (i, dab) in dabs.iter().enumerate() {
+        b.damage = dab.bounds();
+        render(&mut r, std::slice::from_ref(dab), &b, i == 0);
+    }
+    let reference = r.readback_srgb_rgba8().unwrap();
+    let difference = compact.iter().zip(reference).map(|(a,b)| a.abs_diff(b)).max().unwrap();
+    assert!(difference <= 1, "compaction changed ordered pigment by {difference}");
 }

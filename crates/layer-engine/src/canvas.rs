@@ -2043,7 +2043,12 @@ fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
         wet_mix: brush.wet_mix,
         transport: brush.transport.clone(),
         deform: brush.deform,
-        contact: brush.contact,
+        contact: brush.contact.map(|mut material| {
+            // Resolve strand density once per style so pressure changes
+            // retain strand identity while large tools keep fine bristles.
+            material.fibers *= (brush.diameter / 128.).max(1.);
+            material
+        }),
     }
 }
 

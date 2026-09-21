@@ -30,23 +30,28 @@ def main():
     parser.add_argument("trace")
     parser.add_argument("markers")
     parser.add_argument("--processor", required=True)
+    parser.add_argument("--package", default="art.capycanvas")
     args = parser.parse_args()
-    query = """
+    package = args.package.replace("'", "''")
+    # Android may record only the tail of a long package name in /proc comm.
+    process_names = ",".join("'" + n.replace("'", "''") + "'" for n in
+                             dict.fromkeys([args.package, args.package[-15:], args.package[-14:]]))
+    query = f"""
     SELECT 'bounds' kind, start_ts ts, end_ts dur, '' name FROM trace_bounds
     UNION ALL
     SELECT 'slice', s.ts, s.dur, s.name FROM slice s
       JOIN thread_track tt ON tt.id=s.track_id JOIN thread t USING(utid)
       JOIN process p USING(upid)
-      WHERE p.name='art.capycanvas' AND t.name='capy-canvas' AND s.dur>=0
+      WHERE p.name IN ({process_names}) AND t.name='capy-canvas' AND s.dur>=0
     UNION ALL
     SELECT 'sched', s.ts, s.dur, '' FROM sched s JOIN thread t USING(utid)
-      JOIN process p USING(upid) WHERE p.name='art.capycanvas' AND t.name='capy-canvas'
+      JOIN process p USING(upid) WHERE p.name IN ({process_names}) AND t.name='capy-canvas'
     UNION ALL
     SELECT 'counter', c.ts, c.value, t.name FROM counter c
       JOIN counter_track t ON t.id=c.track_id WHERE t.name GLOB 'Capy*'
     UNION ALL
     SELECT 'latch', ts, dur, name FROM slice
-      WHERE name GLOB 'latchBuffer SurfaceView*art.capycanvas/*'
+      WHERE name GLOB 'latchBuffer SurfaceView*{package}/*'
     UNION ALL
     SELECT 'error', 0, value, name FROM stats WHERE severity='error' AND value>0
     ORDER BY ts

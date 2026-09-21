@@ -420,7 +420,7 @@ impl FilterPreviews {
             data[8] = 9.;
             self.scene.jobs.push(Job::Draw {
                 target: fallback.1.clone(),
-                sources: [r.empty_view.clone(), r.empty_view.clone()],
+                sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone()],
                 data,
                 over: false,
                 clip: None,
@@ -564,7 +564,7 @@ impl FilterPreviews {
                 }
                 self.scene.jobs.push(Job::Effect {
                     target: target.clone(),
-                    sources: [previous, source.clone()],
+                    sources: [previous, source.clone(), r.empty_view.clone()],
                     data,
                     prepared: prepared.clone(),
                     masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
@@ -590,7 +590,7 @@ impl FilterPreviews {
             ]);
             self.scene.jobs.push(Job::Draw {
                 target: atlas.1.clone(),
-                sources: [previous, self.mask.1.clone()],
+                sources: [previous, self.mask.1.clone(), r.empty_view.clone()],
                 data,
                 over: false,
                 clip: None,

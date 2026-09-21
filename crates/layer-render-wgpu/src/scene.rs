@@ -22,7 +22,7 @@ enum Job {
     },
     Effect {
         target: wgpu::TextureView,
-        sources: [wgpu::TextureView; 2],
+        sources: [wgpu::TextureView; 3],
         data: [f32; 32],
         prepared: effects::PreparedEffect,
         // Keep ordinary draw jobs small: only effects carry the mask inputs.
@@ -30,7 +30,7 @@ enum Job {
     },
     Draw {
         target: wgpu::TextureView,
-        sources: [wgpu::TextureView; 2],
+        sources: [wgpu::TextureView; 3],
         data: [f32; 32],
         over: bool,
         clip: Option<PixelRect>,
@@ -63,7 +63,7 @@ pub(super) struct Scene {
     jobs: Vec<Job>,
     // Retain table capacity across tile batches, but release resource handles
     // after encoding so these tables cannot pin evicted paint/source pages.
-    source_bindings: std::collections::HashMap<[wgpu::TextureView; 2], wgpu::BindGroup>,
+    source_bindings: std::collections::HashMap<[wgpu::TextureView; 3], wgpu::BindGroup>,
     mask_bindings: std::collections::HashMap<[wgpu::TextureView; effects::MASK_SLOTS], wgpu::BindGroup>,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::BindGroupLayout,
@@ -209,7 +209,7 @@ impl Scene {
                 data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
                 data[8] = 8.;
                 self.jobs.push(Job::Draw {
-                    target, sources: [view.clone(), r.empty_view.clone()],
+                    target, sources: [view.clone(), r.empty_view.clone(), r.empty_view.clone()],
                     data, over: false, clip: None,
                 });
                 uploads += 1;
@@ -289,7 +289,7 @@ impl Scene {
                 data[..8].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0.]);
                 data[8] = 1.;
                 data[9] = 1.;
-                self.jobs.push(Job::Draw { target, sources: [view, r.empty_view.clone()], data, over: false, clip: None });
+                self.jobs.push(Job::Draw { target, sources: [view, r.empty_view.clone(), r.empty_view.clone()], data, over: false, clip: None });
             }
         }
         self.encode_jobs(r, encoder)
@@ -322,7 +322,7 @@ impl Scene {
             data[9] = 1.;
             self.jobs.push(Job::Draw {
                 target,
-                sources: [view, r.empty_view.clone()],
+                sources: [view, r.empty_view.clone(), r.empty_view.clone()],
                 data,
                 over: false,
                 clip: None,
@@ -610,6 +610,7 @@ impl Scene {
         let mut sources = [
             self.pool[input].view.clone(),
             mask.map_or_else(|| r.empty_view.clone(), |m| self.pool[m].view.clone()),
+            r.empty_view.clone(),
         ];
         // Lower a source-over operation followed by an adjustment into one
         // shader invocation. No intermediate color tile or pass is necessary.
@@ -672,6 +673,7 @@ impl Scene {
         mut over: bool,
     ) {
         let mut data = [0.; 32];
+        let mut sources = [source, back.unwrap_or_else(|| r.empty_view.clone()), r.empty_view.clone()];
         data[..4].copy_from_slice(&rect);
         data[4..8].copy_from_slice(&[256., 256., 0., 0.]);
         data[8..12].copy_from_slice(&options);
@@ -687,9 +689,31 @@ impl Scene {
             ]);
             over = false;
         }
+        // Two aligned normal layers, including a separate Flow preview, can
+        // resolve over their constant backdrop in one destination write. This
+        // preserves layer opacity after preview composition and needs neither
+        // a scratch color tile nor an attachment destination read.
+        if r.scene_pipelines.constant.is_some() && self.cached_composition() && over && rect == [0., 0., 256., 256.]
+            && (options[0] == 14. || (options[0] == 7. && options[3] < 2.))
+            && let Some(Job::Draw { target: prior_target, sources: prior_sources,
+                data: prior, over: false, clip: None }) = self.jobs.last()
+            && *prior_target == self.pool[target].view
+            && prior[..4] == rect && prior[8] == 13. && prior[11] < 2.
+        {
+            if options[0] == 7. {
+                data[9] *= options[2];
+                sources[1] = r.empty_view.clone();
+            }
+            sources[2] = prior_sources[0].clone();
+            data[8] = 15.;
+            data[16] = prior[9] * prior[10];
+            data[20..24].copy_from_slice(&prior[16..20]);
+            over = false;
+            self.jobs.pop();
+        }
         self.jobs.push(Job::Draw {
             target: self.pool[target].view.clone(),
-            sources: [source, back.unwrap_or_else(|| r.empty_view.clone())],
+            sources,
             data,
             over,
             clip: None,
@@ -1155,8 +1179,7 @@ impl Scene {
             data[28..30].copy_from_slice(&inverse[4..]);
             return Ok(true);
         }
-        if (r.preview_layer_id == Some(layer.id) && !r.preview_requires_base)
-            || layer.properties.placement != layer_core::Affine::IDENTITY
+        if layer.properties.placement != layer_core::Affine::IDENTITY
             || world_offset(packet.layers, layer.id, false) != layer_core::Point::default()
         {
             return Ok(false);
@@ -1180,6 +1203,30 @@ impl Scene {
         let predicted = (r.preview_layer_id == Some(layer.id))
             .then(|| r.preview_page(tile))
             .flatten();
+        if let Some(preview) = predicted.filter(|_| !r.preview_requires_base) {
+            // A Flow preview is a separate transparent paint contribution.
+            // Resolve it over persistent paint before applying layer opacity;
+            // drawing the two contributions independently changes the result.
+            // An enabled mask needs a third source and retains the general path.
+            if mask.is_some() {
+                return Ok(false);
+            }
+            let base = if let Some(page) = stored.pages.iter().find(|p| p.coordinate == tile) {
+                Some(page.active().view.clone())
+            } else {
+                self.source_tile(r, layer, tile)?
+            };
+            self.draw(
+                r,
+                target,
+                preview.active().view.clone(),
+                base,
+                [0., 0., 256., 256.],
+                [14., layer.opacity, 0., 0.],
+                true,
+            );
+            return Ok(true);
+        }
         let view = if let Some(page) = predicted.or_else(|| stored.pages.iter().find(|p| p.coordinate == tile)) {
             page.active().view.clone()
         } else if let Some(view) = self.source_tile(r, layer, tile)? {
@@ -1676,7 +1723,7 @@ impl Scene {
         let color = *color;
         let replaces_backdrop = matches!(self.jobs.get(first + 1),
             Some(Job::Draw { data, over: false, .. })
-                if data[8] == 13. && data[..4] == [0., 0., 256., 256.]);
+                if matches!(data[8], 13. | 15.) && data[..4] == [0., 0., 256., 256.]);
         // Portable Float32 blending reads the destination, so only a single
         // complete replacement can write directly into the composite.
         if r.device.portable_blend() && self.jobs.len() > first + 1
@@ -1699,7 +1746,7 @@ impl Scene {
             self.jobs.remove(first);
         } else {
             self.jobs[first] = Job::Draw {
-                target: composite.clone(), sources: [r.empty_view.clone(), r.empty_view.clone()],
+                target: composite.clone(), sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone()],
                 data: background, over: false, clip: Some(clip),
             };
         }
@@ -1827,7 +1874,7 @@ impl Scene {
         }
         let compute_supported = r.scene_pipelines.constant.is_some();
         let is_compute = |job: &Job| compute_supported && matches!(job,
-            Job::Draw { data, over: false, clip: Some(_), .. } if data[8] == 13.);
+            Job::Draw { data, over: false, clip, .. } if data[8] == 15. || (data[8] == 13. && clip.is_some()));
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
         let mut output_bindings = std::collections::HashMap::new();
@@ -1836,28 +1883,35 @@ impl Scene {
             if i < encoded_through {
                 continue;
             }
-            if let Job::Draw { target, sources, data, over: false, clip: Some(_), .. } = job
-                && is_compute(job)
+            if is_compute(job)
                 && let Some((layout, pipeline)) = &r.scene_pipelines.constant
             {
-                let input = source_bindings.entry(sources.clone())
-                    .or_insert_with(|| source_binding(r, &self.layout, sources));
-                let output = output_bindings.entry(target.clone()).or_insert_with(|| {
-                    r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("scene constant backdrop destination"), layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0, resource: wgpu::BindingResource::TextureView(target),
-                        }],
-                    })
-                });
+                let end = (i + 1..self.jobs.len()).find(|&j| !is_compute(&self.jobs[j]))
+                    .unwrap_or(self.jobs.len());
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("scene constant backdrop"), timestamp_writes: None,
+                    label: Some("scene normal layers"), timestamp_writes: None,
                 });
                 pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &self.binding, &[((base + i) * self.stride) as u32]);
-                pass.set_bind_group(1, &*input, &[]);
-                pass.set_bind_group(2, &*output, &[]);
-                pass.dispatch_workgroups((data[2] as u32).div_ceil(8), (data[3] as u32).div_ceil(8), 1);
+                for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                    let Job::Draw { target, sources, data, .. } = job else { unreachable!() };
+                    let input = source_bindings.entry(sources.clone())
+                        .or_insert_with(|| source_binding(r, &self.layout, sources));
+                    let output = output_bindings.entry((target.clone(), sources[2].clone())).or_insert_with(|| {
+                        r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("scene normal layers destination"), layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0, resource: wgpu::BindingResource::TextureView(target),
+                            }, wgpu::BindGroupEntry {
+                                binding: 1, resource: wgpu::BindingResource::TextureView(&sources[2]),
+                            }],
+                        })
+                    });
+                    pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
+                    pass.set_bind_group(1, &*input, &[]);
+                    pass.set_bind_group(2, &*output, &[]);
+                    pass.dispatch_workgroups((data[2] as u32).div_ceil(8), (data[3] as u32).div_ceil(8), 1);
+                }
+                encoded_through = end;
                 continue;
             }
             match job {
@@ -2083,7 +2137,7 @@ impl Pipelines {
                 )
             })
         });
-        let constant = device.portable_blend().then(|| {
+        let constant = (device.working_format() == wgpu::TextureFormat::Rgba32Float).then(|| {
             let output = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene constant backdrop output"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -2093,6 +2147,9 @@ impl Pipelines {
                         format: wgpu::TextureFormat::Rgba32Float,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     }, count: None,
+                }, wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ..texture_entry(1)
                 }],
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2298,7 +2355,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
     result
 }
 
-fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
+fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
     r.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("scene tile inputs"),
         layout,

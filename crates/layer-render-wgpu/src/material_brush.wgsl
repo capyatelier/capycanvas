@@ -54,6 +54,8 @@ struct Dab {
     previous: vec4<f32>,
     contact: vec4<f32>,
     previous_contact: vec4<f32>,
+    metric: vec4<f32>,
+    invariants: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> style: Style;
@@ -204,9 +206,14 @@ fn watercolor_canvas_sample(position: vec2<f32>, amount: f32) -> vec4<f32> {
 }
 
 fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
-    if style.contact_a.x > 0.5 {
-        return evolving_contact(world, dab.center, dab.radii, dab.rotation, dab.motion,
-            dab.previous, dab.contact, dab.previous_contact, dab.hardness) * brush_selection_at(brush_to_layer(world));
+    return contact_coverage_field(dab, world, contact_field(world));
+}
+
+fn contact_coverage_field(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
+    if contact_feature(1u, style.contact_a.x > 0.5) {
+        return evolving_contact_prepared(world, dab.center, dab.radii, dab.rotation, dab.motion,
+            dab.previous, dab.contact, dab.previous_contact, dab.hardness, field,
+            dab.metric, dab.invariants.xy) * brush_selection_at(brush_to_layer(world));
     }
     let delta = world - dab.center;
     let local = rotate(delta, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));
@@ -726,7 +733,9 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         );
     }
 
-    var result = canvas_load(world);
+    // Dry deposition reads exactly the destination texel, even for a placed
+    // layer. Avoid the brush-to-layer round trip and neighborhood selection.
+    var result = textureLoad(source_11, vec2<i32>(floor(fragment_position.xy)), 0);
     let state_coordinate = clamp(
         vec2<i32>(floor(fragment_position.xy)),
         vec2<i32>(0),
@@ -739,24 +748,33 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // Fully covered incoming pixels cannot receive more uniform pigment.
     // Keep this outside the contact loop: a loop-carried early break produces
     // dark contact seams on Adreno for large, multi-contact batches.
-    if style.render_mode.y > 0.5 && style.render_mode.x < 0.5 && stroke_coverage >= 1.0 {
-        return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+    let range = material_sources.header.zw;
+    if style.render_mode.y > 0.5 && style.render_mode.x < 0.5 {
+        var ceiling = 1.0;
+        // The solid-contact specialization has no material variation. Its
+        // upload supplies an upper bound across every incoming contact; max
+        // accumulation cannot change pixels already at or above that bound.
+        if CONTACT_FLAGS == 1u && range.y > 0u {
+            ceiling = dabs[range.x].invariants.z;
+        }
+        if stroke_coverage >= ceiling {
+            return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
+        }
     }
-    let range = select(style.operation.xy, material_sources.header.zw, style.contact_a.x > 0.5);
+    let field = contact_field(world);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
-        let coverage = contact_coverage(dab, world);
+        let coverage = contact_coverage_field(dab, world, field);
         if coverage <= 0.0 { continue; }
         var requested_alpha = clamp(
             coverage * dab.flow * dab.color.a,
             0.0,
             1.0,
         );
-        if style.contact_a.x > 0.5 && style.render_mode.y < 0.5 {
-            let exposure = contact_exposure(dab.motion, dab.radii, dab.rotation, dab.hardness);
+        if contact_feature(1u, style.contact_a.x > 0.5) && style.render_mode.y < 0.5 {
             let selected = brush_selection_at(brush_to_layer(world));
             let unselected_coverage = coverage / max(selected, 0.000001);
-            requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * exposure * 6.0)) * selected;
+            requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * 6.0)) * selected;
         }
         var source_alpha = requested_alpha;
         if style.render_mode.y > 0.5 {
@@ -816,7 +834,10 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
     var result = paint_fragment(fragment_position);
     if style.color.a > 0.5 {
         let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
-        let original = canvas_load(world);
+        var original: vec4<f32>;
+        if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
+            original = textureLoad(source_11, vec2<i32>(floor(fragment_position.xy)), 0);
+        } else { original = canvas_load(world); }
         if style.operation.w != 0u { result.color = original; }
         else {
             result.color = vec4<f32>(working_unassociate(result.color) * original.a, original.a);

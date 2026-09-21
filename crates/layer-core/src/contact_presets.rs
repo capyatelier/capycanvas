@@ -1,8 +1,8 @@
-//! The first media using the shared GPU contact model.
+//! Built-in media using the shared GPU contact model.
 use crate::*;
 use std::sync::Arc;
 
-pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 12] = [
+pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 22] = [
     DefaultBrushPreset::Pencil,
     DefaultBrushPreset::PointyPencil,
     DefaultBrushPreset::ShadingPencil,
@@ -15,6 +15,16 @@ pub const CONTACT_BRUSH_PRESETS: [DefaultBrushPreset; 12] = [
     DefaultBrushPreset::WetInk,
     DefaultBrushPreset::BlottyInk,
     DefaultBrushPreset::BrushedInk,
+    DefaultBrushPreset::Eraser,
+    DefaultBrushPreset::Paintbrush,
+    DefaultBrushPreset::Airbrush,
+    DefaultBrushPreset::Chalk,
+    DefaultBrushPreset::Marker,
+    DefaultBrushPreset::DualTexture,
+    DefaultBrushPreset::TexturedFlat,
+    DefaultBrushPreset::DryScumble,
+    DefaultBrushPreset::PastelBlock,
+    DefaultBrushPreset::TransparentGlaze,
 ];
 
 pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
@@ -46,14 +56,14 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     if pencil {
         brush.color_rgba_linear = [0.018, 0.017, 0.016, 1.0];
         brush.diameter = 14.0;
-        brush.hardness = 0.62;
-        brush.flow = 0.8;
+        brush.hardness = 0.82;
+        brush.flow = 0.65;
         brush.spacing = 0.13;
         brush.rendering.accumulation = BrushAccumulation::Flow;
         brush.grain = Some(BrushGrain {
             asset: AssetId::from(CONTACT_PAPER_TEXTURE_ASSET),
             behavior: BrushGrainBehavior::Canvas,
-            scale: 1.0,
+            scale: 1.8,
             depth: 1.0,
             rotation_radians: 0.0,
             offset_jitter: 0.0,
@@ -163,4 +173,42 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     }
     brush.contact = Some(model);
     brush
+}
+
+pub(crate) fn dry_material(preset: DefaultBrushPreset) -> BrushContact {
+    use DefaultBrushPreset::*;
+    match preset {
+        Eraser | Airbrush | Marker => BrushContact::default(),
+        Paintbrush | TexturedFlat | DualTexture => BrushContact {
+            fibers: if preset == TexturedFlat { 32. } else { 19. },
+            fiber_strength: 0.78,
+            depletion: 0.001,
+            edge_roughness: if preset == TexturedFlat { 0. } else { 0.08 },
+            edge_scale: 1.7,
+            paper: if preset == DualTexture { 0.72 } else { 0.15 },
+            pressure_gain: 0.85,
+            ..Default::default()
+        },
+        Chalk | PastelBlock => BrushContact {
+            paper: 1.,
+            pressure_gain: 0.75,
+            edge_roughness: if preset == Chalk { 0.12 } else { 0.06 },
+            edge_scale: 2.5,
+            tilt_spread: 0.4,
+            ..Default::default()
+        },
+        DryScumble => BrushContact {
+            paper: 1.,
+            pressure_gain: 0.25,
+            fiber_strength: 0.35,
+            fibers: 17.,
+            edge_roughness: 0.15,
+            ..Default::default()
+        },
+        TransparentGlaze => BrushContact {
+            paper: 0.06,
+            ..Default::default()
+        },
+        _ => unreachable!("only continuous dry presets use this material"),
+    }
 }

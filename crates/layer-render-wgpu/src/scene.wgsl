@@ -198,6 +198,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
     if op == 7u || op == 13u { return scene_normal(raw,v); }
     let dst = scene_read(back,v);
+    if op == 14u { return (raw + dst * (1. - raw.a)) * settings.options.y; }
     if op == 3u { return raw*dst.r; }
     if op == 5u { let a = (1.-raw.r)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
     let src = raw*settings.options.y;
