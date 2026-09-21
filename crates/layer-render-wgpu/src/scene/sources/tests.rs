@@ -4,8 +4,8 @@ use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 #[test]
 fn source_residency_and_upload_window_follow_admitted_headroom() {
     let gib = 1024 * 1024 * 1024;
-    for (allowance, slots) in [(0, 64), (gib - 1, 64), (gib, 128),
-        (2 * gib - 1, 128), (2 * gib, 256), (u64::MAX, 256)] {
+    for (allowance, slots) in [(0, 64), (gib / 2, 64), (gib - 1, 127), (gib, 128),
+        (3 * gib / 2, 192), (2 * gib - 1, 255), (2 * gib, 256), (u64::MAX, 256)] {
         let limits = SourceLimits::admitted(allowance);
         assert_eq!(limits.slots, slots);
         assert_eq!(limits.upload_bytes, slots as u64 * FLOAT_TILE_BYTES / 4);

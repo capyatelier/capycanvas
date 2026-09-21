@@ -17,11 +17,11 @@ New-Item -ItemType Directory $OutputDirectory|Out-Null
 $names=@('CAPY_SETTINGS_DIRECTORY','CAPY_LATENCY_TRACE','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_PRESENT_PROBE','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT')
 $previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try{
- foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+ foreach($name in $names){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
  $env:CAPY_SETTINGS_DIRECTORY=Join-Path $OutputDirectory 'profile'
  $env:CAPY_LATENCY_TRACE='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  $app=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $OutputDirectory 'stderr.log')
-}finally{foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}
+}finally{foreach($name in $names){if($null -eq $previous[$name]){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}else{[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}}}
 $app.Id|Set-Content (Join-Path $OutputDirectory 'process-id.txt')
 $deadline=[DateTime]::UtcNow.AddSeconds(60)
 do{Start-Sleep -Milliseconds 150;$app.Refresh();if($app.HasExited){throw 'Benchmark app exited'}}while(!$app.MainWindowHandle -and [DateTime]::UtcNow -lt $deadline)
@@ -31,6 +31,8 @@ Wait-Until {$m=Get-Content (Join-Path $directory 'presentation-probe.json') -Raw
 Open-Project $Project
 Wait-Until {$field=Find 'tool-setting-size';$field -and $field.Current.IsEnabled} 'Project did not become editable' 90
 Invoke-Id 'tool-subtool-0'
+$brushName=(Find 'tool-subtool-0').Current.Name
+if($brushName -notmatch 'G[- ]?Pen'){throw "Expected G-Pen, got $brushName"}
 $size=Find 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Diameter)
 (Find 'tool-setting-opacity').SetFocus();Invoke-Id 'canvas-fit'
 Wait-Until {$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq "$Diameter.0 px"} 'Brush size was not committed'
@@ -41,7 +43,7 @@ Start-Sleep -Seconds 3
 $bounds=$canvas.Current.BoundingRectangle
 $cx=[int]($bounds.X+$bounds.Width/2);$cy=[int]($bounds.Y+$bounds.Height/2)
 $meta=Get-Content (Join-Path $directory 'presentation-probe.json') -Raw|ConvertFrom-Json
-[pscustomobject]@{process_id=$app.Id;diameter=$Diameter;project_sha256=(Get-FileHash $Project).Hash;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;surface=$meta;seconds=$Seconds;rate_hz=240;center=@($cx,$cy);radii=@(200,120);qpc_frequency=[Diagnostics.Stopwatch]::Frequency;display=(& (Join-Path $repo 'apps/layer-windows/scripts/probe-displays.ps1')|ConvertFrom-Json)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $OutputDirectory 'capture.json')
+[pscustomobject]@{process_id=$app.Id;brush_name=$brushName;diameter=$Diameter;project_sha256=(Get-FileHash $Project).Hash;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;surface=$meta;seconds=$Seconds;rate_hz=240;center=@($cx,$cy);radii=@(200,120);qpc_frequency=[Diagnostics.Stopwatch]::Frequency;display=(& (Join-Path $repo 'apps/layer-windows/scripts/probe-displays.ps1')|ConvertFrom-Json)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $OutputDirectory 'capture.json')
 Add-Type -Path (Join-Path $PSScriptRoot 'WindowsPenMotion.cs')
 if(!$SkipPresentMon){
 $pm=Start-Process -FilePath $PresentMon -ArgumentList @('--process_id',$app.Id,'--timed',($Seconds+5),'--terminate_after_timed','--no_console_stats','--no_track_input','--v1_metrics','--qpc_time_ms','--session_name',"CapyPen-$($app.Id)",'--output_file',('"'+(Join-Path $OutputDirectory 'presents.csv')+'"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $OutputDirectory 'presentmon.log') -RedirectStandardError (Join-Path $OutputDirectory 'presentmon-error.log')
@@ -62,4 +64,6 @@ $app.WaitForExit(30000)|Out-Null
 if(!$app.HasExited){throw 'Benchmark app did not finish'}
 $prefix='latency-'+$meta.window_id
 Get-ChildItem (Join-Path $directory ($prefix+'-*'))|Copy-Item -Destination $OutputDirectory
+if($app.ExitCode -ne 0){throw "Benchmark app exited with $($app.ExitCode)"}
+if((Test-Path (Join-Path $OutputDirectory 'errors.txt')) -and (Get-Item (Join-Path $OutputDirectory 'errors.txt')).Length -gt 0){throw 'Benchmark application reported an error; inspect errors.txt'}
 Write-Output "Captured $OutputDirectory"

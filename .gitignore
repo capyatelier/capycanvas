@@ -60,6 +60,10 @@ xcuserdata/
 *.dmp
 *.etl
 *.wer
+latency-*-input.csv
+latency-*-consumed.csv
+latency-*-frames.csv
+latency-*-status.json
 canvas-state.json
 presentation-probe.json
 

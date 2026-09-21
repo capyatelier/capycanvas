@@ -254,12 +254,19 @@ impl CapyHost {
             .surface
             .get_default_config(&adapter, width, height)
             .ok_or("D3D12 surface unsupported")?;
-        config.present_mode = wgpu::PresentMode::Fifo;
+        // Present completed ink without waiting for vblank when DXGI supports
+        // tearing. Keep the one-frame queue and acquire-before-input ordering.
+        // See docs/development/windows-pen-latency-20260920.md for measurements.
+        config.present_mode = if self.surface.get_capabilities(&adapter).present_modes
+            .contains(&wgpu::PresentMode::Immediate) {
+            wgpu::PresentMode::Immediate
+        } else { wgpu::PresentMode::Fifo };
         if std::env::var_os("CAPY_LATENCY_TRACE").is_some() {
             let mode = match std::env::var("CAPY_WINDOWS_PRESENT_MODE").as_deref() {
                 Ok("immediate") => wgpu::PresentMode::Immediate,
                 Ok("mailbox") => wgpu::PresentMode::Mailbox,
-                _ => wgpu::PresentMode::Fifo,
+                Ok("fifo") => wgpu::PresentMode::Fifo,
+                _ => config.present_mode,
             };
             if self.surface.get_capabilities(&adapter).present_modes.contains(&mode) {
                 config.present_mode = mode;

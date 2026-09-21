@@ -38,9 +38,11 @@ impl SourceLimits {
         // Unknown/small budgets retain the original 64+16 MiB ceilings. Larger
         // devices admit at most 256 MiB of source pixels and 64 MiB in flight;
         // their source pixels use no more than one eighth of that allowance.
-        let slots = if display_allowance >= 8 * 256 * FLOAT_TILE_BYTES { 256 }
-            else if display_allowance >= 8 * 128 * FLOAT_TILE_BYTES { 128 }
-            else { DECODED_SLOTS };
+        // Admit whole tiles instead of rounding down to power-of-two tiers.
+        // A 1.8 GiB allowance can retain ~230 tiles; limiting it to 128 causes
+        // avoidable source eviction during a wide G-Pen sweep.
+        let slots = (display_allowance / (8 * FLOAT_TILE_BYTES))
+            .clamp(DECODED_SLOTS as u64, 256) as usize;
         Self { slots, upload_bytes: slots as u64 * FLOAT_TILE_BYTES / 4 }
     }
 }

@@ -40,3 +40,39 @@ test('rejects a renderer that stopped consuming pen input',t=>{
  fs.writeFileSync(prefix+'-consumed.csv','sequence,frame\n1,1\n');
  assert.throws(()=>analyze(dir),/Incomplete pen consumption/);
 });
+
+test('uses observation bounds instead of refresh-start timestamps for immediate flips',t=>{
+ const {dir}=fixture(t);
+ const meta=JSON.parse(fs.readFileSync(path.join(dir,'capture.json'),'utf8'));
+ meta.surface.present_mode='Immediate';fs.writeFileSync(path.join(dir,'capture.json'),JSON.stringify(meta));
+ const r=analyze(dir);
+ assert.equal(r.input_to_dxgi_display_ms,null);
+ assert.equal(r.refresh_timestamp_applicable,false);
+ assert.equal(r.input_to_presentation_observation_bound_ms.p50_ms,22);
+ assert.equal(r.observation_matched_inputs,1); // final query has no subsequent timestamp
+});
+
+test('rejects consumed input without a new present',t=>{
+ const {dir,prefix}=fixture(t);
+ fs.writeFileSync(prefix+'-frames.csv',fs.readFileSync(prefix+'-frames.csv','utf8').replace('115000000,2,1','115000000,1,1'));
+ assert.throws(()=>analyze(dir),/no new present/);
+});
+
+test('uses recorded injection QPC despite quantized Windows pointer timestamps',t=>{
+ const {dir,prefix}=fixture(t);
+ fs.writeFileSync(path.join(dir,'injected.csv'),'index,qpc_before,qpc_after,x,y\n0,95,95.2,1,1\n1,105,105.2,2,2\n');
+ fs.writeFileSync(prefix+'-input.csv',fs.readFileSync(prefix+'-input.csv','utf8').replace('95000000','96150000'));
+ const r=analyze(dir);
+ assert.equal(r.delivery_ms.p50_ms,1);
+ assert.equal(r.input_to_dxgi_display_ms.p50_ms,15);
+ assert.match(r.timestamp_origin,/QPC/);
+ assert.equal(r.pointer_timestamp_offset_ms.max,1.15);
+});
+
+test('rejects missing injections and mismatched injection-to-pointer correspondence',t=>{
+ const {dir}=fixture(t),file=path.join(dir,'injected.csv');
+ fs.writeFileSync(file,'index,qpc_before,qpc_after\n0,95,95.2\n');
+ assert.throws(()=>analyze(dir),/count mismatch/);
+ fs.writeFileSync(file,'index,qpc_before,qpc_after\n0,95,95.2\n1,99,99.2\n');
+ assert.throws(()=>analyze(dir),/correspondence mismatch/);
+});

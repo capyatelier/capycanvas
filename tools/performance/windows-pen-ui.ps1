@@ -13,8 +13,8 @@ public static class PenBenchUi {
 }
 "@
 [PenBenchUi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-$app=Get-Process -Id $ProcessId
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
+$windowProcess=Get-Process -Id $ProcessId
+$root=[System.Windows.Automation.AutomationElement]::FromHandle($windowProcess.MainWindowHandle)
 function Find([string]$Value,[switch]$Name){$p=if($Name){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty};$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($p,$Value))}
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=45){$watch=[Diagnostics.Stopwatch]::StartNew();do{if(& $Condition){return};Start-Sleep -Milliseconds 100}while($watch.Elapsed.TotalSeconds -lt $Seconds);throw $Message}
 function Invoke-Id([string]$Id){$hit=@{item=$null};Wait-Until {$hit.item=Find $Id;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id";$hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
