@@ -9956,7 +9956,7 @@ fn native_preferences_and_shortcuts() {
         "setting-platform-prediction",
     ).unwrap().downcast::<adw::SwitchRow>().unwrap();
     assert!(!prediction.is_sensitive());
-    assert_eq!(prediction.subtitle().as_deref(), Some("Unavailable for this system or connected pen."));
+    assert!(prediction.subtitle().is_none_or(|subtitle| subtitle.is_empty()));
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Shortcuts,
     });

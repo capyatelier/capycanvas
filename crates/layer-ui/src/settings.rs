@@ -694,7 +694,7 @@ impl Settings {
                     Platform::Gtk => "Use Linux stroke prediction",
                     Platform::Generic => "Use native stroke prediction",
                 },
-                "Use your system's estimate of the next pen position.",
+                "",
                 PreferenceKind::Switch {
                     active: self.platform_prediction,
                 },
@@ -702,7 +702,7 @@ impl Settings {
             number(
                 PredictionHorizon,
                 "Prediction amount",
-                "Higher values reduce lag but may overshoot.",
+                "",
                 self.prediction_ms,
                 0.0,
                 64.0,
@@ -805,7 +805,7 @@ impl Settings {
                     rows: vec![
                         row(
                             Cursor,
-                            "Canvas cursor",
+                            "Cursor shape",
                             "",
                             PreferenceKind::Choice {
                                 presentation: ChoicePresentation::Dropdown,
@@ -827,7 +827,7 @@ impl Settings {
                         ),
                         row(
                             HideCursorWhileDrawing,
-                            "Hide cursor while drawing",
+                            "Hide cursor when painting",
                             "",
                             PreferenceKind::Switch {
                                 active: self.hide_cursor_while_drawing,
@@ -1094,7 +1094,6 @@ impl PreferencesState {
             if row.id == PreferenceId::PlatformPrediction && !platform_prediction_available {
                 row.enabled = false;
                 row.kind = PreferenceKind::Switch { active: false };
-                row.description = "Unavailable for this system or connected pen.".into();
             }
             if row.id == PreferenceId::PredictionHorizon
                 && platform_prediction_available
@@ -1102,7 +1101,6 @@ impl PreferencesState {
             {
                 row.enabled = false;
                 row.visible = platform != Platform::Ios;
-                row.description = "Automatic while native stroke prediction is on.".into();
             }
             if !row.enabled
                 && let Some(reset) = &mut row.reset
@@ -1720,6 +1718,7 @@ mod copy_tests {
                 PreferenceId::Cursor,
                 PreferenceId::PanSpeed,
                 PreferenceId::ZoomSpeed,
+                PreferenceId::PredictionHorizon,
                 PreferenceId::Renderer,
                 PreferenceId::ZenIcon,
                 PreferenceId::ZenShowCapy,
@@ -1744,7 +1743,6 @@ mod copy_tests {
             for id in [
                 PreferenceId::Pressure,
                 PreferenceId::Feedback,
-                PreferenceId::PredictionHorizon,
                 PreferenceId::License,
             ] {
                 assert!(!settings.field(id, platform).unwrap().description.is_empty());
