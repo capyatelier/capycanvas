@@ -11,6 +11,7 @@ import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
 import {checkIcons} from "./icons.test.mjs";
 import {checkPrediction} from "./prediction.test.mjs";
+import {checkPenRendering} from "./pen-rendering.test.mjs";
 import {checkTooltips} from "./tooltips.test.mjs";
 import {checkColumnStacks} from "./column-stacks.test.mjs";
 import {checkLayoutDrops} from "./layout-drops.test.mjs";
@@ -438,6 +439,10 @@ try {
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--pen")) {
+    await checkPenRendering({call, evaluate, settle});
+    await checkPrediction({call, evaluate, settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--prediction")) {
     await checkPrediction({call, evaluate, settle});

@@ -1,6 +1,7 @@
 // Focused visual/DOM conformance, using the same hardware browser as test.mjs.
 // GTK reference measurements come from native_web_parity_reference, not CSS.
 import assert from "node:assert/strict";
+import { checkPenRendering } from "./pen-rendering.test.mjs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 export async function checkParity({ call, evaluate, settle }) {
@@ -444,74 +445,10 @@ export async function checkParity({ call, evaluate, settle }) {
     ) < 0.001,
   );
 
-  // Real hover listeners, a non-interactive vector overlay, and shared settings.
+  // Geometry, pressure, transformed mask and DPI cases live in shared Rust
+  // cursor tests. Browser suites share the actual GPU pixel/input checks.
   await action({ type: "invoke", command: "reset_layout" });
-  await action({
-    type: "select_brush",
-    id: catalog.brush_categories
-      .flatMap((c) => c.brushes)
-      .find((b) => b.label === "G-Pen").id,
-  });
-  await action({ type: "set_brush_size", value: 256 });
-  const cursorAt = async (x, y) => {
-    await evaluate(
-      `window.dispatchEvent(new PointerEvent('pointermove',{clientX:${x},clientY:${y},pointerType:'pen'}))`,
-    );
-    await settle();
-  };
-  await cursorAt(600, 450);
-  assert.equal(
-    await evaluate("getComputedStyle(layerApp.canvas).cursor"),
-    "none",
-  );
-  const cursorBounds = await evaluate(
-    `(() => {const p=document.querySelector('.cursor-outline-front');const b=p.getBBox();return [b.width,b.height,getComputedStyle(p).strokeWidth,getComputedStyle(p).strokeDasharray]})()`,
-  );
-  const expectedSize = await evaluate(
-    "256*layerApp.state().camera.zoom/(layerApp.canvas.width/layerApp.canvas.clientWidth)",
-  );
-  assert.ok(Math.abs(cursorBounds[0] - expectedSize) < 1);
-  assert.ok(Math.abs(cursorBounds[1] - expectedSize) < 1);
-  assert.deepEqual(cursorBounds.slice(2), ["1px", "3px, 3px"]);
-  assert.equal(
-    await evaluate("document.elementFromPoint(600,450).id"),
-    "canvas",
-  );
-  await capture("cursor-round");
-  await action({
-    type: "select_brush",
-    id: catalog.brush_categories
-      .flatMap((c) => c.brushes)
-      .find((b) => b.label === "Watercolor Wash").id,
-  });
-  await action({ type: "set_brush_size", value: 512 });
-  await cursorAt(600, 450);
-  assert.ok(
-    await evaluate(
-      "document.querySelector('.cursor-outline-front').getAttribute('d').includes('L')",
-    ),
-  );
-  await capture("cursor-watercolor");
-  await cursorAt(30, 150);
-  assert.equal(
-    await evaluate(
-      "document.querySelector('.cursor-outline-front').getAttribute('d')",
-    ),
-    "",
-  );
-  await click('[data-command="settings"]');
-  await click('[data-settings-page="canvas"]');
-  await evaluate(
-    `const select=document.querySelector('#setting-cursor'); select.value=layerApp.app.catalog().cursors.findIndex(c=>c[0]==='cross');select.dispatchEvent(new Event('input'));`,
-  );
-  await click("#close-settings");
-  await cursorAt(600, 450);
-  assert.deepEqual(
-    await evaluate(
-      "[document.querySelector('.cursor-outline-front').getAttribute('d'), !!document.querySelector('.cursor-marker-front').getAttribute('d')]",
-    ),
-    ["", true],
-  );
+  await checkPenRendering({call, evaluate, settle});
   await action({ type: "invoke", command: "settings" });
   await action({
     type: "edit_settings",

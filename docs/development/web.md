@@ -41,6 +41,12 @@ Pointer Events supply pressure and other available pen data. Coalesced and predi
 samples depend on browser support. GPU access, file pickers and installation also
 vary by browser and OS; a desktop browser test cannot establish mobile behavior.
 
+Active pen contacts use `pointerrawupdate` when delivered, with coalesced samples,
+later predictions from `pointermove`, and a per-contact move fallback. The cursor
+shares the GPU viewport pass. See the [Huion G Pen investigation](web-pen-huion-2026-09-20.md)
+for CPU fixes, 18 px device measurements, the `--pen` regression suite and the
+repeatable Web pen benchmark, including Web front-buffer API limits.
+
 GPU startup is staged so controls can appear before the complete shader catalog
 is ready. The app reports unavailable GPU access rather than switching painting
 to a CPU renderer. The [startup record](../history/web-staged-startup.md) describes

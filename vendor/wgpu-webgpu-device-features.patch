@@ -1,0 +1,19 @@
+diff --git a/vendor/wgpu/src/backend/webgpu.rs b/vendor/wgpu/src/backend/webgpu.rs
+index 4fdf2ca5..798a45d5 100644
+--- a/vendor/wgpu/src/backend/webgpu.rs
++++ b/vendor/wgpu/src/backend/webgpu.rs
+@@ -1045,2 +1045,3 @@ fn future_request_device(
+                 WebDevice {
++                    features: map_wgt_features(device.features()),
+                     inner: device,
+@@ -1270,2 +1271,5 @@ pub struct WebDevice {
+     pub(crate) inner: webgpu_sys::GpuDevice,
++    // GPUDevice features are immutable. Mapping them repeatedly in a tile loop
++    // crosses Wasm/JS for every feature name and dominates small brush frames.
++    features: wgt::Features,
+     /// Unique identifier for this Device.
+@@ -2070,3 +2074,3 @@ impl dispatch::DeviceInterface for WebDevice {
+     fn features(&self) -> crate::Features {
+-        map_wgt_features(self.inner.features())
++        self.features
+     }

@@ -1,9 +1,8 @@
-//! Shared cursor presentation. Hosts paint vectors, never interpret brush math.
+//! Shared GPU cursor geometry. Hosts never interpret brush math.
 use crate::Camera;
 use layer_core::BrushTip;
 use layer_render::{CanvasRenderer, CursorSegment, Dab};
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,17 +24,12 @@ impl CursorMode {
     ];
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct CanvasCursor {
     /// Logical coordinates, independent of device pixel ratio.
     pub center: [f32; 2],
     pub mode: CursorMode,
-    /// SVG path syntax for the web overlay.
-    /// Coordinates are already transformed, keeping the stroke a thin 1px.
-    pub outline: String,
-    pub marker: String,
-    /// Native GPU presentation; web consumes the equivalent SVG paths above.
-    #[serde(skip)]
+    /// GPU presentation shared by native and Web hosts.
     pub segments: Vec<CursorSegment>,
 }
 
@@ -56,7 +50,6 @@ impl Cursor {
         scale: f32,
         mode: CursorMode,
         view: &mut CanvasCursor,
-        svg: bool,
     ) {
         view.mode = mode;
         if let Some(event) = self.event {
@@ -66,24 +59,6 @@ impl Cursor {
             ];
         }
         let [cx, cy] = view.center;
-        if svg {
-            match mode {
-                CursorMode::Cross | CursorMode::BrushSizeCross => {
-                    let _ = write!(
-                        view.marker,
-                        "M{} {}h12M{} {}v12",
-                        cx - 6.0,
-                        cy,
-                        cx,
-                        cy - 6.0
-                    );
-                }
-                CursorMode::Dot => {
-                    let _ = write!(view.marker, "M{} {}h2v2h-2Z", cx - 1.0, cy - 1.0);
-                }
-                _ => {}
-            }
-        }
         match mode {
             CursorMode::Cross | CursorMode::BrushSizeCross => {
                 view.line([cx - 6.0, cy], [cx + 6.0, cy], 0.0, true);
@@ -125,7 +100,6 @@ impl Cursor {
                 BrushTip::AnalyticEllipse => {
                     let rx = a.hypot(b);
                     let ry = c.hypot(d);
-                    let angle = b.atan2(a).to_degrees();
                     // At most 0.1px chord error, independent of zoom/pressure.
                     let count = (std::f32::consts::PI * (rx.max(ry) / 0.2).sqrt())
                         .ceil()
@@ -136,18 +110,6 @@ impl Cursor {
                         [a * cos + c * sin + tx, b * cos + d * sin + ty]
                     });
                     view.contour(points, false);
-                    if svg {
-                        let _ = write!(
-                            view.outline,
-                            "M{} {}A{rx} {ry} {angle} 1 1 {} {}A{rx} {ry} {angle} 1 1 {} {}Z",
-                            tx + a,
-                            ty + b,
-                            tx - a,
-                            ty - b,
-                            tx + a,
-                            ty + b
-                        );
-                    }
                 }
                 BrushTip::Mask(id) => {
                     if let Some(contours) = renderer.tip_outline(id) {
@@ -156,18 +118,6 @@ impl Cursor {
                                 .iter()
                                 .map(|&[x, y]| [a * x + c * y + tx, b * x + d * y + ty]);
                             view.contour(points, false);
-                            if svg {
-                                for (i, &[x, y]) in contour.iter().enumerate() {
-                                    let _ = write!(
-                                        view.outline,
-                                        "{}{:.2} {:.2}",
-                                        if i == 0 { 'M' } else { 'L' },
-                                        a * x + c * y + tx,
-                                        b * x + d * y + ty
-                                    );
-                                }
-                                view.outline.push('Z');
-                            }
                         }
                     }
                 }

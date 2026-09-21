@@ -369,7 +369,7 @@ impl App {
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
         self.host
             .session
-            .update_canvas_cursor(&mut self.cursor, false);
+            .update_canvas_cursor(&mut self.cursor);
         self.host
             .session
             .append_layer_overlay(&mut self.cursor.segments);

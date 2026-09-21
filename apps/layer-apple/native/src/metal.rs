@@ -354,7 +354,7 @@ impl MetalHost {
         let view = host.session.state().camera.view();
         let surround = host.session.state().palette.surround_linear;
         let scale = view.width_px as f32 / host.logical[0];
-        host.session.update_canvas_cursor(&mut self.cursor, false);
+        host.session.update_canvas_cursor(&mut self.cursor);
         host.session.append_layer_overlay(&mut self.cursor.segments);
         // Keep optional overview preparation behind the first paper frame.
         // Image and outline sample this frame's live composition and camera.

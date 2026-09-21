@@ -95,9 +95,9 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 :focus-visible { outline: none; }
 /* Chrome is a control surface, not a text document. Preserve text editing and
    copyable labels. Pen-first chrome intentionally has no focus/tap halo. */
-.chrome, .dock-group, .dock-tab, .tile-popover, dialog, #canvas, #canvas-cursor, #canvas-cursor * { user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.chrome, .dock-group, .dock-tab, .tile-popover, dialog, #canvas { user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
 /* Safari can select SVG artwork independently of pointer hit testing. */
-#canvas, #canvas-cursor, #canvas-cursor * { -webkit-touch-callout: none; -webkit-user-drag: none; }
+#canvas { -webkit-touch-callout: none; -webkit-user-drag: none; }
 #document-title, #view-info, #status, input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea { user-select: text; -webkit-user-select: text; }
 .brush-preview, svg { -webkit-user-drag: none; pointer-events: none; }
 #canvas:focus { outline: none; }
@@ -135,11 +135,6 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
   .gpu-steps { margin-bottom: 16px; }
 }
 #canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
-#canvas-cursor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
-#canvas-cursor path { fill: none; stroke: black; stroke-width: 1; }
-#canvas-cursor .cursor-outline-front { stroke: white; stroke-dasharray: 3 3; }
-#canvas-cursor .cursor-marker-back { stroke-width: 3; }
-#canvas-cursor .cursor-marker-front { stroke: white; }
 #header { --header-item-gap:6px; --header-text-padding:6px; position: absolute; inset: 0 0 auto; height: 48px; padding: 0; display: block; background: transparent; z-index: 1000; }
 #header nav > button, .header-menu > summary, #document-title { background: var(--bg); border-radius: 6px; }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }

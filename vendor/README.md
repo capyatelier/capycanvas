@@ -199,6 +199,14 @@ keeps its existing worker/cache path. This addresses GPU-process display
 stalls that merely yielding JavaScript tasks did not resolve. The
 [tablet startup record](../docs/history/web-startup-tablet-2026-09-17.md)
 records the evidence and physical-device regressions.
+
+`wgpu-webgpu-device-features.patch` caches the mapped, immutable `GPUDevice`
+feature set when the device is created. Feature tests in material and composition
+loops then read Rust bits instead of remapping all browser feature strings on
+every call. The cache uses the features exposed by the actual device, not its
+adapter, and is recreated with each device. See the
+[Huion Web pen investigation](../docs/development/web-pen-huion-2026-09-20.md).
+
 ## HEIF/AVIF source color preservation
 
 The validation-only

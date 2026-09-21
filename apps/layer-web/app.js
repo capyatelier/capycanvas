@@ -278,28 +278,19 @@ function applyChange(change) {
       queueWorkspacePresentation(presentation);
   }
   if (change.canvas_wake) wake();
-  if (!workspaceGesture?.started) scheduleCursor();
+  if (change.regions && !workspaceGesture?.started) wake();
 }
-let cursorScheduled = false;
-function scheduleCursor() {
-  if (cursorScheduled || !gpuReady) return;
-  cursorScheduled = true;
-  requestAnimationFrame(() => {
-    cursorScheduled = false;
-    const view = app.canvas_cursor();
-    for (const kind of ["outline", "marker"])
-      for (const node of $("canvas-cursor").querySelectorAll(
-        `.cursor-${kind}-back, .cursor-${kind}-front`,
-      ))
-        node.setAttribute("d", view?.[kind] || "");
-  });
-}
+let canvasCursorActive = false;
 function cursorInput(e) {
   if (!gpuReady) return;
   const onCanvas =
     e &&
     e.pointerType !== "touch" &&
-    document.elementFromPoint(e.clientX, e.clientY) === canvas;
+    ((e.target === canvas && lastPenEvent?.pointerId === e.pointerId) ||
+      document.elementFromPoint(e.clientX, e.clientY) === canvas);
+  // Clear once on exit; ordinary UI hover must not redraw the GPU viewport.
+  if (!onCanvas && !canvasCursorActive) return;
+  canvasCursorActive = !!onCanvas;
   app.cursor_input(
     onCanvas
       ? new Float64Array([
@@ -312,7 +303,8 @@ function cursorInput(e) {
         ])
       : new Float64Array(),
   );
-  scheduleCursor();
+  // Cursor geometry is drawn with the canvas by the shared GPU presenter.
+  wake();
 }
 function wake() {
   if (gpuReady && !scheduled) {
@@ -320,8 +312,24 @@ function wake() {
     requestAnimationFrame(frame);
   }
 }
-function frame(now) {
+const frameIntervals = [];
+let previousFrameTime;
+let displayInterval = 1000 / 60;
+function frame(frameTime) {
   scheduled = false;
+  if (previousFrameTime !== undefined) {
+    const interval = frameTime - previousFrameTime;
+    if (interval > 250) frameIntervals.length = 0;
+    else if (interval >= 4 && interval < 50) {
+      frameIntervals.push(interval);
+      if (frameIntervals.length > 32) frameIntervals.shift();
+      // Missed callbacks are multiples of the display interval. Use the lower
+      // tail, and let the bounded window follow a changed monitor/refresh rate.
+      const sorted = frameIntervals.toSorted((a, b) => a - b);
+      displayInterval = sorted[Math.floor((sorted.length - 1) * .1)];
+    }
+  }
+  previousFrameTime = frameTime;
   // During startup the modal editor owns interaction. Resume preparation on
   // dismissal instead of competing with Settings for the UI thread/GPU.
   if (state.settings_open && startupTimes.complete === null) return;
@@ -336,7 +344,12 @@ function frame(now) {
         break;
       }
     }
-    applyChange(app.frame(now, now + 1000 / 120));
+    // rAF's timestamp can precede the newest input by an entire display tick.
+    // Model against current time and the next estimated display opportunity.
+    const now = performance.now();
+    const elapsedTicks = Math.floor(Math.max(0, now - frameTime) / displayInterval);
+    const presentation = frameTime + (elapsedTicks + 1) * displayInterval;
+    applyChange(app.frame(now, presentation));
     refreshStartup();
     scheduleCompiler();
     if (pending.length) wake();
@@ -1105,8 +1118,10 @@ function input(event) {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
     const capy = $("zen-capy");
-    if (capy) capy.hidden = !reply.keep_zen_button;
-    canvas.style.cursor = reply.pan_cursor ? "grab" : "";
+    if (capy && capy.hidden !== !reply.keep_zen_button)
+      capy.hidden = !reply.keep_zen_button;
+    const cursor = reply.pan_cursor ? "grab" : "";
+    if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(
         "details[open], :popover-open",
@@ -1176,8 +1191,12 @@ window.addEventListener(
     pointerStyle(e);
     if (e.target.closest("dialog[open]")) return;
     if (!e.buttons) chromeHeld = false;
-    chromeInput({ kind: "motion", position: [e.clientX, e.clientY] });
-    cursorInput(e);
+    // A captured paint contact cannot reveal chrome. The canvas listener owns
+    // its samples/cursor; querying popups and hit-testing here duplicates work
+    // and can force layout between input and the next drawing submission.
+    if (!(e.target === canvas && lastPenEvent?.pointerId === e.pointerId))
+      chromeInput({ kind: "motion", position: [e.clientX, e.clientY] });
+    if (e.target !== canvas) cursorInput(e);
   },
   { capture: true },
 );
@@ -1240,8 +1259,7 @@ window.addEventListener(
   { capture: true },
 );
 window.addEventListener("focusout", () => requestAnimationFrame(updateZen));
-function position(e) {
-  const rect = canvas.getBoundingClientRect();
+function position(e, rect = canvas.getBoundingClientRect()) {
   return [
     ((e.clientX - rect.left) * canvas.width) / rect.width,
     ((e.clientY - rect.top) * canvas.height) / rect.height,
@@ -1252,12 +1270,17 @@ function position(e) {
 function corePointerId(e) {
   return e.pointerId >>> 0;
 }
-function queuePen(e, stage) {
-  lastPenEvent = stage === 3 || stage === 4 ? null : e;
+function queuePen(e, stage, predictionsOnly = false) {
+  const predict = state.settings.feedback && state.settings.platform_prediction;
+  if (predictionsOnly && !predict) return;
+  if (!predictionsOnly) {
+    lastPenEvent = stage === 3 || stage === 4 ? null : e;
+    if (stage !== 2) rawPenPointer = null;
+  }
   const records = [];
-  const history = stage === 2 ? e.getCoalescedEvents?.() || [] : [];
+  const rect = canvas.getBoundingClientRect();
   const append = (item, predicted) => {
-    const [x, y] = position(item),
+    const [x, y] = position(item, rect),
       pen = item.pointerType === "pen";
     records.push(
       corePointerId(item),
@@ -1273,12 +1296,17 @@ function queuePen(e, stage) {
       pen ? (item.buttons & 32 ? 2 : 0) : 1,
     );
   };
-  for (const item of history.length ? history : [e]) append(item, false);
-  if (stage === 2 && e.pointerType === "pen" && state.settings.feedback && state.settings.platform_prediction) {
+  if (!predictionsOnly) {
+    const history = stage === 2 ? e.getCoalescedEvents?.() || [] : [];
+    for (const item of history.length ? history : [e]) append(item, false);
+  }
+  if (stage === 2 && e.pointerType === "pen" && predict) {
+    const latestActualTime = Math.max(e.timeStamp, lastPenEvent?.timeStamp ?? 0);
     for (const item of e.getPredictedEvents?.() || []) {
-      if (item.timeStamp > e.timeStamp) append(item, true);
+      if (item.timeStamp > latestActualTime) append(item, true);
     }
   }
+  if (!records.length) return;
   const batch = {
     records: new Float64Array(records),
     revision: state.camera.revision,
@@ -1291,8 +1319,21 @@ function queuePen(e, stage) {
   if (batch.records.length) pending.push(batch);
   wake();
 }
+// Use raw updates only for the captured painting contact. UI rows, touch
+// navigation and hover keep their ordinary pointermove arbitration. Observe
+// actual raw delivery, so browsers/devices without it still paint via moves.
+let rawPenPointer = null;
 function canvasPointer(e, stage) {
-  e.preventDefault();
+  if (e.cancelable) e.preventDefault();
+  if (
+    stage === 2 && e.type === "pointermove" && rawPenPointer === e.pointerId &&
+    ((e.buttons & 33) || e.pressure !== 0)
+  ) {
+    // The real samples were already delivered by pointerrawupdate. Chrome's
+    // native predictions usually arrive only with the matching pointermove.
+    queuePen(e, stage, true);
+    return;
+  }
   if (stage === 1) {
     canvas.focus();
     canvas.setPointerCapture(e.pointerId);
@@ -1321,6 +1362,13 @@ for (const [name, stage] of [
 ])
   canvas.addEventListener(name, (e) => canvasPointer(e, stage));
 canvas.addEventListener("lostpointercapture", (e) => canvasPointer(e, 4));
+if ("onpointerrawupdate" in globalThis) {
+  canvas.addEventListener("pointerrawupdate", e => {
+    if (lastPenEvent?.pointerId !== e.pointerId || e.pointerType !== "pen") return;
+    rawPenPointer = e.pointerId;
+    canvasPointer(e, 2);
+  }, { passive: true });
+}
 function pointerInput(e, stage, point = position(e)) {
   return input({
     type: "pointer",

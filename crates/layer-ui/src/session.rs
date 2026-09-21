@@ -529,17 +529,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cursor.event = event;
     }
 
+    /// Snapshot of shared cursor geometry. Render loops reuse a host-owned
+    /// buffer through `update_canvas_cursor` instead.
     pub fn canvas_cursor(&mut self) -> Option<CanvasCursor> {
         let mut view = CanvasCursor::default();
-        self.update_canvas_cursor(&mut view, true).then_some(view)
+        self.update_canvas_cursor(&mut view).then_some(view)
     }
 
     /// Refill a host-owned cursor buffer without discarding its capacity.
-    /// Native presenters need segments only;
-    /// SVG formatting is optional, without changing the shared outline geometry.
-    pub fn update_canvas_cursor(&mut self, view: &mut CanvasCursor, svg: bool) -> bool {
-        view.outline.clear();
-        view.marker.clear();
+    /// All hosts consume the same GPU segments and outline geometry.
+    pub fn update_canvas_cursor(&mut self, view: &mut CanvasCursor) -> bool {
         view.segments.clear();
         let Some(event) = self.cursor.event else {
             return false;
@@ -574,7 +573,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 CursorMode::Cross
             },
             view,
-            svg,
         );
         true
     }
@@ -13909,16 +13907,15 @@ mod tests {
         s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
         let initial = s.canvas_cursor().unwrap();
         assert_eq!(initial.center, [112.5, 150.0]);
-        assert!(!initial.outline.is_empty());
-        assert_eq!(initial.outline, s.canvas_cursor().unwrap().outline);
+        assert!(!initial.segments.is_empty());
+        assert_eq!(initial.segments, s.canvas_cursor().unwrap().segments);
         let mut native = CanvasCursor::default();
-        assert!(s.update_canvas_cursor(&mut native, false));
+        assert!(s.update_canvas_cursor(&mut native));
         assert_eq!(native.segments, initial.segments);
-        assert!(native.outline.is_empty() && native.marker.is_empty());
         let capacity = native.segments.capacity();
         let pointer = native.segments.as_ptr();
         for _ in 0..100 {
-            assert!(s.update_canvas_cursor(&mut native, false));
+            assert!(s.update_canvas_cursor(&mut native));
             assert_eq!(native.segments, initial.segments);
             assert_eq!(native.segments.capacity(), capacity);
             assert_eq!(native.segments.as_ptr(), pointer);
@@ -13934,7 +13931,7 @@ mod tests {
         );
         key(&mut s, " ", true, false, false);
         assert!(s.canvas_cursor().is_none());
-        assert!(!s.update_canvas_cursor(&mut native, false));
+        assert!(!s.update_canvas_cursor(&mut native));
         assert!(native.segments.is_empty());
         key(&mut s, " ", false, false, false);
         assert!(s.canvas_cursor().is_some());
@@ -13947,8 +13944,8 @@ mod tests {
         s.dispatch(UiAction::EditSettings { settings }).unwrap();
         s.dispatch(UiAction::CloseSettings).unwrap();
         let cross = s.canvas_cursor().unwrap();
-        assert!(cross.outline.is_empty());
-        assert!(!cross.marker.is_empty());
+        assert_eq!(cross.segments.len(), 2);
+        assert!(cross.segments.iter().all(|segment| segment.marker == 1.0));
         s.cursor_input(None);
         assert!(s.canvas_cursor().is_none());
         let old: Settings = serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.0}"#).unwrap();
@@ -13974,15 +13971,24 @@ mod tests {
         brush.shape.flip_x_probability = 1.0;
         s.engine.set_brush(brush).unwrap();
         s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
-        let svg = s.canvas_cursor().unwrap();
-        assert_eq!(
-            svg.outline,
-            "M92.50 155.00L122.50 155.00L92.50 145.00L92.50 155.00Z"
-        );
-        let mut native = CanvasCursor::default();
-        assert!(s.update_canvas_cursor(&mut native, false));
-        assert_eq!(native.segments, svg.segments);
-        assert!(native.outline.is_empty());
+        let cursor = s.canvas_cursor().unwrap();
+        let expected = [
+            [92.5, 155.0],
+            [122.5, 155.0],
+            [92.5, 145.0],
+            [92.5, 155.0],
+        ];
+        assert_eq!(cursor.segments.len(), expected.len());
+        for (index, segment) in cursor.segments.iter().enumerate() {
+            for (actual, expected) in [
+                (segment.from, expected[index]),
+                (segment.to, expected[(index + 1) % expected.len()]),
+            ] {
+                assert!((actual[0] - expected[0]).abs() < 0.001);
+                assert!((actual[1] - expected[1]).abs() < 0.001);
+            }
+            assert_eq!(segment.marker, 0.0);
+        }
     }
 
     #[test]
@@ -13995,15 +14001,9 @@ mod tests {
         let dabs = s.engine.backend().dabs;
         s.cursor_input(Some(low));
         let radius = |c: CanvasCursor| {
-            c.outline
-                .split('A')
-                .nth(1)
-                .unwrap()
-                .split_whitespace()
-                .next()
-                .unwrap()
-                .parse::<f32>()
-                .unwrap()
+            c.segments.iter()
+                .map(|s| (s.from[0] - c.center[0]).hypot(s.from[1] - c.center[1]))
+                .fold(0.0_f32, f32::max)
         };
         let low_radius = radius(s.canvas_cursor().unwrap());
         s.cursor_input(Some(PenEvent {

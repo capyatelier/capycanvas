@@ -36,6 +36,7 @@ pub struct WebApp {
     document_gpu: Option<document_tabs::DocumentGpu>,
     canvas: web_sys::HtmlCanvasElement,
     viewport_scale: f32,
+    cursor: layer_ui::CanvasCursor,
     sequence: u64,
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
@@ -391,12 +392,6 @@ impl WebApp {
         });
         self.session.cursor_input(event);
     }
-    pub fn canvas_cursor(&mut self) -> Result<JsValue, JsValue> {
-        if !self.gpu_ready() {
-            return Ok(JsValue::NULL);
-        }
-        serialize(&self.session.canvas_cursor())
-    }
     pub fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebApp, JsValue> {
         console_error_panic_hook::set_once();
         let mut session = UiSession::blank(
@@ -422,6 +417,7 @@ impl WebApp {
             workspaces: None,
             canvas,
             viewport_scale: 1.,
+            cursor: Default::default(),
             sequence: 0,
             startup: StartupProgress::default(),
             state_cache: Default::default(),
@@ -1180,13 +1176,15 @@ impl WebApp {
         }
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
-        let mut overlay = Vec::new();
-        self.session.append_layer_overlay(&mut overlay);
+        // Reuse the same retained GPU cursor as native hosts. Updating a
+        // full-window SVG overlay made every pen frame repaint DOM artwork.
+        self.session.update_canvas_cursor(&mut self.cursor);
+        self.session.append_layer_overlay(&mut self.cursor.segments);
         let scale = self.viewport_scale;
         change.canvas_wake |= self.present_navigators()?;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter
-            .set_cursor(gpu.renderer.device(), &overlay, scale);
+            .set_cursor(gpu.renderer.device(), &self.cursor.segments, scale);
         let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,

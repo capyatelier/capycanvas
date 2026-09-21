@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
-function harness() {
+function harness({ raw = false, prediction = false } = {}) {
   const listeners = new Map(), records = [], phases = [];
   let contact = null;
   const context = {
@@ -15,7 +15,7 @@ function harness() {
       focus() {}, setPointerCapture() {},
       addEventListener: (name, fn) => listeners.set(name, fn),
     },
-    lastPenEvent: null, pending: [], state: { camera: { revision: 1 }, settings: { feedback: false, platform_prediction: false } },
+    lastPenEvent: null, pending: [], state: { camera: { revision: 1 }, settings: { feedback: prediction, platform_prediction: prediction } },
     app: { pen(batch) { records.push(...batch); return batch.length / 11; } },
     input(event) {
       phases.push(event);
@@ -27,14 +27,15 @@ function harness() {
     },
     cursorInput() {}, wake() {},
   };
-  runInNewContext(source.slice(source.indexOf("function position(e)"),
+  if (raw) context.onpointerrawupdate = null;
+  runInNewContext(source.slice(source.indexOf("function position("),
     source.indexOf('canvas.addEventListener("contextmenu"')), context);
   let timeStamp = 0;
   return {
     send(type, overrides = {}) {
       listeners.get(type)({ type, pointerId: -7, pointerType: "pen", button: 0,
         buttons: 1, pressure: 0.6, clientX: 40, clientY: 50,
-        timeStamp: ++timeStamp, preventDefault() {}, ...overrides });
+        timeStamp: ++timeStamp, cancelable: type !== "pointerrawupdate", preventDefault() {}, ...overrides });
     },
     samples: () => Array.from({ length: records.length / 11 }, (_, i) => records.slice(i * 11, i * 11 + 11)),
     phases,
@@ -102,4 +103,47 @@ test("mouse cancellation and touch/pan routing retain their semantics", () => {
     assert.deepEqual(h.samples(), []);
     assert.equal(h.phases.at(-1).phase, "cancel");
   }
+});
+
+for (const ending of ["pointerup", "pointercancel", "lostpointercapture", "pointerrawupdate", "pointermove"]) {
+  test(`raw pen contact is not duplicated and survives ${ending}`, () => {
+    const h = harness({ raw: true });
+    h.send("pointerdown");
+    h.send("pointerrawupdate", { clientX: 100 });
+    h.send("pointermove", { clientX: 100 });
+    h.send(ending, { clientX: 700, clientY: 500, buttons: 0, pressure: 0 });
+    h.send("lostpointercapture", { buttons: 0, pressure: 0 });
+    h.send("pointermove", { buttons: 0, pressure: 0 });
+    assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3]);
+    h.send("pointerdown");
+    // A contact without actual raw delivery still uses pointermove.
+    h.send("pointermove", { clientX: 200 });
+    h.send("pointerup");
+    assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3, 1, 2, 3]);
+  });
+}
+test("raw coalesced samples arrive once, with later native predictions from pointermove", () => {
+  const h = harness({ raw: true, prediction: true });
+  const sample = (x, timeStamp) => ({ pointerId: -7, pointerType: "pen", buttons: 1,
+    clientX: x, clientY: 50, pressure: .6, timeStamp });
+  h.send("pointerdown");
+  const history = [sample(80, 2), sample(100, 3)];
+  h.send("pointerrawupdate", { timeStamp: 3, clientX: 100, getCoalescedEvents: () => history });
+  h.send("pointermove", { timeStamp: 3, clientX: 100, getCoalescedEvents: () => history,
+    getPredictedEvents: () => [sample(90, 2), sample(120, 4)] });
+  h.send("pointerup");
+  const records = h.samples();
+  assert.deepEqual(records.map(s => s[9]), [2, 2, 2, 3, 2]);
+  assert.deepEqual(records.slice(1, 4).map(s => s[2]), [80, 100, 120]);
+});
+test("raw hover, foreign pointers, touch and mouse do not enter the pen stream", () => {
+  const h = harness({ raw: true });
+  h.send("pointerrawupdate");
+  h.send("pointerdown");
+  h.send("pointerrawupdate", { pointerId: 9 });
+  h.send("pointerrawupdate", { pointerType: "touch" });
+  h.send("pointerrawupdate", { pointerType: "mouse" });
+  h.send("pointermove");
+  h.send("pointerup");
+  assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3]);
 });

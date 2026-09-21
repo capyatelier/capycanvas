@@ -10480,7 +10480,7 @@ fn native_cursor_vectors() {
             .session
             .canvas_cursor()
             .unwrap();
-        assert!(!shape.outline.is_empty());
+        assert!(shape.segments.iter().any(|segment| segment.marker == 0.0));
         assert!(shape.segments.len() > 20);
         assert!(
             shape

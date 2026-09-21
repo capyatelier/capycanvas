@@ -34,7 +34,7 @@ impl GpuCanvas {
         Ok(())
     }
     pub fn update_cursor(&mut self) -> bool {
-        self.session.update_canvas_cursor(&mut self.cursor, false);
+        self.session.update_canvas_cursor(&mut self.cursor);
         self.session.append_layer_overlay(&mut self.cursor.segments);
         let renderer = self.session.renderer_mut();
         if renderer.cursor == self.cursor.segments {

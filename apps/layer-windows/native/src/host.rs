@@ -310,7 +310,7 @@ impl CapyHost {
         self.native.dirty |= self.native.session.wants_continuous_frames();
         self.native
             .session
-            .update_canvas_cursor(&mut self.cursor, false);
+            .update_canvas_cursor(&mut self.cursor);
         self.native
             .session
             .append_layer_overlay(&mut self.cursor.segments);
