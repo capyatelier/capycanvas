@@ -47,7 +47,8 @@ extension XCTestCase {
         reopen("appearance"); selected("theme", "Light")
 
         page("input")
-        for label in ["Outline and crosshair", "Crosshair", "No cursor", "Brush outline", "Dot"] {
+        for label in ["None", "Cross", "Triangle", "Single-pixel dot", "Sight", "Brush size",
+                      "Brush size and cross", "Brush size and dot", "Brush size and single-pixel dot", "Dot"] {
             choose("cursor", label)
         }
         reopen("input"); selected("cursor", "Dot")

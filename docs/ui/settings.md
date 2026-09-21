@@ -25,6 +25,18 @@ a settings dialog dismisses the view; it is not a second Apply operation.
 Dependent fields are enabled or disabled by shared rules, so different clients
 cannot disagree about whether a setting is valid.
 
+**Cursor shape** is one shared setting for painting tools, with None first,
+followed by Cross, Triangle, Dot, Single-pixel dot, Sight, and brush-size
+outlines with no center marker, a cross, a dot, or a single-pixel dot. The
+brush-size options retain the resolved brush-tip shape and dynamics. Existing
+saved cursor modes remain valid, and Reset still selects the brush-size outline.
+Single-pixel markers occupy one physical display pixel at any host scale.
+
+**Hide cursor when painting** hides the painting cursor during contact, except
+that brush-size outlines and their center markers stay visible for the Eraser,
+transparent color, and a pen's physical eraser. None always remains invisible.
+The shared Rust cursor model and GPU presenter apply this behavior on every host.
+
 ## Keyboard shortcuts
 
 [`shortcuts.rs`](../../crates/layer-ui/src/shortcuts.rs) associates key chords with

@@ -183,11 +183,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
       assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
       if (page === "input") {
         await click('.preference-choice summary');
-        assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 5);
+        assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 10);
         await capture(`cursor-choices-${theme}`);
-        await click('.preference-options [data-choice="2"]');
+        await click('.preference-options [data-choice="1"]');
         assert.equal(await evaluate("layerApp.state().settings.cursor"), "cross");
-        await preference({ type: "edit", id: "cursor", value: 0 });
+        await preference({ type: "reset", id: "cursor" });
       }
       if (page === "about") {
         assert.ok(await evaluate(`layerApp.app.preferences().pages.flatMap(p=>p.groups.flatMap(g=>g.rows)).filter(r=>r.kind.type==='link').every(row=>{

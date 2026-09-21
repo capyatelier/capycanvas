@@ -810,15 +810,10 @@ impl Settings {
                             PreferenceKind::Choice {
                                 presentation: ChoicePresentation::Dropdown,
                                 options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
-                                icons: [
-                                    "cursor-brush",
-                                    "cursor-brush-cross",
-                                    "cursor-cross",
-                                    "cursor-dot",
-                                    "cursor-none",
-                                ]
-                                .map(String::from)
-                                .to_vec(),
+                                icons: CursorMode::CHOICES
+                                    .iter()
+                                    .map(|(mode, _)| mode.icon().into())
+                                    .collect(),
                                 selected: CursorMode::CHOICES
                                     .iter()
                                     .position(|c| c.0 == self.cursor)
@@ -1412,6 +1407,69 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn cursor_choices_preserve_saved_modes_and_reset_after_reordering() {
+        assert_eq!(CursorMode::CHOICES[0], (CursorMode::None, "None"));
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Windows,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Android,
+        ] {
+            for saved in [
+                "brush_size",
+                "brush_size_cross",
+                "cross",
+                "dot",
+                "none",
+                "triangle",
+                "single_pixel_dot",
+                "sight",
+                "brush_size_dot",
+                "brush_size_single_pixel_dot",
+            ] {
+                let mut settings: Settings =
+                    serde_json::from_value(serde_json::json!({ "cursor": saved })).unwrap();
+                let row = settings.field(PreferenceId::Cursor, platform).unwrap();
+                let PreferenceKind::Choice {
+                    options,
+                    icons,
+                    selected,
+                    ..
+                } = row.kind
+                else {
+                    panic!()
+                };
+                assert_eq!(options.len(), 10);
+                assert_eq!(icons.len(), options.len());
+                assert_eq!(CursorMode::CHOICES[selected as usize].0, settings.cursor);
+                settings
+                    .edit(
+                        PreferenceId::Cursor,
+                        PreferenceValue::Choice(selected),
+                        platform,
+                    )
+                    .unwrap();
+                assert_eq!(serde_json::to_value(&settings).unwrap()["cursor"], saved);
+                settings
+                    .edit(PreferenceId::Cursor, PreferenceValue::Choice(0), platform)
+                    .unwrap();
+                assert_eq!(settings.cursor, CursorMode::None);
+                PreferencesState::default().edit(
+                    &mut settings,
+                    PreferenceAction::Reset {
+                        id: PreferenceId::Cursor,
+                    },
+                    platform,
+                );
+                assert_eq!(settings.cursor, CursorMode::BrushSize);
+            }
+        }
+    }
 
     #[test]
     fn pointer_preferences_belong_to_input_on_every_platform() {

@@ -100,6 +100,129 @@ fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
 }
 
 #[test]
+fn cursor_triangle_and_single_pixel_dot_render_at_native_scale() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    submit(&mut r, &[Layer::paint(LayerId(1), "Empty")], &[], &[], true);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("cursor pixel reference"),
+        size: wgpu::Extent3d {
+            width: 128,
+            height: 128,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&Default::default());
+    let mut presenter =
+        crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    let camera = ViewState {
+        background_rgba_linear: [1.; 4],
+        ..view()
+    };
+    for scale in [1., 1.5, 2., 3.] {
+        for turns in 0..4 {
+            presenter.set_surface_rotation(turns);
+            presenter.set_cursor(r.device(), &[], scale);
+            presenter
+                .present(&r, &target_view, camera, [1.; 4])
+                .unwrap();
+            let baseline = page_bytes(&r, &target);
+            let x = (20.25_f32 * scale).floor() / scale;
+            let y = (24.75_f32 * scale).floor() / scale;
+            presenter.set_cursor(
+                r.device(),
+                &[layer_render::CursorSegment {
+                    from: [x, y],
+                    to: [x + 1. / scale, y + 1. / scale],
+                    distance: 0.,
+                    marker: 2.,
+                    scale: 1.,
+                }],
+                scale,
+            );
+            presenter
+                .present(&r, &target_view, camera, [1.; 4])
+                .unwrap();
+            let actual = page_bytes(&r, &target);
+            let changed = actual
+                .chunks_exact(4)
+                .zip(baseline.chunks_exact(4))
+                .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 8))
+                .count();
+            assert_eq!(
+                changed, 1,
+                "single-pixel dot: scale {scale}, rotation {turns}"
+            );
+        }
+    }
+    presenter.set_surface_rotation(0);
+    for background in [[0., 0., 0., 1.], [1.; 4]] {
+        let camera = ViewState {
+            background_rgba_linear: background,
+            ..view()
+        };
+        presenter.set_cursor(r.device(), &[], 1.);
+        presenter
+            .present(&r, &target_view, camera, background)
+            .unwrap();
+        let baseline = page_bytes(&r, &target);
+        presenter.set_cursor(
+            r.device(),
+            &[layer_render::CursorSegment {
+                from: [32., 32.],
+                to: [42., 46.],
+                distance: 0.,
+                marker: 3.,
+                scale: 1.,
+            }],
+            1.,
+        );
+        presenter
+            .present(&r, &target_view, camera, background)
+            .unwrap();
+        let triangle = page_bytes(&r, &target);
+        let changed = triangle
+            .chunks_exact(4)
+            .zip(baseline.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 8))
+            .count();
+        assert!(
+            changed > 15,
+            "triangle is visible on light and dark: {changed}"
+        );
+        for (x, y) in [(40, 33), (33, 44)] {
+            let index = (y * 128 + x) * 4;
+            assert_eq!(
+                triangle[index..index + 4],
+                baseline[index..index + 4],
+                "outside triangle"
+            );
+        }
+        if background[0] == 1. {
+            assert!(
+                triangle[(41 * 128 + 37) * 4] < 16,
+                "triangle has a filled interior"
+            );
+        }
+        presenter.set_cursor(r.device(), &[], 1.);
+        presenter
+            .present(&r, &target_view, camera, background)
+            .unwrap();
+        assert_eq!(
+            page_bytes(&r, &target),
+            baseline,
+            "hiding the cursor restores the untouched canvas"
+        );
+    }
+}
+
+#[test]
 fn retained_viewport_matches_full_redraw_after_paint_and_preview_replacement() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "Ink")];

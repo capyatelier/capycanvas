@@ -92,9 +92,9 @@ export async function checkPenRendering({ call, evaluate, settle }) {
       assert.ok(difference(hidden, await pixels()) > 4, `${pointerType}: disabling hiding shows the live outline`);
       await preference("hide_cursor_while_drawing", true);
       assert.equal(difference(await pixels(), hidden), 0, `${pointerType}: enabling hiding clears the retained GPU cursor`);
-      await preference("cursor", 4);
-      assert.equal(difference(await pixels(), hidden), 0, `${pointerType}: hidden drawing matches No cursor pixels`);
       await preference("cursor", 0);
+      assert.equal(difference(await pixels(), hidden), 0, `${pointerType}: hidden drawing matches No cursor pixels`);
+      await action({ type: "preferences", action: { type: "reset", id: "cursor" } });
       await send({ type: "mouseReleased", pointerType,
         x: point.x + 30, y: point.y, button: "left", buttons: 0, clickCount: 1, force: 0 });
       const released = await pixels();

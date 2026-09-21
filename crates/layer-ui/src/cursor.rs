@@ -13,15 +13,53 @@ pub enum CursorMode {
     Cross,
     Dot,
     None,
+    Triangle,
+    SinglePixelDot,
+    Sight,
+    BrushSizeDot,
+    BrushSizeSinglePixelDot,
 }
 impl CursorMode {
     pub const CHOICES: &'static [(Self, &'static str)] = &[
-        (Self::BrushSize, "Brush outline"),
-        (Self::BrushSizeCross, "Outline and crosshair"),
-        (Self::Cross, "Crosshair"),
+        (Self::None, "None"),
+        (Self::Cross, "Cross"),
+        (Self::Triangle, "Triangle"),
         (Self::Dot, "Dot"),
-        (Self::None, "No cursor"),
+        (Self::SinglePixelDot, "Single-pixel dot"),
+        (Self::Sight, "Sight"),
+        (Self::BrushSize, "Brush size"),
+        (Self::BrushSizeCross, "Brush size and cross"),
+        (Self::BrushSizeDot, "Brush size and dot"),
+        (
+            Self::BrushSizeSinglePixelDot,
+            "Brush size and single-pixel dot",
+        ),
     ];
+
+    pub const fn has_brush_size(self) -> bool {
+        matches!(
+            self,
+            Self::BrushSize
+                | Self::BrushSizeCross
+                | Self::BrushSizeDot
+                | Self::BrushSizeSinglePixelDot
+        )
+    }
+
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::None => "cursor-none",
+            Self::Cross => "cursor-cross",
+            Self::Triangle => "cursor-triangle",
+            Self::Dot => "cursor-dot",
+            Self::SinglePixelDot => "cursor-single-pixel-dot",
+            Self::Sight => "cursor-sight",
+            Self::BrushSize => "cursor-brush",
+            Self::BrushSizeCross => "cursor-brush-cross",
+            Self::BrushSizeDot => "cursor-brush-dot",
+            Self::BrushSizeSinglePixelDot => "cursor-brush-single-pixel-dot",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,21 +102,50 @@ impl Cursor {
                 view.line([cx - 6.0, cy], [cx + 6.0, cy], 0.0, true);
                 view.line([cx, cy - 6.0], [cx, cy + 6.0], 0.0, true);
             }
-            CursorMode::Dot => {
-                view.contour(
-                    [
-                        [cx - 1.0, cy - 1.0],
-                        [cx + 1.0, cy - 1.0],
-                        [cx + 1.0, cy + 1.0],
-                        [cx - 1.0, cy + 1.0],
-                    ]
-                    .into_iter(),
-                    true,
-                );
+            CursorMode::Dot | CursorMode::BrushSizeDot => {
+                view.line([cx - 1.0, cy], [cx + 1.0, cy], 0.0, true);
+                view.line([cx, cy - 1.0], [cx, cy + 1.0], 0.0, true);
+            }
+            CursorMode::SinglePixelDot | CursorMode::BrushSizeSinglePixelDot => {
+                // Snap to one physical pixel, including fractional host scale.
+                let x = (cx * scale).floor() / scale;
+                let y = (cy * scale).floor() / scale;
+                view.segments.push(CursorSegment {
+                    from: [x, y],
+                    to: [x + 1.0 / scale, y + 1.0 / scale],
+                    distance: 0.0,
+                    marker: 2.0,
+                    scale: 1.0,
+                });
+            }
+            CursorMode::Sight => {
+                for direction in [-1.0, 1.0] {
+                    view.line(
+                        [cx + direction * 5.0, cy],
+                        [cx + direction * 11.0, cy],
+                        0.0,
+                        true,
+                    );
+                    view.line(
+                        [cx, cy + direction * 5.0],
+                        [cx, cy + direction * 11.0],
+                        0.0,
+                        true,
+                    );
+                }
+            }
+            CursorMode::Triangle => {
+                view.segments.push(CursorSegment {
+                    from: [cx, cy],
+                    to: [cx + 10.0, cy + 14.0],
+                    distance: 0.0,
+                    marker: 3.0,
+                    scale: 1.0,
+                });
             }
             _ => {}
         }
-        if !matches!(mode, CursorMode::BrushSize | CursorMode::BrushSizeCross) {
+        if !mode.has_brush_size() {
             return;
         }
         let [a, b, c, d, tx, ty] = camera.document_to_surface().map(|v| v / scale);

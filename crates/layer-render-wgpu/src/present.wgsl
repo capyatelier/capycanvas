@@ -256,6 +256,23 @@ struct CursorVertex {
         alpha = clamp(0.5 - d, 0., 1.);
         white = clamp(0.5 - scale - d, 0., 1.);
     }
+    if v.line.z > 2.5 {
+        // Clockwise triangle, with its upper-left tip at the input position.
+        let a = -v.line.xy;
+        let b = vec2<f32>(0., v.line.y);
+        let c = vec2<f32>(v.line.x, v.line.y * 0.4);
+        let ab = b - a;
+        let bc = c - b;
+        let ca = a - c;
+        let pa = v.local - a;
+        let pb = v.local - b;
+        let pc = v.local - c;
+        let d = max(max((ab.x * pa.y - ab.y * pa.x) / length(ab),
+            (bc.x * pb.y - bc.y * pb.x) / length(bc)),
+            (ca.x * pc.y - ca.y * pc.x) / length(ca));
+        alpha = clamp(0.5 - d, 0., 1.);
+        white = alpha - clamp(0.5 - scale - d, 0., 1.);
+    }
     let clip = window_coverage(logical_surface(v.position.xy));
     return view_store(vec4<f32>(vec3<f32>(white), alpha) * clip);
 }

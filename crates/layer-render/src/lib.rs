@@ -27,7 +27,8 @@ pub struct CursorSegment {
     pub to: [f32; 2],
     pub distance: f32,
     /// 0: dashed line, 1: solid line, 2: filled rectangular handle (`from`/`to`
-    /// are opposite corners). Handles have a one-pixel contrasting border.
+    /// are opposite corners), 3: filled triangle in the `from`/`to` bounds with
+    /// its tip at `from`. Filled shapes have a one-pixel contrasting border.
     pub marker: f32,
     pub scale: f32,
 }

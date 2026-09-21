@@ -543,6 +543,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(event) = self.cursor.event else {
             return false;
         };
+        let erasing = self.state.brush.tool == Tool::Eraser
+            || self.state.colors.transparent()
+            || event.tool == layer_engine::ToolKind::Eraser
+            || event.flags.contains(layer_engine::SampleFlags::INVERTED);
         if self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand
             || self.interaction.pointer.is_some_and(|p| !p.paint)
@@ -553,7 +557,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             // on release/cancel without waiting for stroke backing to finish.
             || (self.state.settings.hide_cursor_while_drawing
                 && self.layer_interaction.tool == LayerCanvasTool::Paint
-                && self.interaction.pointer.is_some_and(|p| p.paint))
+                && self.interaction.pointer.is_some_and(|p| p.paint)
+                && !(self.state.settings.cursor.has_brush_size() && erasing))
         {
             return false;
         }
@@ -14002,6 +14007,172 @@ mod tests {
         s.layer_interaction.tool = LayerCanvasTool::Paint;
         s.cursor_input(Some(event(&s, 2, PenPhase::Hover, 0.0)));
         assert!(s.update_canvas_cursor(&mut view));
+    }
+
+    #[test]
+    fn brush_size_cursors_stay_visible_for_erasing_and_transparent_paint() {
+        let mut s = session();
+        let mut view = CanvasCursor::default();
+        for (tool, slot, input_tool, flags, erasing) in [
+            (
+                CommandId::Pen,
+                ColorSlot::Foreground,
+                ToolKind::Pen,
+                SampleFlags::PRIMARY,
+                false,
+            ),
+            (
+                CommandId::Eraser,
+                ColorSlot::Foreground,
+                ToolKind::Pen,
+                SampleFlags::PRIMARY,
+                true,
+            ),
+            (
+                CommandId::Pen,
+                ColorSlot::Transparent,
+                ToolKind::Pen,
+                SampleFlags::PRIMARY,
+                true,
+            ),
+            (
+                CommandId::Pen,
+                ColorSlot::Foreground,
+                ToolKind::Eraser,
+                SampleFlags::PRIMARY,
+                true,
+            ),
+            (
+                CommandId::Pen,
+                ColorSlot::Foreground,
+                ToolKind::Pen,
+                SampleFlags::INVERTED,
+                true,
+            ),
+        ] {
+            invoke(&mut s, tool);
+            s.dispatch(UiAction::Color {
+                action: ColorAction::Select { slot },
+            })
+            .unwrap();
+            for &(mode, _) in CursorMode::CHOICES {
+                s.state.settings.cursor = mode;
+                let outline = matches!(
+                    mode,
+                    CursorMode::BrushSize
+                        | CursorMode::BrushSizeCross
+                        | CursorMode::BrushSizeDot
+                        | CursorMode::BrushSizeSinglePixelDot
+                );
+                for kind in [PointerKind::Mouse, PointerKind::Pen] {
+                    for hide in [true, false] {
+                        s.state.settings.hide_cursor_while_drawing = hide;
+                        for end in [ContactPhase::Up, ContactPhase::Cancel] {
+                            s.cursor_input(Some(PenEvent {
+                                tool: input_tool,
+                                flags,
+                                ..event(&s, 1, PenPhase::Hover, 0.0)
+                            }));
+                            assert!(s.update_canvas_cursor(&mut view));
+                            assert_eq!(!view.segments.is_empty(), mode != CursorMode::None);
+                            for phase in [ContactPhase::Down, ContactPhase::Move, end] {
+                                s.input(UiInput::Pointer {
+                                    id: 1,
+                                    phase,
+                                    kind,
+                                    button: PointerButton::Primary,
+                                    position: [225.0, 300.0],
+                                })
+                                .unwrap();
+                                let visible = !hide || phase == end || (erasing && outline);
+                                assert_eq!(
+                                    s.update_canvas_cursor(&mut view),
+                                    visible,
+                                    "{tool:?} {slot:?} {mode:?} {kind:?} hide={hide} {phase:?}"
+                                );
+                                assert_eq!(
+                                    !view.segments.is_empty(),
+                                    visible && mode != CursorMode::None
+                                );
+                                assert_eq!(
+                                    view.segments.iter().any(|s| s.marker == 0.0),
+                                    visible && outline
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            s.engine.backend().dabs,
+            0,
+            "cursor updates never deposit ink"
+        );
+    }
+
+    #[test]
+    fn cursor_markers_keep_their_size_and_outline_at_fractional_dpi() {
+        let mut s = session();
+        for pixels in [500, 750, 1000, 1500] {
+            s.set_viewport([500.0, 500.0], [pixels, pixels]).unwrap();
+            s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+            let scale = pixels as f32 / 500.0;
+            s.state.settings.cursor = CursorMode::BrushSize;
+            let outline = s.canvas_cursor().unwrap().segments;
+            for &(mode, _) in CursorMode::CHOICES {
+                s.state.settings.cursor = mode;
+                let cursor = s.canvas_cursor().unwrap();
+                let markers: Vec<_> = cursor.segments.iter().filter(|s| s.marker != 0.0).collect();
+                match mode {
+                    CursorMode::SinglePixelDot | CursorMode::BrushSizeSinglePixelDot => {
+                        assert_eq!(markers.len(), 1);
+                        for axis in 0..2 {
+                            let start = markers[0].from[axis] * scale;
+                            let end = markers[0].to[axis] * scale;
+                            assert!((start - start.round()).abs() < 0.001);
+                            assert!((end - start - 1.0).abs() < 0.001);
+                        }
+                    }
+                    CursorMode::Triangle => {
+                        assert_eq!(markers.len(), 1);
+                        assert_eq!(markers[0].from, cursor.center);
+                        assert_eq!(markers[0].marker, 3.0);
+                    }
+                    CursorMode::Sight => {
+                        assert_eq!(markers.len(), 4);
+                        for segment in markers {
+                            for point in [segment.from, segment.to] {
+                                assert!(
+                                    (point[0] - cursor.center[0])
+                                        .hypot(point[1] - cursor.center[1])
+                                        >= 5.0
+                                );
+                            }
+                        }
+                    }
+                    CursorMode::Cross | CursorMode::BrushSizeCross => {
+                        assert_eq!(markers.len(), 2);
+                        assert_eq!(markers[0].to[0] - markers[0].from[0], 12.0);
+                    }
+                    CursorMode::Dot | CursorMode::BrushSizeDot => {
+                        assert_eq!(markers.len(), 2);
+                        assert_eq!(markers[0].to[0] - markers[0].from[0], 2.0);
+                    }
+                    _ => assert!(markers.is_empty()),
+                }
+                let actual: Vec<_> = cursor
+                    .segments
+                    .into_iter()
+                    .filter(|s| s.marker == 0.0)
+                    .collect();
+                if mode.has_brush_size() {
+                    assert_eq!(actual, outline);
+                } else {
+                    assert!(actual.is_empty());
+                }
+            }
+        }
     }
 
     #[test]

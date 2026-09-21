@@ -412,13 +412,9 @@ pub fn ui_catalog() -> UiCatalog {
             "keyboard",
             "info",
             "search",
-            "cursor-brush",
-            "cursor-brush-cross",
-            "cursor-cross",
-            "cursor-dot",
-            "cursor-none",
         ]
         .into_iter()
+        .chain(CursorMode::CHOICES.iter().map(|(mode, _)| mode.icon()))
         .chain(
             layer_core::bundled_effect_catalog()
                 .filters()
