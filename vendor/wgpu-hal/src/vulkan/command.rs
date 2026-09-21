@@ -283,6 +283,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     {
         let mut src_stages = vk::PipelineStageFlags::empty();
         let mut dst_stages = vk::PipelineStageFlags::empty();
+        let mut shared_memory: Option<vk::MemoryBarrier> = None;
         let vk_barriers = &mut self.temp.image_barriers;
         vk_barriers.clear();
 
@@ -292,13 +293,26 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 bar.texture.format,
                 &self.device.private_caps,
             );
-            let (src_stage, src_access) = conv::map_texture_usage_to_barrier(bar.usage.from);
-            let src_layout = conv::derive_image_layout(bar.usage.from, bar.texture.format);
+            let prior_usage = if bar.texture.shared_present && bar.texture.shared_initialized
+                && bar.usage.from.contains(wgt::TextureUses::UNINITIALIZED) {
+                wgt::TextureUses::COLOR_TARGET
+            } else { bar.usage.from };
+            let (src_stage, src_access) = conv::map_texture_usage_to_barrier(prior_usage);
+            let src_layout = if bar.texture.shared_present && !prior_usage.contains(wgt::TextureUses::UNINITIALIZED) { vk::ImageLayout::SHARED_PRESENT_KHR } else { conv::derive_image_layout(prior_usage, bar.texture.format) };
             src_stages |= src_stage;
             let (dst_stage, dst_access) = conv::map_texture_usage_to_barrier(bar.usage.to);
-            let dst_layout = conv::derive_image_layout(bar.usage.to, bar.texture.format);
+            let dst_layout = if bar.texture.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { conv::derive_image_layout(bar.usage.to, bar.texture.format) };
             dst_stages |= dst_stage;
 
+            if bar.texture.shared_present && src_layout == dst_layout {
+                // Shared images never change layout after their first present.
+                // Preserve access dependencies with a memory barrier, without
+                // issuing another image-layout operation on the front buffer.
+                let memory = shared_memory.get_or_insert_with(vk::MemoryBarrier::default);
+                memory.src_access_mask |= src_access;
+                memory.dst_access_mask |= dst_access;
+                continue;
+            }
             vk_barriers.push(
                 vk::ImageMemoryBarrier::default()
                     .image(bar.texture.raw)
@@ -310,14 +324,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
             );
         }
 
-        if !vk_barriers.is_empty() {
+        if !vk_barriers.is_empty() || shared_memory.is_some() {
             unsafe {
                 self.device.raw.cmd_pipeline_barrier(
                     self.active,
                     src_stages,
                     dst_stages,
                     vk::DependencyFlags::empty(),
-                    &[],
+                    shared_memory.as_slice(),
                     &[],
                     vk_barriers,
                 )
@@ -399,7 +413,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::TextureCopy>,
     {
-        let src_layout = conv::derive_image_layout(src_usage, src.format);
+        let src_layout = if src.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { conv::derive_image_layout(src_usage, src.format) };
 
         let vk_regions_iter = regions.map(|r| {
             let (src_subresource, src_offset) = conv::map_subresource_layers(&r.src_base);
@@ -423,7 +437,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 src.raw,
                 src_layout,
                 dst.raw,
-                DST_IMAGE_LAYOUT,
+                if dst.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { DST_IMAGE_LAYOUT },
                 &smallvec::SmallVec::<[vk::ImageCopy; 32]>::from_iter(vk_regions_iter),
             )
         };
@@ -444,7 +458,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 self.active,
                 src.raw,
                 dst.raw,
-                DST_IMAGE_LAYOUT,
+                if dst.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { DST_IMAGE_LAYOUT },
                 &smallvec::SmallVec::<[vk::BufferImageCopy; 32]>::from_iter(vk_regions_iter),
             )
         };
@@ -459,7 +473,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) where
         T: Iterator<Item = crate::BufferTextureCopy>,
     {
-        let src_layout = conv::derive_image_layout(src_usage, src.format);
+        let src_layout = if src.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { conv::derive_image_layout(src_usage, src.format) };
         let vk_regions_iter = src.map_buffer_copies(regions);
 
         unsafe {
@@ -901,6 +915,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 height: desc.extent.height,
             },
         };
+        let render_area = desc.color_attachments.first().and_then(Option::as_ref)
+            .and_then(|a| *a.target.view.retained_render_area.lock()).filter(|area| {
+            desc.depth_stencil_attachment.is_none() && desc.color_attachments.len() == 1
+                && desc.color_attachments[0].as_ref().is_some_and(|a| a.target.view.shared_present
+                    && a.ops.contains(crate::AttachmentOps::LOAD))
+                && area.offset.x >= 0 && area.offset.y >= 0
+                && area.extent.width > 0 && area.extent.height > 0
+                && area.offset.x as u64 + area.extent.width as u64 <= desc.extent.width as u64
+                && area.offset.y as u64 + area.extent.height as u64 <= desc.extent.height as u64
+        }).unwrap_or(render_area);
         let vk_viewports = [vk::Viewport {
             x: 0.0,
             y: desc.extent.height as f32,

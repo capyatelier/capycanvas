@@ -100,6 +100,185 @@ fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
 }
 
 #[test]
+fn retained_viewport_matches_full_redraw_after_paint_and_preview_replacement() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "Ink")];
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let make_target = || {
+        r.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 128,
+                height: 128,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    };
+    let target = make_target();
+    let reference = make_target();
+    for retained in [false, true] {
+        let mut cached =
+            crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb)
+                .unwrap();
+        if retained { cached.retain_target(); }
+        cached.gpu_timings(&r, true);
+        for (zoom, turns) in [(0.5, 0), (1., 1), (3.7, 2), (8., 3)] {
+            let camera = ViewState {
+                document_to_surface: [zoom, 0., 0., zoom, 64. - zoom * 64., 64. - zoom * 64.],
+                ..view()
+            };
+            cached.set_surface_rotation(turns);
+            for (i, (x, y, preview)) in [
+                (55., 61., false),
+                (68., 69., false),
+                (57., 73., true),
+                (71., 62., true),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut dab = dab([0.7, 0.1, 0.05, 1.]);
+                dab.center = Point { x, y };
+                dab.radii = [3., 3.];
+                let mut batch = batch(1);
+                batch.kind = if preview {
+                    DabBatchKind::Preview
+                } else {
+                    DabBatchKind::Persistent
+                };
+                batch.damage = Rect {
+                    min: Point {
+                        x: x - 10.,
+                        y: y - 10.,
+                    },
+                    max: Point {
+                        x: x + 10.,
+                        y: y + 10.,
+                    },
+                };
+                r.submit(FramePacket {
+                    view: camera,
+                    document_extent: [128; 2],
+                    layers: &layers,
+                    dabs: &[dab],
+                    dab_batches: &[batch],
+                    restore_rasters: &[],
+                    reset_layers: i == 0,
+                    composite_all: i == 0,
+                    time_seconds: 0.,
+                })
+                .unwrap();
+                if i > 0 {
+                    assert!(r.composite_damage.area() < 128 * 128);
+                }
+                let overview = crate::OverviewPlacement {
+                    bounds: [if i < 2 { 98. } else { 82. }, 4., 24., 24.],
+                    clip: None,
+                    work_area: [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                    outline_linear: [0.8, 0.2, 0.3],
+                    background_linear: [0.3; 3],
+                    scale: 1.,
+                    opacity: 0.7,
+                };
+                let overviews = if i == 3 {
+                    &[][..]
+                } else {
+                    std::slice::from_ref(&overview)
+                };
+                // Keep paint, Navigator and cursor as three disjoint regions.
+                // A middle pass must not have empty timestamp-write indices.
+                let marker = [layer_render::CursorSegment {
+                    from: [8., 108.], to: [14., 114.], distance: 0., marker: 0., scale: 1.,
+                }];
+                cached.set_cursor(r.device(), &marker, 1.);
+                cached.set_overviews(&r, overviews);
+                cached
+                    .present(
+                        &r,
+                        &target.create_view(&Default::default()),
+                        camera,
+                        [0.2; 4],
+                    )
+                    .unwrap();
+                let mut full =
+                    crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb)
+                        .unwrap();
+                full.set_surface_rotation(turns);
+                full.set_overviews(&r, overviews);
+                full.set_cursor(r.device(), &marker, 1.);
+                full.present(
+                    &r,
+                    &reference.create_view(&Default::default()),
+                    camera,
+                    [0.2; 4],
+                )
+                .unwrap();
+                assert_eq!(
+                    page_bytes(&r, &target),
+                    page_bytes(&r, &reference),
+                    "retained {retained}, zoom {zoom}, rotation {turns}, frame {i}"
+                );
+                if retained {
+                    for (x, y, visible) in [
+                        (20., 15., true),
+                        (114., 105., true),
+                        (100., 16., true),
+                        (0., 0., false),
+                    ] {
+                        let cursor = [layer_render::CursorSegment {
+                            from: [x, y],
+                            to: [x + 5., y + 8.],
+                            distance: 0.,
+                            marker: 1.,
+                            scale: 1.,
+                        }];
+                        let segments = if visible { &cursor[..] } else { &[] };
+                        cached.set_cursor(r.device(), segments, 1.7);
+                        cached
+                            .present(
+                                &r,
+                                &target.create_view(&Default::default()),
+                                camera,
+                                [0.2; 4],
+                            )
+                            .unwrap();
+                        let mut full = crate::ViewportPresenter::for_surface(
+                            &r,
+                            format,
+                            crate::SdrSurfaceColor::Srgb,
+                        )
+                        .unwrap();
+                        full.set_surface_rotation(turns);
+                        full.set_overviews(&r, overviews);
+                        full.set_cursor(r.device(), segments, 1.7);
+                        full.present(
+                            &r,
+                            &reference.create_view(&Default::default()),
+                            camera,
+                            [0.2; 4],
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            page_bytes(&r, &target),
+                            page_bytes(&r, &reference),
+                            "cursor restored, zoom {zoom}, rotation {turns}, frame {i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
     use layer_render::{RegionRequest, RegionSource};
     let receive = |r: &mut WgpuRasterizer| {

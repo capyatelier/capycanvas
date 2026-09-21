@@ -16,6 +16,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod surface_capture;
+
 struct Window(NonNull<ndk_sys::ANativeWindow>);
 impl Drop for Window {
     fn drop(&mut self) {
@@ -26,6 +28,7 @@ pub(crate) struct Surface {
     // Drop the swapchain before releasing its native-window reference.
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    sdr_format: wgpu::TextureFormat,
     presenter: ViewportPresenter,
     color: SdrSurfaceColor,
     hdr_capable: bool,
@@ -33,8 +36,28 @@ pub(crate) struct Surface {
     presented_tone_generation: Option<u32>,
     first_frame_complete: Option<Arc<AtomicBool>>,
     submitted_frames: u64,
+    trace_timings: bool,
+    front_complete: Arc<AtomicBool>,
+    logical_extent: [u32; 2],
+    quarter_turns: u32,
     _instance: wgpu::Instance,
     _window: Window,
+}
+impl Surface {
+    fn configure(&mut self, gpu: &WgpuRasterizer, extent: [u32; 2]) -> Result<(), String> {
+        self.quarter_turns = match (unsafe { self.surface.as_hal::<wgpu::hal::api::Vulkan>() },
+            unsafe { gpu.adapter().as_hal::<wgpu::hal::api::Vulkan>() }) {
+            (Some(surface), Some(adapter)) => surface.pre_rotate(&adapter).map_err(error)?,
+            _ => 0,
+        };
+        self.logical_extent = extent;
+        let [width, height] = if self.quarter_turns % 2 == 0 { extent } else { [extent[1], extent[0]] };
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(gpu.device(), &self.config);
+        self.presenter.retain_target();
+        Ok(())
+    }
 }
 pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -54,7 +77,11 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "format": format!("{:?}", surface.config.format),
                 "color_space": format!("{:?}", surface.config.color_space),
                 "present_mode": format!("{:?}", surface.config.present_mode),
+                "retained_target": surface.presenter.retains_target(),
+                "overview_count": a.overviews.len(),
+                "extent": [surface.config.width, surface.config.height],
                 "desired_maximum_frame_latency": surface.config.desired_maximum_frame_latency,
+                "surface_quarter_turns": surface.quarter_turns,
                 // Submission progress is not proof that Android displayed a buffer.
                 "submitted_frames": surface.submitted_frames,
                 "hdr_capable": a.hdr_capable(),
@@ -129,6 +156,7 @@ impl App {
                 surface.config.format,
                 surface.color,
             ).expect("The negotiated surface encoding remains valid");
+            surface.presenter.retain_target();
         }
         self.blank_presented = true;
         self.sync_hdr_display();
@@ -228,13 +256,14 @@ impl App {
             .get_default_config(gpu.adapter(), width, height)
             .ok_or("The Vulkan device cannot present to this surface")?;
         let caps = surface.get_capabilities(gpu.adapter());
-        // Choreographer already paces this producer. The Wacom/Android 15 freeze
-        // trace showed Mailbox replacing buffers with no canvas consumer progress.
-        // FIFO avoids that replacement-only path and retains bounded backpressure.
-        // This is a mitigation, not proof of the original synchronization defect;
-        // see docs/development/android-presentation-progress.md for qualification.
-        config.present_mode = wgpu::PresentMode::Fifo;
-        config.desired_maximum_frame_latency = 2;
+        if !caps.present_modes.contains(&wgpu::PresentMode::SharedDemandRefresh) {
+            return Err("This Android GPU driver does not support front-buffer rendering. Capy Canvas requires Vulkan shared presentation with present fences.".into());
+        }
+        config.present_mode = wgpu::PresentMode::SharedDemandRefresh;
+        config.desired_maximum_frame_latency = 1;
+        // Instrumentation can inspect the actual retained HDR/SDR surface;
+        // Android PixelCopy cannot read an acquired shared buffer.
+        if self.profiling { config.usage |= wgpu::TextureUsages::COPY_SRC; }
         if let Some(format) = caps
             .formats
             .iter()
@@ -243,18 +272,18 @@ impl App {
         {
             config.format = format;
         }
+        // Keep SDR on the native sRGB target. Float16 adds conversion and
+        // bandwidth costs even when the document has no HDR output.
+        let sdr_format = config.format;
         let hdr_capable=crate::display::hdr_surface(&caps);
-        if hdr_capable {
-            config.format=wgpu::TextureFormat::Rgba16Float;
-        }
         // Start with SDR; the first document frame selects PQ for HDR artwork with Proof Off.
         let color=SdrSurfaceColor::Srgb;
         config.color_space=color.surface_color_space();
-        surface.configure(gpu.device(), &config);
         let presenter = ViewportPresenter::for_surface(gpu, config.format, color).map_err(error)?;
-        self.surface = Some(Surface {
+        let mut surface = Surface {
             surface,
             config,
+            sdr_format,
             presenter,
             color,
             hdr_capable,
@@ -262,9 +291,15 @@ impl App {
             presented_tone_generation: None,
             first_frame_complete: None,
             submitted_frames: 0,
+            trace_timings: false,
+            front_complete: Arc::new(AtomicBool::new(true)),
+            logical_extent: [width, height],
+            quarter_turns: 0,
             _instance: instance,
             _window: window,
-        });
+        };
+        surface.configure(gpu, [width, height])?;
+        self.surface = Some(surface);
         self.sync_hdr_display();
         self.host.error = None;
         self.host.dirty = true;
@@ -311,12 +346,17 @@ impl App {
             .map_or(Ok(()), |error| Err(error.clone()))
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
-        if self.host.session.engine().backend().0.is_none() { return Ok(false); }
+        // A lost device may already have been retired by observe_gpu_failure.
+        // Still propagate its error so the host offers renderer recovery.
         self.check_gpu()?;
+        if self.host.session.engine().backend().0.is_none() { return Ok(false); }
         self.frame_cost = [0; 5];
         if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
+        // Completion is polled before render(). Keep draining input while the
+        // preceding shared-image update is in flight; don't prepare stale work.
+        if self.surface.as_ref().is_some_and(|s| !s.front_complete.load(Ordering::Acquire)) { return Ok(true); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
         let _presentation = self.host.session.engine().backend().0.as_ref()
@@ -374,10 +414,12 @@ impl App {
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let color=if hdr_output {SdrSurfaceColor::Bt2100Pq} else {SdrSurfaceColor::Srgb};
-        if surface.color!=color {
-            let presenter=ViewportPresenter::for_surface(gpu,surface.config.format,color).map_err(error)?;
+        let format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { surface.sdr_format };
+        let output_changed = surface.color!=color || surface.config.format!=format;
+        if output_changed {
+            let presenter=ViewportPresenter::for_surface(gpu,format,color).map_err(error)?;
+            surface.config.format=format;
             surface.config.color_space=color.surface_color_space();
-            surface.surface.configure(gpu.device(),&surface.config);
             surface.presenter=presenter;
             surface.color=color;
         }
@@ -388,19 +430,26 @@ impl App {
             surface.presenter.set_hdr_view(gpu,rendition,1.).map_err(error)?;
         }
         surface.presenter.set_gpu_local_tone_guide(gpu,self.tone.guide.clone()).map_err(error)?;
+        let trace_timings = unsafe { ndk_sys::ATrace_isEnabled() };
+        if trace_timings || surface.trace_timings {
+            for sample in surface.presenter.gpu_timings(gpu, trace_timings) {
+                if sample.status == 1 {
+                    unsafe { ndk_sys::ATrace_setCounter(c"Capy viewport GPU ns".as_ptr(), sample.elapsed_ns as i64); }
+                }
+            }
+            surface.trace_timings = trace_timings;
+        }
 
         let extent = [view.width_px, view.height_px];
-        if extent != [surface.config.width, surface.config.height] {
-            surface.config.width = extent[0];
-            surface.config.height = extent[1];
-            surface.surface.configure(gpu.device(), &surface.config);
+        if output_changed || extent != surface.logical_extent {
+            surface.configure(gpu, extent)?;
         }
         self.frame_cost[0] = elapsed();
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                surface.surface.configure(gpu.device(), &surface.config);
+                surface.configure(gpu, extent)?;
                 self.host.dirty = true;
                 return Ok(true);
             }
@@ -417,6 +466,7 @@ impl App {
         surface
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_surface_rotation(surface.quarter_turns);
         surface.presenter.set_overviews(gpu, &overviews);
         surface
             .presenter
@@ -430,9 +480,21 @@ impl App {
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
         surface.submitted_frames += 1;
-        // Perfetto can compare these submissions with this SurfaceView's actual
-        // latch events. No polling, readback, or per-frame diagnostic allocation.
+        {
+            surface.front_complete.store(false, Ordering::Release);
+            let complete = surface.front_complete.clone();
+            let frame = surface.submitted_frames;
+            gpu.queue().on_submitted_work_done(move || {
+                complete.store(true, Ordering::Release);
+                // Callback service time is an upper bound on GPU completion,
+                // not scanout or physical pen-to-photon latency.
+                unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }
+            });
+        }
+        // Shared-image submissions are not distinct displayed frames. Perfetto
+        // records producer progress here, not scanout or input visibility.
         unsafe {
+            ndk_sys::ATrace_setCounter(c"Capy viewport damaged pixels".as_ptr(), surface.presenter.damage_area_pixels() as i64);
             ndk_sys::ATrace_setCounter(c"Capy canvas submitted".as_ptr(), surface.submitted_frames as i64);
             ndk_sys::ATrace_setCounter(c"Capy canvas zoom milli-percent".as_ptr(), zoom_milli_percent);
         }

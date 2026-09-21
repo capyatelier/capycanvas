@@ -247,6 +247,17 @@ impl Surface {
         )
     }
 
+    /// Select the native surface's current rotation for the next configure.
+    /// Returns clockwise quarter turns. The caller must rotate its rendering
+    /// and swap the configured width/height for odd quarter turns.
+    /// Non-native swapchains retain the identity transform.
+    pub fn pre_rotate(&self, adapter: &Adapter) -> Result<u32, vk::Result> {
+        match self.inner.as_any().downcast_ref::<swapchain::NativeSurface>() {
+            Some(surface) => surface.pre_rotate(adapter),
+            None => Ok(0),
+        }
+    }
+
     /// Set the present timing information which will be used for the next [presentation](crate::Queue::present()) of this surface,
     /// using [VK_GOOGLE_display_timing].
     ///
@@ -284,7 +295,11 @@ pub struct SurfaceTexture {
     metadata: Box<dyn swapchain::SurfaceTextureMetadata>,
 }
 
-impl crate::DynSurfaceTexture for SurfaceTexture {}
+impl crate::DynSurfaceTexture for SurfaceTexture {
+    fn retains_initialized_contents(&self) -> bool {
+        self.texture.shared_present && self.texture.shared_initialized
+    }
+}
 
 impl Borrow<Texture> for SurfaceTexture {
     fn borrow(&self) -> &Texture {
@@ -815,6 +830,8 @@ pub enum TextureMemory {
 
 #[derive(Debug)]
 pub struct Texture {
+    shared_present: bool,
+    shared_initialized: bool,
     raw: vk::Image,
     memory: TextureMemory,
     format: wgt::TextureFormat,
@@ -847,6 +864,8 @@ impl Texture {
 
 #[derive(Debug)]
 pub struct TextureView {
+    retained_render_area: Mutex<Option<vk::Rect2D>>,
+    shared_present: bool,
     raw_texture: vk::Image,
     raw: vk::ImageView,
     _layers: NonZeroU32,
@@ -861,6 +880,19 @@ pub struct TextureView {
 impl crate::DynTextureView for TextureView {}
 
 impl TextureView {
+    /// Limit tile attachment traffic to retained shared-image damage.
+    ///
+    /// # Safety
+    /// Draws using this view must remain inside these nonempty physical bounds.
+    /// Only initialized shared-image LOAD passes use this rectangle.
+    pub unsafe fn set_retained_render_area(&self, bounds: [u32; 4]) {
+        if self.shared_present {
+            *self.retained_render_area.lock() = Some(vk::Rect2D {
+                offset: vk::Offset2D { x: bounds[0] as i32, y: bounds[1] as i32 },
+                extent: vk::Extent2D { width: bounds[2], height: bounds[3] },
+            });
+        }
+    }
     /// # Safety
     ///
     /// - The image view handle must not be manually destroyed

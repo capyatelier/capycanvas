@@ -112,6 +112,8 @@ pub trait DynShaderModule: DynResource + fmt::Debug {}
 pub trait DynSurfaceTexture:
     DynResource + core::borrow::Borrow<dyn DynTexture> + fmt::Debug
 {
+    /// Whether this acquisition retains initialized contents of the prior one.
+    fn retains_initialized_contents(&self) -> bool { false }
 }
 pub trait DynTexture: DynResource + fmt::Debug {}
 pub trait DynTextureView: DynResource + fmt::Debug {}

@@ -12,6 +12,7 @@ internal object Native {
     @JvmStatic external fun displayInfo(handle: Long, available: Boolean)
     @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun resetGpu(handle: Long)
+    external fun surfacePixelsForTest(handle: Long): ByteArray
     external fun destroyGpuForTest(handle: Long)
     @JvmStatic external fun detach(handle: Long)
     @JvmStatic external fun resize(handle: Long, width: Int, height: Int, density: Float)

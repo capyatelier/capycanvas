@@ -1,5 +1,11 @@
 # Android development
 
+Android rendering requires Vulkan shared-demand presentation and swapchain-maintenance
+present fences. Unsupported drivers show a canvas initialization error; no buffered
+fallback is shipped. Both SDR and HDR use the retained front buffer. See
+[front-buffer requirements and qualification](android-front-buffer-production-2026-09-20.md).
+
+
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
 The Android client uses Kotlin and Jetpack Compose for the editor UI. A Rust JNI

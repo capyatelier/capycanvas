@@ -5,6 +5,7 @@ struct Camera {
     surround: vec4<f32>,
     selection: vec4<f32>,
     selection_inverse: vec4<f32>,
+    rotation: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
@@ -15,6 +16,26 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 struct DisplayCache { info: vec4<u32>, window: vec4<u32>, grid: vec4<u32>, pages: array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var next_mip: texture_2d<f32>;
+
+// The backing buffer follows the display's native orientation. All artwork,
+// cursor and UI geometry continues to use the host's logical viewport.
+fn logical_surface(p: vec2<f32>) -> vec2<f32> {
+    switch u32(camera.rotation.x) {
+        case 1u: { return vec2(p.y, camera.viewport.y - p.x); }
+        case 2u: { return camera.viewport.xy - p; }
+        case 3u: { return vec2(camera.viewport.x - p.y, p.x); }
+        default: { return p; }
+    }
+}
+fn surface_clip(p: vec2<f32>) -> vec4<f32> {
+    let clip = p / camera.viewport.xy * vec2(2., -2.) + vec2(-1., 1.);
+    switch u32(camera.rotation.x) {
+        case 1u: { return vec4(clip.y, -clip.x, 0., 1.); }
+        case 2u: { return vec4(-clip, 0., 1.); }
+        case 3u: { return vec4(-clip.y, clip.x, 0., 1.); }
+        default: { return vec4(clip, 0., 1.); }
+    }
+}
 
 // Coordinates of mip-cell centers. The final cell can represent less than a
 // full footprint; preserve its actual position instead of stretching the image.
@@ -174,7 +195,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
     return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
 }
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {
-    let surface = vertex.position.xy;
+    let surface = logical_surface(vertex.position.xy);
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
     if any(p < vec2<f32>(0.)) || any(p >= extent) {
@@ -215,14 +236,14 @@ struct CursorVertex {
         let half = abs(end_point - start_point) * 0.5;
         let local = vec2<f32>(corners[vertex].x * 2. - 1., corners[vertex].y) * (half + 0.5);
         let point = (start_point + end_point) * 0.5 + local;
-        return CursorVertex(vec4<f32>(point / camera.viewport.xy * vec2<f32>(2.,-2.) + vec2<f32>(-1.,1.),0.,1.), local, vec4<f32>(half, marker, scale));
+        return CursorVertex(surface_clip(point), local, vec4<f32>(half, marker, scale));
     }
     let extent = length(end_point-start_point);
     let along = (end_point-start_point) / max(extent, 0.0001);
     let corner = corners[vertex];
     let local = vec2<f32>(corner.x * (extent + 4.0 * scale) - 2.0 * scale, corner.y * 2.5 * scale);
     let point = start_point + along * local.x + vec2<f32>(-along.y, along.x) * local.y;
-    return CursorVertex(vec4<f32>(point / camera.viewport.xy * vec2<f32>(2.,-2.) + vec2<f32>(-1.,1.),0.,1.), local, vec4<f32>(extent, offset, marker, scale));
+    return CursorVertex(surface_clip(point), local, vec4<f32>(extent, offset, marker, scale));
 }
 @fragment fn cursor_fragment(v: CursorVertex) -> @location(0) vec4<f32> {
     let distance = length(vec2<f32>(max(max(-v.local.x, v.local.x-v.line.x), 0.0), v.local.y));
@@ -235,7 +256,7 @@ struct CursorVertex {
         alpha = clamp(0.5 - d, 0., 1.);
         white = clamp(0.5 - scale - d, 0., 1.);
     }
-    let clip = window_coverage(v.position.xy);
+    let clip = window_coverage(logical_surface(v.position.xy));
     return view_store(vec4<f32>(vec3<f32>(white), alpha) * clip);
 }
 
@@ -259,7 +280,7 @@ struct OverviewVertex {
     // Choose the more contrasting black/white surround once per vertex. A
     // constant white halo disappears with a light-colored outline in dark UI.
     let halo = select(1., 0., dot(outline.rgb, vec3(.2126,.7152,.0722)) > .179);
-    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale, clip, halo);
+    return OverviewVertex(surface_clip(point), uv, ab, cd, outline, background_scale, clip, halo);
 }
 fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
@@ -267,7 +288,7 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 }
 @fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {
     let footprint = fwidth(v.uv);
-    let p = v.position.xy;
+    let p = logical_surface(v.position.xy);
     if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
     let paint = proof_artwork(coarse_area(v.uv, footprint),v.uv*camera.offset_document.zw);
     var rgb = view_working_rgb(paint.rgb) + view_ui_rgb(v.background_scale.rgb) * (1.-paint.a);

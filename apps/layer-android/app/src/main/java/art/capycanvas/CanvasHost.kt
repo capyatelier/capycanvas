@@ -170,7 +170,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     @Volatile private var firstUiDraw = 0L
     @Volatile private var firstSurfaceReady = 0L
     private var filterResources: JSONObject? = null
-    private var scheduled = false
     private var disposed = false
     private var frameInterval = 8_333_333L
     private var snapshotAt = 0L
@@ -179,9 +178,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
     private var documentEpoch = 0L
-    private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 18) else null
-    private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
-    private val frameCosts = if (BuildConfig.DEBUG) LongArray(11) else null
+    private val measuredFrames = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 18) else null
+    private val measuredInputs = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 5) else null
+    private val frameCosts = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(11) else null
     private var frameCount = 0
     private var inputCount = 0
     private val measuredPublications = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 4) else null
@@ -211,7 +210,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     init {
         worker.post {
             attempt {
-                handle = Native.create(BuildConfig.DEBUG)
+                handle = Native.create(BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
                 choreographer = Choreographer.getInstance()
                 attempt(canvas = false) {
                     saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
@@ -436,7 +435,12 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         ++surfaceGeneration
         val stopped = CountDownLatch(1)
         if (!worker.post {
-            try { if (handle != 0L) { attached = false; Native.detach(handle) } }
+            try {
+                worker.removeCallbacks(renderFrame)
+                renderQueued = false
+                renderDelayed = false
+                if (handle != 0L) { attached = false; Native.detach(handle) }
+            }
             finally { stopped.countDown() }
         }) return // The owning thread has already destroyed the native session.
         check(stopped.await(10, TimeUnit.SECONDS)) { "Canvas surface did not detach" }
@@ -485,15 +489,34 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         Native.scroll(handle, x, y, dx * 40, dy * 40, zoom, horizontal)
         wake()
     }
-    private fun wake() {
-        if (!attached || scheduled) return
-        scheduled = true
-        if (Build.VERSION.SDK_INT >= 33) choreographer!!.postVsyncCallback { data ->
-            draw(data.frameTimeNanos, data.preferredFrameTimeline.expectedPresentationTimeNanos)
-        } else choreographer!!.postFrameCallback { time -> draw(time, time + frameInterval) }
+    private var renderQueued = false
+    private var renderDelayed = false
+    private var renderGeneration = 0
+    private val renderFrame = Runnable {
+        renderQueued = false
+        renderDelayed = false
+        if (attached && !disposed && renderGeneration == activeSurfaceGeneration) {
+            val now = System.nanoTime()
+            draw(now, now + frameInterval)
+        }
+    }
+    private fun wake(retryDelay: Long = 0L) {
+        if (!attached) return
+        if (renderQueued) {
+            // New input needn't wait for a previously scheduled GPU/startup retry.
+            if (retryDelay == 0L && renderDelayed) {
+                worker.removeCallbacks(renderFrame)
+                renderDelayed = false
+                worker.post(renderFrame)
+            }
+            return
+        }
+        renderQueued = true
+        renderDelayed = retryDelay > 0L
+        renderGeneration = activeSurfaceGeneration
+        if (renderDelayed) worker.postDelayed(renderFrame, retryDelay) else worker.post(renderFrame)
     }
     private fun draw(frameTime: Long, expectedPresentation: Long) {
-        scheduled = false
         if (!attached || disposed) return
         attempt {
             android.os.Trace.beginSection("capy.callback")
@@ -517,7 +540,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 val elapsed = System.nanoTime() - start
                 if (frameCosts != null) Native.frameCost(handle, frameCosts)
                 val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
-                if (again || awaitingSurfaceFrame) wake()
+                // Shader warmup needs polling, not hundreds of empty presents/s.
+                if (again || awaitingSurfaceFrame) wake(if (lastStartupStage < 2) (frameInterval / 1_000_000).coerceAtLeast(1L) else 1L)
                 publish(!again)
                 if (!startupCacheFinished && lastCanvasReady) {
                     val resources = filterResources

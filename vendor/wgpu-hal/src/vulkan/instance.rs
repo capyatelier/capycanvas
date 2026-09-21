@@ -253,6 +253,8 @@ impl super::Instance {
         if cfg!(target_os = "android") {
             // VK_KHR_android_surface
             extensions.push(khr::android_surface::NAME);
+            extensions.push(khr::get_surface_capabilities2::NAME);
+            extensions.push(ext::surface_maintenance1::NAME);
         }
         if cfg!(target_os = "windows") {
             // VK_KHR_win32_surface

@@ -102,6 +102,10 @@ pub enum PresentMode {
     /// * **Supported on**: DX12 on Windows 10, NVidia on Vulkan and Wayland on Vulkan.
     /// * **Also known as**: "Fast Vsync"
     Mailbox = 5,
+
+    /// Vulkan shared image, retained between acquisitions. Display
+    /// reads may overlap rendering (tearing). Requires explicit surface support.
+    SharedDemandRefresh = 6,
 }
 
 /// Specifies how the alpha channel of the textures should be handled during

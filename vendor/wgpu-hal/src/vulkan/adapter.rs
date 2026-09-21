@@ -39,6 +39,7 @@ const INDEXING_FEATURES: wgt::Features = wgt::Features::TEXTURE_BINDING_ARRAY
 /// [`Instance::expose_adapter`]: super::Instance::expose_adapter
 #[derive(Debug, Default)]
 pub struct PhysicalDeviceFeatures {
+    swapchain_maintenance: Option<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT<'static>>,
     /// Basic Vulkan 1.0 features.
     core: vk::PhysicalDeviceFeatures,
 
@@ -159,6 +160,9 @@ impl PhysicalDeviceFeatures {
         mut info: vk::DeviceCreateInfo<'a>,
     ) -> vk::DeviceCreateInfo<'a> {
         info = info.enabled_features(&self.core);
+        if let Some(ref mut feature) = self.swapchain_maintenance {
+            info = info.push_next(feature);
+        }
         if let Some(ref mut feature) = self.descriptor_indexing {
             info = info.push_next(feature);
         }
@@ -293,6 +297,8 @@ impl PhysicalDeviceFeatures {
             requested_features.intersects(wgt::Features::PARTIALLY_BOUND_BINDING_ARRAY);
 
         Self {
+            swapchain_maintenance: enabled_extensions.contains(&ext::swapchain_maintenance1::NAME)
+                .then(|| vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true)),
             // vk::PhysicalDeviceFeatures is a struct composed of Bool32's while
             // Features is a bitfield so we need to map everything manually
             core: vk::PhysicalDeviceFeatures::default()
@@ -2013,6 +2019,10 @@ impl super::InstanceShared {
             let core = vk::PhysicalDeviceFeatures::default();
             let mut features2 = vk::PhysicalDeviceFeatures2KHR::default().features(core);
 
+            if capabilities.supports_extension(ext::swapchain_maintenance1::NAME) {
+                let next = features.swapchain_maintenance.insert(vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default());
+                features2 = features2.push_next(next);
+            }
             // `VK_KHR_multiview` is promoted to 1.1
             if capabilities.device_api_version >= vk::API_VERSION_1_1
                 || capabilities.supports_extension(khr::multiview::NAME)
@@ -2211,6 +2221,16 @@ impl super::InstanceShared {
             unsafe { self.raw.get_physical_device_features(phd) }
         };
 
+        // Android's loader implements swapchain maintenance itself. On the
+        // tested Mali/Adreno devices, the KHR alias bypasses that intercept;
+        // query this loader feature through the core Vulkan 1.1 entry point.
+        if cfg!(target_os = "android") && self.instance_api_version >= vk::API_VERSION_1_1 {
+            if let Some(feature) = features.swapchain_maintenance.as_mut() {
+                feature.p_next = core::ptr::null_mut();
+                let mut query = vk::PhysicalDeviceFeatures2::default().push_next(feature);
+                unsafe { self.raw.get_physical_device_features2(phd, &mut query); }
+            }
+        }
         (capabilities, features)
     }
 }
@@ -2513,8 +2533,17 @@ impl super::Adapter {
         &self.instance
     }
 
+    pub(super) fn supports_retained_presentation(&self) -> bool {
+        cfg!(target_os = "android")
+            && self.instance.extensions.contains(&khr::get_surface_capabilities2::NAME)
+            && self.instance.extensions.contains(&ext::surface_maintenance1::NAME)
+            && self.phd_capabilities.supports_extension(khr::shared_presentable_image::NAME)
+            && self.phd_capabilities.supports_extension(ext::swapchain_maintenance1::NAME)
+            && self.phd_features.swapchain_maintenance.as_ref().is_some_and(|f| f.swapchain_maintenance1 != 0)
+    }
+
     pub fn required_device_extensions(&self, features: wgt::Features) -> Vec<&'static CStr> {
-        let (supported_extensions, unsupported_extensions) = self
+        let (mut supported_extensions, unsupported_extensions) = self
             .phd_capabilities
             .get_required_extensions(features)
             .iter()
@@ -2526,6 +2555,10 @@ impl super::Adapter {
             log::debug!("Missing extensions: {unsupported_extensions:?}");
         }
 
+        if self.supports_retained_presentation() {
+            supported_extensions.push(khr::shared_presentable_image::NAME);
+            supported_extensions.push(ext::swapchain_maintenance1::NAME);
+        }
         log::debug!("Supported extensions: {supported_extensions:?}");
         supported_extensions
     }

@@ -51,7 +51,6 @@ public final class AndroidPenMotion {
             }
         } finally {
             pen(start, hover ? MotionEvent.ACTION_HOVER_EXIT : MotionEvent.ACTION_UP, 0, hover);
-            if (!hover) pen(start, MotionEvent.ACTION_HOVER_EXIT, 0, true);
         }
         mark(name + "_end");
     }

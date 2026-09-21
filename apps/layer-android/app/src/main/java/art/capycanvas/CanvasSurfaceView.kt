@@ -45,12 +45,14 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         refreshPredictionAvailability()
     }
     override fun onDetachedFromWindow() {
+        if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         inputManager.unregisterInputDeviceListener(inputDevices)
         predictor = null; predictionDevice = null; predictionProbe = null
         super.onDetachedFromWindow()
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus && Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_NONE)
         if (hasWindowFocus) refreshPredictionAvailability()
     }
     internal fun refreshPredictionAvailability() {
@@ -134,6 +136,12 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         return true
     }
     override fun onHoverEvent(event: MotionEvent): Boolean {
+        // Hover otherwise waits for the UI vsync before reaching our separate
+        // canvas Looper. The touch-only request on pen-down cannot cover it.
+        if (Build.VERSION.SDK_INT >= 30) requestUnbufferedDispatch(
+            if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) InputDevice.SOURCE_CLASS_NONE
+            else InputDevice.SOURCE_CLASS_POINTER
+        )
         if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
             host.chrome(obj("kind" to "leave", "touch" to false))
             send(event, 0, 4, false)

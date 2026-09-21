@@ -215,7 +215,7 @@ impl crate::Attachment<'_, super::TextureView> {
     pub(super) fn make_attachment_key(&self, ops: crate::AttachmentOps) -> super::AttachmentKey {
         super::AttachmentKey {
             format: self.view.raw_format,
-            layout: derive_image_layout(self.usage, self.view.format),
+            layout: if self.view.shared_present { vk::ImageLayout::SHARED_PRESENT_KHR } else { derive_image_layout(self.usage, self.view.format) },
             ops,
         }
     }
@@ -499,6 +499,7 @@ pub fn map_attachment_ops(
 
 pub fn map_present_mode(mode: wgt::PresentMode) -> vk::PresentModeKHR {
     match mode {
+        wgt::PresentMode::SharedDemandRefresh => vk::PresentModeKHR::SHARED_DEMAND_REFRESH,
         wgt::PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
         wgt::PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
         wgt::PresentMode::Fifo => vk::PresentModeKHR::FIFO,
@@ -521,7 +522,7 @@ pub fn map_vk_present_mode(mode: vk::PresentModeKHR) -> Option<wgt::PresentMode>
         vk::PresentModeKHR::FIFO_RELAXED => Some(wgt::PresentMode::FifoRelaxed),
 
         // Modes that aren't exposed yet.
-        vk::PresentModeKHR::SHARED_DEMAND_REFRESH => None,
+        vk::PresentModeKHR::SHARED_DEMAND_REFRESH => Some(wgt::PresentMode::SharedDemandRefresh),
         vk::PresentModeKHR::SHARED_CONTINUOUS_REFRESH => None,
         FIFO_LATEST_READY => None,
 

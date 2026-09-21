@@ -308,6 +308,7 @@ impl super::Device {
         }
 
         super::Texture {
+            shared_present: false, shared_initialized: false,
             raw: vk_image,
             drop_guard,
             memory,
@@ -1290,6 +1291,8 @@ impl crate::Device for super::Device {
         self.counters.texture_views.add(1);
 
         Ok(super::TextureView {
+            shared_present: texture.shared_present,
+            retained_render_area: Mutex::new(None),
             raw_texture: texture.raw,
             raw,
             _layers: layers,

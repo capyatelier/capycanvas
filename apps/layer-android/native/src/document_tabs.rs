@@ -68,7 +68,8 @@ impl App {
         }
         self.tone = Default::default();
         self.proof = Default::default();
-        self.overviews.clear();
+        // Navigator placements belong to the window, not the retiring document.
+        // The host publishes them again only when layout changes.
         self.cursor = Default::default();
         let renderer = self.host.session.renderer_mut().0.take();
         if let Some(gpu) = &renderer {

@@ -227,3 +227,26 @@ continues to apply only to the libheif/HEIC route. The independent AVIF oracle u
 system libavif 1.3.0 with AOM; source-constructed lossless fixtures additionally
 compare against known samples. Reference:
 [libavif 1.4.2 API](https://github.com/AOMediaCodec/libavif/blob/v1.4.2/include/avif/avif.h).
+
+## Android front-buffer presentation
+
+`wgpu-core` 30.0.1 is pinned to upstream revision
+`40f4a34ebaf56f9a046231f54125ad046239d3f3`, registry archive SHA-256
+`14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14`.
+Its licenses and registry provenance are retained. The sole functional core change lets
+HAL surface acquisitions explicitly report initialized retained contents;
+ordinary acquired images still require initialization. One upstream comment
+trailing space is also removed.
+
+The Vulkan HAL adds `SharedDemandRefresh`, advertised only by Android surfaces
+with shared-image color-attachment support and present fences. It acquires one
+image once, retains `SHARED_PRESENT_KHR` layout, retires a bounded pool of present
+semaphores using explicit fences, and limits tile attachment loads/stores to
+retained render areas. Android's loader feature must be queried through the core
+Vulkan 1.1 entry point; its KHR alias returns false on both tested Mali and Adreno
+devices. Surface copies use the same shared layout for instrumented HDR readback.
+
+All Android builds require this path for SDR and HDR. Unsupported drivers report
+a canvas initialization error; there is no Android FIFO fallback or build flag.
+Other platform hosts retain their existing presentation modes. See
+[production qualification](../docs/development/android-front-buffer-production-2026-09-20.md).

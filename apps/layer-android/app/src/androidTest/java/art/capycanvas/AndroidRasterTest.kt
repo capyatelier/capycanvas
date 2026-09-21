@@ -136,11 +136,16 @@ class AndroidRasterTest {
         }
         return request.getInt("id") to state.getJSONObject("document_file")
     }
-    private fun point(phase: Int, dx: Double, dy: Double) = native { handle ->
+    private fun point(phase: Int, dx: Double, dy: Double) {
+        native { handle ->
         val viewport=host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("viewport")
         val bytes=doubleArrayOf(viewport.getDouble(0)*.50+dx,viewport.getDouble(1)*.5+dy,.65,0.0,0.0,0.0,0.0,System.nanoTime().toDouble(),phase.toDouble())
         Native.pointer(handle,71,0,0,bytes,bytes.size,false)
         val now=System.nanoTime(); Native.frame(handle,now,now+16_666_667)
+    }
+        // Direct JNI input bypasses CanvasHost.wake(). Honor frame()'s retry
+        // contract before capturing the completed stroke on a nonblocking surface.
+        if (phase == 3) compose.waitUntil(10_000) { !tick() }
     }
     private fun stroke(dy: Double) {
         point(1,0.0,dy)
@@ -608,34 +613,48 @@ class AndroidRasterTest {
         fun tone()=native{JSONObject(Native.toneStatus(it))}
         fun mode(value:String){native{Native.proofControl(it,obj("type" to "mode","mode" to value).toString())};compose.runOnUiThread{host.documentChanged()};tick()}
         fun surfacePixels(name:String):JSONObject {
-            fun find(view:android.view.View):CanvasSurfaceView? {
-                if(view is CanvasSurfaceView)return view
-                if(view is android.view.ViewGroup)for(i in 0 until view.childCount)find(view.getChildAt(i))?.let{return it}
-                return null
+            // Navigator placement arrives from Compose layout on a different
+            // queue from tone publication. Drain both before reading pixels.
+            compose.waitForIdle()
+            compose.waitUntil(10_000) { !tick() }
+            // Read the actual shared image, preserving HDR values. Android's
+            // PixelCopy has no queued buffer to acquire in shared presentation.
+            val status=native{JSONObject(Native.displayStatus(it))}
+            assertEquals("SharedDemandRefresh",status.getString("present_mode"))
+            val format=status.getString("format")
+            val hdr=status.getString("color_space")=="Bt2100Pq"
+            val extent=status.getJSONArray("extent")
+            val physicalWidth=extent.getInt(0);val physicalHeight=extent.getInt(1)
+            val turns=status.getInt("surface_quarter_turns")
+            val width=if(turns%2==0)physicalWidth else physicalHeight
+            val height=if(turns%2==0)physicalHeight else physicalWidth
+            val f16=format=="Rgba16Float"
+            val bytes=ByteBuffer.wrap(native{Native.surfacePixelsForTest(it)}).order(ByteOrder.LITTLE_ENDIAN)
+            fun channel(x:Int,y:Int,c:Int):Float {
+                val (px,py)=when(turns){1->height-1-y to x;2->width-1-x to height-1-y;3->y to width-1-x;else->x to y}
+                val offset=(py*physicalWidth+px)*(if(f16)8 else 4)
+                val v=if(f16)android.util.Half.toFloat(bytes.getShort(offset+c*2)).toDouble()
+                    else (bytes.get(offset+(if(format.startsWith("Bgra"))2-c else c)).toInt() and 255)/255.0
+                if(!hdr)return v.toFloat()
+                val p=Math.pow(v,32.0/2523.0)
+                return (10000.0/203.0*Math.pow(maxOf(p-3424.0/4096.0,0.0)/(2413.0/128.0-2392.0/128.0*p),16384.0/2610.0)).toFloat()
             }
-            lateinit var surface:CanvasSurfaceView
-            compose.runOnUiThread{surface=requireNotNull(find(activity.window.decorView))}
-            val image=android.graphics.Bitmap.createBitmap(surface.width,surface.height,android.graphics.Bitmap.Config.RGBA_F16,false,
-                android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB))
-            val done=java.util.concurrent.CountDownLatch(1);var result=-1
-            compose.runOnUiThread{android.view.PixelCopy.request(surface,image,{result=it;done.countDown()},android.os.Handler(android.os.Looper.getMainLooper()))}
-            assertTrue(done.await(10,java.util.concurrent.TimeUnit.SECONDS));assertEquals(android.view.PixelCopy.SUCCESS,result)
             fun range(left:Int,top:Int,right:Int,bottom:Int):JSONObject {
                 var low=Float.POSITIVE_INFINITY;var high=Float.NEGATIVE_INFINITY
                 var above=0;var count=0
                 var digest=1469598103934665603L
-                for(y in top.coerceAtLeast(0) until bottom.coerceAtMost(image.height) step 3)
-                    for(x in left.coerceAtLeast(0) until right.coerceAtMost(image.width) step 3){
-                        val p=image.getColor(x,y)
-                        for(v in listOf(p.red(),p.green(),p.blue())){low=minOf(low,v);high=maxOf(high,v);if(v>1.001f)above++;count++;digest=(digest xor v.toRawBits().toLong())*1099511628211L}
+                for(y in top.coerceAtLeast(0) until bottom.coerceAtMost(height) step 3)
+                    for(x in left.coerceAtLeast(0) until right.coerceAtMost(width) step 3){
+                        for(v in (0..2).map{channel(x,y,it)}){low=minOf(low,v);high=maxOf(high,v);if(v>1.001f)above++;count++;digest=(digest xor v.toRawBits().toLong())*1099511628211L}
                     }
                 return obj("min" to low,"max" to high,"above_sdr" to above,"samples" to count,"digest" to digest.toString())
             }
             val nav=compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot.translate(-host.surfaceOrigin)
-            val pixels=obj("format" to image.config.toString(),"color_space" to image.colorSpace.toString(),
-                "canvas" to range(image.width/3,image.height/3,image.width*2/3,image.height*2/3),
+            val pixels=obj("capture" to "retained-surface-readback",
+                "format" to format,"color_space" to status.getString("color_space"),
+                "canvas" to range(width/3,height/3,width*2/3,height*2/3),
                 "navigator" to range(nav.left.toInt()+3,nav.top.toInt()+3,nav.right.toInt()-3,nav.bottom.toInt()-3))
-            File(output,"$name-pixels.json").writeText(pixels.toString(2));image.recycle();return pixels
+            File(output,"$name-pixels.json").writeText(pixels.toString(2));return pixels
         }
         fun record(name:String){
             File(output,"$name.json").writeText(tone().put("surface",native{JSONObject(Native.displayStatus(it))}).toString(2))
@@ -651,6 +670,11 @@ class AndroidRasterTest {
             compose.waitUntil(10_000){native{JSONObject(Native.displayStatus(it)).let{s->
                 s.opt("presented_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else "Srgb"
             }}}
+            val surface=native{JSONObject(Native.displayStatus(it))}
+            assertEquals("SharedDemandRefresh",surface.getString("present_mode"))
+            val expected=if(hdr)"Rgba16Float" else surface.getJSONArray("formats").objects()
+                .firstOrNull{it.getString("format").endsWith("Srgb")}?.getString("format")
+            if(expected!=null)assertEquals("Presentation format follows the output mode",expected,surface.getString("format"))
         }
         awaitSurface(supports)
         record("hdr-off")
@@ -663,7 +687,11 @@ class AndroidRasterTest {
             compose.runOnUiThread{host.displayInfo(false)}
             awaitSurface(false)
             val fallback=surfacePixels("sdr-display-fallback")
-            for(region in listOf("canvas","navigator"))assertTrue(fallback.getJSONObject(region).getDouble("max")<=1.001)
+            for(region in listOf("canvas","navigator")) {
+                val range=fallback.getJSONObject(region)
+                assertTrue(range.getDouble("max")<=1.001)
+                assertTrue("SDR $region has visible image content: $fallback",range.getDouble("max")-range.getDouble("min")>0.05)
+            }
             compose.runOnUiThread{host.displayInfo(true)}
             awaitSurface(true)
             val restored=surfacePixels("hdr-display-restored")
@@ -2189,7 +2217,72 @@ class AndroidRasterTest {
         compose.onNodeWithText("Close").performClick()
         assertNull(host.failure)
     }
+    @Test fun frontBufferSurfaceLifecycle() {
+        fun ready() {
+            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready")==true }
+            compose.waitUntil(10_000) { !tick() }
+            assertNull(host.failure)
+            val display=native { JSONObject(Native.displayStatus(it)) }
+            assertEquals("SharedDemandRefresh",display.getString("present_mode"))
+            assertTrue(display.getBoolean("retained_target"))
+        }
+        stroke(0.0)
+        val painted=hash(png("front-painted.png"))
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        ready()
+        assertEquals(painted,hash(png("front-resumed.png")))
+        scenario.recreate()
+        scenario.onActivity { activity=it }
+        ready()
+        assertEquals(painted,hash(png("front-recreated.png")))
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalRotation=activity.display!!.rotation
+        val automaticRotation=android.provider.Settings.System.getInt(activity.contentResolver,android.provider.Settings.System.ACCELEROMETER_ROTATION,0)!=0
+        try {
+            // Android 16 large screens may ignore Activity orientation requests.
+            // Rotate the test display itself, preserving the user's rotation mode.
+            for(rotation in listOf(android.view.Surface.ROTATION_0,android.view.Surface.ROTATION_90)) {
+                assertTrue(automation.setRotation(rotation))
+                compose.waitUntil(15_000) {activity.display!!.rotation==rotation && host.surfaceReady}
+                compose.waitForIdle()
+                ready()
+                assertEquals(painted,hash(png("front-rotated-$rotation.png")))
+                val bytes=native { Native.surfacePixelsForTest(it) }
+                assertTrue("Rotated retained image has content",(bytes.indices step 97).map {bytes[it]}.toSet().size>8)
+            }
+        } finally {
+            automation.setRotation(originalRotation)
+            if(automaticRotation)automation.setRotation(android.app.UiAutomation.ROTATION_UNFREEZE)
+        }
+        compose.waitUntil(60_000) {host.snapshot?.optBoolean("shaders_ready")==true}
+        // Let the restored orientation's workspace animation/layout finish.
+        SystemClock.sleep(1000)
+        compose.waitForIdle()
+        ready()
+        val submitted=native {JSONObject(Native.displayStatus(it)).getLong("submitted_frames")}
+        SystemClock.sleep(300)
+        assertEquals("An idle front buffer stops submitting",submitted,native {JSONObject(Native.displayStatus(it)).getLong("submitted_frames")})
+        native { Native.destroyGpuForTest(it) }
+        compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(10_000) { host.failure!=null }
+        compose.runOnUiThread { host.restartCanvas() }
+        ready()
+        assertEquals(painted,hash(png("front-recovered.png")))
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString()) }
+        compose.waitUntil(10_000) { !tick() }
+        assertNotEquals(painted,hash(png("front-undone.png")))
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString()) }
+        compose.waitUntil(10_000) { !tick() }
+        assertEquals(painted,hash(png("front-redone.png")))
+        assertNull(host.failure)
+    }
     @Test fun exactSnapshotsSurviveFilesGpuReplacementAndRecovery() {
+        fun history(command:String) {
+            compose.waitUntil(15_000) {tick();native {state(it).array("commands").objects().any {c->c.optString("id")==command && c.optBoolean("enabled")}}}
+            native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }
+            compose.waitUntil(10_000) { !tick() }
+        }
         stroke(0.0)
         val first=save("first.capy")
         assertTrue(manifest(first).getJSONArray("blobs").length()>0)
@@ -2209,9 +2302,9 @@ class AndroidRasterTest {
         compose.waitUntil(60_000) {host.surfaceReady && host.snapshot?.optBoolean("brush_ready")==true}
         assertNull(host.failure)
         assertEquals(hash(secondPng),hash(png("replaced.png")))
-        native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick()
+        history("undo")
         assertEquals(hash(firstPng),hash(png("undo.png")))
-        native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick()
+        history("redo")
         assertEquals(hash(secondPng),hash(png("redo.png")))
         open(File(files,"first.capy"))
         assertEquals(hash(firstPng),hash(png("opened.png")))
@@ -2256,19 +2349,24 @@ class AndroidRasterTest {
         var write: Job? = null
         compose.runOnUiThread { write = host.recovery.capture() }
         runBlocking { write?.join() }
-        assertEquals(1,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
+        // Opening/recovering now creates drawing tabs, each with its own copy.
+        val modifiedTabs=native{h->JSONObject(Native.documentTabs(h,obj("op" to "view").toString())).array("tabs").objects().count {tab->
+            JSONObject(Native.documentTabs(h,obj("op" to "recovery","id" to tab.getLong("id")).toString())).getBoolean("modified")
+        }}
+        assertEquals(modifiedTabs,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
         assertNull(host.actionError)
         scenario.close()
         launch()
         assertNotSame(retained,host)
         compose.waitUntil(10_000) {host.recovery.candidate != null}
+        val offered=host.recovery.candidate
         compose.onNodeWithTag("recover-drawing").performClick()
-        compose.waitUntil(60_000) {host.recovery.candidate == null && !host.recovery.working}
+        compose.waitUntil(60_000) {host.recovery.candidate != offered && !host.recovery.working}
         assertNull(host.actionError)
         assertEquals(hash(firstPng),hash(png("controller-recovered.png")))
         assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         assertTrue(native {state(it).getJSONObject("document_file").isNull("location")})
-        assertEquals(1,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
+        assertEquals(modifiedTabs,recoveryDirectory.listFiles().orEmpty().count { it.extension == "capy" })
         activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS: exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, atomic recovery, Activity recreation, recovery offer/adoption\n")
     }
     @Test fun drawingTabsKeepHistorySpillAndLifecycle() {

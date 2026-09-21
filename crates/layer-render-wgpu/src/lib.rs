@@ -73,6 +73,7 @@ mod display_mips;
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 mod display_memory;
 mod live_display;
+mod present_damage;
 mod region_requests;
 mod region_sources;
 mod scene;
@@ -861,6 +862,7 @@ pub struct WgpuRasterizer {
     live_display: Option<live_display::Cache>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
+    composite_damage: PixelRect,
     filter_previews: Option<scene::FilterPreviews>,
     effect_validation: Option<effect_validation::Pending>,
     validated_effects: Option<effects::Effects>,
@@ -1237,6 +1239,7 @@ impl WgpuRasterizer {
             live_display: None,
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
+            composite_damage: PixelRect::EMPTY,
             thumbnails: thumbnails::Thumbnails::new(),
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
             ui_rendition: None,
@@ -4380,15 +4383,17 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(cache) = &mut self.live_display {
             cache.note_artwork_change(!dirty.is_empty() || animated);
         }
-        if !dirty.is_empty() || animated {
-            self.composite_revision = self.composite_revision.wrapping_add(1);
-        }
         if !display_missing.is_empty() {
             if dirty.is_empty() && !animated { composite_tiles = Some(display_missing.clone()); }
             else if let Some(tiles) = &mut composite_tiles { tiles.extend(&display_missing); }
             for coordinate in &display_missing {
                 dirty = dirty.union(page_rect(*coordinate).intersect(PixelRect::full(packet.document_extent)));
             }
+        }
+        // Newly populated display pages change visible pixels too, even when
+        // the document itself did not change (for example after navigation).
+        if !dirty.is_empty() || animated {
+            self.composite_revision = self.composite_revision.wrapping_add(1);
         }
         if (!dirty.is_empty() || animated) && scene_required {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
@@ -4677,6 +4682,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 .saturating_add(dirty.area().saturating_add(composited_pixels));
         }
 
+        if !dirty.is_empty() || animated {
+            self.composite_damage = if needs_scene(packet) || animated { PixelRect::full(packet.document_extent) } else { dirty };
+        }
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.publication");

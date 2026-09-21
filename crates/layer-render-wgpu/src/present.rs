@@ -70,7 +70,10 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 24]>,
+    camera_data: Option<[f32; 28]>,
+    quarter_turns: u32,
+    retained: Option<crate::present_damage::Retained>,
+    presented_area: u64,
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
@@ -590,7 +593,7 @@ impl ViewportPresenter {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport camera"),
-            size: 96,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -650,6 +653,9 @@ impl ViewportPresenter {
             cursor_vertices: Vec::with_capacity(256),
             uploads: Uploads::new(device, 16 * 1024),
             camera_data: None,
+            quarter_turns: 0,
+            retained: None,
+            presented_area: 0,
             shader,
             pipeline_layout,
             format,
@@ -745,6 +751,16 @@ impl ViewportPresenter {
         self.corner_radius = physical_pixels.max(0.0);
     }
 
+    pub fn retains_target(&self) -> bool { self.retained.is_some() }
+
+    pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
+
+    /// Retain destination contents. The caller guarantees the same image
+    /// survives presentations. Reset this state on every reconfiguration.
+    pub fn retain_target(&mut self) {
+        self.retained = Some(Default::default());
+    }
+
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {
         self.cursor_vertices.clear();
         if segments.is_empty() {
@@ -789,6 +805,12 @@ impl ViewportPresenter {
             timer.submitted(renderer.queue());
         }
         Ok(())
+    }
+
+    /// Rotate the logical viewport into a display's native buffer orientation.
+    /// Cursor, selection and Navigator coordinates remain in logical pixels.
+    pub fn set_surface_rotation(&mut self, clockwise_quarter_turns: u32) {
+        self.quarter_turns = clockwise_quarter_turns % 4;
     }
 
     /// Encode into the host's submission, allowing native GPU interop barriers
@@ -871,14 +893,14 @@ impl ViewportPresenter {
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
-        if self.bind_group.is_none()
+        let bindings_changed = self.bind_group.is_none()
             || self.document_extent != renderer.document_extent
             || self.selection_buffer.as_ref() != Some(coverage)
             || self.composite_view.as_ref() != Some(composite)
             || self.coarse_view.as_ref() != Some(coarse)
             || self.next_view.as_ref() != Some(next)
-            || self.display_geometry.as_ref() != Some(geometry)
-        {
+            || self.display_geometry.as_ref() != Some(geometry);
+        if bindings_changed {
             self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("viewport composite"),
                 layout: &self.layout,
@@ -946,7 +968,7 @@ impl ViewportPresenter {
                 s.affine.inverse().expect("selection placement validated")
             })
             .0;
-        let data: [f32; 24] = [
+        let data: [f32; 28] = [
             d / det,
             -b / det,
             -c / det,
@@ -971,12 +993,14 @@ impl ViewportPresenter {
             inverse[1],
             inverse[2],
             inverse[3],
+            self.quarter_turns as f32, 0., 0., 0.,
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
         };
-        if self.camera_data != Some(data) {
+        let camera_changed = self.camera_data != Some(data);
+        if camera_changed {
             self.uploads
                 .write(encoder, &renderer.queue, &self.uniform, bytes)?;
             self.camera_data = Some(data);
@@ -1008,31 +1032,157 @@ impl ViewportPresenter {
             )?;
             self.overviews_changed = false;
         }
-        let timestamp_writes = self.timing.as_mut().and_then(|timer| {
-            timer.poll(renderer.device(), renderer.queue());
-            timer.begin_render_pass(timer.stats().requested)
-        });
-        {
+        let extent = if self.quarter_turns % 2 == 0 {
+            [view.width_px, view.height_px]
+        } else {
+            [view.height_px, view.width_px]
+        };
+        let (regions, full) = if !overview_only && self.retained.is_some() {
+            let previous = self.retained.as_ref().unwrap();
+            let full = !previous.valid
+                || bindings_changed
+                || camera_changed
+                || previous.hdr != self.hdr_options
+                || previous.proof != self.proof_options
+                || (previous.revision != renderer.composite_revision
+                    && previous.revision.wrapping_add(1) != renderer.composite_revision);
+            let cursor =
+                crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
+            let repaint = if full {
+                crate::pixel_rect::PixelRect::full(extent)
+            } else if previous.revision != renderer.composite_revision {
+                crate::present_damage::damage(renderer.composite_damage, view, self.quarter_turns)
+            } else {
+                crate::pixel_rect::PixelRect::EMPTY
+            };
+            let mut regions = Vec::with_capacity(3 + 2 * self.overviews.len());
+            crate::present_damage::add_region(&mut regions, repaint);
+            crate::present_damage::add_region(&mut regions, previous.cursor);
+            crate::present_damage::add_region(&mut regions, cursor);
+            // A distant Navigator must not turn a short stroke into a nearly
+            // full-screen render area. Only merge intersecting damage regions.
+            if previous.overviews != self.overviews {
+                for o in previous.overviews.iter().chain(self.overviews.iter()) {
+                    let pad = o[19] * 3. + 2.;
+                    crate::present_damage::add_region(
+                        &mut regions,
+                        crate::present_damage::surface_bounds(
+                            [o[0] - pad, o[1] - pad, o[2] + 2. * pad, o[3] + 2. * pad],
+                            view,
+                            self.quarter_turns,
+                        ),
+                    );
+                }
+            } else if previous.revision != renderer.composite_revision {
+                for o in &self.overviews {
+                    // Artwork damage has the same document coordinates in the
+                    // Navigator. Preserve its unchanged pixels too, including
+                    // the costly area-filtered samples of zoomed-out artwork.
+                    let overview_view = ViewState {
+                        document_to_surface: [
+                            o[2] / self.document_extent[0] as f32,
+                            0.,
+                            0.,
+                            o[3] / self.document_extent[1] as f32,
+                            o[0],
+                            o[1],
+                        ],
+                        ..view
+                    };
+                    let area = crate::present_damage::damage(
+                        renderer.composite_damage,
+                        overview_view,
+                        self.quarter_turns,
+                    )
+                    .intersect(crate::present_damage::surface_bounds(
+                        [o[20], o[21], o[22], o[23]],
+                        view,
+                        self.quarter_turns,
+                    ));
+                    crate::present_damage::add_region(&mut regions, area);
+                }
+            }
+            let previous = self.retained.as_mut().unwrap();
+            previous.valid = true;
+            previous.revision = renderer.composite_revision;
+            previous.hdr = self.hdr_options;
+            previous.proof = self.proof_options;
+            previous.cursor = cursor;
+            previous.overviews.clone_from(&self.overviews);
+            (regions, full)
+        } else {
+            (vec![crate::pixel_rect::PixelRect::full(extent)], true)
+        };
+        self.presented_area = regions.iter().map(|r| r.area()).sum();
+        let timestamp_writes = if regions.is_empty() {
+            None
+        } else {
+            self.timing.as_mut().and_then(|timer| {
+                timer.poll(renderer.device(), renderer.queue());
+                timer.begin_render_pass(timer.stats().requested)
+            })
+        };
+        for (index, repaint) in regions.iter().enumerate() {
+            // Each pass needs its own view: wgpu can defer encoding until
+            // finish(), so mutating one view would reuse the last area.
+            let region_view = (!full).then(|| target.texture().create_view(&Default::default()));
+            let pass_target = region_view.as_ref().unwrap_or(target);
+            // Scissoring alone does not limit attachment loads/stores on a
+            // tile renderer. Narrow the native render area as well.
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            if !full {
+                if let Some(target) = unsafe { pass_target.as_hal::<wgpu::hal::api::Vulkan>() } {
+                    unsafe {
+                        target.set_retained_render_area([
+                            repaint.min_x(),
+                            repaint.min_y(),
+                            repaint.width(),
+                            repaint.height(),
+                        ]);
+                    }
+                }
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: pass_target,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(if overview_only {
-                            wgpu::Color::TRANSPARENT
+                        load: if full {
+                            wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK })
                         } else {
-                            wgpu::Color::BLACK
-                        }),
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes,
+                timestamp_writes: timestamp_writes.as_ref()
+                    .filter(|_| index == 0 || index + 1 == regions.len()).map(|t| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set: t.query_set,
+                        beginning_of_pass_write_index: if index == 0 {
+                            t.beginning_of_pass_write_index
+                        } else {
+                            None
+                        },
+                        end_of_pass_write_index: if index + 1 == regions.len() {
+                            t.end_of_pass_write_index
+                        } else {
+                            None
+                        },
+                    }
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            pass.set_scissor_rect(
+                repaint.min_x(),
+                repaint.min_y(),
+                repaint.width(),
+                repaint.height(),
+            );
             pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
             if !overview_only {
                 pass.set_pipeline(&self.pipeline);

@@ -1,5 +1,8 @@
 # Huion: sparse swept contacts and direct float composition
 
+The subsequent [Android latency investigation](android-huion-input-latency-2026-09-20.md)
+measures input delivery and the viewport/presentation stages excluded below.
+
 2026-09-20. Initial measurement source base: `a8c51612cb5b40286fd21780a4d7adae8822bf14`.
 
 Three costs explained the G-Pen GPU tails: prediction evaluated contacts across

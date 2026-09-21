@@ -92,6 +92,52 @@ fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
     })
 }
 
+#[test]
+fn native_surface_rotation_preserves_artwork_cursor_and_clipped_overview() {
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
+        space: RgbSpace::Srgb, depth: SampleDepth::U16,
+    }).unwrap();
+    frame(&mut r, &source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
+    let view = ViewState { width_px: 192, height_px: 128,
+        document_to_surface: [0.45, 0., 0., 0.35, 19., 13.], ..view() };
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+    presenter.set_cursor(r.device(), &[layer_render::CursorSegment {
+        from: [13., 21.], to: [73., 52.], distance: 0., marker: 1., scale: 1.,
+    }], 1.);
+    presenter.set_overviews(&r, &[crate::OverviewPlacement {
+        bounds: [117., 59., 57., 43.], clip: Some([127., 62., 38., 33.]),
+        work_area: [[120., 64.], [163., 67.], [161., 94.], [122., 91.]],
+        outline_linear: [0.1, 0.2, 0.8], background_linear: [0.3; 3], scale: 1., opacity: 1.,
+    }]);
+    let mut reference = Vec::new();
+    for turns in 0..4 {
+        let [width, height] = if turns % 2 == 0 { [192, 128] } else { [128, 192] };
+        let target = r.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("rotated viewport reference"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        presenter.set_surface_rotation(turns);
+        presenter.present(&r, &target.create_view(&Default::default()), view, [0.04, 0.08, 0.2, 1.]).unwrap();
+        let actual = crate::layer_tests::page_bytes(&r, &target);
+        if turns == 0 { reference = actual; continue; }
+        for y in 0..128usize {
+            for x in 0..192usize {
+                let (rx, ry) = match turns {
+                    1 => (127-y, x), 2 => (191-x, 127-y), _ => (y, 191-x),
+                };
+                let a = (ry * width as usize + rx) * 4;
+                let b = (y * 192 + x) * 4;
+                assert!(actual[a..a+4].iter().zip(&reference[b..b+4]).all(|(a,b)| a.abs_diff(*b) <= 2),
+                    "rotation {turns}, logical {x},{y}: {:?} != {:?}", &actual[a..a+4], &reference[b..b+4]);
+            }
+        }
+    }
+}
+
 // Float16 is allowed only for display. Bound its rounding independently of the
 // Float32 document oracle: 0.05% relative plus 3e-6 arithmetic/conversion error.
 fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f64; 3]) {

@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::any::Any;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use ash::{khr, vk};
 use parking_lot::{Mutex, MutexGuard};
@@ -19,6 +20,7 @@ pub(crate) struct NativeSurface {
     raw: vk::SurfaceKHR,
     functor: khr::surface::Instance,
     instance: Arc<InstanceShared>,
+    pre_transform: AtomicU32,
     /// Built from the window's `HWND` (Windows only) to answer the display-HDR
     /// query; `None` for non-Win32 surfaces.
     #[cfg(windows)]
@@ -38,6 +40,7 @@ impl NativeSurface {
             raw,
             functor,
             instance: Arc::clone(&instance.shared),
+            pre_transform: AtomicU32::new(vk::SurfaceTransformFlagsKHR::IDENTITY.as_raw()),
             #[cfg(windows)]
             hdr_source: hwnd.map(|wh| crate::auxil::dxgi::hdr::DxgiHdrSource::new(wh.0)),
         }
@@ -45,6 +48,20 @@ impl NativeSurface {
 
     pub fn as_raw(&self) -> vk::SurfaceKHR {
         self.raw
+    }
+
+    pub fn pre_rotate(&self, adapter: &crate::vulkan::Adapter) -> Result<u32, vk::Result> {
+        let caps = unsafe {
+            self.functor.get_physical_device_surface_capabilities(adapter.raw, self.raw)?
+        };
+        let turns = match caps.current_transform {
+            vk::SurfaceTransformFlagsKHR::ROTATE_90 => 1,
+            vk::SurfaceTransformFlagsKHR::ROTATE_180 => 2,
+            vk::SurfaceTransformFlagsKHR::ROTATE_270 => 3,
+            _ => 0,
+        };
+        self.pre_transform.store(1 << turns, Ordering::Relaxed);
+        Ok(turns)
     }
 }
 
@@ -162,6 +179,13 @@ impl Surface for NativeSurface {
                 }),
             }
         }
+        let shared_usage = if adapter.supports_retained_presentation() {
+            let loader = khr::get_surface_capabilities2::Instance::new(&self.instance.entry, &self.instance.raw);
+            let mut shared = vk::SharedPresentSurfaceCapabilitiesKHR::default();
+            let mut caps = vk::SurfaceCapabilities2KHR::default().push_next(&mut shared);
+            unsafe { loader.get_physical_device_surface_capabilities2(adapter.raw, &vk::PhysicalDeviceSurfaceInfo2KHR::default().surface(self.raw), &mut caps) }
+                .ok().map(|()| shared.shared_present_supported_usage_flags)
+        } else { None };
         Some(crate::SurfaceCapabilities {
             formats,
             // TODO: Right now we're always truncating the swap chain
@@ -173,6 +197,8 @@ impl Surface for NativeSurface {
             usage: conv::map_vk_image_usage(caps.supported_usage_flags),
             present_modes: raw_present_modes
                 .into_iter()
+                .filter(|mode| *mode != vk::PresentModeKHR::SHARED_DEMAND_REFRESH ||
+                    shared_usage.is_some_and(|u| u.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)))
                 .flat_map(conv::map_vk_present_mode)
                 .collect(),
             composite_alpha_modes: conv::map_vk_composite_alpha(caps.supported_composite_alpha),
@@ -208,10 +234,24 @@ impl Surface for NativeSurface {
             raw_view_formats.push(original_format);
         }
 
+        let shared = config.present_mode == wgt::PresentMode::SharedDemandRefresh;
+        if shared {
+            if !device.shared.enabled_extensions.contains(&ash::ext::swapchain_maintenance1::NAME) {
+                return Err(crate::SurfaceError::Other("Shared presentation requires present fences"));
+            }
+            let loader = khr::get_surface_capabilities2::Instance::new(&self.instance.entry, &self.instance.raw);
+            let mut shared_caps = vk::SharedPresentSurfaceCapabilitiesKHR::default();
+            let mut caps = vk::SurfaceCapabilities2KHR::default().push_next(&mut shared_caps);
+            unsafe { loader.get_physical_device_surface_capabilities2(device.shared.physical_device, &vk::PhysicalDeviceSurfaceInfo2KHR::default().surface(self.raw), &mut caps) }
+                .map_err(map_host_device_oom_and_lost_err)?;
+            if !shared_caps.shared_present_supported_usage_flags.contains(conv::map_texture_usage(config.usage)) {
+                return Err(crate::SurfaceError::Other("Unsupported shared image usage"));
+            }
+        }
         let mut info = vk::SwapchainCreateInfoKHR::default()
             .flags(raw_flags)
             .surface(self.raw)
-            .min_image_count(config.maximum_frame_latency + 1) // TODO: https://github.com/gfx-rs/wgpu/issues/2869
+            .min_image_count(if shared { 1 } else { config.maximum_frame_latency + 1 }) // TODO: https://github.com/gfx-rs/wgpu/issues/2869
             .image_format(original_format)
             .image_color_space(color_space)
             .image_extent(vk::Extent2D {
@@ -221,7 +261,7 @@ impl Surface for NativeSurface {
             .image_array_layers(config.extent.depth_or_array_layers)
             .image_usage(conv::map_texture_usage(config.usage))
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+            .pre_transform(vk::SurfaceTransformFlagsKHR::from_raw(self.pre_transform.load(Ordering::Relaxed)))
             .composite_alpha(conv::map_composite_alpha_mode(config.composite_alpha_mode))
             .present_mode(conv::map_present_mode(config.present_mode))
             .clipped(true)
@@ -254,52 +294,48 @@ impl Surface for NativeSurface {
             }
         };
 
-        let images = unsafe { functor.get_swapchain_images(raw) }
-            .map_err(crate::vulkan::map_host_device_oom_err)?;
-
-        // This fence is only used to throttle acquisition on Windows. It is very important to
-        // avoid bad frame pacing when the Vulkan driver is using a DXGI swapchain. See
-        // https://github.com/gfx-rs/wgpu/issues/8310 and
-        // https://github.com/gfx-rs/wgpu/issues/8354 for more details.
-        let fence = if cfg!(target_os = "windows") {
-            let raw = unsafe {
-                device
-                    .shared
-                    .raw
-                    .create_fence(&vk::FenceCreateInfo::default(), None)
-                    .map_err(crate::vulkan::map_host_device_oom_err)?
-            };
-            Some(raw)
-        } else {
-            None
-        };
-
-        // NOTE: It's important that we define the same number of acquire/present semaphores
-        // as we will need to index into them with the image index.
-        let acquire_semaphores = (0..images.len())
-            .map(|i| {
-                SwapchainAcquireSemaphore::new(&device.shared, i)
-                    .map(Mutex::new)
-                    .map(Arc::new)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let present_semaphores = (0..images.len())
-            .map(|i| Arc::new(Mutex::new(SwapchainPresentSemaphores::new(i))))
-            .collect::<Vec<_>>();
-
-        Ok(Box::new(NativeSwapchain {
-            raw,
-            functor,
-            device: Arc::clone(&device.shared),
-            images,
-            fence,
-            config: config.clone(),
-            acquire_semaphores,
-            next_acquire_index: 0,
-            present_semaphores,
-            next_present_time: None,
-        }))
+        // Own the swapchain before any fallible allocations so partial setup
+        // releases all fences/semaphores as well as the native swapchain.
+        let mut swapchain = Box::new(NativeSwapchain {
+            raw, functor, device: Arc::clone(&device.shared), config: config.clone(),
+            images: Vec::new(), fence: None, acquire_semaphores: Vec::new(),
+            present_semaphores: Vec::new(), next_acquire_index: 0, next_present_time: None,
+            shared, shared_acquired: false, shared_initialized: false,
+            present_fences: Vec::new(), present_pending: Vec::new(),
+        });
+        let setup = (|| -> Result<(), crate::SurfaceError> {
+            swapchain.images = unsafe { swapchain.functor.get_swapchain_images(raw) }
+                .map_err(crate::vulkan::map_host_device_oom_err)?;
+            // DXGI acquisition pacing: https://github.com/gfx-rs/wgpu/issues/8310
+            if cfg!(target_os = "windows") {
+                swapchain.fence = Some(unsafe { device.shared.raw.create_fence(
+                    &vk::FenceCreateInfo::default(), None)
+                    .map_err(crate::vulkan::map_host_device_oom_err)? });
+            }
+            // Shared images never return to acquisition. A small bounded pool
+            // retires present semaphores via explicit present fences instead.
+            let slots = if shared { 4 } else { swapchain.images.len() };
+            for i in 0..slots {
+                if shared {
+                    let fence = unsafe { device.shared.raw.create_fence(
+                        &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED), None)
+                        .map_err(map_host_device_oom_and_lost_err)? };
+                    swapchain.present_fences.push(fence);
+                    swapchain.present_pending.push(false);
+                }
+                if !shared || i == 0 {
+                    swapchain.acquire_semaphores.push(Arc::new(Mutex::new(
+                        SwapchainAcquireSemaphore::new(&device.shared, i)?)));
+                }
+                swapchain.present_semaphores.push(Arc::new(Mutex::new(SwapchainPresentSemaphores::new(i))));
+            }
+            Ok(())
+        })();
+        if let Err(error) = setup {
+            unsafe { swapchain.release_resources(device); }
+            return Err(error);
+        }
+        Ok(swapchain)
     }
 
     #[cfg(windows)]
@@ -313,6 +349,11 @@ impl Surface for NativeSurface {
 }
 
 pub(crate) struct NativeSwapchain {
+    shared: bool,
+    shared_acquired: bool,
+    shared_initialized: bool,
+    present_fences: Vec<vk::Fence>,
+    present_pending: Vec<bool>,
     raw: vk::SwapchainKHR,
     functor: khr::swapchain::Device,
     device: Arc<DeviceShared>,
@@ -336,10 +377,11 @@ pub(crate) struct NativeSwapchain {
     /// [`vkAcquireNextImageKHR`]: https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#vkAcquireNextImageKHR
     /// [`previously_used_submission_index`]: SwapchainAcquireSemaphore::previously_used_submission_index
     acquire_semaphores: Vec<Arc<Mutex<SwapchainAcquireSemaphore>>>,
-    /// The index of the next acquire semaphore to use.
+    /// The next presentation slot (and acquire semaphore for ordinary images).
     ///
     /// This is incremented each time we acquire a new image, and wraps around
-    /// to 0 when it reaches the end of [`acquire_semaphores`].
+    /// to 0 when it reaches the end of `present_semaphores`. Shared images
+    /// retain a single acquire semaphore for their one-time acquisition.
     ///
     /// [`acquire_semaphores`]: NativeSwapchain::acquire_semaphores
     next_acquire_index: usize,
@@ -391,6 +433,12 @@ impl Swapchain for NativeSwapchain {
             };
         };
 
+        for (index, fence) in self.present_fences.drain(..).enumerate() {
+            unsafe {
+                if self.present_pending[index] { let _ = device.shared.raw.wait_for_fences(&[fence], true, u64::MAX); }
+                device.shared.raw.destroy_fence(fence, None);
+            }
+        }
         if let Some(fence) = self.fence {
             unsafe { device.shared.raw.destroy_fence(fence, None) }
         }
@@ -438,7 +486,16 @@ impl Swapchain for NativeSwapchain {
             timeout_ns = u64::MAX;
         }
 
-        let acquire_semaphore_arc = self.get_acquire_semaphore();
+        if self.shared {
+            // Poll only: a saturated presentation pool causes resampling on the
+            // next callback rather than blocking input behind old frames.
+            if !unsafe { self.device.raw.get_fence_status(self.present_fences[self.next_acquire_index]) }
+                .map_err(map_host_device_oom_and_lost_err)? { return Err(crate::SurfaceError::Timeout); }
+            timeout_ns = 0;
+        }
+        let slot = self.next_acquire_index;
+        let acquire_semaphore_arc = if self.shared { self.acquire_semaphores[0].clone() }
+            else { self.get_acquire_semaphore() };
         // Nothing should be using this, so we don't block, but panic if we fail to lock.
         let acquire_semaphore_guard = acquire_semaphore_arc
             .try_lock()
@@ -469,7 +526,9 @@ impl Swapchain for NativeSwapchain {
         let acquire_fence = self.fence.unwrap_or_else(vk::Fence::null);
 
         // will block if no image is available
-        let (index, suboptimal) = match unsafe {
+        let (index, suboptimal) = if self.shared && self.shared_acquired {
+            (0, false)
+        } else { match unsafe {
             profiling::scope!("vkAcquireNextImageKHR");
             self.functor.acquire_next_image(
                 self.raw,
@@ -496,8 +555,10 @@ impl Swapchain for NativeSwapchain {
                     other => Err(map_host_device_oom_and_lost_err(other).into()),
                 };
             }
-        };
+        }
 
+        };
+        self.shared_acquired = true;
         if let Some(fence) = self.fence {
             unsafe {
                 // The `wait_all` argument must be `true` to avoid crash on some Android devices. See https://github.com/gfx-rs/wgpu/pull/8769
@@ -518,7 +579,7 @@ impl Swapchain for NativeSwapchain {
         // we should try to re-acquire using the same semaphores.
         self.advance_acquire_semaphore();
 
-        let present_semaphore_arc = self.get_present_semaphores(index);
+        let present_semaphore_arc = self.get_present_semaphores(if self.shared { slot as u32 } else { index });
 
         // special case for Intel Vulkan returning bizarre values (ugh)
         if self.device.vendor_id == crate::auxil::db::intel::VENDOR && index > 0x100 {
@@ -530,6 +591,7 @@ impl Swapchain for NativeSwapchain {
         let texture = crate::vulkan::SurfaceTexture {
             index,
             texture: crate::vulkan::Texture {
+                shared_present: self.shared, shared_initialized: self.shared_initialized,
                 raw: self.images[index as usize],
                 drop_guard: None,
                 memory: crate::vulkan::TextureMemory::External,
@@ -542,6 +604,7 @@ impl Swapchain for NativeSwapchain {
                 identity,
             },
             metadata: Box::new(NativeSurfaceTextureMetadata {
+                slot,
                 acquire_semaphores: acquire_semaphore_arc,
                 present_semaphores: present_semaphore_arc,
             }),
@@ -581,7 +644,7 @@ impl Swapchain for NativeSwapchain {
         // We do this before the actual call to present to ensure that
         // even if this method errors and early outs, we have reset
         // the state for next frame.
-        acquire_semaphore.end_semaphore_usage();
+        if !self.shared { acquire_semaphore.end_semaphore_usage(); }
         present_semaphores.end_semaphore_usage();
 
         drop(acquire_semaphore);
@@ -610,6 +673,14 @@ impl Swapchain for NativeSwapchain {
             vk_info
         };
 
+        let fence = self.present_fences.get(metadata.slot).copied();
+        let fences = fence.as_slice();
+        let mut present_fence_info = vk::SwapchainPresentFenceInfoEXT::default().fences(fences);
+        let vk_info = if self.shared {
+            self.present_pending[metadata.slot] = false;
+            unsafe { self.device.raw.reset_fences(fences) }.map_err(map_host_device_oom_and_lost_err)?;
+            vk_info.push_next(&mut present_fence_info)
+        } else { vk_info };
         let suboptimal = {
             profiling::scope!("vkQueuePresentKHR");
             unsafe { self.functor.queue_present(queue.raw, &vk_info) }.map_err(|error| {
@@ -622,11 +693,13 @@ impl Swapchain for NativeSwapchain {
                 }
             })?
         };
+        if self.shared { self.present_pending[metadata.slot] = true; }
+        self.shared_initialized = self.shared;
         if suboptimal {
             // We treat `VK_SUBOPTIMAL_KHR` as `VK_SUCCESS` on Android.
             // On Android 10+, libvulkan's `vkQueuePresentKHR` implementation returns `VK_SUBOPTIMAL_KHR` if not doing pre-rotation
             // (i.e `VkSwapchainCreateInfoKHR::preTransform` not being equal to the current device orientation).
-            // This is always the case when the device orientation is anything other than the identity one, as we unconditionally use `VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR`.
+            // Native callers can opt into pre-rotation; other callers keep the identity transform.
             #[cfg(not(target_os = "android"))]
             log::debug!("Suboptimal present of frame {}", texture.index);
         }
@@ -665,7 +738,7 @@ impl NativeSwapchain {
 
     /// Mark the current frame finished, advancing to the next acquire semaphore.
     fn advance_acquire_semaphore(&mut self) {
-        let semaphore_count = self.acquire_semaphores.len();
+        let semaphore_count = self.present_semaphores.len();
         self.next_acquire_index = (self.next_acquire_index + 1) % semaphore_count;
     }
 
@@ -887,6 +960,7 @@ impl SwapchainPresentSemaphores {
 
 #[derive(Debug)]
 struct NativeSurfaceTextureMetadata {
+    slot: usize,
     acquire_semaphores: Arc<Mutex<SwapchainAcquireSemaphore>>,
     present_semaphores: Arc<Mutex<SwapchainPresentSemaphores>>,
 }
