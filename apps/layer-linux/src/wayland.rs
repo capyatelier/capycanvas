@@ -1,6 +1,8 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
 mod color;
 mod hdr;
+mod pacing;
+pub(crate) use pacing::StrokeTarget;
 pub(crate) mod backdrop;
 use gtk::{gdk, glib::translate::*, prelude::*};
 use std::{
@@ -26,12 +28,23 @@ use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_prese
 pub struct FrameClock {
     phase_ns: AtomicU64,
     period_ns: AtomicU64,
+    stroke_lead_ns: AtomicU64,
+    stroke_feedback_ns: AtomicU64,
+    draw_work_ns: AtomicU64,
 }
 impl FrameClock {
+    pub fn stroke_work_fits(&self) -> bool {
+        self.draw_work_ns.load(Ordering::Relaxed) <= self.period() / 8
+    }
+    fn observe_draw_work(&self, elapsed_ns: u64) {
+        // React immediately to expensive/acquisition-blocked frames, and let
+        // the recent peak decay over several refreshes after work becomes cheap.
+        let previous = self.draw_work_ns.load(Ordering::Relaxed);
+        self.draw_work_ns.store(elapsed_ns.max(previous.saturating_sub(previous / 16 + 1)), Ordering::Relaxed);
+    }
     fn lead(period: u64) -> u64 {
-        // Test-only control for matched scheduling measurements. Production
-        // retains its drawing deadline; these measurements do not select a new
-        // production policy.
+        // Test-only override for the conservative rendering margin.
+        // Eligible strokes can learn a shorter margin from presentation feedback.
         #[cfg(test)]
         {
             static OVERRIDE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
@@ -47,6 +60,9 @@ impl FrameClock {
     fn observe(&self, time: u64, period: u64) {
         let previous = self.phase_ns.load(Ordering::Relaxed);
         let old_period = self.period_ns.load(Ordering::Relaxed);
+        if old_period != period {
+            self.stroke_lead_ns.store(0, Ordering::Relaxed);
+        }
         let drift = if period > 0 {
             let delta = (time % period).abs_diff(previous % period);
             delta.min(period - delta)
@@ -67,6 +83,21 @@ impl FrameClock {
         }
     }
     pub fn deadline(&self, now: u64) -> Option<u64> {
+        self.deadline_for(now, false)
+    }
+    pub fn stroke_lead(&self, period: u64) -> u64 {
+        self.stroke_lead_at(period, gtk::glib::monotonic_time().max(0) as u64 * 1000)
+    }
+    fn stroke_lead_at(&self, period: u64, now: u64) -> u64 {
+        if now.saturating_sub(self.stroke_feedback_ns.load(Ordering::Acquire)) > 2_000_000_000 {
+            return Self::lead(period);
+        }
+        match self.stroke_lead_ns.load(Ordering::Relaxed) {
+            0 => Self::lead(period),
+            lead => lead.clamp(period / 4, period * 3 / 4),
+        }
+    }
+    pub fn deadline_for(&self, now: u64, stroke: bool) -> Option<u64> {
         let phase = self.phase_ns.load(Ordering::Acquire);
         if phase == 0 {
             return None;
@@ -75,7 +106,8 @@ impl FrameClock {
         // Leave three quarters of a refresh for canvas work plus GTK's overlay and
         // compositor. Half was too short for live transforms with wet paint
         // and numeric controls updating, despite each renderer fitting 120Hz.
-        let base = phase.saturating_sub(Self::lead(period));
+        let lead = if stroke { self.stroke_lead(period) } else { Self::lead(period) };
+        let base = phase.saturating_sub(lead);
         Some(if base > now {
             base
         } else {
@@ -107,6 +139,9 @@ impl FrameClock {
     /// phase, not just refresh-rate changes. Ignore small feedback
     /// jitter rather than continuously rearming an otherwise aligned timer.
     pub fn aligned(&self, deadline: u64, interval: u64) -> bool {
+        self.aligned_for(deadline, interval, false)
+    }
+    pub fn aligned_for(&self, deadline: u64, interval: u64, stroke: bool) -> bool {
         let phase = self.phase_ns.load(Ordering::Acquire);
         let period = self.period();
         if interval != period {
@@ -115,7 +150,8 @@ impl FrameClock {
         if phase == 0 {
             return true;
         }
-        let drift = ((deadline + Self::lead(period)) % period).abs_diff(phase % period);
+        let lead = if stroke { self.stroke_lead(period) } else { Self::lead(period) };
+        let drift = ((deadline + lead) % period).abs_diff(phase % period);
         drift.min(period - drift) <= period / 16
     }
     pub fn presentation(&self, now: u64) -> u64 {
@@ -134,6 +170,26 @@ impl FrameClock {
 #[cfg(test)]
 mod clock_tests {
     use super::*;
+    #[test]
+    fn first_stroke_after_idle_starts_with_the_conservative_margin() {
+        let clock = FrameClock::default();
+        clock.stroke_lead_ns.store(4_500_000, Ordering::Relaxed);
+        clock.stroke_feedback_ns.store(1_000_000_000, Ordering::Release);
+        assert_eq!(clock.stroke_lead_at(8_000_000, 1_500_000_000), 4_500_000);
+        assert_eq!(clock.stroke_lead_at(8_000_000, 3_100_000_000), 6_000_000);
+    }
+    #[test]
+    fn expensive_frames_keep_the_original_margin_until_work_recovers() {
+        let clock = FrameClock::default();
+        clock.observe(100_000_000, 8_000_000);
+        assert!(clock.stroke_work_fits());
+        clock.observe_draw_work(2_000_000);
+        assert!(!clock.stroke_work_fits());
+        for _ in 0..4 { clock.observe_draw_work(200_000); }
+        assert!(!clock.stroke_work_fits());
+        for _ in 0..32 { clock.observe_draw_work(200_000); }
+        assert!(clock.stroke_work_fits());
+    }
     #[test]
     fn presentation_phase_shift_realigns_navigation_but_small_jitter_does_not() {
         let clock = FrameClock::default();
@@ -290,6 +346,7 @@ struct Events {
     clock: Arc<FrameClock>,
     monotonic: bool,
     feedback_pending: usize,
+    stroke_pacer: pacing::StrokePacer,
     #[cfg(test)]
     presented: Vec<[u64; 4]>,
 }
@@ -371,11 +428,14 @@ impl Child {
     pub fn feedback_pending(&self) -> bool {
         self.state.feedback_pending != 0
     }
+    pub fn observe_draw_work(&self, elapsed_ns: u64) {
+        self.state.clock.observe_draw_work(elapsed_ns);
+    }
 
-    pub fn feedback(&mut self, id: u64) {
+    pub fn feedback(&mut self, id: u64, stroke: Option<StrokeTarget>) {
         if let Some(presentation) = &self.presentation {
             self.state.feedback_pending += 1;
-            presentation.feedback(&self.surface, &self.events.handle(), id);
+            presentation.feedback(&self.surface, &self.events.handle(), Presentation { id, stroke });
         }
     }
 
@@ -383,6 +443,12 @@ impl Child {
     pub fn take_presented(&mut self) -> Vec<[u64; 4]> {
         std::mem::take(&mut self.state.presented)
     }
+}
+
+struct Presentation {
+    #[cfg_attr(not(test), allow(dead_code))]
+    id: u64,
+    stroke: Option<StrokeTarget>,
 }
 
 impl Drop for Child {
@@ -432,12 +498,12 @@ impl Dispatch<wp_presentation::WpPresentation, ()> for Events {
         }
     }
 }
-impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, u64> for Events {
+impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, Presentation> for Events {
     fn event(
         state: &mut Self,
         _: &wp_presentation_feedback::WpPresentationFeedback,
         event: wp_presentation_feedback::Event,
-        _id: &u64,
+        data: &Presentation,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -454,13 +520,19 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, u64> for Events 
                 + u64::from(tv_nsec);
             if state.monotonic {
                 state.clock.observe(time, u64::from(refresh));
+                if let Some(sample) = data.stroke
+                    && let Some(lead) = state.stroke_pacer.observe(sample, time, u64::from(refresh))
+                {
+                    state.clock.stroke_lead_ns.store(lead, Ordering::Relaxed);
+                    state.clock.stroke_feedback_ns.store(time, Ordering::Release);
+                }
             }
             #[cfg(test)]
-            state.presented.push([*_id, time, u64::from(refresh), 1]);
+            state.presented.push([data.id, time, u64::from(refresh), 1]);
         } else if matches!(event, wp_presentation_feedback::Event::Discarded) {
             state.feedback_pending -= 1;
             #[cfg(test)]
-            state.presented.push([*_id, 0, 0, 0]);
+            state.presented.push([data.id, 0, 0, 0]);
         }
     }
 }

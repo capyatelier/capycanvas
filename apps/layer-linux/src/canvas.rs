@@ -114,7 +114,16 @@ impl GpuCanvas {
             needs_present: true,
         })
     }
-    pub fn render(&mut self, area: &gtk::Picture, now_ns: u64) -> Result<UiChange, String> {
+    pub fn stroke_pacing(&self) -> bool {
+        let engine = self.session.engine();
+        engine.backend().startup.complete
+            && engine.backend().clock.stroke_work_fits()
+            && self.session.state().layer_tools.tool == layer_ui::LayerCanvasTool::Paint
+            && (engine.has_active_stroke() || engine.has_pending_input())
+            && !engine.has_pending_document_edits()
+            && engine.transform_preview().is_none()
+    }
+    pub fn render(&mut self, area: &gtk::Picture, now_ns: u64, paced: bool) -> Result<UiChange, String> {
         #[cfg(test)]
         let start = std::time::Instant::now();
         let engine = self.session.engine();
@@ -147,6 +156,18 @@ impl GpuCanvas {
         let surround = self.session.state().palette.surround_linear;
         self.session.renderer_mut().surround = surround;
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
+        let clock = &self.session.engine().backend().clock;
+        let period = clock.period();
+        let lead = clock.stroke_lead(period);
+        // Only train on a normal paced stroke frame. Immediate terminal wakes,
+        // startup, resize, and the first frame during a mode change have their
+        // own timing and must not be mistaken for compositor deadline misses.
+        let target = (paced && self.stroke_pacing()
+            && presentation_ns.saturating_sub(now_ns).abs_diff(lead) <= period / 8)
+            .then_some(crate::wayland::StrokeTarget {
+                presentation_ns, period_ns: period, lead_ns: lead,
+            });
+        self.session.renderer_mut().stroke_target = target;
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
         if view_color_changed {

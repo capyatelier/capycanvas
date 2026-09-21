@@ -39,6 +39,7 @@ struct Frame {
     surround: [f32; 4],
     cursor: Vec<CursorSegment>,
     overviews: Vec<layer_render_wgpu::OverviewPlacement>,
+    stroke_target: Option<crate::wayland::StrokeTarget>,
     // Every queued producer must resolve its immutable roots, even on failure.
     pending_rasters: Vec<layer_core::raster::RasterRevision>,
     #[cfg(test)]
@@ -172,6 +173,7 @@ pub struct RenderWorker {
     pub(super) surround: [f32; 4],
     pub(super) cursor: Vec<CursorSegment>,
     pub(super) overviews: Vec<layer_render_wgpu::OverviewPlacement>,
+    pub(super) stroke_target: Option<crate::wayland::StrokeTarget>,
     #[cfg(test)]
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
@@ -303,6 +305,7 @@ impl RenderWorker {
             region: None,
             region_pending: false,
             clock,
+            stroke_target: None,
             telemetry,
             telemetry_enabled: false,
             commands,
@@ -679,6 +682,7 @@ impl CanvasRenderer for RenderWorker {
             surround: self.surround,
             cursor: self.cursor.clone(),
             overviews: self.overviews.clone(),
+            stroke_target: self.stroke_target,
             #[cfg(test)]
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
         };
@@ -919,6 +923,7 @@ impl Worker {
                     {
                         self.publish(
                             target,
+                            None,
                             #[cfg(test)]
                             None,
                         )?;
@@ -1276,6 +1281,7 @@ impl Worker {
         paper: bool,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
+        let draw_start = std::time::Instant::now();
         while frame.layers.iter().any(|l| {
             l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
         }) && !self.renderer.raster_ready()
@@ -1359,10 +1365,12 @@ impl Worker {
         if let Some(target) = target {
             self.publish(
                 target,
+                frame.stroke_target.filter(|_| !paper),
                 #[cfg(test)]
                 Some(timing),
             )?;
         }
+        self.child.observe_draw_work(draw_start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         Ok(())
     }
 
@@ -1393,6 +1401,7 @@ impl Worker {
     fn publish(
         &mut self,
         target: wgpu::SurfaceTexture,
+        stroke_target: Option<crate::wayland::StrokeTarget>,
         #[cfg(test)] timing: Option<&mut crate::timing::Timing>,
     ) -> Result<(), String> {
         let _presentation = self.renderer.prioritize_raster_presentation();
@@ -1431,9 +1440,9 @@ impl Worker {
             timing.mark(2);
         }
         #[cfg(test)]
-        self.child.feedback(timing.as_ref().map_or(0, |t| t.id()));
+        self.child.feedback(timing.as_ref().map_or(0, |t| t.id()), stroke_target);
         #[cfg(not(test))]
-        self.child.feedback(0);
+        self.child.feedback(0, stroke_target);
         #[cfg(test)]
         if let Some(timing) = &timing {
             timing.mark(3);

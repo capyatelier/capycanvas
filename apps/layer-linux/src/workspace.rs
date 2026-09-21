@@ -1923,6 +1923,9 @@ impl Workspace {
         self.wake_frame(true, false);
     }
     fn wake_frame(self: &Rc<Self>, immediate: bool, navigation: bool) {
+        self.wake_frame_after(immediate, navigation, 0);
+    }
+    fn wake_frame_after(self: &Rc<Self>, immediate: bool, navigation: bool, not_before: u64) {
         if self.documents.paused.get() { return; }
         if self
             .gpu
@@ -1933,18 +1936,28 @@ impl Workspace {
             return;
         }
         let now = glib::monotonic_time().max(0) as u64 * 1000;
-        let (navigation, period, deadline) = self.gpu.borrow().as_ref().map(|g| {
+        let (navigation, period, deadline, stroke_lead) = self.gpu.borrow().as_ref().map(|g| {
             let engine = g.session.engine();
             let clock = &engine.backend().clock;
             let navigation = navigation && engine.backend().startup.complete
                 && !engine.has_active_stroke() && !engine.has_pending_document_edits()
                 && engine.transform_preview().is_none();
+            let stroke_lead = (!navigation && g.stroke_pacing()).then(|| clock.stroke_lead(clock.period()));
             (navigation, clock.period(), if navigation {
                 clock.navigation_start(self.navigation_input.get(), now)
             } else {
-                clock.deadline(now).unwrap_or(self.frame_deadline.get())
-            })
-        }).unwrap_or((false, crate::canvas::FRAME_NS, self.frame_deadline.get()));
+                if g.stroke_pacing() {
+                    clock.deadline_for(now, true)
+                } else {
+                    clock.deadline(now)
+                }.unwrap_or(self.frame_deadline.get())
+            }, stroke_lead)
+        }).unwrap_or((false, crate::canvas::FRAME_NS, self.frame_deadline.get(), None));
+        // Retiming after a render must not spend another frame on the same
+        // refresh just because the new deadline is slightly later than the old.
+        let deadline = if deadline < not_before {
+            deadline + (not_before - deadline).div_ceil(period) * period
+        } else { deadline };
         // Keep one timer through the input burst. Rearming for corrected display
         // feedback must retain the real input anchor, not invent another input.
         if !navigation {
@@ -2008,7 +2021,7 @@ impl Workspace {
                             .navigator_overviews
                             .placements(g.session.state(), area.scale_factor() as f32);
                         g.session.renderer_mut().overviews = overviews;
-                        g.render(area, now)
+                        g.render(area, now, !expedited)
                     });
                     match result {
                         Some(Ok(change)) => this.changed(Ok(change)),
@@ -2047,11 +2060,21 @@ impl Workspace {
                             if navigating {
                                 !clock.navigation_aligned(next, period)
                             } else {
-                                !clock.aligned(next, period)
+                                if g.stroke_pacing() {
+                                    stroke_lead != Some(clock.stroke_lead(period))
+                                        || !clock.aligned_for(next, period, true)
+                                } else {
+                                    stroke_lead.is_some() || !clock.aligned(next, period)
+                                }
                             }
                         }) {
+                            let not_before = if !expedited && (stroke_lead.is_some()
+                                || this.gpu.borrow().as_ref().is_some_and(|g| g.stroke_pacing()))
+                            {
+                                now + period / 2
+                            } else { 0 };
                             this.frame_timer.borrow_mut().take();
-                            this.wake_frame(false, navigating && !expedited);
+                            this.wake_frame_after(false, navigating && !expedited, not_before);
                             return glib::ControlFlow::Break;
                         }
                         glib::ControlFlow::Continue
