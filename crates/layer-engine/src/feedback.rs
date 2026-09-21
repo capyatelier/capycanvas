@@ -12,6 +12,8 @@ mod fullscreen_tests;
 mod longitudinal_tests;
 mod output;
 mod prediction_clock;
+#[cfg(test)]
+mod test_support;
 mod trajectory;
 #[cfg(test)]
 mod trajectory_tests;
