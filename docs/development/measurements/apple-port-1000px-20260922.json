@@ -1,0 +1,362 @@
+{
+  "date": "2026-09-22",
+  "integrated_upstream": "9817c626",
+  "benchmark_renderer_revision": "e2979a2730b90158dc9e6bd8e79d184bb67ae3eb",
+  "workload_sha256": "31ac30ea2c1b0da1956bf0ed5290e082380c28229b105ae91dc12c5ade666b77",
+  "hardware": {
+    "mac": "M2 Pro Mac mini, 10 CPU / 16 GPU cores, 16 GiB, macOS 26.6.2",
+    "ipad": "Physical 13-inch iPad Pro M4, iPad16,6, iPadOS 27.0"
+  },
+  "input": {
+    "description": "Retained Apple Synthetic-61MP project; sRGB U8 photo, empty paint layer, hidden paper",
+    "extent": [
+      9504,
+      6336
+    ],
+    "sha256": "eef1832858bdae60b9393154327cbdcc819d0f94d446e123cc87f30d3af12135"
+  },
+  "parameters": {
+    "diameter_document_px": 1000,
+    "pressure": 1,
+    "rgba_linear": [
+      0.8,
+      0.04,
+      0.2,
+      1
+    ],
+    "surface": [
+      2752,
+      2064
+    ],
+    "format": "Rgba16Float",
+    "drawing_scale": 0.2,
+    "samples_per_update": 8,
+    "sample_rate_hz": 240,
+    "drawing_updates": 180,
+    "zoom_updates": 360,
+    "path": "circles",
+    "path_frequency_hz": 2,
+    "prediction": "Shared trajectory, 8 ms, no platform prediction",
+    "memory": "Normal host admission",
+    "eraser_seed": "Unmeasured 2000 px G-Pen on the same path",
+    "order": [
+      "ascending",
+      "descending",
+      "ascending"
+    ]
+  },
+  "measurement": "Median of three per-run throughputs, each 180000/sum(completed_ms). Includes offscreen managed presentation and GPU completion. All drawing frames retained. p99 index=floor(.99*(n-1)). Not visible screen FPS.",
+  "binary_sha256": {
+    "mac": "e25d3130cf8ce2f37340396b22bc0338b561fa5c1ad9aedf681c55a7adfad43e",
+    "ipad": "12a1b9eb9ee32d4c0f811f233dfc7da9c5dd5b6be480bd4e38004a9fd8860b97"
+  },
+  "artifact_root": "artifacts/apple-port-20260921",
+  "memory_ceiling_ranges_bytes": {
+    "mac": {
+      "display": [
+        1403908096,
+        2029268992
+      ],
+      "source": [
+        350224384,
+        506462208
+      ],
+      "upload": [
+        67108864,
+        67108864
+      ]
+    },
+    "ipad": {
+      "display": [
+        1333505874,
+        1333739346
+      ],
+      "source": [
+        332398592,
+        332398592
+      ],
+      "upload": [
+        67108864,
+        67108864
+      ]
+    }
+  },
+  "tools": [
+    {"preset": 1, "name": "G-Pen",
+      "ipad": {"median_frame_gens_per_second": 126.802724, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 127.350542, "drawing_completed_ms": 1413.421542, "median_completed_ms": 7.4142915, "p99_completed_ms": 14.474208, "first_completed_ms": 21.06675, "max_completed_ms": 41.9615, "memory_ceiling_bytes": [1333677906, 332398592, 67108864], "csv_sha256": "140fe2cc2c06b2aef6447bf40c1dc896b91df4d156f779d1fc9c512fcf8ff5b5", "roots_sha256": "42fbc4b67a79e96b6bb091aea2e1efbb1ad8ebfc58bdbe23c7f386cadb0f6747", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 126.802724, "drawing_completed_ms": 1419.527866, "median_completed_ms": 7.3977085, "p99_completed_ms": 14.901583, "first_completed_ms": 20.902875, "max_completed_ms": 42.290584, "memory_ceiling_bytes": [1333628754, 332398592, 67108864], "csv_sha256": "f1c906b10ce8830724fbe46e8cf9c7bb5baa0acf2b4445d308929c50113d23a2", "roots_sha256": "42fbc4b67a79e96b6bb091aea2e1efbb1ad8ebfc58bdbe23c7f386cadb0f6747", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 126.760199, "drawing_completed_ms": 1420.004079, "median_completed_ms": 7.4377914999999994, "p99_completed_ms": 14.358834, "first_completed_ms": 21.099167, "max_completed_ms": 42.268291, "memory_ceiling_bytes": [1333583692, 332398592, 67108864], "csv_sha256": "591a35f4fc23bb9900695fab62015857b7645a590ae571539a79e72bc640eea8", "roots_sha256": "42fbc4b67a79e96b6bb091aea2e1efbb1ad8ebfc58bdbe23c7f386cadb0f6747", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 176.895557, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 102.194414, "drawing_completed_ms": 1761.348713, "median_completed_ms": 6.9270625, "p99_completed_ms": 12.402667, "first_completed_ms": 484.437459, "max_completed_ms": 484.437459, "memory_ceiling_bytes": [1403908096, 350224384, 67108864], "csv_sha256": "b864ef0052322d62c2d35445617819d26940a1feedc11d32071f0ff6ebca34d8", "roots_sha256": "3c7d630a6e7fbce305cac55dbb8e42114e39bb11d2833bc0d4ab4c7ce8d749e6"},
+        {"repeat": 2, "frame_gens_per_second": 177.118756, "drawing_completed_ms": 1016.2673, "median_completed_ms": 5.0037915, "p99_completed_ms": 13.465292, "first_completed_ms": 23.325834, "max_completed_ms": 32.216042, "memory_ceiling_bytes": [1832398848, 457179136, 67108864], "csv_sha256": "25527048d9286b29c4f4bc6708ef20b46d13da0913194a2dba0ca3f53b0deba3", "roots_sha256": "3c7d630a6e7fbce305cac55dbb8e42114e39bb11d2833bc0d4ab4c7ce8d749e6"},
+        {"repeat": 3, "frame_gens_per_second": 176.895557, "drawing_completed_ms": 1017.549579, "median_completed_ms": 4.972811999999999, "p99_completed_ms": 13.877041, "first_completed_ms": 24.195542, "max_completed_ms": 31.72125, "memory_ceiling_bytes": [1830838272, 457179136, 67108864], "csv_sha256": "418d54fb0a48adca9383af56ddc15f973eb0bb4730838dfab372b974f16bfa12", "roots_sha256": "3c7d630a6e7fbce305cac55dbb8e42114e39bb11d2833bc0d4ab4c7ce8d749e6"}
+      ]}
+    },
+    {"preset": 2, "name": "Pencil",
+      "ipad": {"median_frame_gens_per_second": 122.902083, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 94.032117, "drawing_completed_ms": 1914.23958, "median_completed_ms": 7.8816665, "p99_completed_ms": 11.280208, "first_completed_ms": 484.206084, "max_completed_ms": 484.206084, "memory_ceiling_bytes": [1333718860, 332398592, 67108864], "csv_sha256": "39c35ad433c4cf205e8133834babb1085b723af0b9bdafea2a2cc9d58d9d47e6", "roots_sha256": "7e0b037746705bde6e14415f5e2d436853664571b0582d24e5f0019e5794dd6f", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 122.982892, "drawing_completed_ms": 1463.618206, "median_completed_ms": 7.91675, "p99_completed_ms": 10.784459, "first_completed_ms": 21.057125, "max_completed_ms": 42.905875, "memory_ceiling_bytes": [1333673804, 332398592, 67108864], "csv_sha256": "d262eedd5aa0514ce2e5866e291bf9597db48be5ccacde46fe6c50266949ce97", "roots_sha256": "7e0b037746705bde6e14415f5e2d436853664571b0582d24e5f0019e5794dd6f", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 122.902083, "drawing_completed_ms": 1464.580549, "median_completed_ms": 7.9284795, "p99_completed_ms": 12.016584, "first_completed_ms": 19.247125, "max_completed_ms": 42.754542, "memory_ceiling_bytes": [1333575506, 332398592, 67108864], "csv_sha256": "3ab84720c3936701c932c9ba899b2fa5c5742d25c70d342b4839e50ee0b34ad4", "roots_sha256": "7e0b037746705bde6e14415f5e2d436853664571b0582d24e5f0019e5794dd6f", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 149.959329, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 110.213199, "drawing_completed_ms": 1633.198214, "median_completed_ms": 6.082187, "p99_completed_ms": 10.535709, "first_completed_ms": 494.337916, "max_completed_ms": 494.337916, "memory_ceiling_bytes": [1824477184, 455081984, 67108864], "csv_sha256": "0443b3780a90e5995881c24656b08b67cc0e5eebcd2090a7b28ffb1c8726fbda", "roots_sha256": "79fad0790e0019a46472ec8bf7842c31ee074ccf440c4a6bd19cd648b24a2dd5"},
+        {"repeat": 2, "frame_gens_per_second": 150.24182, "drawing_completed_ms": 1198.068551, "median_completed_ms": 6.0803329999999995, "p99_completed_ms": 14.684875, "first_completed_ms": 26.0905, "max_completed_ms": 32.965167, "memory_ceiling_bytes": [1838583808, 459276288, 67108864], "csv_sha256": "dc5b3933f30e0e20e69f13c9c7ef4160b83fe61b631c05286f3f6b2ebb2a1203", "roots_sha256": "79fad0790e0019a46472ec8bf7842c31ee074ccf440c4a6bd19cd648b24a2dd5"},
+        {"repeat": 3, "frame_gens_per_second": 149.959329, "drawing_completed_ms": 1200.325459, "median_completed_ms": 6.081958500000001, "p99_completed_ms": 14.885541, "first_completed_ms": 26.105667, "max_completed_ms": 31.903584, "memory_ceiling_bytes": [1829105664, 457179136, 67108864], "csv_sha256": "ab50a8321e563afaa376e1c85b7a0e7612ad37bc7727d9df929bf402584e8b97", "roots_sha256": "79fad0790e0019a46472ec8bf7842c31ee074ccf440c4a6bd19cd648b24a2dd5"}
+      ]}
+    },
+    {"preset": 3, "name": "Eraser",
+      "ipad": {"median_frame_gens_per_second": 123.665465, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 94.586081, "drawing_completed_ms": 1903.02841, "median_completed_ms": 7.699958499999999, "p99_completed_ms": 13.242834, "first_completed_ms": 482.571125, "max_completed_ms": 482.571125, "memory_ceiling_bytes": [1333739346, 332398592, 67108864], "csv_sha256": "f1d0df1925ecfdc527f51422fe61939e38423ed100c7c92e7b176e32cc76e9fc", "roots_sha256": "32501824a7a560975948c1d648eaa8b8a49cdc405ac63dd5e0f37b35c91cb73d", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 123.937214, "drawing_completed_ms": 1452.348284, "median_completed_ms": 7.7505625, "p99_completed_ms": 13.586375, "first_completed_ms": 20.804709, "max_completed_ms": 34.884708, "memory_ceiling_bytes": [1333583698, 332398592, 67108864], "csv_sha256": "3334436dec17603e154c543309450ba9999e7f409b0a0e9ed95b9233d116dff8", "roots_sha256": "32501824a7a560975948c1d648eaa8b8a49cdc405ac63dd5e0f37b35c91cb73d", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 123.665465, "drawing_completed_ms": 1455.539753, "median_completed_ms": 7.7499585, "p99_completed_ms": 13.536916, "first_completed_ms": 21.16425, "max_completed_ms": 35.051666, "memory_ceiling_bytes": [1333665618, 332398592, 67108864], "csv_sha256": "e64a31f1ad894b362a3e32d447a2abfafb16bac01732617d51b09a5cbb7c7047", "roots_sha256": "32501824a7a560975948c1d648eaa8b8a49cdc405ac63dd5e0f37b35c91cb73d", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 160.865588, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 109.949884, "drawing_completed_ms": 1637.109502, "median_completed_ms": 5.742167, "p99_completed_ms": 13.428292, "first_completed_ms": 538.57975, "max_completed_ms": 538.57975, "memory_ceiling_bytes": [1824911360, 456130560, 67108864], "csv_sha256": "b1ff8b8dc051261e17f1fb4bdddab2af92776d72f3f07e7cb9d9d9c70d1cd2e2", "roots_sha256": "645294afc7529b1f1bbfe054034ba13ef87940bfaf43f818d728293928fe63d1"},
+        {"repeat": 2, "frame_gens_per_second": 161.15513, "drawing_completed_ms": 1116.936207, "median_completed_ms": 5.759729, "p99_completed_ms": 12.618125, "first_completed_ms": 25.837042, "max_completed_ms": 25.837042, "memory_ceiling_bytes": [1839382528, 459276288, 67108864], "csv_sha256": "f6a58d24f3337f7f7a0b13d66fbe158a0948c984524777c391d6da21f1d09f83", "roots_sha256": "645294afc7529b1f1bbfe054034ba13ef87940bfaf43f818d728293928fe63d1"},
+        {"repeat": 3, "frame_gens_per_second": 160.865588, "drawing_completed_ms": 1118.946584, "median_completed_ms": 5.7397290000000005, "p99_completed_ms": 12.39675, "first_completed_ms": 26.079, "max_completed_ms": 26.079, "memory_ceiling_bytes": [1830240256, 457179136, 67108864], "csv_sha256": "03e5ab6e2e72bbfe043f6754e99ef4dfc2d676a85207cc28a242db6980bcc1fb", "roots_sha256": "645294afc7529b1f1bbfe054034ba13ef87940bfaf43f818d728293928fe63d1"}
+      ]}
+    },
+    {"preset": 4, "name": "Paintbrush",
+      "ipad": {"median_frame_gens_per_second": 88.525945, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 71.323422, "drawing_completed_ms": 2523.715129, "median_completed_ms": 10.418271, "p99_completed_ms": 19.789375, "first_completed_ms": 560.977583, "max_completed_ms": 560.977583, "memory_ceiling_bytes": [1333608274, 332398592, 67108864], "csv_sha256": "2f52e8edda20aba17c99cd9f89cbcbe8d7dde42a9b1ad0c8cb09daea452d05ac", "roots_sha256": "d9d1d2259f55d0bf1f2986979571ef943c540780936682b73bc0b050109c4414", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 88.525945, "drawing_completed_ms": 2033.30221, "median_completed_ms": 10.6272295, "p99_completed_ms": 21.207167, "first_completed_ms": 32.881917, "max_completed_ms": 60.465166, "memory_ceiling_bytes": [1333575506, 332398592, 67108864], "csv_sha256": "b5f79b0ab4c57804c4a68ed72cb79116ee7e44639b30a8d3097d61f7d21243e3", "roots_sha256": "d9d1d2259f55d0bf1f2986979571ef943c540780936682b73bc0b050109c4414", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 88.695719, "drawing_completed_ms": 2029.410241, "median_completed_ms": 10.598604, "p99_completed_ms": 19.817541, "first_completed_ms": 33.441209, "max_completed_ms": 60.415208, "memory_ceiling_bytes": [1333546828, 332398592, 67108864], "csv_sha256": "f7167682f03be031c6c3d92402a976b97ab4d2782d65b7aaf80f29bd7dec5f19", "roots_sha256": "d9d1d2259f55d0bf1f2986979571ef943c540780936682b73bc0b050109c4414", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 95.487512, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 74.542774, "drawing_completed_ms": 2414.720962, "median_completed_ms": 9.7422285, "p99_completed_ms": 18.068792, "first_completed_ms": 596.283292, "max_completed_ms": 596.283292, "memory_ceiling_bytes": [1970950144, 491782144, 67108864], "csv_sha256": "541c5f7ffd239da50902a03d722f8b4592bcc3d832d1312220230f485d87b749", "roots_sha256": "7c39aa4d8841fa3f7ac6fba830583b0e1028fd33f0230d65844e6a737f93f48e"},
+        {"repeat": 2, "frame_gens_per_second": 97.101587, "drawing_completed_ms": 1853.728711, "median_completed_ms": 9.6993335, "p99_completed_ms": 18.400542, "first_completed_ms": 35.664667, "max_completed_ms": 47.788083, "memory_ceiling_bytes": [1844690944, 460324864, 67108864], "csv_sha256": "27e8cb3cf06fa5de06693dafd6d9ea3b36debdc883b61b272b1fae1df88e145d", "roots_sha256": "7c39aa4d8841fa3f7ac6fba830583b0e1028fd33f0230d65844e6a737f93f48e"},
+        {"repeat": 3, "frame_gens_per_second": 95.487512, "drawing_completed_ms": 1885.063261, "median_completed_ms": 9.722208, "p99_completed_ms": 20.585292, "first_completed_ms": 41.351208, "max_completed_ms": 46.375792, "memory_ceiling_bytes": [1830043648, 457179136, 67108864], "csv_sha256": "2da1b763a930233ab51154020b1c8aff51fee256bd4e612830e57515c0bf5454", "roots_sha256": "7c39aa4d8841fa3f7ac6fba830583b0e1028fd33f0230d65844e6a737f93f48e"}
+      ]}
+    },
+    {"preset": 5, "name": "Airbrush",
+      "ipad": {"median_frame_gens_per_second": 137.129441, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 138.268716, "drawing_completed_ms": 1301.812914, "median_completed_ms": 7.0171875, "p99_completed_ms": 10.55575, "first_completed_ms": 18.383792, "max_completed_ms": 43.878917, "memory_ceiling_bytes": [1333595986, 332398592, 67108864], "csv_sha256": "9efb0571d93757d609fe6c8dd630c46e544652014a29bb953423c0ae80c0a58e", "roots_sha256": "6103c89cd25680ac4dec1e6d38a5a2052f576e3e4cb72b530a2c3f8a3508a152", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 136.815386, "drawing_completed_ms": 1315.6415, "median_completed_ms": 7.0651875, "p99_completed_ms": 11.600708, "first_completed_ms": 19.880375, "max_completed_ms": 44.17475, "memory_ceiling_bytes": [1333546828, 332398592, 67108864], "csv_sha256": "2091ba6d7e492ea109c5ed369a222dde526fc71e8678fa21951bd0579a0c2a27", "roots_sha256": "6103c89cd25680ac4dec1e6d38a5a2052f576e3e4cb72b530a2c3f8a3508a152", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 137.129441, "drawing_completed_ms": 1312.628409, "median_completed_ms": 7.066729, "p99_completed_ms": 10.146708, "first_completed_ms": 18.517792, "max_completed_ms": 43.266875, "memory_ceiling_bytes": [1333571410, 332398592, 67108864], "csv_sha256": "ec1f974fbf70033b9792fb98c9ac0dcb5609b81dacf6184f69a51d64cb37f9ef", "roots_sha256": "6103c89cd25680ac4dec1e6d38a5a2052f576e3e4cb72b530a2c3f8a3508a152", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 176.259782, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 175.331977, "drawing_completed_ms": 1026.623914, "median_completed_ms": 5.12875, "p99_completed_ms": 12.461291, "first_completed_ms": 23.758875, "max_completed_ms": 31.437833, "memory_ceiling_bytes": [1970077696, 491782144, 67108864], "csv_sha256": "391ffaacb98d73bd8e2de613e68282b4c9b7b610b1dd473b0c2a0d64cb6567c0", "roots_sha256": "967bb946e67ab9d66275af7a617f6b9377486d375e2d7d1b34226c3953201467"},
+        {"repeat": 2, "frame_gens_per_second": 178.09887, "drawing_completed_ms": 1010.674575, "median_completed_ms": 5.1338335, "p99_completed_ms": 11.746583, "first_completed_ms": 24.4505, "max_completed_ms": 32.21425, "memory_ceiling_bytes": [1843703808, 460324864, 67108864], "csv_sha256": "6d52428eca012045922afe1c8fa28686a5f5a14991ceb0c5111aa2f512cfa776", "roots_sha256": "967bb946e67ab9d66275af7a617f6b9377486d375e2d7d1b34226c3953201467"},
+        {"repeat": 3, "frame_gens_per_second": 176.259782, "drawing_completed_ms": 1021.219919, "median_completed_ms": 5.1312915, "p99_completed_ms": 16.294792, "first_completed_ms": 25.544833, "max_completed_ms": 32.498667, "memory_ceiling_bytes": [1827074048, 456130560, 67108864], "csv_sha256": "98029db22ee737d44b708471b54b6b12969a533531af98b03a6fb28adde0e48d", "roots_sha256": "967bb946e67ab9d66275af7a617f6b9377486d375e2d7d1b34226c3953201467"}
+      ]}
+    },
+    {"preset": 6, "name": "Chalk",
+      "ipad": {"median_frame_gens_per_second": 114.096559, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 88.846093, "drawing_completed_ms": 2025.975416, "median_completed_ms": 8.3463125, "p99_completed_ms": 11.308792, "first_completed_ms": 505.079167, "max_completed_ms": 505.079167, "memory_ceiling_bytes": [1333714764, 332398592, 67108864], "csv_sha256": "ef237d160b9bf35d3b1fa02f3b7980da1b6ff20d0f4d2644d10167ac80cf002a", "roots_sha256": "79aab8a14fc06bb654190d067ab8a2f04e1064d0df827e166dd249e7f6b490b3", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 114.336873, "drawing_completed_ms": 1574.29528, "median_completed_ms": 8.473958, "p99_completed_ms": 12.723875, "first_completed_ms": 22.875042, "max_completed_ms": 44.643542, "memory_ceiling_bytes": [1333518156, 332398592, 67108864], "csv_sha256": "819b27a473a0fb72ab17deed3f30d929a19af12629dd74c98c15ea0c162457c3", "roots_sha256": "79aab8a14fc06bb654190d067ab8a2f04e1064d0df827e166dd249e7f6b490b3", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 114.096559, "drawing_completed_ms": 1577.611116, "median_completed_ms": 8.438499499999999, "p99_completed_ms": 13.36675, "first_completed_ms": 22.059875, "max_completed_ms": 44.384917, "memory_ceiling_bytes": [1333653330, 332398592, 67108864], "csv_sha256": "562a55f44fb6cff5913ad388a974d89ba7913d8d5ad631c0917525247b446609", "roots_sha256": "79aab8a14fc06bb654190d067ab8a2f04e1064d0df827e166dd249e7f6b490b3", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 142.395403, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 102.012203, "drawing_completed_ms": 1764.494786, "median_completed_ms": 6.451916499999999, "p99_completed_ms": 11.330083, "first_completed_ms": 544.087708, "max_completed_ms": 544.087708, "memory_ceiling_bytes": [1970085888, 491782144, 67108864], "csv_sha256": "0c66001d9bdb15d76c74799b7b58e907f3ce91bde9fd6b0e08a98a68a13e2499", "roots_sha256": "1003f5cd13c6285f17c12d1117dd1249b387501f7b989799055b1718fb70b754"},
+        {"repeat": 2, "frame_gens_per_second": 142.813193, "drawing_completed_ms": 1260.387758, "median_completed_ms": 6.436875000000001, "p99_completed_ms": 13.376042, "first_completed_ms": 26.990709, "max_completed_ms": 34.320583, "memory_ceiling_bytes": [1845788672, 461373440, 67108864], "csv_sha256": "da27b6d7f8d314b5ad26771d56127bda99a41fcfd246a442ff59810d59a93de9", "roots_sha256": "1003f5cd13c6285f17c12d1117dd1249b387501f7b989799055b1718fb70b754"},
+        {"repeat": 3, "frame_gens_per_second": 142.395403, "drawing_completed_ms": 1264.085748, "median_completed_ms": 6.445854, "p99_completed_ms": 15.498375, "first_completed_ms": 28.76225, "max_completed_ms": 35.5855, "memory_ceiling_bytes": [1855533056, 463470592, 67108864], "csv_sha256": "52d80957c251106351ebff541c5c10e05ab2d11ed7eb2ff58869aba157719fc0", "roots_sha256": "1003f5cd13c6285f17c12d1117dd1249b387501f7b989799055b1718fb70b754"}
+      ]}
+    },
+    {"preset": 7, "name": "Marker",
+      "ipad": {"median_frame_gens_per_second": 78.036654, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 78.599341, "drawing_completed_ms": 2290.09554, "median_completed_ms": 12.4920625, "p99_completed_ms": 24.485625, "first_completed_ms": 35.835167, "max_completed_ms": 68.083333, "memory_ceiling_bytes": [1333710680, 332398592, 67108864], "csv_sha256": "8b3cc4c28617b6caf2b1f21b14abcd926769d69405e18aebfd5dca1dd1b618a3", "roots_sha256": "2691325b1eb4cb71cc4fff3e79cd0ff98f1a8d17c84ee26a5007dafeed35f818", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 78.036654, "drawing_completed_ms": 2306.608381, "median_completed_ms": 12.527729, "p99_completed_ms": 24.388084, "first_completed_ms": 37.85625, "max_completed_ms": 68.828125, "memory_ceiling_bytes": [1333595986, 332398592, 67108864], "csv_sha256": "f41cd2983f777ec2fea448d39bc59db28cb63a71e155dcde42bdd7e483df4f25", "roots_sha256": "2691325b1eb4cb71cc4fff3e79cd0ff98f1a8d17c84ee26a5007dafeed35f818", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 77.794588, "drawing_completed_ms": 2313.785629, "median_completed_ms": 12.6200835, "p99_completed_ms": 24.013625, "first_completed_ms": 35.863625, "max_completed_ms": 67.464958, "memory_ceiling_bytes": [1333600076, 332398592, 67108864], "csv_sha256": "cf0f612e87928b9a4d66b38075a25ea8706ddc2cf4bb09ae8e42d03f5566d36f", "roots_sha256": "2691325b1eb4cb71cc4fff3e79cd0ff98f1a8d17c84ee26a5007dafeed35f818", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 86.968753, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 87.729979, "drawing_completed_ms": 2051.750171, "median_completed_ms": 11.2280625, "p99_completed_ms": 20.890125, "first_completed_ms": 37.209, "max_completed_ms": 52.7255, "memory_ceiling_bytes": [1963958272, 490733568, 67108864], "csv_sha256": "ead48d368b0c9caf1d8edeb36bc22c4bacc519ef0d664efbf318a2b795747183", "roots_sha256": "393e9012be733bdab783d77852c48cc98073cde04cc199f0673bd81a7058922d"},
+        {"repeat": 2, "frame_gens_per_second": 86.13505, "drawing_completed_ms": 2089.741627, "median_completed_ms": 11.314667, "p99_completed_ms": 20.655042, "first_completed_ms": 40.717667, "max_completed_ms": 53.382959, "memory_ceiling_bytes": [1845985280, 461373440, 67108864], "csv_sha256": "a2d5ed0e617fe0518bda2811bac3a8441faa9120bd8e65ba5c3060dc8f274599", "roots_sha256": "393e9012be733bdab783d77852c48cc98073cde04cc199f0673bd81a7058922d"},
+        {"repeat": 3, "frame_gens_per_second": 86.968753, "drawing_completed_ms": 2069.708876, "median_completed_ms": 11.2255, "p99_completed_ms": 21.523625, "first_completed_ms": 42.230792, "max_completed_ms": 54.027875, "memory_ceiling_bytes": [1780813824, 444596224, 67108864], "csv_sha256": "300755ed412c421b4159aec46d6fac61bb8e29aa154383e74acbea066b24ea74", "roots_sha256": "393e9012be733bdab783d77852c48cc98073cde04cc199f0673bd81a7058922d"}
+      ]}
+    },
+    {"preset": 8, "name": "Spray",
+      "ipad": {"median_frame_gens_per_second": 35.467727, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 32.41699, "drawing_completed_ms": 5552.643868, "median_completed_ms": 26.1499585, "p99_completed_ms": 51.481958, "first_completed_ms": 533.882791, "max_completed_ms": 533.882791, "memory_ceiling_bytes": [1333657432, 332398592, 67108864], "csv_sha256": "715cbdc1f770b076d848a6edf58c932d4a87ba8bfce06a1823d1459fe752f1aa", "roots_sha256": "f963b03db0f73f7beae6fdabaf1aa2f30c3862999ddb3b6c7361060d53226dde", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 35.482182, "drawing_completed_ms": 5072.968706, "median_completed_ms": 26.488396, "p99_completed_ms": 50.944958, "first_completed_ms": 55.468042, "max_completed_ms": 113.509792, "memory_ceiling_bytes": [1333591890, 332398592, 67108864], "csv_sha256": "c5a501da5334b1f6bfd6e1d3b1d686546c6a5f7988c17c564a2f492f8e80253a", "roots_sha256": "f963b03db0f73f7beae6fdabaf1aa2f30c3862999ddb3b6c7361060d53226dde", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 35.467727, "drawing_completed_ms": 5075.036288, "median_completed_ms": 26.2259995, "p99_completed_ms": 51.380083, "first_completed_ms": 53.210083, "max_completed_ms": 114.047167, "memory_ceiling_bytes": [1333571416, 332398592, 67108864], "csv_sha256": "1430e566ea622ec7ec04d692a895a44448bfe7d2093ac2a781e99727883666f6", "roots_sha256": "f963b03db0f73f7beae6fdabaf1aa2f30c3862999ddb3b6c7361060d53226dde", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 42.801992, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 38.394123, "drawing_completed_ms": 4688.217462, "median_completed_ms": 21.92, "p99_completed_ms": 49.125084, "first_completed_ms": 563.211958, "max_completed_ms": 563.211958, "memory_ceiling_bytes": [1962606592, 489684992, 67108864], "csv_sha256": "6a66238a78c5cb5b5b99271bb90183b2f8f3e6d8aaa28e44ce89953a94db2b33", "roots_sha256": "e664edc5a5eeb19fe76660247023d4dd48b42bf59d11e7d5b401c0e5c3cc30e5"},
+        {"repeat": 2, "frame_gens_per_second": 43.048189, "drawing_completed_ms": 4181.360585, "median_completed_ms": 21.8608755, "p99_completed_ms": 49.76025, "first_completed_ms": 56.2685, "max_completed_ms": 88.100333, "memory_ceiling_bytes": [1849585664, 461373440, 67108864], "csv_sha256": "d7c3a9fc607eaeda1d4eba38bb26450a0fc4b6ca1ab18c4489e4d48a569a774c", "roots_sha256": "e664edc5a5eeb19fe76660247023d4dd48b42bf59d11e7d5b401c0e5c3cc30e5"},
+        {"repeat": 3, "frame_gens_per_second": 42.801992, "drawing_completed_ms": 4205.41175, "median_completed_ms": 21.997146, "p99_completed_ms": 50.076333, "first_completed_ms": 58.07, "max_completed_ms": 87.772458, "memory_ceiling_bytes": [1795837952, 448790528, 67108864], "csv_sha256": "7a0ff2c8c71954b078453c132247c3e126df6c6eb878f42b5ccfcb6410a59f63", "roots_sha256": "e664edc5a5eeb19fe76660247023d4dd48b42bf59d11e7d5b401c0e5c3cc30e5"}
+      ]}
+    },
+    {"preset": 9, "name": "Dual Texture",
+      "ipad": {"median_frame_gens_per_second": 84.898452, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 69.685494, "drawing_completed_ms": 2583.033995, "median_completed_ms": 11.2063125, "p99_completed_ms": 14.910875, "first_completed_ms": 522.232583, "max_completed_ms": 522.232583, "memory_ceiling_bytes": [1333702488, 332398592, 67108864], "csv_sha256": "fedc8e344c3291f32805664d8caf2d31b1a43cf4e21fc38c8b1ba445f06fdbce", "roots_sha256": "582b4da24533ddf655a6dbb0e05e59aabefba10d7c475f53dc5f881c8f73434d", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 85.323733, "drawing_completed_ms": 2109.612332, "median_completed_ms": 11.3790835, "p99_completed_ms": 16.110542, "first_completed_ms": 27.603, "max_completed_ms": 59.038, "memory_ceiling_bytes": [1333567320, 332398592, 67108864], "csv_sha256": "db354456c21720650e939061df1774d0d19d83ffee2c88bb40d4f3eadc59a530", "roots_sha256": "582b4da24533ddf655a6dbb0e05e59aabefba10d7c475f53dc5f881c8f73434d", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 84.898452, "drawing_completed_ms": 2120.179992, "median_completed_ms": 11.4844785, "p99_completed_ms": 16.340875, "first_completed_ms": 27.887167, "max_completed_ms": 59.856125, "memory_ceiling_bytes": [1333555020, 332398592, 67108864], "csv_sha256": "a5cd9634cda088dc53d69af895a2795eb6105f9883d7963f778c57fee0757111", "roots_sha256": "582b4da24533ddf655a6dbb0e05e59aabefba10d7c475f53dc5f881c8f73434d", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 84.146139, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 69.741072, "drawing_completed_ms": 2580.975509, "median_completed_ms": 10.9660625, "p99_completed_ms": 15.12775, "first_completed_ms": 568.024583, "max_completed_ms": 568.024583, "memory_ceiling_bytes": [2029268992, 506462208, 67108864], "csv_sha256": "c75b1c4673ddbf25cd881febeb6ab8c105a5a135115353ea109c2bb26827c6a0", "roots_sha256": "e2cddb89ee423e49c516f517a8ab3d3bd56fbb4acaea33f54fa2ae6f660ad506"},
+        {"repeat": 2, "frame_gens_per_second": 84.28458, "drawing_completed_ms": 2135.621963, "median_completed_ms": 11.40025, "p99_completed_ms": 17.649209, "first_completed_ms": 37.340583, "max_completed_ms": 45.50325, "memory_ceiling_bytes": [1846358016, 461373440, 67108864], "csv_sha256": "c8034f13864b98b9cfb6261d714fe49292c34c1d0fe8757ed789f7bfe6c59cc6", "roots_sha256": "e2cddb89ee423e49c516f517a8ab3d3bd56fbb4acaea33f54fa2ae6f660ad506"},
+        {"repeat": 3, "frame_gens_per_second": 84.146139, "drawing_completed_ms": 2139.135578, "median_completed_ms": 11.359771, "p99_completed_ms": 19.503292, "first_completed_ms": 38.105958, "max_completed_ms": 46.209375, "memory_ceiling_bytes": [1844903936, 460324864, 67108864], "csv_sha256": "a4bb972ac86f21dc80f112f14cdb3e8cafb6f4b45c44ab726dfe6f371d8f4c3d", "roots_sha256": "e2cddb89ee423e49c516f517a8ab3d3bd56fbb4acaea33f54fa2ae6f660ad506"}
+      ]}
+    },
+    {"preset": 15, "name": "Textured Flat",
+      "ipad": {"median_frame_gens_per_second": 85.991523, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 69.434291, "drawing_completed_ms": 2592.379043, "median_completed_ms": 10.8277505, "p99_completed_ms": 19.831875, "first_completed_ms": 561.561291, "max_completed_ms": 561.561291, "memory_ceiling_bytes": [1333673810, 332398592, 67108864], "csv_sha256": "24a778502d0f9c2c1d97dbb476d6e4327f36b37e12207efc0f41616bdf3552a2", "roots_sha256": "2e2e746a63214cd0393fe2b7189576c90010461324859841004a005f70b0a0ee", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 86.279318, "drawing_completed_ms": 2086.247375, "median_completed_ms": 10.787375, "p99_completed_ms": 22.680959, "first_completed_ms": 34.721792, "max_completed_ms": 61.825458, "memory_ceiling_bytes": [1333542732, 332398592, 67108864], "csv_sha256": "5d5f1c55ed1ce94bdddf329f0af89fffb5b8ae38eddc59cfa2b91a5bebada01e", "roots_sha256": "2e2e746a63214cd0393fe2b7189576c90010461324859841004a005f70b0a0ee", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 85.991523, "drawing_completed_ms": 2093.229586, "median_completed_ms": 10.908271, "p99_completed_ms": 21.958833, "first_completed_ms": 34.00125, "max_completed_ms": 62.042292, "memory_ceiling_bytes": [1333518156, 332398592, 67108864], "csv_sha256": "51b47d5acda53e3e40e780d0861748ffb1760bcf0528c12637f73f94a26ff7c3", "roots_sha256": "2e2e746a63214cd0393fe2b7189576c90010461324859841004a005f70b0a0ee", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 93.994805, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 73.903622, "drawing_completed_ms": 2435.604579, "median_completed_ms": 9.800853499999999, "p99_completed_ms": 18.094166, "first_completed_ms": 594.558041, "max_completed_ms": 594.558041, "memory_ceiling_bytes": [2027683840, 506462208, 67108864], "csv_sha256": "c072fa49c532f100e3f80b424c81e4c3804d7d8259e99ffd7a4b8f913314006f", "roots_sha256": "e1ed1d844da8ef7df89f00c4a31bd4d1dc8d5c30b12370e794eda6ea2cecb771"},
+        {"repeat": 2, "frame_gens_per_second": 95.241994, "drawing_completed_ms": 1889.922629, "median_completed_ms": 9.789375, "p99_completed_ms": 18.370625, "first_completed_ms": 37.267291, "max_completed_ms": 48.121334, "memory_ceiling_bytes": [1846509568, 461373440, 67108864], "csv_sha256": "b3e441ce484db5da3d98b67edd56b6aef7f03c40287690e733a488ddcede5a77", "roots_sha256": "e1ed1d844da8ef7df89f00c4a31bd4d1dc8d5c30b12370e794eda6ea2cecb771"},
+        {"repeat": 3, "frame_gens_per_second": 93.994805, "drawing_completed_ms": 1914.999457, "median_completed_ms": 9.879979, "p99_completed_ms": 23.990375, "first_completed_ms": 40.401917, "max_completed_ms": 48.598375, "memory_ceiling_bytes": [1835302912, 458227712, 67108864], "csv_sha256": "70ccc30687f00aa02226730ea1a83110f5b7769b3f22c389947fbccc6a6ebe4e", "roots_sha256": "e1ed1d844da8ef7df89f00c4a31bd4d1dc8d5c30b12370e794eda6ea2cecb771"}
+      ]}
+    },
+    {"preset": 16, "name": "Dry Scumble",
+      "ipad": {"median_frame_gens_per_second": 84.892247, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 68.464562, "drawing_completed_ms": 2629.097385, "median_completed_ms": 11.0306455, "p99_completed_ms": 19.276959, "first_completed_ms": 564.712375, "max_completed_ms": 564.712375, "memory_ceiling_bytes": [1333591890, 332398592, 67108864], "csv_sha256": "770b6f39278a1d01f968c9e3088e71cedb5c40126b2cfc621b27b41df3b148d1", "roots_sha256": "facf47f4963f6117058689a5fc509ee77c3d83941178af43bf510fc7543b80cc", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 84.966812, "drawing_completed_ms": 2118.474212, "median_completed_ms": 11.1004375, "p99_completed_ms": 21.011, "first_completed_ms": 33.244542, "max_completed_ms": 59.934042, "memory_ceiling_bytes": [1333546834, 332398592, 67108864], "csv_sha256": "ce8938d957f86e9cadd17aea1190f6960ed57f6fd6ce065cf3c822371b975d14", "roots_sha256": "facf47f4963f6117058689a5fc509ee77c3d83941178af43bf510fc7543b80cc", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 84.892247, "drawing_completed_ms": 2120.334961, "median_completed_ms": 11.129479, "p99_completed_ms": 21.436416, "first_completed_ms": 33.327292, "max_completed_ms": 60.381958, "memory_ceiling_bytes": [1333628754, 332398592, 67108864], "csv_sha256": "3635e1604ce0ebf3008ee3c78c34ff53dff20dfe3cc020237b02e3009da04a2d", "roots_sha256": "facf47f4963f6117058689a5fc509ee77c3d83941178af43bf510fc7543b80cc", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 86.672686, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 68.444232, "drawing_completed_ms": 2629.878288, "median_completed_ms": 10.890354, "p99_completed_ms": 17.822125, "first_completed_ms": 615.248667, "max_completed_ms": 615.248667, "memory_ceiling_bytes": [1944018944, 485490688, 67108864], "csv_sha256": "e37503e6f0f58d06ea0022e8997e89cbaa1b8b847e2aae6ba42cc14754712b43", "roots_sha256": "b49115e6a66571582a2af2617b2d4a27ec22e4a1e855461942ee9d14d9f82e25"},
+        {"repeat": 2, "frame_gens_per_second": 86.761711, "drawing_completed_ms": 2074.647877, "median_completed_ms": 10.8507295, "p99_completed_ms": 21.866584, "first_completed_ms": 40.090334, "max_completed_ms": 46.658708, "memory_ceiling_bytes": [1845465088, 460324864, 67108864], "csv_sha256": "f94ff9951500cb3c02ef1ea00afde8f02337f821859280af263ede7d42d45670", "roots_sha256": "b49115e6a66571582a2af2617b2d4a27ec22e4a1e855461942ee9d14d9f82e25"},
+        {"repeat": 3, "frame_gens_per_second": 86.672686, "drawing_completed_ms": 2076.778826, "median_completed_ms": 10.8624375, "p99_completed_ms": 21.948833, "first_completed_ms": 39.472125, "max_completed_ms": 47.527708, "memory_ceiling_bytes": [1835749376, 458227712, 67108864], "csv_sha256": "e7455abcddd88f169cf8831a5792e102b374e578f397be62b071b95c2e4d2eb7", "roots_sha256": "b49115e6a66571582a2af2617b2d4a27ec22e4a1e855461942ee9d14d9f82e25"}
+      ]}
+    },
+    {"preset": 17, "name": "Pastel Block",
+      "ipad": {"median_frame_gens_per_second": 75.513729, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 62.392313, "drawing_completed_ms": 2884.970789, "median_completed_ms": 12.455333, "p99_completed_ms": 22.086791, "first_completed_ms": 561.065917, "max_completed_ms": 561.065917, "memory_ceiling_bytes": [1333542732, 332398592, 67108864], "csv_sha256": "ab4788bdb8760d841c9531d9c73fae9cf5a9e73265b0f8139c260764b6080c76", "roots_sha256": "b5c0c1ad4216ba4611b0fd798e5dca025fb030dcfeb3e19eea871b6e3f72ddba", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 75.656052, "drawing_completed_ms": 2379.188371, "median_completed_ms": 12.477625, "p99_completed_ms": 23.079792, "first_completed_ms": 37.337875, "max_completed_ms": 69.146667, "memory_ceiling_bytes": [1333632850, 332398592, 67108864], "csv_sha256": "917e1f91ed4f20961c74afd834f29ac5b99b6ec2197c78337df1f4c652443cf3", "roots_sha256": "b5c0c1ad4216ba4611b0fd798e5dca025fb030dcfeb3e19eea871b6e3f72ddba", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 75.513729, "drawing_completed_ms": 2383.672507, "median_completed_ms": 12.5807915, "p99_completed_ms": 23.137458, "first_completed_ms": 37.914792, "max_completed_ms": 68.910375, "memory_ceiling_bytes": [1333600082, 332398592, 67108864], "csv_sha256": "056ad97fd6ba8f79b517a36dd9119f10dce1ae0754767a2e327359e480066600", "roots_sha256": "b5c0c1ad4216ba4611b0fd798e5dca025fb030dcfeb3e19eea871b6e3f72ddba", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 79.246731, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 63.761798, "drawing_completed_ms": 2823.006946, "median_completed_ms": 12.0303125, "p99_completed_ms": 19.72925, "first_completed_ms": 599.881375, "max_completed_ms": 599.881375, "memory_ceiling_bytes": [1904455680, 476053504, 67108864], "csv_sha256": "5a41da540665a1efb9e0c6144ed638311faa80a26ed2a3f56d00cfae6aa479ef", "roots_sha256": "e036f7e4a39742c45cef4e5569860817d6347faa5e2be39c20cf859f796cbc8c"},
+        {"repeat": 2, "frame_gens_per_second": 79.246731, "drawing_completed_ms": 2271.387078, "median_completed_ms": 11.9955415, "p99_completed_ms": 19.938291, "first_completed_ms": 41.844833, "max_completed_ms": 53.546125, "memory_ceiling_bytes": [1829896192, 457179136, 67108864], "csv_sha256": "e597d3aa5fa14c6de21478a79c1e97746bf58a169b5fa94ab497c958e3614fcf", "roots_sha256": "e036f7e4a39742c45cef4e5569860817d6347faa5e2be39c20cf859f796cbc8c"},
+        {"repeat": 3, "frame_gens_per_second": 79.511635, "drawing_completed_ms": 2263.819626, "median_completed_ms": 11.980791499999999, "p99_completed_ms": 19.870917, "first_completed_ms": 39.924292, "max_completed_ms": 53.898208, "memory_ceiling_bytes": [1837400064, 459276288, 67108864], "csv_sha256": "61abc04707e0de03087dd129a7c986efe1bf849347a36bf7d3d1ae4eac40d3d9", "roots_sha256": "e036f7e4a39742c45cef4e5569860817d6347faa5e2be39c20cf859f796cbc8c"}
+      ]}
+    },
+    {"preset": 18, "name": "Transparent Glaze",
+      "ipad": {"median_frame_gens_per_second": 77.847866, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 77.847866, "drawing_completed_ms": 2312.202119, "median_completed_ms": 11.825396, "p99_completed_ms": 23.7075, "first_completed_ms": 42.414708, "max_completed_ms": 73.471083, "memory_ceiling_bytes": [1333505874, 332398592, 67108864], "csv_sha256": "b022c27ffb5e43865bbc734f41556573df9d319dcc9ad4a44196801f9b3117f1", "roots_sha256": "0ad3c72dd1093660308adee09c21808ccd046aa9a5f2281ededb6691937752b0", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 77.905261, "drawing_completed_ms": 2310.498633, "median_completed_ms": 11.840667, "p99_completed_ms": 22.365, "first_completed_ms": 45.242416, "max_completed_ms": 73.8665, "memory_ceiling_bytes": [1333600082, 332398592, 67108864], "csv_sha256": "c8879009d4e473d5bf9e63f16b45ada55b3ef87c7b62d15f836df09ad2afe897", "roots_sha256": "0ad3c72dd1093660308adee09c21808ccd046aa9a5f2281ededb6691937752b0", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 77.557616, "drawing_completed_ms": 2320.855245, "median_completed_ms": 11.845812500000001, "p99_completed_ms": 23.664375, "first_completed_ms": 44.09, "max_completed_ms": 73.279625, "memory_ceiling_bytes": [1333559122, 332398592, 67108864], "csv_sha256": "d9cdb351b8c4f879690867154372bce934340f7ccff453712ba64c14ad6e8266", "roots_sha256": "0ad3c72dd1093660308adee09c21808ccd046aa9a5f2281ededb6691937752b0", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 85.604237, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 85.665502, "drawing_completed_ms": 2101.195888, "median_completed_ms": 10.73425, "p99_completed_ms": 20.1585, "first_completed_ms": 49.110375, "max_completed_ms": 57.371417, "memory_ceiling_bytes": [1907343360, 476053504, 67108864], "csv_sha256": "cfe4c8dcc17068605d2df4a3bf5352be82c6dc523d312d52ab8a17243f16e06c", "roots_sha256": "7c44dea86aab0105626920f5f08ba949cd8516d73c0d0b28fb472e903d899a1f"},
+        {"repeat": 2, "frame_gens_per_second": 83.643191, "drawing_completed_ms": 2151.998249, "median_completed_ms": 10.8938125, "p99_completed_ms": 21.158542, "first_completed_ms": 49.842042, "max_completed_ms": 55.862917, "memory_ceiling_bytes": [1849135104, 461373440, 67108864], "csv_sha256": "aa15e3398b5ec4860d7791246605e05bba2e7e93698aa88986da897b350134bf", "roots_sha256": "7c44dea86aab0105626920f5f08ba949cd8516d73c0d0b28fb472e903d899a1f"},
+        {"repeat": 3, "frame_gens_per_second": 85.604237, "drawing_completed_ms": 2102.699663, "median_completed_ms": 10.7633125, "p99_completed_ms": 20.088083, "first_completed_ms": 49.170375, "max_completed_ms": 56.424792, "memory_ceiling_bytes": [1836290048, 458227712, 67108864], "csv_sha256": "cc2654efea2c2af25bcf47f608ee8092bc07b3520565236c1488603e434e9bd2", "roots_sha256": "7c44dea86aab0105626920f5f08ba949cd8516d73c0d0b28fb472e903d899a1f"}
+      ]}
+    },
+    {"preset": 25, "name": "Pointy Pencil",
+      "ipad": {"median_frame_gens_per_second": 122.963096, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 123.33727, "drawing_completed_ms": 1459.41288, "median_completed_ms": 7.905021, "p99_completed_ms": 12.108792, "first_completed_ms": 19.288958, "max_completed_ms": 42.703834, "memory_ceiling_bytes": [1333649228, 332398592, 67108864], "csv_sha256": "bf1a0e17cc49c522959107bf9661a70208480416b162d4483a94d5ffa80c75ed", "roots_sha256": "e36ed3991239aad4e06417dc6556b57b54d9d0264ceff8528c45821b2d7ab16b", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 122.963096, "drawing_completed_ms": 1463.853843, "median_completed_ms": 7.928625500000001, "p99_completed_ms": 11.202042, "first_completed_ms": 19.361042, "max_completed_ms": 42.841417, "memory_ceiling_bytes": [1333571410, 332398592, 67108864], "csv_sha256": "a3787e8cc1038a660fb1aae56e56bed4ee7f9fcefdc808247d4828523609d809", "roots_sha256": "e36ed3991239aad4e06417dc6556b57b54d9d0264ceff8528c45821b2d7ab16b", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 121.114984, "drawing_completed_ms": 1486.191002, "median_completed_ms": 8.015457999999999, "p99_completed_ms": 12.312917, "first_completed_ms": 21.025958, "max_completed_ms": 43.090291, "memory_ceiling_bytes": [1333571410, 332398592, 67108864], "csv_sha256": "a933810006063cdcaeece0ba8bad4f5e79b4c3d5cef8c300aef3504b19b7b508", "roots_sha256": "e36ed3991239aad4e06417dc6556b57b54d9d0264ceff8528c45821b2d7ab16b", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 152.105162, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 150.528255, "drawing_completed_ms": 1195.788793, "median_completed_ms": 6.087604000000001, "p99_completed_ms": 15.633541, "first_completed_ms": 26.597917, "max_completed_ms": 31.731792, "memory_ceiling_bytes": [1908596736, 477102080, 67108864], "csv_sha256": "a219bc545d3253cd027b4fd792230cc99eb5263374280132f855e06839f8b6f1", "roots_sha256": "42da378ad628d71379d8b753ffa4627f327a4ad0b2c49b2211358d6808c8ca70"},
+        {"repeat": 2, "frame_gens_per_second": 152.105162, "drawing_completed_ms": 1183.391793, "median_completed_ms": 6.061521000000001, "p99_completed_ms": 12.763042, "first_completed_ms": 24.060292, "max_completed_ms": 33.621459, "memory_ceiling_bytes": [1850499072, 462422016, 67108864], "csv_sha256": "d2029dd9b4a397e6f81c8c47d7a115102d91929fd165651ba7187ca22456b263", "roots_sha256": "42da378ad628d71379d8b753ffa4627f327a4ad0b2c49b2211358d6808c8ca70"},
+        {"repeat": 3, "frame_gens_per_second": 152.571282, "drawing_completed_ms": 1179.776413, "median_completed_ms": 6.0910835, "p99_completed_ms": 12.686208, "first_completed_ms": 23.908666, "max_completed_ms": 33.050959, "memory_ceiling_bytes": [1834024960, 458227712, 67108864], "csv_sha256": "4c3378ff7b445a197142ae51e384fabe615ecf589661f87b965d8595515a936f", "roots_sha256": "42da378ad628d71379d8b753ffa4627f327a4ad0b2c49b2211358d6808c8ca70"}
+      ]}
+    },
+    {"preset": 26, "name": "Shading Pencil",
+      "ipad": {"median_frame_gens_per_second": 183.940605, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 120.803308, "drawing_completed_ms": 1490.025421, "median_completed_ms": 4.9411249999999995, "p99_completed_ms": 10.675, "first_completed_ms": 534.214459, "max_completed_ms": 534.214459, "memory_ceiling_bytes": [1333546828, 332398592, 67108864], "csv_sha256": "035161350416e8a9d20609edacc3a6002f4107e375cb41b68b53ce1c51d07b3a", "roots_sha256": "6b8cec1069e6d1d05bc71c621d7a3ac0d64523eb952fb7ec2de8302f4a5c5223", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 183.940605, "drawing_completed_ms": 978.576753, "median_completed_ms": 4.9271045, "p99_completed_ms": 10.448833, "first_completed_ms": 18.200375, "max_completed_ms": 31.718792, "memory_ceiling_bytes": [1333567314, 332398592, 67108864], "csv_sha256": "b6b0be0e2c3010992af1b592b1b92f9933a5c2362325b6f837fb815abfc7c6fe", "roots_sha256": "6b8cec1069e6d1d05bc71c621d7a3ac0d64523eb952fb7ec2de8302f4a5c5223", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 183.972307, "drawing_completed_ms": 978.408127, "median_completed_ms": 4.931896, "p99_completed_ms": 10.100708, "first_completed_ms": 18.453333, "max_completed_ms": 31.438833, "memory_ceiling_bytes": [1333661522, 332398592, 67108864], "csv_sha256": "3db0645f5b63fa6a6408d37857a22f2273bfbd024d482d0794f83691447ef4b0", "roots_sha256": "6b8cec1069e6d1d05bc71c621d7a3ac0d64523eb952fb7ec2de8302f4a5c5223", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 203.558476, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 127.42802, "drawing_completed_ms": 1412.562164, "median_completed_ms": 4.337854, "p99_completed_ms": 9.266167, "first_completed_ms": 575.568542, "max_completed_ms": 575.568542, "memory_ceiling_bytes": [1908764672, 477102080, 67108864], "csv_sha256": "9ae495d36ff98c056d2f2a2504308cd36a50c98d6bec00fed1b58e145a1f0db9", "roots_sha256": "bc12265bc5271b021417b0076dc12ca41267cfd7605897e696e96c2e951db01b"},
+        {"repeat": 2, "frame_gens_per_second": 203.558476, "drawing_completed_ms": 884.266791, "median_completed_ms": 4.339333, "p99_completed_ms": 13.1195, "first_completed_ms": 20.913209, "max_completed_ms": 23.536083, "memory_ceiling_bytes": [1911930880, 477102080, 67108864], "csv_sha256": "3b6facb992c1a0fe63ef56506a5542ed4ff31e94134148645a21e11fd0281fa4", "roots_sha256": "bc12265bc5271b021417b0076dc12ca41267cfd7605897e696e96c2e951db01b"},
+        {"repeat": 3, "frame_gens_per_second": 206.06658, "drawing_completed_ms": 873.504086, "median_completed_ms": 4.322646, "p99_completed_ms": 10.801375, "first_completed_ms": 22.258084, "max_completed_ms": 24.395125, "memory_ceiling_bytes": [1836392448, 458227712, 67108864], "csv_sha256": "cb8b1af02cca2779c0fb9386e4fab03803b2a16f31057ff5bee64b17943caac3", "roots_sha256": "bc12265bc5271b021417b0076dc12ca41267cfd7605897e696e96c2e951db01b"}
+      ]}
+    },
+    {"preset": 27, "name": "Charcoal",
+      "ipad": {"median_frame_gens_per_second": 130.097293, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 97.434068, "drawing_completed_ms": 1847.403112, "median_completed_ms": 7.175875, "p99_completed_ms": 10.672917, "first_completed_ms": 509.735208, "max_completed_ms": 509.735208, "memory_ceiling_bytes": [1333690194, 332398592, 67108864], "csv_sha256": "685bf5cae4a9941df0b5d1ade5c0f916e0f5f5215a028f152c16226822ac609c", "roots_sha256": "a43f88f8da79ea3108c736ce622f64b682ac013d2194e4831074d65a5a6e7d37", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 130.720315, "drawing_completed_ms": 1376.985662, "median_completed_ms": 7.257687499999999, "p99_completed_ms": 10.647125, "first_completed_ms": 18.327167, "max_completed_ms": 40.16225, "memory_ceiling_bytes": [1333575506, 332398592, 67108864], "csv_sha256": "3d62df5fc860845ac8063028669205d9552c7ce3f277e7f454f454d48c4e1628", "roots_sha256": "a43f88f8da79ea3108c736ce622f64b682ac013d2194e4831074d65a5a6e7d37", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 130.097293, "drawing_completed_ms": 1383.579905, "median_completed_ms": 7.2915205, "p99_completed_ms": 11.039583, "first_completed_ms": 19.758625, "max_completed_ms": 40.300458, "memory_ceiling_bytes": [1333686104, 332398592, 67108864], "csv_sha256": "16a720d8be79dc9915bf4c090a5935154cd44b80596cdf401745ab696aad4e2e", "roots_sha256": "a43f88f8da79ea3108c736ce622f64b682ac013d2194e4831074d65a5a6e7d37", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 149.677004, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 103.836622, "drawing_completed_ms": 1733.492448, "median_completed_ms": 6.206562, "p99_completed_ms": 10.461334, "first_completed_ms": 549.929083, "max_completed_ms": 549.929083, "memory_ceiling_bytes": [1910382592, 477102080, 67108864], "csv_sha256": "cb5767b58bddd96a907556322c992ec7febf59e1733fb35bb29b273af271a4ff", "roots_sha256": "0e293e2578c0501e84b9ad3556260a794029801ffeaa6ae26685c14bcee9edbb"},
+        {"repeat": 2, "frame_gens_per_second": 151.767075, "drawing_completed_ms": 1186.027996, "median_completed_ms": 6.0941875, "p99_completed_ms": 12.167875, "first_completed_ms": 21.814208, "max_completed_ms": 29.448583, "memory_ceiling_bytes": [1858146304, 464519168, 67108864], "csv_sha256": "53f984e35fe6b5e7a46a071b5a7b6b8cac77f887967239c5367d217388a0040a", "roots_sha256": "0e293e2578c0501e84b9ad3556260a794029801ffeaa6ae26685c14bcee9edbb"},
+        {"repeat": 3, "frame_gens_per_second": 149.677004, "drawing_completed_ms": 1202.589544, "median_completed_ms": 6.1085, "p99_completed_ms": 13.834834, "first_completed_ms": 27.489375, "max_completed_ms": 31.563584, "memory_ceiling_bytes": [1836294144, 458227712, 67108864], "csv_sha256": "6459cf87dcc69b7175ebb830d03e39577d7c98b83cba7ae0254a5b69cd9b41c4", "roots_sha256": "0e293e2578c0501e84b9ad3556260a794029801ffeaa6ae26685c14bcee9edbb"}
+      ]}
+    },
+    {"preset": 28, "name": "Rough G-Pen",
+      "ipad": {"median_frame_gens_per_second": 111.648722, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 84.560937, "drawing_completed_ms": 2128.642457, "median_completed_ms": 8.2592295, "p99_completed_ms": 15.512667, "first_completed_ms": 556.2435, "max_completed_ms": 556.2435, "memory_ceiling_bytes": [1333534540, 332398592, 67108864], "csv_sha256": "12fcef3c3e576b10d53392535be7270cc650c3ba62a8085d56e7f1c4c537c135", "roots_sha256": "b7e4b5a5f6f1f2feab5b4925b7c2f7d2cd57b9f27a939d48e6c9c45321e5723c", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 112.132567, "drawing_completed_ms": 1605.242838, "median_completed_ms": 8.2802495, "p99_completed_ms": 15.563709, "first_completed_ms": 26.771833, "max_completed_ms": 47.943459, "memory_ceiling_bytes": [1333591884, 332398592, 67108864], "csv_sha256": "3fdc8d96ff9dd4029798d64ffc26e7204b00c19338585fbed17c7abdbd3eb10d", "roots_sha256": "b7e4b5a5f6f1f2feab5b4925b7c2f7d2cd57b9f27a939d48e6c9c45321e5723c", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 111.648722, "drawing_completed_ms": 1612.199379, "median_completed_ms": 8.3071455, "p99_completed_ms": 15.377917, "first_completed_ms": 26.873708, "max_completed_ms": 49.221125, "memory_ceiling_bytes": [1333624652, 332398592, 67108864], "csv_sha256": "73e6205bbf72c63a11336535a93cfbaedbd52568f88c0d28a46073cd4ec209d6", "roots_sha256": "b7e4b5a5f6f1f2feab5b4925b7c2f7d2cd57b9f27a939d48e6c9c45321e5723c", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 147.39619, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 104.038713, "drawing_completed_ms": 1730.125213, "median_completed_ms": 5.7958335000000005, "p99_completed_ms": 13.572125, "first_completed_ms": 590.013875, "max_completed_ms": 590.013875, "memory_ceiling_bytes": [1907056640, 476053504, 67108864], "csv_sha256": "4f96edb462520436f791a5072c93f0deb1c643bc590e6b44765ff8a7b0e22cdb", "roots_sha256": "c966c6747a99e35cce49f79f2e3032fdef07d334b7b7c15097ec2380e7e13b4e"},
+        {"repeat": 2, "frame_gens_per_second": 147.39619, "drawing_completed_ms": 1221.198455, "median_completed_ms": 5.827396, "p99_completed_ms": 17.276208, "first_completed_ms": 29.843625, "max_completed_ms": 34.930125, "memory_ceiling_bytes": [1858256896, 464519168, 67108864], "csv_sha256": "c9b15211c8047f7e768eadf9232610e299249298f505f605e2d5258f2a8a3937", "roots_sha256": "c966c6747a99e35cce49f79f2e3032fdef07d334b7b7c15097ec2380e7e13b4e"},
+        {"repeat": 3, "frame_gens_per_second": 152.260513, "drawing_completed_ms": 1182.184382, "median_completed_ms": 5.774875, "p99_completed_ms": 15.462333, "first_completed_ms": 28.358042, "max_completed_ms": 34.853167, "memory_ceiling_bytes": [1836068864, 458227712, 67108864], "csv_sha256": "3da9150783e8114903d98632391afe0192e9f86c0344072b1d8b096640da73ef", "roots_sha256": "c966c6747a99e35cce49f79f2e3032fdef07d334b7b7c15097ec2380e7e13b4e"}
+      ]}
+    },
+    {"preset": 29, "name": "Calligraphy Pen",
+      "ipad": {"median_frame_gens_per_second": 197.071329, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 196.698498, "drawing_completed_ms": 915.106123, "median_completed_ms": 4.6045, "p99_completed_ms": 12.255, "first_completed_ms": 14.909542, "max_completed_ms": 33.111792, "memory_ceiling_bytes": [1333579608, 332398592, 67108864], "csv_sha256": "bd8f95c06e047c2d66d47c6cd72d1385530fed720e98bb878b3985d3c2f748fe", "roots_sha256": "7970d77bdc45d942c8136d3e19251ab75717bfe4f911c528fdf6547001bb1f9f", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 197.950887, "drawing_completed_ms": 909.316461, "median_completed_ms": 4.57925, "p99_completed_ms": 11.823917, "first_completed_ms": 14.934209, "max_completed_ms": 32.226083, "memory_ceiling_bytes": [1333559116, 332398592, 67108864], "csv_sha256": "b7f716612eeff02bab2413f65e25ec99acb6b689622fccc3350e5b38d15cd96d", "roots_sha256": "7970d77bdc45d942c8136d3e19251ab75717bfe4f911c528fdf6547001bb1f9f", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 197.071329, "drawing_completed_ms": 913.374873, "median_completed_ms": 4.5523955, "p99_completed_ms": 11.892417, "first_completed_ms": 16.237875, "max_completed_ms": 33.123208, "memory_ceiling_bytes": [1333571410, 332398592, 67108864], "csv_sha256": "1e129aec7257efc7e190131f821cbdaa946eb3df48ebb37f368057020f003873", "roots_sha256": "7970d77bdc45d942c8136d3e19251ab75717bfe4f911c528fdf6547001bb1f9f", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 232.211511, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 228.174441, "drawing_completed_ms": 788.870125, "median_completed_ms": 3.7045624999999998, "p99_completed_ms": 14.462625, "first_completed_ms": 19.8365, "max_completed_ms": 23.713708, "memory_ceiling_bytes": [1908072448, 476053504, 67108864], "csv_sha256": "e488e3c5cd97908d3b7777fb9a24a302903ae45c9c949483ebc7506f142815d3", "roots_sha256": "7117a959937dc99368bb172e51e9084526c8c9e81acac2f6d480116017178c5e"},
+        {"repeat": 2, "frame_gens_per_second": 234.199744, "drawing_completed_ms": 768.574707, "median_completed_ms": 3.6848335, "p99_completed_ms": 12.927625, "first_completed_ms": 18.4515, "max_completed_ms": 23.916792, "memory_ceiling_bytes": [1858138112, 464519168, 67108864], "csv_sha256": "4dff4ccd9e46e5075d7cf1d6a49530dcf79c7b39e0ae0b1bcbd988d867930bb5", "roots_sha256": "7117a959937dc99368bb172e51e9084526c8c9e81acac2f6d480116017178c5e"},
+        {"repeat": 3, "frame_gens_per_second": 232.211511, "drawing_completed_ms": 775.15537, "median_completed_ms": 3.733708, "p99_completed_ms": 12.526625, "first_completed_ms": 20.12375, "max_completed_ms": 24.188042, "memory_ceiling_bytes": [1834549248, 458227712, 67108864], "csv_sha256": "a29f85cda0afb33f263f086e43a89bdb251754653869f413bac725fc4631fad9", "roots_sha256": "7117a959937dc99368bb172e51e9084526c8c9e81acac2f6d480116017178c5e"}
+      ]}
+    },
+    {"preset": 30, "name": "Antique Pen",
+      "ipad": {"median_frame_gens_per_second": 133.227668, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 97.093635, "drawing_completed_ms": 1853.880536, "median_completed_ms": 6.856437, "p99_completed_ms": 13.059792, "first_completed_ms": 544.082458, "max_completed_ms": 544.082458, "memory_ceiling_bytes": [1333538642, 332398592, 67108864], "csv_sha256": "664062426bf68eedbf98c08b6fd4c8a1fbd977b591573cd6ca1683b0e9d5206e", "roots_sha256": "6d652a773343b913584532ae4c9182346363cf2e30955f035a25784cc5244a20", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 133.427878, "drawing_completed_ms": 1349.043413, "median_completed_ms": 6.841896, "p99_completed_ms": 14.345084, "first_completed_ms": 21.641583, "max_completed_ms": 41.753459, "memory_ceiling_bytes": [1333595986, 332398592, 67108864], "csv_sha256": "eb5a6cc5f3a0e50c0d514b4fb9e4d60e2d912e73d194292939e31bd3b91ffed7", "roots_sha256": "6d652a773343b913584532ae4c9182346363cf2e30955f035a25784cc5244a20", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 133.227668, "drawing_completed_ms": 1351.070708, "median_completed_ms": 6.8893755, "p99_completed_ms": 14.011333, "first_completed_ms": 21.146125, "max_completed_ms": 41.0205, "memory_ceiling_bytes": [1333645132, 332398592, 67108864], "csv_sha256": "3f9e1b0ed234d47040c780e86e80c590debc0be382a7e9a86e17b1c402b77f77", "roots_sha256": "6d652a773343b913584532ae4c9182346363cf2e30955f035a25784cc5244a20", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 177.812315, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 115.496324, "drawing_completed_ms": 1558.491165, "median_completed_ms": 4.8095835000000005, "p99_completed_ms": 11.830042, "first_completed_ms": 585.092333, "max_completed_ms": 585.092333, "memory_ceiling_bytes": [1907204096, 476053504, 67108864], "csv_sha256": "7190747840db9072e2be4e4cc3a7b73741b55d70b02f7ecdb4c599c5eb206479", "roots_sha256": "be8de3b80b9d9f7cfc39dcde01dc40fd25cdfaea84f385a41e38bd632b0afd31"},
+        {"repeat": 2, "frame_gens_per_second": 177.812315, "drawing_completed_ms": 1012.303337, "median_completed_ms": 4.813833, "p99_completed_ms": 13.753666, "first_completed_ms": 24.886292, "max_completed_ms": 29.48675, "memory_ceiling_bytes": [1857220608, 463470592, 67108864], "csv_sha256": "8d48c4611d5d2958262e56eebf533c8ef2e1483194a79846b93775979e673fb5", "roots_sha256": "be8de3b80b9d9f7cfc39dcde01dc40fd25cdfaea84f385a41e38bd632b0afd31"},
+        {"repeat": 3, "frame_gens_per_second": 178.021756, "drawing_completed_ms": 1011.112373, "median_completed_ms": 4.8017705, "p99_completed_ms": 13.938667, "first_completed_ms": 24.223917, "max_completed_ms": 29.472, "memory_ceiling_bytes": [1832488960, 457179136, 67108864], "csv_sha256": "7210c145e396146a639fdf5280728bb53bef7461d28f525f95eaf5e877c0f802", "roots_sha256": "be8de3b80b9d9f7cfc39dcde01dc40fd25cdfaea84f385a41e38bd632b0afd31"}
+      ]}
+    },
+    {"preset": 31, "name": "Realistic Pen",
+      "ipad": {"median_frame_gens_per_second": 115.264185, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 87.383217, "drawing_completed_ms": 2059.89212, "median_completed_ms": 8.054646, "p99_completed_ms": 14.053542, "first_completed_ms": 538.775875, "max_completed_ms": 538.775875, "memory_ceiling_bytes": [1333546834, 332398592, 67108864], "csv_sha256": "0561665e49651aacb1601197066c0d5d6f949ea90fc4e0e2e234f3226ee037bf", "roots_sha256": "26c1b103fc6ca096ec1af8285eb357113ac98f717cb46f52645d2673b71af8f5", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 115.980437, "drawing_completed_ms": 1551.985877, "median_completed_ms": 7.993104499999999, "p99_completed_ms": 14.878167, "first_completed_ms": 25.031292, "max_completed_ms": 47.555416, "memory_ceiling_bytes": [1333641042, 332398592, 67108864], "csv_sha256": "dc95045f986ae0432335883150575143722f357588862486d6100014be5b5972", "roots_sha256": "26c1b103fc6ca096ec1af8285eb357113ac98f717cb46f52645d2673b71af8f5", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 115.264185, "drawing_completed_ms": 1561.629919, "median_completed_ms": 8.0702085, "p99_completed_ms": 15.752375, "first_completed_ms": 25.651959, "max_completed_ms": 47.902375, "memory_ceiling_bytes": [1333653330, 332398592, 67108864], "csv_sha256": "799c09f419628959ba8dd6f33c9356ad1bcb42419957952c9586a64cbca94d8d", "roots_sha256": "26c1b103fc6ca096ec1af8285eb357113ac98f717cb46f52645d2673b71af8f5", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 157.872735, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 107.455255, "drawing_completed_ms": 1675.115838, "median_completed_ms": 5.571167, "p99_completed_ms": 13.120542, "first_completed_ms": 582.336916, "max_completed_ms": 582.336916, "memory_ceiling_bytes": [1894866944, 472907776, 67108864], "csv_sha256": "90d5db4cc35e59104e7e2ca19d15646419e2d91ac8988e5147dad624c3866af6", "roots_sha256": "b9cc48bae58cd798973927337a851cbeb90f5e22869a9c1ccf8f509983272a7f"},
+        {"repeat": 2, "frame_gens_per_second": 158.15237, "drawing_completed_ms": 1138.142921, "median_completed_ms": 5.5527505, "p99_completed_ms": 15.509375, "first_completed_ms": 27.944458, "max_completed_ms": 34.054875, "memory_ceiling_bytes": [1856552960, 463470592, 67108864], "csv_sha256": "4d19e1d49af879982a98f2639f0f432e47541767737c7f69fdf1294e578b033b", "roots_sha256": "b9cc48bae58cd798973927337a851cbeb90f5e22869a9c1ccf8f509983272a7f"},
+        {"repeat": 3, "frame_gens_per_second": 157.872735, "drawing_completed_ms": 1140.158874, "median_completed_ms": 5.558917, "p99_completed_ms": 14.418542, "first_completed_ms": 27.575583, "max_completed_ms": 34.790083, "memory_ceiling_bytes": [1834254336, 458227712, 67108864], "csv_sha256": "ad7ce1cc94c97de51a8fb5775080b9eebf2eeadee1de012d5b5c6dc434279696", "roots_sha256": "b9cc48bae58cd798973927337a851cbeb90f5e22869a9c1ccf8f509983272a7f"}
+      ]}
+    },
+    {"preset": 32, "name": "Wet Ink",
+      "ipad": {"median_frame_gens_per_second": 105.641912, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 102.368603, "drawing_completed_ms": 1758.351635, "median_completed_ms": 9.0703335, "p99_completed_ms": 16.664833, "first_completed_ms": 25.527333, "max_completed_ms": 49.641, "memory_ceiling_bytes": [1333649234, 332398592, 67108864], "csv_sha256": "255f85f7b323b2f91af1f9fa8b5065aaa6afe24fb27de4027ddca2f380de423a", "roots_sha256": "15445c7b74339382f5bea92972e5438efa435a770911ad81a83c18fa62f7468a", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 106.068047, "drawing_completed_ms": 1697.023794, "median_completed_ms": 8.8016455, "p99_completed_ms": 16.917375, "first_completed_ms": 25.450333, "max_completed_ms": 50.480833, "memory_ceiling_bytes": [1333518156, 332398592, 67108864], "csv_sha256": "5f87d6ba62e4e8046d08c79848fd1c366940340580ec1b06c2c17bad466f4993", "roots_sha256": "15445c7b74339382f5bea92972e5438efa435a770911ad81a83c18fa62f7468a", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 105.641912, "drawing_completed_ms": 1703.869206, "median_completed_ms": 8.8014165, "p99_completed_ms": 16.793292, "first_completed_ms": 25.707125, "max_completed_ms": 50.224958, "memory_ceiling_bytes": [1333571410, 332398592, 67108864], "csv_sha256": "2c95cecbfeabc16d8b757128bae97f0a072b533fdeb13f7a6dc5f8ffdf644621", "roots_sha256": "15445c7b74339382f5bea92972e5438efa435a770911ad81a83c18fa62f7468a", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 145.087772, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 123.351706, "drawing_completed_ms": 1459.242083, "median_completed_ms": 7.3467085, "p99_completed_ms": 16.0355, "first_completed_ms": 27.722583, "max_completed_ms": 43.40475, "memory_ceiling_bytes": [1894371328, 472907776, 67108864], "csv_sha256": "baf6684e1d43282f34d837bd49eea914ea49724199e3c60f18cf54de2e156179", "roots_sha256": "c595cf1c86e6c670676d47b17b85f76fd73cc62ce0f1a177cd0ebb9cf9ad75c2"},
+        {"repeat": 2, "frame_gens_per_second": 145.807843, "drawing_completed_ms": 1234.501492, "median_completed_ms": 6.121083, "p99_completed_ms": 16.481125, "first_completed_ms": 29.33825, "max_completed_ms": 35.910166, "memory_ceiling_bytes": [1864593408, 465567744, 67108864], "csv_sha256": "bbdb2acb840c30ee55cdd55d6ab52e405473479c61f1dbcf8112adef01590bb4", "roots_sha256": "c595cf1c86e6c670676d47b17b85f76fd73cc62ce0f1a177cd0ebb9cf9ad75c2"},
+        {"repeat": 3, "frame_gens_per_second": 145.087772, "drawing_completed_ms": 1240.62833, "median_completed_ms": 6.041396000000001, "p99_completed_ms": 19.173958, "first_completed_ms": 30.566958, "max_completed_ms": 35.954292, "memory_ceiling_bytes": [1825632256, 456130560, 67108864], "csv_sha256": "166e35e3d72cf4679b71fee5ff699eef4c92ce3fd42cbb0f7689d464a1fcad1c", "roots_sha256": "c595cf1c86e6c670676d47b17b85f76fd73cc62ce0f1a177cd0ebb9cf9ad75c2"}
+      ]}
+    },
+    {"preset": 33, "name": "Blotty Ink",
+      "ipad": {"median_frame_gens_per_second": 88.925654, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 88.925654, "drawing_completed_ms": 2024.162785, "median_completed_ms": 10.506396, "p99_completed_ms": 21.250625, "first_completed_ms": 32.802792, "max_completed_ms": 58.434791, "memory_ceiling_bytes": [1333657420, 332398592, 67108864], "csv_sha256": "6c88c5c8de189dcb0e306360b538c1ff5eb29989679c5077646ff9e1db577644", "roots_sha256": "a85fbdcf000577fc016df2fe80aafe57c7cdffe59ea1c33d23a0703417c95e3b", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 88.97314, "drawing_completed_ms": 2023.082465, "median_completed_ms": 10.502292, "p99_completed_ms": 20.766459, "first_completed_ms": 32.741667, "max_completed_ms": 58.216208, "memory_ceiling_bytes": [1333579602, 332398592, 67108864], "csv_sha256": "14d0ec1cafecee9647f129d010ec00eba4b13e33f65174a0dca49428aba109d9", "roots_sha256": "a85fbdcf000577fc016df2fe80aafe57c7cdffe59ea1c33d23a0703417c95e3b", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 88.871822, "drawing_completed_ms": 2025.388872, "median_completed_ms": 10.5507505, "p99_completed_ms": 20.236167, "first_completed_ms": 33.158375, "max_completed_ms": 58.098084, "memory_ceiling_bytes": [1333624658, 332398592, 67108864], "csv_sha256": "f7b8ca884d66c014973b664e3d2e02c46c01472783e981a75b949b394e52f75b", "roots_sha256": "a85fbdcf000577fc016df2fe80aafe57c7cdffe59ea1c33d23a0703417c95e3b", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 97.300827, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 97.300827, "drawing_completed_ms": 1849.93288, "median_completed_ms": 9.6635205, "p99_completed_ms": 16.754042, "first_completed_ms": 34.416834, "max_completed_ms": 44.080667, "memory_ceiling_bytes": [1894469632, 472907776, 67108864], "csv_sha256": "186c7798f18c89ce250bfe0b354afa83d8d60552138a4d14ab2fc1ff40733704", "roots_sha256": "1a999a1c906169f7ff43a069ea4ee6ed636e34464bb46e0071a7df608096363e"},
+        {"repeat": 2, "frame_gens_per_second": 97.005385, "drawing_completed_ms": 1855.567082, "median_completed_ms": 9.5868125, "p99_completed_ms": 17.738166, "first_completed_ms": 38.570791, "max_completed_ms": 45.607875, "memory_ceiling_bytes": [1893109760, 472907776, 67108864], "csv_sha256": "7357b839556960ad727d5099d51e12914d52acbca986aec142f4708c21b2c63d", "roots_sha256": "1a999a1c906169f7ff43a069ea4ee6ed636e34464bb46e0071a7df608096363e"},
+        {"repeat": 3, "frame_gens_per_second": 97.345534, "drawing_completed_ms": 1849.083291, "median_completed_ms": 9.6618335, "p99_completed_ms": 17.317875, "first_completed_ms": 34.491375, "max_completed_ms": 44.183125, "memory_ceiling_bytes": [1832476672, 457179136, 67108864], "csv_sha256": "fe19b9d4b50b40c982726c0baecce1059922c0435953b47dfd912ad844697715", "roots_sha256": "1a999a1c906169f7ff43a069ea4ee6ed636e34464bb46e0071a7df608096363e"}
+      ]}
+    },
+    {"preset": 34, "name": "Realistic Brushed Ink",
+      "ipad": {"median_frame_gens_per_second": 88.40794, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 88.40794, "drawing_completed_ms": 2036.016218, "median_completed_ms": 10.649603500000001, "p99_completed_ms": 20.60325, "first_completed_ms": 33.281459, "max_completed_ms": 60.076416, "memory_ceiling_bytes": [1333657432, 332398592, 67108864], "csv_sha256": "141b668530e28eb145ec8f56b3f7e584a113331f9e7f8207aef6a152904e65fe", "roots_sha256": "8247a3bc56557d991feb334dcf68534ea0d9f6a151e69f0062c54b3e438d956e", "thermal": [0, 0]},
+        {"repeat": 2, "frame_gens_per_second": 88.574081, "drawing_completed_ms": 2032.197204, "median_completed_ms": 10.554271, "p99_completed_ms": 21.317333, "first_completed_ms": 33.694458, "max_completed_ms": 60.101333, "memory_ceiling_bytes": [1333546828, 332398592, 67108864], "csv_sha256": "8f80185eeb3b49bc8548c263797c693efe7503852a5214aa9f9b67d61bab6520", "roots_sha256": "8247a3bc56557d991feb334dcf68534ea0d9f6a151e69f0062c54b3e438d956e", "thermal": [0, 0]},
+        {"repeat": 3, "frame_gens_per_second": 88.057345, "drawing_completed_ms": 2044.122504, "median_completed_ms": 10.629438, "p99_completed_ms": 20.91625, "first_completed_ms": 34.01075, "max_completed_ms": 60.218375, "memory_ceiling_bytes": [1333673810, 332398592, 67108864], "csv_sha256": "3cc5905d10faa9292df4405b4e6386880fa0afc678a1347bba8f2c7c95eb1d2f", "roots_sha256": "8247a3bc56557d991feb334dcf68534ea0d9f6a151e69f0062c54b3e438d956e", "thermal": [0, 0]}
+      ]},
+      "mac": {"median_frame_gens_per_second": 93.741151, "runs": [
+        {"repeat": 1, "frame_gens_per_second": 93.741151, "drawing_completed_ms": 1920.181249, "median_completed_ms": 9.9632085, "p99_completed_ms": 20.853333, "first_completed_ms": 39.900458, "max_completed_ms": 45.529708, "memory_ceiling_bytes": [1895600128, 472907776, 67108864], "csv_sha256": "d90af59f8314af41777783da3f707a6294d2e871fccf532256efb406f4c0a731", "roots_sha256": "5eac1a9adb5a0e9de712c620aae4543f01dc70577aec774a217f1ef73f3519ae"},
+        {"repeat": 2, "frame_gens_per_second": 94.425313, "drawing_completed_ms": 1906.268495, "median_completed_ms": 9.942166499999999, "p99_completed_ms": 18.504916, "first_completed_ms": 34.862541, "max_completed_ms": 46.21925, "memory_ceiling_bytes": [1895424000, 472907776, 67108864], "csv_sha256": "126f773dac7cc2708ad99dd63db2036558cca332ba2eeedc1104281fd0e2ce19", "roots_sha256": "5eac1a9adb5a0e9de712c620aae4543f01dc70577aec774a217f1ef73f3519ae"},
+        {"repeat": 3, "frame_gens_per_second": 92.617139, "drawing_completed_ms": 1943.484788, "median_completed_ms": 10.0069375, "p99_completed_ms": 23.263541, "first_completed_ms": 39.602042, "max_completed_ms": 46.599417, "memory_ceiling_bytes": [1829437440, 457179136, 67108864], "csv_sha256": "2d9a5f4fe7d68d59946d0cfc77cdb55e566301d0a3adb4beeda789daccec37f0", "roots_sha256": "5eac1a9adb5a0e9de712c620aae4543f01dc70577aec774a217f1ef73f3519ae"}
+      ]}
+    }
+  ]
+}
