@@ -20,6 +20,8 @@ pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
 pub const PANEL_CONTENT_INSET: f32 = 8.0;
 /// Three standard tiles, two gaps, and the panel's two content insets.
 pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * 2.0 + 2.0 * PANEL_CONTENT_INSET;
+/// A single icon/name row; labels may ellipsize at the minimum width.
+pub const BRUSH_SETS_MIN_WIDTH: f32 = 104.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
 const PANEL_GRIP_HEIGHT: f32 = 20.0;
 const TOOLBAR_DIVIDER_SIZE: f32 = 8.0;
@@ -404,6 +406,9 @@ pub enum Panel {
     Toolbar,
     Commands,
     Brushes,
+    BrushSets,
+    SculptSets,
+    Tools,
     ToolSettings,
     Color,
     Sizes,
@@ -423,6 +428,9 @@ impl From<Panel> for String {
             Panel::Toolbar => "toolbar".into(),
             Panel::Commands => "commands".into(),
             Panel::Brushes => "brushes".into(),
+            Panel::BrushSets => "brush_sets".into(),
+            Panel::SculptSets => "sculpt_sets".into(),
+            Panel::Tools => "tools".into(),
             Panel::ToolSettings => "tool_settings".into(),
             Panel::Color => "color".into(),
             Panel::Sizes => "sizes".into(),
@@ -443,6 +451,9 @@ impl TryFrom<String> for Panel {
             "toolbar" => Self::Toolbar,
             "commands" => Self::Commands,
             "brushes" => Self::Brushes,
+            "brush_sets" => Self::BrushSets,
+            "sculpt_sets" => Self::SculptSets,
+            "tools" => Self::Tools,
             "tool_settings" => Self::ToolSettings,
             "color" => Self::Color,
             "sizes" => Self::Sizes,
@@ -479,7 +490,8 @@ impl Panel {
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {
         match self {
-            Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
+            Self::BrushSets | Self::SculptSets => 160.,
+            Self::Tools | Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
             Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
                 254.
             }
@@ -490,6 +502,9 @@ impl Panel {
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
+        if matches!(self, Self::BrushSets | Self::SculptSets | Self::Tools) {
+            return matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Generic);
+        }
         if self == Self::Proof { return crate::color_management::enabled(platform) || platform == crate::Platform::Generic; }
         if matches!(
             self,
@@ -527,7 +542,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 15] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
@@ -540,12 +555,18 @@ impl Panel {
         Self::Stats,
         Self::Navigator,
         Self::Proof,
+        Self::BrushSets,
+        Self::Tools,
+        Self::SculptSets,
     ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Toolbar => "Tools",
             Self::Commands => "Commands",
             Self::Brushes => "Tool Set",
+            Self::BrushSets => "Brushes",
+            Self::SculptSets => "Sculpting",
+            Self::Tools => "Tools",
             Self::ToolSettings => "Tool",
             Self::Color => "Color",
             Self::Sizes => "Brush size",
@@ -563,6 +584,9 @@ impl Panel {
             Self::Toolbar | Self::CustomToolbar(_) => "toolbar",
             Self::Commands => "menu",
             Self::Brushes => "brush",
+            Self::BrushSets => "drawing-tools",
+            Self::SculptSets => "sculpt",
+            Self::Tools => "brush",
             Self::ToolSettings => "settings",
             Self::Color => "color",
             Self::Sizes => "size",
@@ -821,6 +845,9 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::Properties
                 | Panel::Stats
                 | Panel::ToolSettings
+                | Panel::BrushSets
+                | Panel::SculptSets
+                | Panel::Tools
                 | Panel::Color
                 | Panel::Navigator
                 | Panel::Proof
@@ -1226,7 +1253,11 @@ impl DockLayout {
             if let Some(existing) = layout.panels.iter_mut().find(|p| p.id == id) {
                 *existing = config;
             } else {
-                layout.panels.push(config);
+                // Loading an older registry appends newly available panels.
+                // Match that order so untouched defaults remain recognizable.
+                let index = layout.panels.iter().position(|p|
+                    matches!(p.id, Panel::BrushSets | Panel::SculptSets | Panel::Tools)).unwrap_or(layout.panels.len());
+                layout.panels.insert(index, config);
             }
         }
         // Earlier bands own corners: side columns extend to the bottom while
@@ -1582,7 +1613,9 @@ impl DockLayout {
             {
                 return Err("Invalid toolbar identity".into());
             }
-            if !names.insert(config.title().to_lowercase()) {
+            // Menus distinguish “Tools panel” from “Tools toolbar”. New built-in
+            // content panels must also coexist with previously named toolbars.
+            if !names.insert((config.id.kind() == PanelKind::Tiles, config.title().to_lowercase())) {
                 return Err("Panel names must be unique".into());
             }
             for tile in config.tiles() {
@@ -1790,7 +1823,7 @@ impl DockLayout {
         let group = next.allocate()?;
         let band = next.allocate()?;
         let edge = match panel {
-            Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
+            Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
             Panel::Layers
             | Panel::Adjustments
             | Panel::Properties
@@ -2195,7 +2228,8 @@ impl DockLayout {
                 .iter()
                 .map(|p| match p {
                     Panel::Layers => LAYERS_MIN_WIDTH,
-                    Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
+                    Panel::BrushSets | Panel::SculptSets => BRUSH_SETS_MIN_WIDTH,
+                    Panel::Tools | Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
                     Panel::Navigator => 192.0,
                     Panel::Color => 4.0 * TILE_SIZE,
                     _ => 0.0,

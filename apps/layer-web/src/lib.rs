@@ -724,6 +724,7 @@ impl WebApp {
             tool_settings,
             tool_actions,
             tool_set,
+            tool_panels,
             layers,
             layer_tools,
             adjustments,
@@ -769,6 +770,7 @@ impl WebApp {
         field!(tool_settings);
         field!(tool_actions);
         field!(tool_set);
+        field!(tool_panels);
         field!(layers);
         field!(layer_tools);
         field!(adjustments);

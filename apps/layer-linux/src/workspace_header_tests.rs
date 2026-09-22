@@ -1228,7 +1228,7 @@ fn native_drawer_dismissal_input() {
             let color = d.named(&d.header_tool(ToolbarControl::Color));
             let color_button = find_css(&color, "header-tool").unwrap();
             let brush = d.named(&d.header_tool(ToolbarControl::Command {
-                command: CommandId::Brush,
+                command: CommandId::DrawingBrush,
             }));
             let menu = d.named("header-item-2");
             for outside in ["gap", "menu", "disabled", "canvas"] {
@@ -1486,11 +1486,93 @@ fn native_header_cancel_caption_input() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_brush_drawer_input"]
+fn native_brush_drawer_input() {
+    let mut d = Driver::new("art.capycanvas.BrushDrawer");
+    let brush = ToolbarControl::Command { command: CommandId::DrawingBrush };
+    let opener = d.header_tool(brush);
+    d.click_name(&opener);
+    let drawer = d.named("tool-drawer");
+    let sets = find_named(&drawer, "drawer-panel-BrushSets").unwrap();
+    let tools = find_named(&drawer, "drawer-panel-Tools").unwrap();
+    let settings = find_named(&drawer, "drawer-panel-ToolSettings").unwrap();
+    assert!(sets.width() < tools.width());
+    assert!(tools.width() < settings.width());
+    assert!(find_css(&tools, "tool-groups").is_some_and(|w| !w.is_visible()));
+    for (touch, icon, group) in [
+        (false, "pencil", layer_ui::ToolGroup::Pencil),
+        (true, "pastel", layer_ui::ToolGroup::Pastel),
+        (false, "paint", layer_ui::ToolGroup::Paint),
+    ] {
+        let button = find_named(&sets, &format!("brush-set-{icon}")).unwrap();
+        assert!(button.height() >= 44, "touchable brush set row");
+        let p = d.point(&button);
+        if touch {
+            d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        } else { d.click(&button); }
+        assert!(state(&d.w).customization.drawer.is_some());
+        assert_eq!(state(&d.w).brush.tool, group.tool());
+        assert!(state(&d.w).tool_panels.brush_sets.groups.iter().any(|g| g.selected && g.label == group.label()));
+        assert_eq!(d.named("drawer-panel-BrushSets"), sets, "set list remains retained");
+        let choices = state(&d.w).tool_set.subtools;
+        let last = choices.last().unwrap();
+        d.click_name(&format!("brush-{}", last.preview.unwrap()));
+        assert_eq!(state(&d.w).brush.preset, last.preview.unwrap());
+        assert!(state(&d.w).customization.drawer.is_some());
+    }
+    d.number(&find_named(&drawer, "tool-setting-size").unwrap(), "37");
+    let remembered = state(&d.w).brush.preset;
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS")
+        .unwrap_or_else(|_| d.dir.to_string_lossy().into()));
+    std::fs::create_dir_all(&output).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        let _warm = crate::snapshot(&d.w);
+        pump(120);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("brush-drawer-{theme:?}.png"))).unwrap();
+    }
+    assert_eq!(state(&d.w).tool_panels.brush_sets.groups.len(), 10);
+    let sculpt = d.header_tool(ToolbarControl::Command { command: CommandId::Sculpt });
+    d.click_name(&sculpt);
+    let sculpt_sets = d.named("drawer-panel-SculptSets");
+    assert_eq!(state(&d.w).tool_panels.sculpt_sets.groups.len(), 2);
+    let liquify = find_named(&sculpt_sets, "sculpt-set-liquify").unwrap();
+    let p = d.point(&liquify);
+    d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+    assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Liquify);
+    assert!(state(&d.w).customization.drawer.is_some());
+    d.number(&find_named(&d.named("tool-drawer"), "tool-setting-size").unwrap(), "79");
+    let sculpt_preset = state(&d.w).brush.preset;
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("sculpt-drawer-{theme:?}.png"))).unwrap();
+    }
+    d.click_name(&opener);
+    assert_eq!((state(&d.w).brush.preset, state(&d.w).brush.diameter), (remembered, 37.));
+    d.click_name(&sculpt);
+    assert_eq!((state(&d.w).brush.preset, state(&d.w).brush.diameter), (sculpt_preset, 79.));
+    d.click_name(&opener);
+    d.click_name(&opener);
+    assert!(state(&d.w).customization.drawer.is_none());
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    d.click_name(&opener);
+    assert!(state(&d.w).customization.drawer.is_none(), "first click restores Brush");
+    assert_eq!(state(&d.w).brush.preset, remembered);
+    assert_eq!(state(&d.w).brush.diameter, 37.);
+    d.click_name(&opener);
+    assert!(state(&d.w).customization.drawer.is_some());
+    assert_eq!(d.w.gpu.borrow().as_ref().unwrap().session.command(CommandId::Brush).label, "Paint Brush");
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_drawer_controls_input"]
 fn native_header_drawer_controls_input() {
     let mut d = Driver::new("art.capycanvas.HeaderDrawers");
     let brush = ToolbarControl::Command {
-        command: CommandId::Brush,
+        command: CommandId::DrawingBrush,
     };
     d.click_name(&d.header_tool(brush));
     if state(&d.w).customization.drawer.is_none() {
@@ -1501,14 +1583,14 @@ fn native_header_drawer_controls_input() {
     assert_eq!(state(&d.w).brush.diameter, 37.);
     // The first click on another header tool switches the existing drawer.
     d.click_name(&d.header_tool(ToolbarControl::Command {
-        command: CommandId::Blend,
+        command: CommandId::Sculpt,
     }));
     assert!(state(&d.w).customization.drawer.is_some());
     assert!(
         tool_state(
             &state(&d.w),
             ToolbarControl::Command {
-                command: CommandId::Blend
+                command: CommandId::Sculpt
             }
         )
         .1
@@ -2385,10 +2467,10 @@ fn native_header_builder_input() {
             command: CommandId::Eraser,
         },
         ToolbarControl::Command {
-            command: CommandId::Blend,
+            command: CommandId::Sculpt,
         },
         ToolbarControl::Command {
-            command: CommandId::Brush,
+            command: CommandId::DrawingBrush,
         },
     ] {
         let id = original

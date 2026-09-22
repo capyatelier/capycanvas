@@ -673,7 +673,7 @@ function buildPanels() {
     panelFrame(panel, kind !== "tiles");
   }
   panels.get("brushes").append(editor.control("brushes"));
-  for (const [panel, control] of [["tool_settings","tool_settings"],["color","color_wheel"],["navigator","navigator"]])
+  for (const [panel, control] of [["brush_sets","brush_sets"],["sculpt_sets","sculpt_sets"],["tools","tools"],["tool_settings","tool_settings"],["color","color_wheel"],["navigator","navigator"]])
     panels.get(panel).append(editor.control(control));
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";

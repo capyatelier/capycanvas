@@ -1,3 +1,4 @@
+import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
@@ -380,6 +381,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-panel")) {
     await checkColorPanel({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--brush-drawers")) {
+    await checkBrushDrawers({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--editor")) {
     await checkEditor({call,evaluate,settle,canvasPixels});

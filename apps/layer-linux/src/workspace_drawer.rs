@@ -174,7 +174,7 @@ impl Body {
         }
         match self {
             Self::Toolbar(v) => v.refresh(w, state),
-            Self::Tools(v) => v.refresh(w, &state.tool_set, state.theme),
+            Self::Tools(v) => v.refresh_state(w, state),
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.colors, w.view_color(), w.picker_headroom()),
             Self::Sizes(v) => v.refresh(&state.brush),
@@ -249,8 +249,8 @@ impl View {
                     Panel::Toolbar | Panel::Commands | Panel::CustomToolbar(_) => {
                         Body::Toolbar(ToolbarBody::new(*panel))
                     }
-                    Panel::Brushes => {
-                        let v = ToolSet::new();
+                    Panel::Brushes | Panel::BrushSets | Panel::SculptSets | Panel::Tools => {
+                        let v = ToolSet::for_panel(*panel);
                         margins(&v.root, PANEL_CONTENT_INSET as i32);
                         Body::Tools(v)
                     }

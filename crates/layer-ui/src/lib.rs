@@ -47,7 +47,7 @@ pub use color::{
 pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;
 pub use tools::{
-    Tool, ToolFamily, ToolGroup, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
+    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
     brush_categories,
 };
 mod cursor;
@@ -104,7 +104,7 @@ pub use layout::{
     WorkspacePreset,
 };
 pub use layout::{
-    DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
+    DropHint, BRUSH_SETS_MIN_WIDTH, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
     TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_content_height,
     toolbar_tile_layout,
 };
@@ -323,6 +323,8 @@ pub fn ui_catalog() -> UiCatalog {
             "properties",
             "stats",
             "brush",
+            "drawing-tools",
+            "sculpt",
             "paint",
             "watercolor",
             "oil-paint",
@@ -454,6 +456,8 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    DrawingBrush,
+    Sculpt,
     SdrRendition,
     PreviewSdr,
     SoftProofSetup,
@@ -539,6 +543,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::DrawingBrush | Self::Sculpt => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Generic),
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
@@ -619,6 +624,8 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::DrawingBrush => "drawing-tools",
+            Self::Sculpt => "sculpt",
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
             Self::Histogram => "stats",
             Self::ImportImage | Self::PasteImage | Self::RasterizeSource => "image",
@@ -685,7 +692,9 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 79] = [
+    pub const ALL: [Self; 81] = [
+        Self::DrawingBrush,
+        Self::Sculpt,
         Self::SdrRendition,
         Self::PreviewSdr,
         Self::SoftProofSetup,
@@ -766,7 +775,9 @@ impl CommandId {
         Self::SourceCode,
         Self::Drawings,
     ];
-    pub const TOOLS: [Self; 18] = [
+    pub const TOOLS: [Self; 20] = [
+        Self::DrawingBrush,
+        Self::Sculpt,
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -794,6 +805,8 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::DrawingBrush => "Brush",
+            Self::Sculpt => "Sculpt",
             Self::SdrRendition => "Proof SDR",
             Self::PreviewSdr => "Preview SDR",
             Self::SoftProofSetup => "Proof…",
@@ -816,7 +829,7 @@ impl CommandId {
             Self::CloseDocument => "Close",
             Self::Pen => "Pen",
             Self::Pencil => "Pencil",
-            Self::Brush => "Brush",
+            Self::Brush => "Paint Brush",
             Self::Eraser => "Eraser",
             Self::Airbrush => "Airbrush",
             Self::Decoration => "Decoration",
@@ -961,6 +974,7 @@ pub struct UiState {
     pub tool_settings: Vec<ToolSetting>,
     pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
+    pub tool_panels: ToolPanels,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
     pub adjustments: Vec<AdjustmentChoice>,
@@ -1088,6 +1102,9 @@ pub enum UiAction {
         id: u32,
     },
     SelectToolGroup {
+        group: ToolGroup,
+    },
+    SelectBrushSet {
         group: ToolGroup,
     },
     CycleTool {

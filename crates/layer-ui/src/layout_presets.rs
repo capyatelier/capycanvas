@@ -39,6 +39,12 @@ impl WorkspacePreset {
         } else {
             self.layout_with_header_tools(platform,crate::CommandId::CustomizeWorkspaceUi.available_on(platform))
         };
+        if self == Self::Painter && crate::CommandId::DrawingBrush.available_on(platform) {
+            for (old, new) in [(crate::CommandId::Brush, crate::CommandId::DrawingBrush), (crate::CommandId::Blend, crate::CommandId::Sculpt)] {
+                replace_tool(&mut layout, old, new);
+            }
+        }
+
         if self != Self::Painter && Panel::Proof.available_on(platform) {
             if let Some(group)=layout.panel_group(Panel::Color) {
                 if let Some(DockNode::Tabs {panels,..})=layout.node_mut(group) {
@@ -53,6 +59,11 @@ impl WorkspacePreset {
     /// Exact pre-title-bar arrangement, retained for conservative default upgrades.
     pub fn legacy_painter_layout(platform: crate::Platform) -> DockLayout {
         Self::Painter.layout_with_header_tools(platform, false)
+    }
+
+    /// The three-panel Brush drawer replaces the prior Paint button.
+    pub fn legacy_painter_paint_drawer_layout(platform: crate::Platform) -> DockLayout {
+        Self::Painter.layout_with_header_tools(platform, crate::CommandId::CustomizeWorkspaceUi.available_on(platform))
     }
 
     /// Exact prior Photo columns, before adopting the shared primary panels.
@@ -131,6 +142,10 @@ impl WorkspacePreset {
         } else {
             HeaderLayout::for_platform(platform)
         };
+        // This builder also supplies the exact previous defaults for migration.
+        // The current layout promotes Paint Brush and Blend to their tool classes.
+        layout.header.replace_tool(DrawingBrush, Brush);
+        layout.header.replace_tool(Sculpt, Blend);
         let tile_style = if self == Self::Painter {
             TileStyle::Medium
         } else {
@@ -307,10 +322,56 @@ impl DockLayout {
     }
 }
 
+fn replace_tool(layout: &mut DockLayout, old: crate::CommandId, new: crate::CommandId) {
+    layout.header.replace_tool(old, new);
+    let old = ToolbarControl::Command { command: old };
+    let new = ToolbarControl::Command { command: new };
+    for panel in &mut layout.panels {
+        if let PanelContent::Toolbar { tiles, .. } = &mut panel.content {
+            for tile in tiles {
+                if tile.control == old { tile.control = new; }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{HeaderItem, HeaderZone, Platform};
+
+    #[test]
+    fn tool_class_panels_are_independent_and_available_on_supported_hosts() {
+        let gtk = WorkspacePreset::Painter.layout(Platform::Gtk);
+        for panel in [Panel::BrushSets, Panel::SculptSets, Panel::Tools] {
+            assert!(gtk.panel(panel).is_ok());
+            assert!(gtk.panel_group(panel).is_none());
+            assert!(panel.available_on(Platform::Gtk));
+        }
+        assert!(Panel::BrushSets.default_width() < Panel::Tools.default_width());
+        assert_eq!(Panel::BrushSets.label(), "Brushes");
+        assert_eq!(Panel::Tools.label(), "Tools");
+        for platform in [Platform::Windows, Platform::Mac, Platform::Ios] {
+            assert!(!crate::CommandId::DrawingBrush.available_on(platform));
+            assert!(!Panel::BrushSets.available_on(platform));
+            assert!(!Panel::Tools.available_on(platform));
+            let layout = WorkspacePreset::Painter.layout(platform);
+            assert!(layout.header.entries().any(|entry| entry.item == HeaderItem::Tool {
+                control: ToolbarControl::Command { command: crate::CommandId::Brush },
+            }));
+        }
+        // Existing workspaces gain hidden registrations without losing layout.
+        let mut saved = serde_json::to_value(&gtk).unwrap();
+        saved["panels"].as_array_mut().unwrap().retain(|panel|
+            panel["id"] != "brush_sets" && panel["id"] != "tools" && panel["id"] != "sculpt_sets");
+        let restored: DockLayout = serde_json::from_value(saved).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.header, gtk.header);
+        assert_eq!(restored.bands, gtk.bands);
+        for panel in &gtk.panels {
+            assert_eq!(restored.panel(panel.id).unwrap(), panel);
+        }
+    }
 
     #[test]
     fn preset_title_bar_controls_follow_the_host_platform() {
@@ -359,7 +420,12 @@ mod tests {
                     items.contains(&HeaderItem::Menu),
                     minimal && platform != Platform::Mac
                 );
-                let native = preset.layout(Platform::Gtk).header.projected_for(platform);
+                let mut native = preset.layout(Platform::Gtk).header.projected_for(platform);
+                // Hosts without these projections retain the prior tools.
+                if !crate::CommandId::DrawingBrush.available_on(platform) {
+                    native.replace_tool(crate::CommandId::DrawingBrush, crate::CommandId::Brush);
+                    native.replace_tool(crate::CommandId::Sculpt, crate::CommandId::Blend);
+                }
                 for zone in HeaderZone::ALL {
                     assert_eq!(
                         layout.header.zones[zone.index()]

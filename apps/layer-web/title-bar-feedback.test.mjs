@@ -54,7 +54,7 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const entries = await evaluate('layerApp.state().workspace.layout.header.zones.flat()');
   const tool = command => `[data-header-item="${entries.find(e=>e.item.control?.command===command).id}"] .header-tool`;
   const color = `[data-header-item="${entries.find(e=>e.item.control?.kind==='color').id}"] .header-tool`;
-  const brush = tool('brush'), erase = tool('eraser');
+  const brush = tool('drawing_brush'), erase = tool('eraser');
   try {
     for (const size of ['small','large','medium']) {
       await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});

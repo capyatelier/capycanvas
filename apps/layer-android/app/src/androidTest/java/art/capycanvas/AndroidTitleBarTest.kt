@@ -612,7 +612,7 @@ class AndroidTitleBarTest {
             event(MotionEvent.ACTION_DOWN, gap); event(MotionEvent.ACTION_UP)
             waitFor("bar gap dismisses drawer") { node("tool-drawer") == null }
         }
-        val brush = tools.first { it.getJSONObject("item").getJSONObject("control").optString("command") == "brush" }.getInt("id")
+        val brush = tools.first { it.getJSONObject("item").getJSONObject("control").optString("command") == "drawing_brush" }.getInt("id")
         val filters = tools.first { it.getJSONObject("item").getJSONObject("control").optString("panel") == "adjustments" }.getInt("id")
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
@@ -641,6 +641,87 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Switch discards the temporary header", committed, model().toString())
         shot("sketch-default")
     }
+    @Test fun brushAndSculptDrawersKeepIndependentSelections() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        fun header(command: String) = "header-control-" + entries().first {
+            it.getJSONObject("item").objectOrNull("control")?.optString("command") == command
+        }.getInt("id")
+        fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+        fun checkColumns(first: String) {
+            assertEquals("[[\"$first\"],[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+            val set = state().getJSONObject("tool_panels").getJSONObject(first).array("groups").objects().first().getString("label")
+            val choice = state().getJSONObject("tool_set").array("subtools").objects().first().getString("label")
+            waitFor("$first drawer content laid out") {
+                (node("$first-$set")?.second?.boundsInRoot?.height ?: 0f) >= 48 * density &&
+                    (node("subtool-$choice")?.second?.boundsInRoot?.width ?: 0f) > 0f
+            }
+            val a = bounds("$first-$set"); val b = bounds("subtool-$choice")
+            assertTrue("Sets $a should be narrower than tools $b", a.width < b.width)
+            assertTrue(state().array("tool_settings").length() > 0)
+            assertNull("Tools has no category headers", node("tool-group-" + if(first == "sculpt_sets") "Blend" else "Paint"))
+        }
+        val brush = header("drawing_brush")
+        val sculpt = header("sculpt")
+        tap(brush)
+        if (drawer() == null) tap(brush)
+        checkColumns("brush_sets")
+        assertEquals(10, state().getJSONObject("tool_panels").getJSONObject("brush_sets").array("groups").length())
+        assertFalse(state().getJSONObject("tool_panels").getJSONObject("brush_sets").array("groups").objects().any { it.getString("label") in listOf("Eraser", "Blend", "Liquify") })
+        for ((device, label) in listOf(MotionEvent.TOOL_TYPE_MOUSE to "Pencil", MotionEvent.TOOL_TYPE_FINGER to "Pastel", MotionEvent.TOOL_TYPE_STYLUS to "Paint")) {
+            tool = device
+            assertTrue(bounds("brush_sets-$label").height / density >= 48f)
+            tap("brush_sets-$label")
+            checkColumns("brush_sets")
+            val choice = state().getJSONObject("tool_set").array("subtools").objects().first()
+            tap("subtool-${choice.getString("label")}")
+            assertEquals(choice.getInt("preview"), state().getJSONObject("brush").getInt("preset"))
+        }
+        action(obj("type" to "set_brush_size", "value" to 37))
+        val drawing = state().getJSONObject("brush").getInt("preset")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); shot("brush-drawer-$theme")
+        }
+        tap(sculpt)
+        checkColumns("sculpt_sets")
+        assertEquals(listOf("Blend", "Liquify"), state().getJSONObject("tool_panels").getJSONObject("sculpt_sets").array("groups").objects().map { it.getString("label") })
+        for (device in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool = device
+            for (label in listOf("Liquify", "Blend")) {
+                tap("sculpt_sets-$label"); checkColumns("sculpt_sets")
+                assertEquals(label.lowercase(), state().getJSONObject("brush").getString("tool"))
+            }
+        }
+        tap("sculpt_sets-Liquify")
+        action(obj("type" to "set_brush_size", "value" to 79))
+        val sculpting = state().getJSONObject("brush").getInt("preset")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); shot("sculpt-drawer-$theme")
+        }
+        tap(brush)
+        assertEquals(drawing, state().getJSONObject("brush").getInt("preset"))
+        assertEquals(37.0, state().getJSONObject("brush").getDouble("diameter"), .01)
+        tap(header("eraser"))
+        assertEquals("[[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+        val eraserChoice = state().getJSONObject("tool_set").array("subtools").objects().first().getString("label")
+        waitFor("Eraser tools laid out") { (node("subtool-$eraserChoice")?.second?.boundsInRoot?.width ?: 0f) > 0f }
+        assertNull("Eraser has no category header", node("tool-group-Eraser"))
+        shot("eraser-drawer")
+        assertFalse(state().array("commands").objects().filter { it.getString("id") in listOf("drawing_brush", "sculpt") }.any { it.getBoolean("selected") })
+        tap(sculpt)
+        assertEquals(sculpting, state().getJSONObject("brush").getInt("preset"))
+        assertEquals(79.0, state().getJSONObject("brush").getDouble("diameter"), .01)
+        tap(sculpt); assertNull(drawer())
+        send(obj("type" to "switch", "id" to "builtin:workspace:illustrator"))
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        // The workspace is adopted after send's publication fence. Wait for its
+        // native header measurements before delivering the next contact.
+        idle()
+        tap(brush)
+        assertEquals(drawing, state().getJSONObject("brush").getInt("preset"))
+        assertNull("First contact selects Brush", drawer())
+        tap(brush); checkColumns("brush_sets")
+    }
+
     @Test fun keyboardContextHoldAndFocusLossKeepTheirOwnership() {
         restore(); startEditor(); tool = MotionEvent.TOOL_TYPE_MOUSE
         tap("header-item-1")

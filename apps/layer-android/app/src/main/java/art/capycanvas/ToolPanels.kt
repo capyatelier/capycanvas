@@ -24,10 +24,14 @@ import org.json.JSONObject
 
 /** The selected tool determines groups, subtools and settings in Rust. */
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject) {
-    val view = state.getJSONObject("tool_set")
+@Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject, panel: String = "brushes") {
+    val view = state.getJSONObject("tool_panels").optJSONObject(panel) ?: state.getJSONObject("tool_set")
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (panel == "brush_sets" || panel == "sculpt_sets") Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            view.array("groups").objects().forEach { item ->
+                ToolChoice(host, item, "set", Modifier.fillMaxWidth().testTag("$panel-${item.getString("label")}"))
+            }
+        } else FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("groups").objects().forEach { item ->
                 ToolChoice(host, item, "group", (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"))
             }
@@ -60,10 +64,10 @@ import org.json.JSONObject
                     SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                     Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
                 }
-            } else Row(Modifier.heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically,
+            } else Row(Modifier.heightIn(min = if (kind == "set") 42.dp else 30.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
-                Text(label, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(label, fontWeight = FontWeight.Bold, maxLines = if (kind == "set") 1 else 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }

@@ -114,6 +114,9 @@ impl TileStyle {
 #[serde(rename_all = "snake_case")]
 pub enum PanelControl {
     Brushes,
+    BrushSets,
+    SculptSets,
+    Tools,
     ToolSettings,
     ColorWheel,
     BrushSize,
@@ -132,6 +135,9 @@ impl PanelControl {
     pub fn label(self) -> &'static str {
         match self {
             Self::Brushes => "Tool Set",
+            Self::BrushSets => Panel::BrushSets.label(),
+            Self::SculptSets => Panel::SculptSets.label(),
+            Self::Tools => Panel::Tools.label(),
             Self::ToolSettings => Panel::ToolSettings.label(),
             Self::ColorWheel => "Color wheel",
             Self::BrushSize => "Brush size",
@@ -149,6 +155,9 @@ impl PanelControl {
     }
     pub fn available(panel: Panel) -> &'static [Self] {
         match panel {
+            Panel::BrushSets => &[Self::BrushSets],
+            Panel::SculptSets => &[Self::SculptSets],
+            Panel::Tools => &[Self::Tools],
             Panel::ToolSettings => &[Self::ToolSettings],
             Panel::Color => &[Self::ColorWheel],
             Panel::Brushes => &[
@@ -181,6 +190,9 @@ impl PanelControl {
             | Panel::Stats
             | Panel::Navigator
             | Panel::ToolSettings
+            | Panel::BrushSets
+            | Panel::SculptSets
+            | Panel::Tools
             | Panel::Color => Self::available(panel),
             _ => &[],
         }
@@ -908,6 +920,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Command { command } => (
             command.label().into(),
             match command {
+                CommandId::DrawingBrush => "Draw with pens, pencils, pastels, paint and other brushes",
+                CommandId::Sculpt => "Shape existing strokes with Blend and Liquify",
                 CommandId::DocumentProperties => "Inspect document color, depth and retained sources",
                 CommandId::SdrRendition => "Edit the saved HDR-to-SDR delivery mapping",
                 CommandId::PreviewSdr => "Preview the authored SDR rendition without changing artwork",
@@ -1778,11 +1792,17 @@ impl CustomizationState {
                 ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
-                let drawer = match action {
+                let mut drawer = match action {
                     ToggleToolDrawer { anchor } => ContentDrawer::for_tile(layout, anchor)?,
                     ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
                     _ => unreachable!(),
                 };
+                // Keep the existing tool list on hosts awaiting the Tools panel.
+                if !Panel::Tools.available_on(platform) {
+                    for panel in drawer.columns.iter_mut().flatten() {
+                        if *panel == Panel::Tools { *panel = Panel::Brushes; }
+                    }
+                }
                 if self
                     .drawer_placement(&drawer, layout, viewport, &vec![0.0; drawer.columns.len()])
                     .is_none()

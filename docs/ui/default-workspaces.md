@@ -33,9 +33,41 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Blend, Eraser, Layers, Color (plus Full Screen on Web) |
+| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Sculpt, Eraser, Layers, Color (plus Full Screen on Web) |
 | Paint | Tools toolbar and expanded Tool Set/Tool/Brush size/Color column | Commands toolbar | Open collapsed stack for Navigator/Diagnostics, Properties/Filters and Layers |
 | Photo | Tools toolbar | Commands toolbar | Expanded Color/Diagnostics, Properties/Filters, Layers; inner collapsed strip for Tool Set, Tool/Brush size, Navigator |
+
+The GTK, Android and Web Sketch Brush button now opens **Brushes → Tools → Tool**. Brushes is a
+narrow list of drawing sets (Paint, Pencil, Pastel, and the other brush media),
+Tools contains only the selected set's tools and stroke previews, and Tool keeps
+the existing settings. The previous Brush class is named **Paint Brush**. The new
+Brush class restores the most recently selected drawing tool; clicking it while
+already selected opens or closes its drawer. Choosing a set keeps the drawer
+open and restores that set's last tool and settings.
+
+Brushes, Sculpting and Tools are independent panels in the panel menus. Brushes starts
+at 160 logical pixels wide, can shrink to a 104-pixel minimum, and uses rows at
+least 44 pixels tall with an icon and name on the same line. Tools uses the usual
+tool-list sizing; Android set rows are at least 48 dp tall.
+
+Sculpt replaces Sketch’s Blend entry and opens **Sculpting → Tools → Tool**.
+Sculpting contains Blend and Liquify; neither appears under Brush, and Eraser
+remains a separate tool with a two-panel **Tools → Tool** drawer. Brush and Sculpt
+each restore their own last selection and settings, including after switching
+workspaces or restarting. Other hosts
+retain their previous entry points until their native projections are added.
+
+Untouched included GTK, Android and Web Sketch workspaces receive the new default automatically.
+Customized layouts keep their arrangement; Restore Starting Layout adopts the
+new default. Saved brush choices, settings, and color are preserved.
+
+Drawer regression coverage lives in GTK's `native_brush_drawer_input`, Android's
+`AndroidTitleBarTest#brushAndSculptDrawersKeepIndependentSelections`, and Web's
+`--brush-drawers` journey (desktop and device runners). On 2026-09-21 the GTK
+mouse/touch journey and Huion KP1202 Android/Chrome mouse/touch/stylus journeys
+passed, with light/dark captures in `artifacts/sculpt-gtk`,
+`artifacts/sculpt-android`, and `artifacts/brush-sculpt-web`. Tablet contacts were
+automated native MotionEvents / Chrome input events, not physical pen strokes.
 
 GTK/Web Sketch uses Medium window-bar icons, a transparent canvas overlay, no menu
 labels and no zoom/rotation bubble. Other hosts retain the earlier two-toolbar

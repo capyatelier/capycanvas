@@ -26,7 +26,7 @@ export async function checkToolbarDrawerSwitching({call,evaluate,settle}) {
   };
   const check=async(i)=>{
     const drawer=await model();assert.equal(drawer?.anchor.tile,ids[i],'One click moves the drawer to the new tool');
-    assert.deepEqual(drawer.columns,i===2?[['color']]:[['brushes'],['tool_settings']]);
+    assert.deepEqual(drawer.columns,i===2?[['color']]:[[i===1?'tools':'brushes'],['tool_settings']]);
     assert.ok(await evaluate(`document.querySelector(${JSON.stringify(selector(i))}).dataset.drawerFacing`),'Connector corners follow the new opener');
     if(i!==2) {
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector(i))}).getAttribute('aria-pressed')`),'true','New tool activates immediately');

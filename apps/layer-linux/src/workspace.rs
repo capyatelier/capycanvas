@@ -834,6 +834,9 @@ pub struct Workspace {
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
     tool_set: crate::tool_panels::ToolSet,
+    brush_sets: crate::tool_panels::ToolSet,
+    sculpt_sets: crate::tool_panels::ToolSet,
+    subtools: crate::tool_panels::ToolSet,
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
@@ -963,6 +966,12 @@ impl Workspace {
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let tool_set = crate::tool_panels::ToolSet::new();
+        let brush_sets = crate::tool_panels::ToolSet::for_panel(Panel::BrushSets);
+        let sculpt_sets = crate::tool_panels::ToolSet::for_panel(Panel::SculptSets);
+        let subtools = crate::tool_panels::ToolSet::for_panel(Panel::Tools);
+        margins(&brush_sets.root, layer_ui::PANEL_CONTENT_INSET as i32);
+        margins(&sculpt_sets.root, layer_ui::PANEL_CONTENT_INSET as i32);
+        margins(&subtools.root, layer_ui::PANEL_CONTENT_INSET as i32);
         let tool_settings = crate::tool_panels::ToolSettings::new();
         let color_panel = crate::tool_panels::ColorPanel::new();
         let navigator_overviews = Rc::new(crate::navigator::Overviews::default());
@@ -1055,6 +1064,9 @@ impl Workspace {
             panels: vec![
                 (Panel::Toolbar, toolbar.clone().upcast()),
                 (Panel::Brushes, scroll(&brushes)),
+                (Panel::BrushSets, scroll(&brush_sets.root)),
+                (Panel::SculptSets, scroll(&sculpt_sets.root)),
+                (Panel::Tools, scroll(&subtools.root)),
                 (Panel::ToolSettings, scroll(&tool_settings.root)),
                 (Panel::Color, scroll(&color_panel.root)),
                 (Panel::Sizes, scroll(&sizes)),
@@ -1067,6 +1079,9 @@ impl Workspace {
             ],
             commands: RefCell::new(Vec::new()),
             tool_set,
+            brush_sets,
+            sculpt_sets,
+            subtools,
             size_buttons: RefCell::new(Vec::new()),
             size_number,
             opacity,
@@ -1154,6 +1169,9 @@ impl Workspace {
         brushes.append(brush_list);
         self.customization
             .track(Panel::Brushes, PanelControl::Brushes, brush_list);
+        self.customization.track(Panel::BrushSets, PanelControl::BrushSets, &self.brush_sets.root);
+        self.customization.track(Panel::SculptSets, PanelControl::SculptSets, &self.sculpt_sets.root);
+        self.customization.track(Panel::Tools, PanelControl::Tools, &self.subtools.root);
         self.customization.track(
             Panel::ToolSettings,
             PanelControl::ToolSettings,
@@ -2261,6 +2279,9 @@ impl Workspace {
         }
         if regions & (regions::BRUSH | regions::SETTINGS | regions::DOCUMENT) != 0 {
             self.tool_set.refresh(self, &state.tool_set, state.theme);
+            self.brush_sets.refresh_state(self, &state);
+            self.sculpt_sets.refresh_state(self, &state);
+            self.subtools.refresh_state(self, &state);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
             self.tool_settings.refresh(self, &state);

@@ -123,7 +123,7 @@ import kotlin.math.roundToInt
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             controls.forEach { item ->
                 when (item.getString("control")) {
-                    "brushes" -> ToolSetControls(host, state)
+                    "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"))
                     "tool_settings" -> ToolSettingsControls(host, state)
                     "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> colorHeightDeficit = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> navigatorHeightDeficit = natural - displayed }
@@ -234,7 +234,7 @@ import kotlin.math.roundToInt
                 Box(Modifier.fillMaxSize().background(Color(rgba.getDouble(0).toFloat(), rgba.getDouble(1).toFloat(), rgba.getDouble(2).toFloat()), RoundedCornerShape(4.dp)))
             }
         }
-        "brushes" -> ToolSetControls(host, state)
+        "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, control)
         "layers" -> {
             var open by remember { mutableStateOf(false) }
             val choices = if (control == "brushes") host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() } else state.array("layers").objects()

@@ -9,7 +9,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     const root = element("div", `${kind.replaceAll("_", "-")}-control`);
     root.dataset.control = kind;
     let refresh;
-    if (kind === "brushes") refresh = toolSet(root);
+    if (["brushes", "brush_sets", "sculpt_sets", "tools"].includes(kind)) refresh = toolSet(root, kind);
     else if (kind === "tool_settings") refresh = toolSettings(root);
     else if (kind === "color_wheel") refresh = colorWheel(root);
     else if (kind === "navigator") refresh = navigatorPanel(root);
@@ -18,14 +18,15 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
     root.disposeEditor = () => { updates.delete(root); root.navigatorDispose?.(); };
     return root;
   };
-  function toolSet(root) {
+  function toolSet(root, panel) {
     let key = "", rows = [];
     return () => {
-      const view = state().tool_set;
+      const view = state().tool_panels[panel] || state().tool_set;
       const next = JSON.stringify([view.groups, view.subtools].map(items => items.map(({selected, ...item}) => item))) + state().theme;
       if (next !== key) {
         key = next; rows = []; root.replaceChildren();
         for (const [kind, items] of [["groups",view.groups], ["subtools",view.subtools]]) {
+          if (!items.length) continue;
           const list = element("div", `tool-${kind}`); root.append(list);
           for (const item of items) {
             const node = button("", () => dispatch(item.action), "tool-choice-button");
@@ -41,7 +42,7 @@ export function createEditorPanels({ app, state, element, button, icon, numberFi
             node.append(label); list.append(node); rows.push({node,kind,index:rows.filter(r=>r.kind===kind).length});
           }
         }
-        contentChanged("brushes");
+        contentChanged(panel);
       }
       for (const {node,kind,index} of rows) {
         const pressed=String(view[kind][index].selected);if(node.getAttribute("aria-pressed")!==pressed)node.setAttribute("aria-pressed",pressed);

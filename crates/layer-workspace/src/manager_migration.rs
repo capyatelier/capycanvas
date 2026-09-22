@@ -18,17 +18,18 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
+    let previous_paint_drawer = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
     let mut previous_native_settings = previous.clone();
     previous_native_settings.header.add(
         layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
     ).ok()?;
     let portable = layer_ui::WorkspacePreset::legacy_painter_layout(Platform::Web);
-    let mut previous_header = layout.clone();
+    let mut previous_header = previous_paint_drawer.clone();
     previous_header.header.add(
         layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
     ).ok()?;
     let mut previous_with_settings = portable.clone();
-    previous_with_settings.header = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk).header;
+    previous_with_settings.header = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(Platform::Gtk).header;
     previous_with_settings.header.add(
         layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
     ).ok()?;
@@ -41,7 +42,8 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         || history.layout() != baseline.as_ref()
         || (baseline.as_ref() != &previous && baseline.as_ref() != &portable
             && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
-            && baseline.as_ref() != &previous_native_settings)
+            && baseline.as_ref() != &previous_native_settings
+            && baseline.as_ref() != &previous_paint_drawer)
 
     {
         return None;
@@ -111,7 +113,7 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
     }
     // The prior GTK Sketch header ended in Settings. Only an untouched
     // included layout receives the new default; working brush values survive.
-    let mut old = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
+    let mut old = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(Platform::Gtk);
     old.header.add(
         layer_ui::HeaderZone::Right, None, &[layer_ui::HeaderItem::Settings],
     ).unwrap();
@@ -141,6 +143,36 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
     }
     assert!(updated_painter_default(&entity, Platform::Gtk).is_none());
 
+}
+
+#[cfg(test)]
+#[test]
+fn brush_drawer_upgrade_only_replaces_untouched_defaults() {
+    for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+        let previous = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
+        let mut saved = serde_json::to_value(previous.clone()).unwrap();
+        saved["panels"].as_array_mut().unwrap().retain(|panel|
+            panel["id"] != "brush_sets" && panel["id"] != "tools" && panel["id"] != "sculpt_sets");
+        let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
+        assert_eq!(old, previous);
+        let mut working = layer_ui::WorkspacePreset::Painter.working_state();
+        working.preset = layer_ui::Tool::Pencil.default_preset();
+        let mut entity = Entity::workspace("Sketch", WorkspaceCapture {
+            history: layer_ui::LayoutHistory::new(&old), working: working.clone(),
+        }, old, None, 1);
+        entity.id = DEFAULT_WORKSPACES[0].0.into();
+        entity.metadata.builtin = true;
+        let mut updated = entity.clone();
+        updated.content = updated_painter_default(&entity, platform).unwrap();
+        assert_eq!(updated.capture().unwrap().working, working);
+        assert_eq!(updated.capture().unwrap().history.layout(), &layer_ui::WorkspacePreset::Painter.layout(platform));
+        if let ItemContent::Workspace { history, .. } = &mut entity.content {
+            let mut layout = history.layout().clone();
+            layout.header.size = layer_ui::HeaderSize::Large;
+            history.append(&layout, "User customization");
+        }
+        assert!(updated_painter_default(&entity, platform).is_none());
+    }
 }
 
 /// Existing, untouched Illustrator workspaces receive the new column default.

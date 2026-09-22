@@ -213,6 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 tool_settings: Vec::new(),
                 tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
+                tool_panels: ToolPanels::default(),
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
                 adjustments: effects::catalog(&effect_catalog, &Default::default()),
@@ -1888,7 +1889,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => true,
         };
         let selected = (self.layer_interaction.tool == LayerCanvasTool::Paint
-            && id.paint_tool() == Some(self.state.brush.tool))
+            && ((id == CommandId::DrawingBrush && tools::is_drawing(self.state.brush.tool))
+                || (id == CommandId::Sculpt && tools::is_sculpt(self.state.brush.tool))
+                || id.paint_tool() == Some(self.state.brush.tool)))
             || matches!(
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
@@ -2026,6 +2029,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let was_expanded = self.state.customization.has_drawer();
         let was_zen = self.state.workspace.zen_mode;
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
+        let choosing_drawing_set = matches!(&action, UiAction::SelectBrushSet { .. })
+            && self.state.customization.drawer.as_ref().is_some_and(|drawer|
+                drawer.columns.iter().flatten().any(|p| matches!(p, Panel::BrushSets | Panel::SculptSets)));
         let explicit_color = matches!(action, UiAction::Color { .. } | UiAction::SetColor { .. });
         let workspace_before = matches!(
             &action,
@@ -2499,6 +2505,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.select_brush(self.tools.group(group))?;
                 (BRUSH, false)
             }
+            UiAction::SelectBrushSet { group } => {
+                self.select_brush(self.tools.group(group))?;
+                (BRUSH, false)
+            }
             UiAction::SetBrushSize { value } => {
                 NumericControl::brush_size().validate(value, "Brush size")?;
                 self.state.brush.diameter = value;
@@ -2925,7 +2935,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .and_then(|panel| layout.active_panel(panel));
         }
         if self.state.customization.drawer.is_some()
-            && (tool_before != (self.state.brush.tool, self.layer_interaction.tool)
+            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set)
                 || self.state.customization.expanded.is_some()
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
@@ -3645,6 +3655,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
+            CommandId::Sculpt => {
+                self.select_brush(self.tools.sculpt())?;
+                Ok((BRUSH, false))
+            }
+            CommandId::DrawingBrush => {
+                self.select_brush(self.tools.drawing())?;
+                Ok((BRUSH, false))
+            }
             CommandId::Pen
             | CommandId::Pencil
             | CommandId::Brush
@@ -4011,6 +4029,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             Vec::new()
         };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
+
         if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
             && self.layer_interaction.tool.picks_color() {
             self.state.tool_set.subtools.extend(
@@ -4025,6 +4044,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }),
             );
         }
+        self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set);
         self.state.tool_settings = if self.operation.active() {
             self.transform_controls()
         } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
@@ -7314,6 +7334,119 @@ mod tests {
             s.renderer_mut().preview_requests,
             [None, Some(42), Some(42)]
         );
+    }
+
+    #[test]
+    fn brush_class_browses_all_sets_and_remembers_tools_and_settings() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+            layout: WorkspacePreset::Painter.layout(Platform::Gtk),
+            ..WorkspaceState::default()
+        }) }).unwrap();
+        let id = s.state.workspace.layout.header.entries().find(|e|
+            e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::DrawingBrush } }).unwrap().id;
+        s.dispatch(UiAction::MeasureHeader {
+            height: 60.,
+            items: vec![HeaderItemBounds { id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. } }],
+        }).unwrap();
+        s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+        let drawer = s.state.customization.drawer.clone().unwrap();
+        assert_eq!(drawer.columns, [vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
+        assert_eq!(drawer.column_widths(), [160., 272., 320.]);
+        let sets = s.state.tool_panels.brush_sets.groups.clone();
+        assert_eq!(sets.len(), 10);
+        assert!(sets.iter().all(|set| !matches!(set.label, "Eraser" | "Blend" | "Liquify")));
+        let mut remembered = Vec::new();
+        for set in sets {
+            s.dispatch(set.action).unwrap();
+            assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
+            assert_eq!(s.state.tool_panels.brush_sets.groups.iter().filter(|g| g.selected).count(), 1);
+            let tool = s.state.tool_set.subtools.last().unwrap().clone();
+            s.dispatch(tool.action).unwrap();
+            let preset = tool.preview.unwrap();
+            let size = preset as f32 + 12.;
+            s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+            remembered.push((tools::group(preset), preset, size));
+            assert!(s.state.customization.drawer.is_some());
+            assert!(!s.state.tool_settings.is_empty());
+        }
+        for (group, preset, size) in remembered {
+            s.dispatch(UiAction::SelectBrushSet { group }).unwrap();
+            assert_eq!((s.state.brush.preset, s.state.brush.diameter), (preset, size));
+        }
+        let remembered = (s.state.brush.preset, s.state.brush.diameter);
+        invoke(&mut s, CommandId::Lasso);
+        assert!(s.state.customization.drawer.is_none());
+        assert!(s.state.tool_panels.brush_sets.groups.iter().all(|g| !g.selected));
+        assert!(!crate::header::tool_state(&s.state, ToolbarControl::Command { command: CommandId::DrawingBrush }).1);
+        s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+        assert_eq!((s.state.brush.preset, s.state.brush.diameter), remembered);
+        assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Paint);
+        assert!(s.state.customization.drawer.is_none(), "First click selects the class");
+        s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+        assert_eq!(s.state.customization.drawer, Some(drawer));
+        s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+        assert!(s.state.customization.drawer.is_none(), "Clicking the opener again closes it");
+        let capture = s.capture_workspace().unwrap();
+        let mut restored = session();
+        restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
+        assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), remembered);
+    }
+
+    #[test]
+    fn sculpt_and_brush_restore_separate_selections_across_workspace_reload() {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+                layout: WorkspacePreset::Painter.layout(platform), ..WorkspaceState::default()
+            }) }).unwrap();
+            let id = s.state.workspace.layout.header.entries().find(|e|
+                e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Sculpt } }).unwrap().id;
+            s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
+                id, bounds: Bounds { x: 800., y: 0., width: 40., height: 60. }
+            }] }).unwrap();
+            invoke(&mut s, CommandId::Pencil);
+            s.dispatch(UiAction::SetBrushSize { value: 23. }).unwrap();
+            let drawing = s.state.brush.preset;
+            s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.state.brush.tool, Tool::Blend);
+            s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
+            let drawer = s.state.customization.drawer.clone().unwrap();
+            assert_eq!(drawer.columns, [vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
+            assert_eq!(s.state.tool_panels.sculpt_sets.groups.iter().map(|s| s.label).collect::<Vec<_>>(), ["Blend", "Liquify"]);
+            for set in s.state.tool_panels.sculpt_sets.groups.clone() {
+                s.dispatch(set.action).unwrap();
+                assert_eq!(s.state.customization.drawer.as_ref(), Some(&drawer));
+                assert!(s.command(CommandId::Sculpt).selected);
+                assert!(!s.command(CommandId::DrawingBrush).selected);
+                assert!(s.state.tool_panels.brush_sets.groups.iter().all(|s| !s.selected));
+                s.dispatch(s.state.tool_set.subtools.last().unwrap().action.clone()).unwrap();
+            }
+            s.dispatch(UiAction::SetBrushSize { value: 79. }).unwrap();
+            let sculpt = s.state.brush.preset;
+            invoke(&mut s, CommandId::Eraser);
+            assert!(!s.command(CommandId::Sculpt).selected);
+            assert!(!s.command(CommandId::DrawingBrush).selected);
+            let eraser = s.state.workspace.layout.header.entries().find(|e|
+                e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
+            s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
+                id: eraser, bounds: Bounds { x: 850., y: 0., width: 40., height: 60. }
+            }] }).unwrap();
+            s.dispatch(UiAction::ActivateHeaderItem { id: eraser }).unwrap();
+            assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
+                [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+            let capture = s.capture_workspace().unwrap();
+            let json = serde_json::to_string(&capture).unwrap();
+            let mut restored = session();
+            restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
+            invoke(&mut restored, CommandId::DrawingBrush);
+            assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
+            invoke(&mut restored, CommandId::Sculpt);
+            assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (sculpt, 79.));
+        }
     }
 
     #[test]

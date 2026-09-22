@@ -342,6 +342,64 @@ pub struct ToolSetView {
     pub groups: Vec<ToolSetItem>,
     pub subtools: Vec<ToolSetItem>,
 }
+
+/// Hosts render these projections without deciding which tools belong together.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ToolPanels {
+    pub brush_sets: ToolSetView,
+    pub sculpt_sets: ToolSetView,
+    pub tools: ToolSetView,
+}
+impl ToolPanels {
+    pub(crate) fn new(brush: &BrushState, canvas_tool: LayerCanvasTool, current: &ToolSetView) -> Self {
+        Self {
+            brush_sets: ToolSetView {
+                groups: sets(brush, canvas_tool, is_drawing),
+                subtools: Vec::new(),
+            },
+            sculpt_sets: ToolSetView {
+                groups: sets(brush, canvas_tool, is_sculpt),
+                subtools: Vec::new(),
+            },
+            tools: ToolSetView {
+                groups: Vec::new(),
+                subtools: current.subtools.clone(),
+            },
+        }
+    }
+}
+impl crate::UiState {
+    pub fn tool_panel(&self, panel: crate::Panel) -> &ToolSetView {
+        match panel {
+            crate::Panel::BrushSets => &self.tool_panels.brush_sets,
+            crate::Panel::SculptSets => &self.tool_panels.sculpt_sets,
+            crate::Panel::Tools => &self.tool_panels.tools,
+            _ => &self.tool_set,
+        }
+    }
+}
+pub(crate) fn is_drawing(tool: Tool) -> bool {
+    !matches!(tool, Tool::Eraser | Tool::Blend | Tool::Liquify)
+}
+
+pub(crate) fn is_sculpt(tool: Tool) -> bool {
+    matches!(tool, Tool::Blend | Tool::Liquify)
+}
+
+fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> bool) -> Vec<ToolSetItem> {
+    ToolGroup::ALL
+        .into_iter()
+        .filter(|set| includes(set.tool()))
+        .map(|set| ToolSetItem {
+            label: set.label(),
+            icon: set.icon(),
+            action: UiAction::SelectBrushSet { group: set },
+            selected: canvas_tool == LayerCanvasTool::Paint && set == group(brush.preset),
+            preview: None,
+        })
+        .collect()
+}
+
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
     if matches!(
         canvas_tool,
@@ -522,6 +580,10 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
 pub struct WorkspaceToolMemory {
     tools: BTreeMap<Tool, u32>,
     groups: BTreeMap<ToolGroup, u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    drawing: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sculpt: Option<u32>,
     pub overrides: BTreeMap<u32, BTreeMap<String, f32>>,
 }
 pub(crate) type ToolMemory = WorkspaceToolMemory;
@@ -530,6 +592,8 @@ impl WorkspaceToolMemory {
         let group = group(id);
         self.tools.insert(group.tool(), id);
         self.groups.insert(group, id);
+        if is_drawing(group.tool()) { self.drawing = Some(id); }
+        if is_sculpt(group.tool()) { self.sculpt = Some(id); }
     }
     pub fn set_override(&mut self, id: u32, setting: &str, value: f32) -> Result<(), String> {
         let defaults = layer_core::default_brush(preset(id)?);
@@ -555,6 +619,12 @@ impl WorkspaceToolMemory {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), String> {
+        for (id, includes) in [(self.drawing, is_drawing as fn(Tool) -> bool), (self.sculpt, is_sculpt)] {
+            if let Some(id) = id {
+                preset(id)?;
+                if !includes(group(id).tool()) { return Err("Invalid remembered tool class".into()); }
+            }
+        }
         for (&tool, &id) in &self.tools {
             preset(id)?;
             if group(id).tool() != tool {
@@ -580,6 +650,12 @@ impl WorkspaceToolMemory {
             .get(&tool)
             .copied()
             .unwrap_or_else(|| tool.default_preset())
+    }
+    pub(crate) fn drawing(&self) -> u32 {
+        self.drawing.unwrap_or_else(|| self.tool(Tool::Brush))
+    }
+    pub(crate) fn sculpt(&self) -> u32 {
+        self.sculpt.unwrap_or_else(|| self.tool(Tool::Blend))
     }
     pub fn group(&self, group: ToolGroup) -> u32 {
         self.groups

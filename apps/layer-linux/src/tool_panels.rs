@@ -61,6 +61,7 @@ impl PlacementActions {
 /// other view. Preview textures are shared by the existing immutable cache.
 pub struct ToolSet {
     pub root: gtk::Box,
+    panel: layer_ui::Panel,
     groups: gtk::FlowBox,
     list: gtk::Box,
     pub group_buttons: RefCell<Vec<gtk::Button>>,
@@ -70,11 +71,14 @@ pub struct ToolSet {
 }
 impl ToolSet {
     pub fn new() -> Self {
+        Self::for_panel(layer_ui::Panel::Brushes)
+    }
+    pub fn for_panel(panel: layer_ui::Panel) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let groups = gtk::FlowBox::builder()
             .homogeneous(true)
             .min_children_per_line(1)
-            .max_children_per_line(16)
+            .max_children_per_line(if matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets) { 1 } else { 16 })
             .selection_mode(gtk::SelectionMode::None)
             .column_spacing(2)
             .row_spacing(2)
@@ -83,8 +87,11 @@ impl ToolSet {
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         root.append(&groups);
         root.append(&list);
+        groups.set_visible(panel != layer_ui::Panel::Tools);
+        list.set_visible(!matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets));
         Self {
             root,
+            panel,
             groups,
             list,
             group_buttons: RefCell::default(),
@@ -92,6 +99,9 @@ impl ToolSet {
             view: RefCell::default(),
             theme: Cell::new(None),
         }
+    }
+    pub fn refresh_state(&self, workspace: &Rc<Workspace>, state: &UiState) {
+        self.refresh(workspace, state.tool_panel(self.panel), state.theme);
     }
     pub fn refresh(&self, workspace: &Rc<Workspace>, view: &ToolSetView, theme: Theme) {
         let same = |a: &[ToolSetItem], b: &[ToolSetItem]| {
@@ -114,12 +124,15 @@ impl ToolSet {
                 let button = workspace.action_button(item.label, item.action.clone());
                 button.add_css_class("flat");
                 button.add_css_class("tool-group");
-                button.set_halign(gtk::Align::Start);
+                let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
+                if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
+                button.set_halign(if media { gtk::Align::Fill } else { gtk::Align::Start });
+                button.set_hexpand(media);
                 button.set_size_request(
-                    (layer_ui::TOOL_PANEL_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
-                    layer_ui::TILE_SIZE as i32,
+                    ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
+                    if media { 44 } else { layer_ui::TILE_SIZE as i32 },
                 );
-                button.set_child(Some(&tool_label(item)));
+                button.set_child(Some(&aligned_icon_label(item.label, item.icon, if media { 0.0 } else { 1.0 })));
                 self.groups.insert(&button, -1);
                 buttons.push(button);
             }

@@ -167,7 +167,19 @@ impl HeaderLayout {
     }
 
     pub fn painter_for_platform(platform: Platform) -> Self {
-        Self::painter().with_platform_controls(platform)
+        let mut header = Self::painter();
+        if !CommandId::DrawingBrush.available_on(platform) {
+            header.replace_tool(CommandId::DrawingBrush, CommandId::Brush);
+            header.replace_tool(CommandId::Sculpt, CommandId::Blend);
+        }
+        header.with_platform_controls(platform)
+    }
+
+    pub(crate) fn replace_tool(&mut self, old: CommandId, new: CommandId) {
+        let item = |command| HeaderItem::Tool { control: ToolbarControl::Command { command } };
+        for entry in self.zones.iter_mut().flatten() {
+            if entry.item == item(old) { entry.item = item(new); }
+        }
     }
 
     fn with_platform_controls(mut self, platform: Platform) -> Self {
@@ -301,8 +313,8 @@ impl HeaderLayout {
                 ],
                 vec![Workspaces],
                 vec![
-                    tool(CommandId::Brush),
-                    tool(CommandId::Blend),
+                    tool(CommandId::DrawingBrush),
+                    tool(CommandId::Sculpt),
                     tool(CommandId::Eraser),
                     Tool {
                         control: ToolbarControl::Panel {

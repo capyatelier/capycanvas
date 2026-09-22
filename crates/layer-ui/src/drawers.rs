@@ -245,6 +245,7 @@ impl Panel {
     /// Roomier than ordinary dock defaults. Shared by tile and column drawers.
     pub fn drawer_width(self) -> f32 {
         match self {
+            Self::BrushSets | Self::SculptSets => 160.0,
             Self::Color => 280.0,
             Self::ToolSettings | Self::Properties | Self::Layers => 320.0,
             _ => 272.0,
@@ -288,6 +289,9 @@ impl ResolvedLayout {
 impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
+            Self::Command { command: CommandId::Eraser } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
+            Self::Command { command: CommandId::Sculpt } => Some(vec![vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
+            Self::Command { command: CommandId::DrawingBrush } => Some(vec![vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command }
                 if command.paint_tool().is_some()
                     || matches!(

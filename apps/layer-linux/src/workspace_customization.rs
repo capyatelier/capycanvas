@@ -1194,6 +1194,9 @@ impl Workspace {
             | PanelControl::Stats
             | PanelControl::Navigator
             | PanelControl::ToolSettings
+            | PanelControl::SculptSets
+            | PanelControl::BrushSets
+            | PanelControl::Tools
             | PanelControl::ColorWheel => {
                 // These schema-driven surfaces already occupy their panel body.
                 return None;
