@@ -15,13 +15,15 @@ fn contact_radius(dab: Dab, contact: &layer_core::BrushContact) -> f32 {
     let axes = [dab.radii[0], dab.radii[1], dab.previous[0], dab.previous[1]];
     let maximum = axes.into_iter().fold(0.005_f32, f32::max);
     let minimum = axes.into_iter().fold(f32::INFINITY, f32::min).max(0.005);
+    let low_pressure = dab.contact[0].min(dab.previous_contact[0]).clamp(0., 1.);
+    let high_pressure = dab.contact[0].max(dab.previous_contact[0]).clamp(0., 1.);
     // evolving_contact's outer edge is boundary + half an AA pixel; roughness
     // and pooling are the only terms that expand it. Interpolated/rotated
     // ellipses stay inside the largest endpoint radius. The shader also rejects
     // radius > 1.45, independently of the material parameters.
     let expansion = (1.0
-        + 0.75 * contact.edge_roughness
-        + 0.12 * contact.pooling
+        + 0.5 * (1.5 - 0.5 * low_pressure) * contact.edge_roughness
+        + 0.12 * (0.3 + 0.7 * high_pressure) * contact.pooling
         + 0.5 * (1.0 / minimum).min(1.0))
     .min(1.45);
     maximum * expansion + 1.0
@@ -419,7 +421,12 @@ mod tests {
         ] {
             dab.radii = [axes[0], axes[1]];
             dab.previous[..2].copy_from_slice(&axes[2..]);
-            for (roughness, pooling) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
+            for (roughness, pooling, low_pressure, high_pressure) in [
+                (0., 0., 0., 1.), (1., 0., 0., 1.), (0., 1., 0., 1.), (1., 1., 0., 1.),
+                (0.15, 0., 1., 1.), (0.15, 1., 0.4, 0.7),
+            ] {
+                dab.previous_contact[0] = low_pressure;
+                dab.contact[0] = high_pressure;
                 let contact = layer_core::BrushContact {
                     edge_roughness: roughness,
                     pooling,
@@ -439,7 +446,7 @@ mod tests {
                         dab.center.x - dab.motion[0] * (1. - t),
                         dab.center.y - dab.motion[1] * (1. - t),
                     ];
-                    for pressure in [0., 0.5, 1.] {
+                    for pressure in [low_pressure, (low_pressure + high_pressure) * 0.5, high_pressure] {
                         // The shader's outer smoothstep edge at maximal noise.
                         let boundary = 1.
                             + roughness * 0.5 * (1.5 - pressure * 0.5)

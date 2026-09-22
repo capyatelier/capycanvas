@@ -57,6 +57,8 @@ pub(super) struct Scene {
     placement_display: bool,
     placement_mips: std::collections::HashMap<LayerId, placement::Mip>,
     source_tiles: sources::DecodedTiles,
+    display_source_tiles: sources::DecodedTiles,
+    display_sources: bool,
     reverse_composition_tiles: bool,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -91,7 +93,7 @@ pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
     pub source: sources::Pipelines,
-    pub constant: Option<(wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>)>,
+    pub constant: Option<(wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>)>,
 }
 
 impl Scene {
@@ -136,13 +138,17 @@ impl Scene {
         ]
     }
     pub fn source_cache_work(&self) -> [u64; 2] {
-        [self.source_tiles.hits, self.source_tiles.misses]
+        [self.source_tiles.hits + self.display_source_tiles.hits,
+            self.source_tiles.misses + self.display_source_tiles.misses]
     }
     pub fn admit_native_sources(&mut self, allowance: u64) {
         self.source_tiles.admit(allowance);
+        self.display_source_tiles = self.source_tiles.split_display_cache();
     }
     pub fn source_cache_limits(&self) -> [u64; 2] {
-        self.source_tiles.admitted_bytes()
+        let mut limits = self.source_tiles.admitted_bytes();
+        limits[0] += self.display_source_tiles.admitted_bytes()[0];
+        limits
     }
     #[cfg(test)]
     pub fn placement_cache(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
@@ -156,7 +162,7 @@ impl Scene {
             + self.placement.storage_bytes()
             + self.placement_mips.values().map(|m| m.image.storage_bytes()).sum::<u64>()
             + self.images.storage_bytes();
-        { bytes += self.source_tiles.gpu_bytes(); }
+        { bytes += self.source_tiles.gpu_bytes() + self.display_source_tiles.gpu_bytes(); }
         bytes
     }
     pub fn initialize_images(
@@ -352,6 +358,8 @@ impl Scene {
         });
         let binding = uniform_binding(device, &uniforms, &buffer);
         let effects = effects::Effects::new(r, &uniforms, &layout);
+        let mut source_tiles = sources::DecodedTiles::for_renderer(r);
+        let display_source_tiles = source_tiles.split_display_cache();
         Self {
             placement_display: false,
             placement_mips: Default::default(),
@@ -359,7 +367,9 @@ impl Scene {
                 || pixel_transform::PixelTransform::staged(device, false).placement_pass(),
                 paint_transform::PaintTransforms::placement_pass,
             ),
-            source_tiles: sources::DecodedTiles::for_renderer(r),
+            source_tiles,
+            display_source_tiles,
+            display_sources: false,
             reverse_composition_tiles: false,
             pool: Vec::new(),
             used: Vec::new(),
@@ -422,7 +432,9 @@ impl Scene {
             if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
                 return Ok(None);
             }
-            self.source_tiles.plan(r, source, coordinate)?
+            if self.display_sources && self.display_source_tiles.accepts_display(source) {
+                self.display_source_tiles.plan(r, source, coordinate)?
+            } else { self.source_tiles.plan(r, source, coordinate)? }
         };
         if let Some(pending) = pending { self.enqueue_source_decode(pending); }
         Ok(Some(tile.view))
@@ -1505,6 +1517,21 @@ impl Scene {
         overlay: bool,
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<(), GpuRasterError> {
+        self.display_sources = r.live_display.is_some();
+        let result = self.compose_display_pixels(r, packet, dirty, encoder, overlay, tiles);
+        self.display_sources = false;
+        result
+    }
+
+    fn compose_display_pixels(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        dirty: PixelRect,
+        encoder: &mut crate::submission::CommandEncoder,
+        overlay: bool,
+        tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
+    ) -> Result<(), GpuRasterError> {
         if dirty.is_empty() {
             return Ok(());
         }
@@ -1878,13 +1905,14 @@ impl Scene {
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
         let mut output_bindings = std::collections::HashMap::new();
+        let mut compute_bindings = std::collections::HashMap::new();
         let mut encoded_through = 0;
         for (i, job) in self.jobs.iter().enumerate() {
             if i < encoded_through {
                 continue;
             }
             if is_compute(job)
-                && let Some((layout, pipeline)) = &r.scene_pipelines.constant
+                && let Some((layout, inputs, pipeline)) = &r.scene_pipelines.constant
             {
                 let end = (i + 1..self.jobs.len()).find(|&j| !is_compute(&self.jobs[j]))
                     .unwrap_or(self.jobs.len());
@@ -1894,22 +1922,23 @@ impl Scene {
                 pass.set_pipeline(pipeline);
                 for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
                     let Job::Draw { target, sources, data, .. } = job else { unreachable!() };
-                    let input = source_bindings.entry(sources.clone())
-                        .or_insert_with(|| source_binding(r, &self.layout, sources));
-                    let output = output_bindings.entry((target.clone(), sources[2].clone())).or_insert_with(|| {
+                    let input = compute_bindings.entry(sources.clone())
+                        .or_insert_with(|| compute_source_binding(r, inputs, sources));
+                    // All independent tiles in a complete image share this
+                    // destination. Source-specific state belongs in the input
+                    // group, not a new destination binding for every tile.
+                    let output = output_bindings.entry(target.clone()).or_insert_with(|| {
                         r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("scene normal layers destination"), layout,
                             entries: &[wgpu::BindGroupEntry {
                                 binding: 0, resource: wgpu::BindingResource::TextureView(target),
-                            }, wgpu::BindGroupEntry {
-                                binding: 1, resource: wgpu::BindingResource::TextureView(&sources[2]),
                             }],
                         })
                     });
                     pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                     pass.set_bind_group(1, &*input, &[]);
                     pass.set_bind_group(2, &*output, &[]);
-                    pass.dispatch_workgroups((data[2] as u32).div_ceil(8), (data[3] as u32).div_ceil(8), 1);
+                    pass.dispatch_workgroups((data[2] as u32).div_ceil(32), (data[3] as u32).div_ceil(2), 1);
                 }
                 encoded_through = end;
                 continue;
@@ -2138,6 +2167,16 @@ impl Pipelines {
             })
         });
         let constant = (device.working_format() == wgpu::TextureFormat::Rgba32Float).then(|| {
+            let inputs = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("scene normal stack inputs"),
+                entries: &[
+                    texture_entry(0), texture_entry(1),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None,
+                    }, texture_entry(3),
+                ],
+            });
             let output = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene constant backdrop output"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -2147,14 +2186,11 @@ impl Pipelines {
                         format: wgpu::TextureFormat::Rgba32Float,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     }, count: None,
-                }, wgpu::BindGroupLayoutEntry {
-                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
-                    ..texture_entry(1)
                 }],
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene constant backdrop"),
-                bind_group_layouts: &[Some(&uniforms), Some(&layout), Some(&output)],
+                bind_group_layouts: &[Some(&uniforms), Some(&inputs), Some(&output)],
                 immediate_size: 0,
             });
             let (device, shader) = (device.clone(), shader.clone());
@@ -2165,7 +2201,7 @@ impl Pipelines {
                     compilation_options: Default::default(), cache: None,
                 })
             });
-            (output, pipeline)
+            (output, inputs, pipeline)
         });
         Self {
             source: sources::Pipelines::new(device, &uniforms),
@@ -2353,6 +2389,18 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effect
         }
     }
     result
+}
+
+fn compute_source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
+    r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("scene normal stack inputs"), layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&sources[0]) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sources[1]) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.sampler) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sources[2]) },
+        ],
+    })
 }
 
 fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {

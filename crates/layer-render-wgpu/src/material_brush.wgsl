@@ -28,6 +28,7 @@ struct Style {
 // compiler sees only that operation's control flow. Style retains its packed
 // operation field for the shared batch layout and reservoir pass.
 override MATERIAL_OPERATION: u32;
+override CONTACT_FILM_CULL: bool = true;
 
 const OP_DEPOSIT: u32 = 0u;
 const OP_COVERAGE: u32 = 1u;
@@ -629,7 +630,7 @@ fn wet_fragment(
         let dab = dabs[first + offset];
         var contact_dab = dab;
         var contact_progress = 1.0;
-        if style.render_mode.y > 0.5 {
+        if contact_uniform() {
             contact_progress = contact_segment_progress(dab, world);
             contact_dab.center = dab.center - dab.motion * (1.0 - contact_progress);
         }
@@ -667,7 +668,7 @@ fn wet_fragment(
             deposited_wetness,
             coverage * style.material_a.z * wet_jitter,
         );
-        if style.render_mode.y > 0.5 {
+        if contact_uniform() {
             let next_coverage = max(stroke_coverage, source_alpha);
             source_alpha = clamp(
                 working_ratio(next_coverage - stroke_coverage, 1.0 - stroke_coverage),
@@ -735,7 +736,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
 
     // Dry deposition reads exactly the destination texel, even for a placed
     // layer. Avoid the brush-to-layer round trip and neighborhood selection.
-    var result = textureLoad(source_11, vec2<i32>(floor(fragment_position.xy)), 0);
+    var result = dry_original(vec2<i32>(floor(fragment_position.xy)));
     let state_coordinate = clamp(
         vec2<i32>(floor(fragment_position.xy)),
         vec2<i32>(0),
@@ -749,35 +750,46 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     // Keep this outside the contact loop: a loop-carried early break produces
     // dark contact seams on Adreno for large, multi-contact batches.
     let range = material_sources.header.zw;
-    if style.render_mode.y > 0.5 && style.render_mode.x < 0.5 {
+    let tooth = contact_paper(world);
+    if CONTACT_FILM_CULL && contact_uniform() && style.render_mode.x < 0.5 {
         var ceiling = 1.0;
-        // The solid-contact specialization has no material variation. Its
-        // upload supplies an upper bound across every incoming contact; max
-        // accumulation cannot change pixels already at or above that bound.
-        if CONTACT_FLAGS == 1u && range.y > 0u {
+        if contact_feature(1u, style.contact_a.x > 0.5) && range.y > 0u {
             ceiling = dabs[range.x].invariants.z;
+            var density = 1.0;
+            if contact_feature(64u, style.contact_a.z > 0.0 || style.contact_c.z > 0.0) {
+                let bias = clamp(style.contact_a.z + style.contact_c.z, 0.0, 0.95);
+                density = mix(1.0, 1.6, bias);
+            }
+            var response = density;
+            if contact_feature(2u, style.contact_a.y > 0.0) {
+                let penetration = clamp(dabs[range.x].invariants.w * style.contact_c.x * density, 0.0, 1.0);
+                let threshold = 0.62 - penetration * 0.3;
+                let paper = smoothstep(threshold - 0.08, threshold + 0.08, tooth);
+                response *= mix(1.0, paper, style.contact_a.y);
+            }
+            ceiling *= min(response, 1.0);
         }
         if stroke_coverage >= ceiling {
             return MaterialOutput(result, vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0), vec4<f32>(0.0));
         }
     }
-    let field = contact_field(world);
+    let field = contact_field_with_paper(world, tooth);
     for (var offset = 0u; offset < range.y; offset += 1u) {
         let dab = dabs[range.x + offset];
         let coverage = contact_coverage_field(dab, world, field);
         if coverage <= 0.0 { continue; }
         var requested_alpha = clamp(
-            coverage * dab.flow * dab.color.a,
+            (dab.flow * dab.color.a) * coverage,
             0.0,
             1.0,
         );
-        if contact_feature(1u, style.contact_a.x > 0.5) && style.render_mode.y < 0.5 {
+        if contact_feature(1u, style.contact_a.x > 0.5) && !contact_uniform() {
             let selected = brush_selection_at(brush_to_layer(world));
             let unselected_coverage = coverage / max(selected, 0.000001);
             requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * 6.0)) * selected;
         }
         var source_alpha = requested_alpha;
-        if style.render_mode.y > 0.5 {
+        if contact_uniform() {
             // Attachment-based hosts store R8 coverage. Match that storage
             // before applying its delta so frame boundaries cannot change ink.
             // Native SDR uses R32Float and must retain faint/16-bit coverage.
@@ -825,7 +837,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
         let bounds = material_sources.pages[0];
         if any(p < bounds.xy) || any(p >= bounds.zw) {
             return MaterialOutput(
-                textureLoad(source_11, vec2<i32>(p), 0),
+                dry_original(vec2<i32>(p)),
                 vec4<f32>(textureLoad(stroke_coverage_texture, vec2<i32>(p), 0).r, 0.0, 0.0, 1.0),
                 vec4<f32>(0.0),
             );
@@ -836,7 +848,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
         let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
         var original: vec4<f32>;
         if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE {
-            original = textureLoad(source_11, vec2<i32>(floor(fragment_position.xy)), 0);
+            original = dry_original(vec2<i32>(floor(fragment_position.xy)));
         } else { original = canvas_load(world); }
         if style.operation.w != 0u { result.color = original; }
         else {
@@ -890,14 +902,22 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOut
 }
 @group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var material_coverage_output: texture_storage_2d<r32float, write>;
-@compute @workgroup_size(8, 8)
+override MATERIAL_IN_PLACE: bool = false;
+fn dry_original(p: vec2<i32>) -> vec4<f32> {
+    return textureLoad(source_11, p, 0);
+}
+@compute @workgroup_size(32, 2)
 fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
     let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
+        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    }
 }
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(32, 2)
 fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
     let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));
-    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    if !MATERIAL_IN_PLACE || any(result.color != dry_original(vec2<i32>(id.xy))) {
+        textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    }
     textureStore(material_coverage_output, vec2<i32>(id.xy), result.coverage);
 }

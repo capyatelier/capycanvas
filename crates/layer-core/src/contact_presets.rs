@@ -98,6 +98,7 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             brush.aspect = 2.5;
             model.tilt_spread = 2.4;
             model.tip_bias = 0.25;
+            brush.rendering.accumulation = BrushAccumulation::Uniform;
         }
         Charcoal => {
             brush.diameter = 64.0;
@@ -205,10 +206,9 @@ pub(crate) fn dry_material(preset: DefaultBrushPreset) -> BrushContact {
             edge_roughness: 0.15,
             ..Default::default()
         },
-        TransparentGlaze => BrushContact {
-            paper: 0.06,
-            ..Default::default()
-        },
+        // Glaze is a smooth translucent film; its soft edge supplies the wash
+        // character without a second paper modulation inside the contact.
+        TransparentGlaze => BrushContact::default(),
         _ => unreachable!("only continuous dry presets use this material"),
     }
 }

@@ -65,9 +65,12 @@ impl Requirements {
         let plan = BrushPassPlan::for_device(style, &r.device);
         if style.execution == BrushExecution::Dry && plan.direct.is_none()
             && let Some(dry) = &r.pipelines.dry_material {
-            let kernels = dry.for_contact(style.contact);
+            let kernels = dry.for_style(style);
             self.compute.push(kernels[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
             if preview { self.compute.push(kernels[plan.material as usize * 2].clone()); }
+            if let Some(in_place) = &r.pipelines.dry_in_place {
+                self.compute.push(in_place.for_style(style)[plan.material as usize * 2 + usize::from(plan.state.coverage)].clone());
+            }
         }
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());
@@ -239,13 +242,14 @@ impl WgpuRasterizer {
                 .render
                 .extend(self.scene_pipelines.pipeline.iter().cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
-            if let Some((_, pipeline)) = &self.scene_pipelines.constant { required.compute.push(pipeline.clone()); }
+            if let Some((_, _, pipeline)) = &self.scene_pipelines.constant { required.compute.push(pipeline.clone()); }
             if self.native_edit.as_ref().is_some_and(|native| {
                 u64::from(document.width) * u64::from(document.height) * 16 > native.display_dense_bytes
             }) {
                 let mip = self.display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 required.compute.push(mip.reduce.clone());
+                required.compute.push(mip.fused_reduce.clone());
             }
             if document.layers.iter().any(|l| l.source.is_some()) {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
@@ -381,6 +385,7 @@ impl WgpuRasterizer {
                 let mip = self.display_pipelines
                     .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 startup.compiler.pipeline(&mip.reduce, OTHER);
+                startup.compiler.pipeline(&mip.fused_reduce, OTHER);
             }
             for p in self
                 .pipelines
@@ -602,7 +607,7 @@ mod gpu_tests {
         );
         for index in [2, 3] {
             assert!(renderer.pipelines.dry_material.as_ref().unwrap()
-                .for_contact(layer_core::default_brush(layer_core::DefaultBrushPreset::GPen).contact)[index].ready(),
+                .for_style(&style(&brush, StrokeTool::Brush, false))[index].ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
     }

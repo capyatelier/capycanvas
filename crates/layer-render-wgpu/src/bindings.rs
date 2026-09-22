@@ -30,4 +30,4 @@ impl<K: PartialEq> CachedBinding<K> {
 
 pub(super) type MaterialInput = CachedBinding<([wgpu::Buffer; 2], [wgpu::TextureView; 2])>;
 pub(super) type MaterialOutput =
-    CachedBinding<(wgpu::Buffer, wgpu::TextureView, Option<wgpu::TextureView>)>;
+    CachedBinding<(wgpu::Buffer, wgpu::TextureView, Option<wgpu::TextureView>, bool)>;

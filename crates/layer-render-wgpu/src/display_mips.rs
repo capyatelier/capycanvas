@@ -46,8 +46,10 @@ impl Plan {
 
 pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
+    fused_layout: wgpu::BindGroupLayout,
     pub image_layout: wgpu::BindGroupLayout,
     pub reduce: Deferred<wgpu::ComputePipeline>,
+    pub fused_reduce: Deferred<wgpu::ComputePipeline>,
 }
 impl Pipelines {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -120,6 +122,34 @@ impl Pipelines {
             label: Some("display mip reduction"),
             source: wgpu::ShaderSource::Wgsl(include_str!("display_mips.wgsl").into()),
         });
+        let fused_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("four display mip levels"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
+                    }, count: None,
+                },
+                native_tiles::buffer_entry(1, wgpu::BufferBindingType::Uniform, true, 16),
+                mip_output_entry(2), mip_output_entry(3), mip_output_entry(4), mip_output_entry(5),
+            ],
+        });
+        let fused_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("four display mip levels"), bind_group_layouts: &[Some(&fused_layout)], immediate_size: 0,
+        });
+        let fused_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("four display mip levels"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("display_mips_fused.wgsl").into()),
+        });
+        let fused_device = device.clone();
+        let fused_reduce = Deferred::pipeline(move |mode| mode.compute(&fused_device,
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("four display mip levels"), layout: Some(&fused_pipeline_layout),
+                module: &fused_shader, entry_point: Some("reduce_four"),
+                compilation_options: Default::default(), cache: None,
+            }));
         let device = device.clone();
         let reduce = Deferred::pipeline(move |mode| {
             mode.compute(
@@ -136,9 +166,22 @@ impl Pipelines {
         });
         Self {
             layout,
+            fused_layout,
             image_layout,
             reduce,
+            fused_reduce,
         }
+    }
+}
+
+fn mip_output_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding, visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba32Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        }, count: None,
     }
 }
 
@@ -154,7 +197,9 @@ struct Record {
 pub(super) struct CompleteUpdates {
     records: wgpu::Buffer,
     bindings: Vec<wgpu::BindGroup>,
+    fused_bindings: Vec<wgpu::BindGroup>,
     pipeline: Deferred<wgpu::ComputePipeline>,
+    fused_pipeline: Deferred<wgpu::ComputePipeline>,
     columns: u32,
     stride: u32,
     pending: Vec<[u32; 2]>,
@@ -201,7 +246,23 @@ impl CompleteUpdates {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(pair[1]) },
             ],
         })).collect();
-        Self { records, bindings, pipeline: pipelines.reduce.clone(), columns, stride,
+        let fused_bindings = (0..plan.level as usize / 4).map(|chunk| {
+            let first = chunk * 4;
+            let mut entries = vec![
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(views[first]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &records, offset: 0, size: NonZeroU64::new(16),
+                }) },
+            ];
+            entries.extend((0..4).map(|i| wgpu::BindGroupEntry {
+                binding: i as u32 + 2, resource: wgpu::BindingResource::TextureView(views[first + i + 1]),
+            }));
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("four retained display mip levels"), layout: &pipelines.fused_layout, entries: &entries,
+            })
+        }).collect();
+        Self { records, bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
+            fused_pipeline: pipelines.fused_reduce.clone(), columns, stride,
             pending: Vec::with_capacity(Self::BATCH) }
     }
 
@@ -223,8 +284,11 @@ impl CompleteUpdates {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce retained display tiles"), timestamp_writes: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        for (level, binding) in self.bindings.iter().enumerate() {
+        let mut level = 0;
+        while level < self.bindings.len() {
+            let fused = level % 4 == 0 && level / 4 < self.fused_bindings.len();
+            let binding = if fused { &self.fused_bindings[level / 4] } else { &self.bindings[level] };
+            pass.set_pipeline(if fused { &self.fused_pipeline } else { &self.pipeline });
             let side = PAGE_SIZE >> (level + 1);
             let mut first = 0;
             while first < self.pending.len() {
@@ -239,6 +303,7 @@ impl CompleteUpdates {
                 pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), (end - first) as u32);
                 first = end;
             }
+            level += if fused { 4 } else { 1 };
         }
         self.pending.clear();
     }

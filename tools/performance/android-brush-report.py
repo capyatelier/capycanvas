@@ -8,6 +8,7 @@ import pathlib
 import statistics
 import subprocess
 import sys
+from android_brush_metrics import completion_window
 
 
 def distribution(values):
@@ -37,7 +38,6 @@ def main():
             data = json.loads((args.directory / f"{label}-{i}.json").read_text())
             motion = data["motion"]
             begin, end = motion["begin_ns"], motion["end_ns"]
-            seconds = (end - begin) / 1e9
             markers += [f"stroke{i}_start {motion['begin_boot_ns']}", f"stroke{i}_end {motion['end_boot_ns']}"]
             fields = data["frame_fields"]
             callbacks = [dict(zip(fields, r)) for r in data["frames"] if begin <= r[1] < end]
@@ -47,15 +47,13 @@ def main():
             cpu = {field.removesuffix("_ns"): distribution([f[field] / 1e6 for f in frames])
                    for field in fields if field.endswith("_ns") and field not in ["vsync_ns", "start_ns", "expected_presentation_ns"]}
             inputs = [r for r in data["inputs"] if begin <= r[0] < end]
-            prior, after = data["display_before"], data["display_after_input"]
             rows_before = {r["label"]: r["value"] for r in data["renderer_before"]["rows"]}
             rows_after = {r["label"]: r["value"] for r in data["renderer_after"]["rows"]}
-            submitted = after["submitted_frames"] - prior["submitted_frames"]
-            completed = after["completed_frames"] - prior["completed_frames"]
+            progress = completion_window(data)
+            submitted = progress["submitted"]
             stamps = int(rows_after["Dabs"]) - int(rows_before["Dabs"])
             times = [f["start_ns"] for f in frames]
-            runs.append({"run": i, "input_seconds": seconds, "submitted_per_s": submitted / seconds,
-                "completed_per_s": completed / seconds, "cpu_update_count": len(frames),
+            runs.append({"run": i, **progress, "cpu_update_count": len(frames),
                 "callback_count": len(callbacks), "cpu_ms": cpu,
                 "owner_core_occupancy": sum(f["owner_thread_cpu_ns"] for f in callbacks) / (end - begin),
                 "update_start_gap_ms": distribution([(b - a) / 1e6 for a, b in zip(times, times[1:])]),

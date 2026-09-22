@@ -5,6 +5,7 @@ use super::*;
 pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 
 pub(super) struct Pipelines {
+    in_place: bool,
     layouts: [wgpu::BindGroupLayout; 2],
     pub kernels: [Deferred<wgpu::ComputePipeline>; 4],
     variants: std::collections::BTreeMap<u32, [Deferred<wgpu::ComputePipeline>; 4]>,
@@ -23,10 +24,16 @@ pub(super) fn contact_flags(contact: Option<layer_core::BrushContact>) -> u32 {
 }
 
 impl Pipelines {
+    #[cfg(test)]
+    pub(super) fn use_unculled_reference(&mut self) {
+        self.variants.clear();
+    }
+
     pub fn new(
         device: &PipelineDevice,
         shared: &PipelineLayouts<'_>,
         shader: &Deferred<wgpu::ShaderModule>,
+        in_place: bool,
     ) -> Self {
         let layouts = std::array::from_fn(|coverage| {
             let mut entries = vec![wgpu::BindGroupLayoutEntry {
@@ -44,7 +51,8 @@ impl Pipelines {
                     binding,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        access: if in_place && binding == 1 { wgpu::StorageTextureAccess::ReadWrite }
+                            else { wgpu::StorageTextureAccess::WriteOnly },
                         format: if binding == 1 {
                             wgpu::TextureFormat::Rgba32Float
                         } else {
@@ -89,6 +97,10 @@ impl Pipelines {
                                 constants: &[
                                     ("MATERIAL_OPERATION", (index / 2) as f64),
                                     ("CONTACT_FLAGS", f64::from(flags)),
+                                    ("MATERIAL_IN_PLACE", f64::from(in_place)),
+                                    // The generic kernel also serves as an
+                                    // independent reference for film culling.
+                                    ("CONTACT_FILM_CULL", f64::from(flags != u32::MAX)),
                                 ],
                                 ..Default::default()
                             },
@@ -104,20 +116,27 @@ impl Pipelines {
             .map(|p| contact_flags(layer_core::default_brush(p).contact))
             .collect::<std::collections::BTreeSet<_>>();
         flags.insert(0);
+        flags.extend(flags.clone().into_iter().map(|flags| flags | 128));
         let variants = flags.into_iter().map(|f| (f, make_kernels(f))).collect();
         Self {
+            in_place,
             layouts,
             kernels,
             variants,
         }
     }
 
-    pub fn for_contact(
+    pub fn for_style(
         &self,
-        contact: Option<layer_core::BrushContact>,
+        style: &layer_render::DabStyle,
     ) -> &[Deferred<wgpu::ComputePipeline>; 4] {
+        // Flow integration and maximum-film deposition have different kernels.
+        // Resolve that uniform branch at compilation, including its register
+        // requirements, rather than carrying both models through every pixel.
+        let flags = contact_flags(style.contact)
+            | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 };
         self.variants
-            .get(&contact_flags(contact))
+            .get(&flags)
             .unwrap_or(&self.kernels)
     }
 
@@ -150,6 +169,7 @@ impl Pipelines {
                 r.style_buffer.clone(),
                 color.view.clone(),
                 coverage.map(|p| p.view.clone()),
+                self.in_place,
             ),
             || {
                 r.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -163,6 +183,11 @@ impl Pipelines {
 }
 
 impl WgpuRasterizer {
+    pub(super) fn in_place_dry_material(&self, batch: &DabBatch) -> bool {
+        batch.kind == DabBatchKind::Persistent && self.compute_dry_material(batch)
+            && self.pipelines.dry_in_place.is_some()
+    }
+
     pub(super) fn compute_dry_material(&self, batch: &DabBatch) -> bool {
         // Adreno's compute destination-blend specialization corrupts predicted
         // Multiply batches. Non-normal blends use the ordered fragment path.
@@ -193,12 +218,12 @@ impl WgpuRasterizer {
         pass.set_bind_group(3, &textures.bind_group, &[]);
         let mut active_coverage = None;
         for (output, source, coordinate, coverage, record_offset) in jobs {
-            let pipeline = &self
-                .pipelines
-                .dry_material
+            let pipeline = &if self.in_place_dry_material(batch) {
+                &self.pipelines.dry_in_place
+            } else { &self.pipelines.dry_material }
                 .as_ref()
                 .unwrap()
-                .for_contact(batch.style.contact)[operation as usize * 2 + usize::from(*coverage)];
+                .for_style(&batch.style)[operation as usize * 2 + usize::from(*coverage)];
             if active_coverage != Some(*coverage) {
                 pass.set_pipeline(pipeline);
                 active_coverage = Some(*coverage);
@@ -210,7 +235,7 @@ impl WgpuRasterizer {
                 &[self.layer_target_offset(batch.layer_id, *coordinate)],
             );
             pass.set_bind_group(2, source, &[*record_offset]);
-            pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
+            pass.dispatch_workgroups(PAGE_SIZE.div_ceil(32), PAGE_SIZE.div_ceil(2), 1);
         }
     }
 }

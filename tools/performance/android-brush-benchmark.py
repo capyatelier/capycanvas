@@ -10,6 +10,7 @@ import math
 import pathlib
 import subprocess
 import time
+from android_brush_metrics import completion_window
 
 PRESETS = {
     1: "gpen", 2: "pencil", 3: "eraser", 4: "paintbrush", 5: "airbrush",
@@ -153,11 +154,7 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
         summary = []
         for i in range(args.repeats):
             report = json.loads((args.output / f"{label}-{i}.json").read_text())
-            seconds = (report["motion"]["end_ns"] - report["motion"]["begin_ns"]) / 1e9
-            before, after = report["display_before"], report["display_after_input"]
-            summary.append({"run": i, "input_seconds": seconds,
-                "submitted_per_s": (after["submitted_frames"] - before["submitted_frames"]) / seconds,
-                "completed_per_s": (after["completed_frames"] - before["completed_frames"]) / seconds})
+            summary.append({"run": i, **completion_window(report)})
         (args.output / f"{label}-complete.json").write_text(json.dumps(summary, indent=2))
         print(f"DONE {label} completed/s={[round(r['completed_per_s'], 2) for r in summary]}", flush=True)
     if failures:

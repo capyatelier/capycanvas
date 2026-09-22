@@ -221,17 +221,21 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val displayBefore = display()
                 report(true)
                 native { Native.presentationTimings(it, true) }
+                native { Native.completionTimings(it, true) }
                 val motion = stroke(duration)
                 val displayAfterInput = display()
                 SystemClock.sleep(1000)
                 val data = report(false)
                 val present = native { JSONArray(Native.presentationTimings(it, false)) }
+                val completions = native { JSONArray(Native.completionTimings(it, false)) }
+                check(completions.length() < 32768) { "Completion observation capacity exceeded" }
                 val after = state()
                 check(host.failure == null) { host.failure!! }
                 check(host.actionError == null) { host.actionError!! }
                 check(after.getJSONObject("document_file").getLong("revision") > beforeRevision) { "No committed paint" }
                 check(data.getJSONArray("frames").length() > 0)
                 data.put("motion", motion).put("presentation", present).put("renderer_before", before)
+                    .put("completions", completions)
                     .put("renderer_after", stats()).put("display_before", displayBefore)
                     .put("display_after_input", displayAfterInput).put("display_after_drain", display())
                     .put("state_after", after).put("resources_after", resources())

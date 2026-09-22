@@ -344,7 +344,13 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             hardness: 0.9,
             execution: BrushExecution::Dry,
             grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 5.2, 1., -0.13)),
-            rendering: BrushRendering::default(),
+            // A broad pastel contact lays a bounded film into the tooth.
+            // Separate strokes still build density; dwelling within one stroke
+            // does not repeatedly integrate the same opaque contact.
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..BrushRendering::default()
+            },
             wet_mix: BrushWetMix::default(),
             color_dynamics: BrushColorDynamics {
                 stroke_saturation_jitter: 0.035,
@@ -368,12 +374,13 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             hardness: 0.68,
             execution: BrushExecution::Dry,
             grain: Some(canvas_grain(CONTACT_PAPER_TEXTURE_ASSET, 1.9, 1., 0.0)),
-            rendering: BrushRendering::default(),
-            wet_mix: BrushWetMix {
-                wetness: 0.28,
-                wetness_jitter: 0.08,
-                ..BrushWetMix::default()
+            // One translucent film per stroke, with additional glaze layers
+            // deposited by subsequent strokes.
+            rendering: BrushRendering {
+                accumulation: BrushAccumulation::Uniform,
+                ..BrushRendering::default()
             },
+            wet_mix: BrushWetMix::default(),
             color_dynamics: BrushColorDynamics {
                 stroke_saturation_jitter: 0.035,
                 ..Default::default()

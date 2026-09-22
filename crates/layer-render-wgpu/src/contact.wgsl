@@ -10,6 +10,10 @@ fn contact_feature(bit: u32, dynamic: bool) -> bool {
     return select((CONTACT_FLAGS & bit) != 0u, dynamic, CONTACT_FLAGS == 4294967295u);
 }
 
+fn contact_uniform() -> bool {
+    return contact_feature(128u, style.render_mode.y > 0.5);
+}
+
 fn contact_hash(p: vec2<f32>) -> f32 {
     let cell = vec2<i32>(p);
     var h = (bitcast<u32>(cell.x) * 1597334677u) ^ (bitcast<u32>(cell.y) * 3812015801u);
@@ -26,18 +30,28 @@ fn contact_noise(p: vec2<f32>) -> f32 {
         mix(contact_hash(cell + vec2<f32>(0.0, 1.0)), contact_hash(cell + vec2<f32>(1.0)), u.x), u.y);
 }
 
-// Stationary material fields are shared by all spans touching this pixel.
-fn contact_field(world: vec2<f32>) -> vec2<f32> {
-    var field = vec2<f32>(0.5, 1.0);
+fn contact_paper(world: vec2<f32>) -> f32 {
+    if contact_feature(2u, style.contact_a.y > 0.0) {
+        let uv = rotate(world / vec2<f32>(textureDimensions(grain_texture)), style.grain.z, style.grain.w) * style.grain.x;
+        return textureSampleLevel(grain_texture, brush_sampler, uv, 0.0).r;
+    }
+    return 1.0;
+}
+
+// Paper alone bounds a loaded film. Evaluate the more expensive edge noise
+// only after proving that incoming contacts can still deposit pigment.
+fn contact_field_with_paper(world: vec2<f32>, paper: f32) -> vec2<f32> {
+    var field = vec2<f32>(0.5, paper);
     if contact_feature(4u, style.contact_a.w > 0.0) {
         let p = world / style.contact_b.x;
         field.x = contact_noise(p) * 0.7 + contact_noise(p * 2.17 + vec2<f32>(17.3)) * 0.3;
     }
-    if contact_feature(2u, style.contact_a.y > 0.0) {
-        let uv = rotate(world / vec2<f32>(textureDimensions(grain_texture)), style.grain.z, style.grain.w) * style.grain.x;
-        field.y = textureSampleLevel(grain_texture, brush_sampler, uv, 0.0).r;
-    }
     return field;
+}
+
+// Stationary material fields are shared by all spans touching this pixel.
+fn contact_field(world: vec2<f32>) -> vec2<f32> {
+    return contact_field_with_paper(world, contact_paper(world));
 }
 
 fn evolving_contact_prepared(
@@ -99,7 +113,7 @@ fn evolving_contact_prepared(
     boundary += pool * 0.12 * (0.3 + 0.7 * pressure);
     let feather = max(1.0 - hardness, aa);
     var coverage = 1.0 - smoothstep(boundary - feather, boundary + aa * 0.5, radius);
-    if style.render_mode.y < 0.5 {
+    if !contact_uniform() {
         // Integrate a compact parabolic pigment kernel along the actual span.
         // Adjacent spans partition the integral, so there are no overlapping
         // cap deposits or periodic dots as contact spacing changes.
@@ -166,7 +180,7 @@ fn evolving_contact_prepared(
         // catch the peaks without a translucent film over the whole paper.
         var contact = smoothstep(0.5 - penetration * 0.5, 0.85 - penetration * 0.35, tooth)
             * (0.3 + penetration * 0.7);
-        if style.render_mode.y > 0.5 {
+        if contact_uniform() {
             let threshold = 0.62 - penetration * 0.3;
             contact = smoothstep(threshold - 0.08, threshold + 0.08, tooth);
         }

@@ -1,7 +1,7 @@
 // An aligned, constant-backdrop tile can write its destination directly.
 // This avoids loading/storing a large render attachment on tile-based GPUs.
 @group(2) @binding(0) var scene_output: texture_storage_2d<rgba32float, write>;
-@group(2) @binding(1) var lower: texture_2d<f32>;
+@group(1) @binding(3) var lower: texture_2d<f32>;
 fn scene_normal_stack(preview: vec4<f32>, paint: vec4<f32>, v: Vertex) -> vec4<f32> {
     let top = (preview + paint * (1. - preview.a)) * settings.options.y;
     let bottom = scene_read(lower, v) * settings.source_over.x;
@@ -9,7 +9,7 @@ fn scene_normal_stack(preview: vec4<f32>, paint: vec4<f32>, v: Vertex) -> vec4<f
     return top + backdrop * (1. - top.a);
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(32, 2)
 fn compose_constant(@builtin(global_invocation_id) id: vec3<u32>) {
     let local = vec2<f32>(id.xy) + vec2(.5);
     let p = settings.rect.xy + local;

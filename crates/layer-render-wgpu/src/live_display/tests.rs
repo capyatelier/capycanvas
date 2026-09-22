@@ -1019,6 +1019,7 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
     r.prepare_startup(&doc, &brush, false).unwrap();
     assert!(!r.poll_startup().unwrap().canvas_ready);
     assert!(!r.display_pipelines.as_ref().unwrap().reduce.ready());
+    assert!(!r.display_pipelines.as_ref().unwrap().fused_reduce.ready());
     assert!(r.live_display.is_none() && r.composite_texture.is_none());
     release.send(()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -1027,8 +1028,11 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
         std::thread::yield_now();
     }
     assert!(r.display_pipelines.as_ref().unwrap().reduce.ready());
+    assert!(r.display_pipelines.as_ref().unwrap().fused_reduce.ready());
     submit(&mut r, &doc, view([1., 0., 0., 1., 0., 0.]), true);
     assert!(r.live_display.is_some() && r.composite_texture.is_none());
+    drop(r);
+    startup::finish_shader_compiler_shutdown();
 }
 
 #[test]

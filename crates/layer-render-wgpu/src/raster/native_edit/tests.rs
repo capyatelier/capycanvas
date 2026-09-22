@@ -276,6 +276,7 @@ fn saturated_uniform_contacts_match_the_full_evaluator_exactly() {
     // Compile the current evaluator with the shortcut disabled. Compare native
     // Float32 working pixels, coverage and prediction, not just an 8-bit export.
     fn reference(r: &mut WgpuRasterizer) {
+        r.pipelines.dry_in_place = None;
         let source = include_str!("../../material_brush.wgsl");
         assert!(source.contains("if stroke_coverage >= ceiling"));
         let source = source.replace("if stroke_coverage >= ceiling", "if false");
@@ -295,7 +296,7 @@ fn saturated_uniform_contacts_match_the_full_evaluator_exactly() {
             advanced_texture: &r.advanced_texture_layout, target: &r.target_layout,
             material: &r.material_layout, edge: &r.edge_layout,
             watercolor: &r.watercolor_layout, transport: &r.transport_layout,
-        }, &shader));
+        }, &shader, false));
     }
     fn state(r: &WgpuRasterizer) -> Vec<([u32; 2], Vec<u8>)> {
         r.paint_layers.iter().flat_map(|layer| layer.pages.iter()

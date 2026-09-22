@@ -38,6 +38,7 @@ fn material_renderer() -> WgpuRasterizer {
 // selection, attachment variants, persistent state and both prediction paths.
 fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
     renderer.pipelines.dry_material = None;
+    renderer.pipelines.dry_in_place = None;
     let source = include_str!("../material_brush.wgsl")
         .replace("override MATERIAL_OPERATION: u32;", "")
         .replace("MATERIAL_OPERATION", "style.operation.z");
@@ -265,6 +266,68 @@ fn specialized_material_matches_uniform_dispatch_across_pages_and_prediction() {
         "native={native}: 24 material cases, 120 full-image comparisons; maximum channel error={maximum_error}"
     );
     }
+}
+
+#[test]
+fn contact_film_culling_matches_unculled_pressure_and_prediction() {
+    let mut actual = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut reference = WgpuRasterizer::from_wgpu_inner(
+        actual.adapter.clone(), actual.device.clone(), actual.queue.clone(), Initialization::Warm,
+    ).unwrap();
+    reference.pipelines.dry_material.as_mut().unwrap().use_unculled_reference();
+    reference.pipelines.dry_in_place = None;
+    actual.resize_surface(384, 128).unwrap();
+    reference.resize_surface(384, 128).unwrap();
+    let layer = Layer::paint(LayerId(1), "Contact film reference");
+    let damage = Rect { min: Point { x: 0., y: 0. }, max: Point { x: 384., y: 128. } };
+    let view = ViewState { width_px: 384, ..test_view() };
+    let mut cases = layer_core::CONTACT_BRUSH_PRESETS.into_iter()
+        .map(layer_core::default_brush)
+        .filter(|b| b.rendering.accumulation == BrushAccumulation::Uniform)
+        .collect::<Vec<_>>();
+    // Custom tilted, drying contact exercises density above one before the
+    // coverage clamp. It cannot use the unbiased drying-factor bound.
+    let mut custom = layer_core::default_brush(layer_core::DefaultBrushPreset::ShadingPencil);
+    custom.contact.as_mut().unwrap().depletion = 0.003;
+    cases.push(custom);
+    for (case, brush) in cases.into_iter().enumerate() {
+        let style = DabStyle {
+            contact: brush.contact, grain: brush.grain.clone(), rendering: brush.rendering,
+            ..test_style(BrushExecution::Dry)
+        };
+        for phase in 0..12 {
+            let pressure = [0.35, 0.35, 0.8, 0.8, 1., 0.25][phase % 6];
+            let distance = phase as f32 * 45.;
+            let mut dab = test_dab([252. + (phase % 3) as f32 * 5., 64.], [0.1, 0.2, 0.8, 0.8], brush.flow);
+            dab.radii = [62., 48.];
+            dab.previous = [60., 47., 1., 0.];
+            dab.motion = [5., 2.];
+            dab.hardness = brush.hardness;
+            dab.contact = [pressure, 0.8, distance + 8., 0.1];
+            dab.previous_contact = [pressure, 0.75, distance, 0.1];
+            let batch = DabBatch {
+                material_update: phase as u32, stroke_id: StrokeId(1), layer_id: layer.id,
+                kind: if phase % 3 == 1 { DabBatchKind::Preview } else { DabBatchKind::Persistent },
+                stroke_start: phase == 0, stroke_end: phase == 11, first_dab: 0, dab_count: 1,
+                style: style.clone(), damage,
+            };
+            let packet = FramePacket {
+                view, document_extent: [384, 128], layers: std::slice::from_ref(&layer),
+                dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
+                restore_rasters: &[], reset_layers: phase == 0, time_seconds: 0., composite_all: phase == 0,
+            };
+            actual.submit(packet).unwrap();
+            reference.submit(packet).unwrap();
+            let a = actual.readback_srgb_rgba8().unwrap();
+            let b = reference.readback_srgb_rgba8().unwrap();
+            let error = a.iter().zip(&b).map(|(x,y)| x.abs_diff(*y)).max().unwrap();
+            assert!(error <= 1, "film case={case}, phase={phase}, error={error}");
+            assert!(a.chunks_exact(4).any(|p| p[0] < 250), "contact must paint");
+        }
+    }
+    drop(reference);
+    drop(actual);
+    startup::finish_shader_compiler_shutdown();
 }
 
 #[test]

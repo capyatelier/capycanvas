@@ -15,6 +15,7 @@ impl WgpuRasterizer {
         let batch_dabs =
             &context.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
         let preview = context.target.is_preview();
+        let in_place = self.in_place_dry_material(batch);
         let from_persistent = context.target
             == (BrushEncodingTarget::Preview {
                 from_persistent: true,
@@ -136,7 +137,8 @@ impl WgpuRasterizer {
                 dabs,
                 page_index,
                 coverage_index,
-                destination_secondary: !from_persistent && !page.active_secondary,
+                destination_secondary: if in_place { page.active_secondary }
+                    else { !from_persistent && !page.active_secondary },
                 coverage_destination_secondary: coverage.map(|p| !p.active_secondary),
             });
         };
@@ -224,7 +226,8 @@ impl WgpuRasterizer {
                 continue;
             }
             if self.compute_dry_material(batch) && local == PixelRect::full([PAGE_SIZE; 2]) {
-                let output = self.pipelines.dry_material.as_ref().unwrap().output(
+                let output = if in_place { &self.pipelines.dry_in_place }
+                    else { &self.pipelines.dry_material }.as_ref().unwrap().output(
                     self,
                     destination,
                     coverage_surface,

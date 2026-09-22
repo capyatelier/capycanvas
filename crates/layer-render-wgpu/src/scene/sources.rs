@@ -36,14 +36,14 @@ impl SourceLimits {
     fn admitted(display_allowance: u64) -> Self {
         // Reuse the native renderer's measured headroom admission snapshot.
         // Unknown/small budgets retain the original 64+16 MiB ceilings. Larger
-        // devices admit at most 256 MiB of source pixels and 64 MiB in flight;
-        // their source pixels use no more than one eighth of that allowance.
+        // devices admit at most 1 GiB of source pixels and 64 MiB in flight;
+        // their source pixels use no more than one quarter of that allowance.
         // Admit whole tiles instead of rounding down to power-of-two tiers.
-        // A 1.8 GiB allowance can retain ~230 tiles; limiting it to 128 causes
-        // avoidable source eviction during a wide G-Pen sweep.
-        let slots = (display_allowance / (8 * FLOAT_TILE_BYTES))
-            .clamp(DECODED_SLOTS as u64, 256) as usize;
-        Self { slots, upload_bytes: slots as u64 * FLOAT_TILE_BYTES / 4 }
+        // The resident cache may outlive an upload window: unchanged source
+        // pixels should not be decoded repeatedly during a broad stroke.
+        let slots = (display_allowance / (4 * FLOAT_TILE_BYTES))
+            .clamp(DECODED_SLOTS as u64, 1024) as usize;
+        Self { slots, upload_bytes: (slots as u64 * FLOAT_TILE_BYTES / 4).min(64 * 1024 * 1024) }
     }
 }
 
@@ -133,6 +133,7 @@ impl Drop for UploadCharge {
 }
 #[derive(Default)]
 pub(super) struct DecodedTiles {
+    display_encoded: bool,
     destination: RgbSpace,
     limits: SourceLimits,
     slots: Vec<Slot>,
@@ -164,8 +165,30 @@ impl DecodedTiles {
         debug_assert!(self.slots.is_empty(), "source admission precedes pixel allocation");
         self.limits = SourceLimits::admitted(allowance);
     }
+    // Reserve a quarter of the admitted source memory for opaque sRGB8
+    // display tiles. Their original codes occupy four bytes per texel; native
+    // paint, color queries and captures continue using the Float32 cache.
+    pub fn split_display_cache(&mut self) -> Self {
+        let slots = if self.destination == RgbSpace::Srgb && self.limits.slots >= 256 {
+            self.limits.slots / 4 * 4
+        } else { 0 };
+        self.limits.slots -= slots / 4;
+        Self {
+            display_encoded: true,
+            destination: self.destination,
+            limits: SourceLimits { slots, upload_bytes: self.limits.upload_bytes },
+            in_flight: self.in_flight.clone(),
+            ..Default::default()
+        }
+    }
+    pub fn accepts_display(&self, source: &SourceImage) -> bool {
+        self.display_encoded && self.limits.slots > 0
+            && source.interpretation.depth == SampleDepth::U8
+            && source.interpretation.channels == SourceChannels::Rgb
+            && source.interpretation.profile == ColorProfile::Builtin(RgbSpace::Srgb)
+    }
     pub fn admitted_bytes(&self) -> [u64; 2] {
-        [self.limits.slots as u64 * FLOAT_TILE_BYTES, self.limits.upload_bytes]
+        [self.limits.slots as u64 * FLOAT_TILE_BYTES / if self.display_encoded { 4 } else { 1 }, self.limits.upload_bytes]
     }
     pub fn prepare_transfer(
         &mut self,
@@ -206,7 +229,7 @@ impl DecodedTiles {
         total
     }
     pub fn gpu_bytes(&self) -> u64 {
-        self.slots.len() as u64 * FLOAT_TILE_BYTES
+        self.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum::<u64>()
             + self.transfer.gpu_bytes()
             + self
                 .inputs
@@ -226,6 +249,7 @@ impl DecodedTiles {
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
     ) -> Result<(RawTile, Option<PendingTile>), GpuRasterError> {
+        debug_assert!(!self.display_encoded || self.accepts_display(source));
         let (tile, write) = self.plan_key(r, Key::Image(Arc::downgrade(source), coordinate))?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Image(source.clone(), coordinate),
@@ -298,7 +322,7 @@ impl DecodedTiles {
         self.misses += 1;
         let index = if self.slots.len() < self.limits.slots {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("bounded Float32 source tile"),
+                label: Some("bounded source tile"),
                 size: wgpu::Extent3d {
                     width: PAGE_SIZE,
                     height: PAGE_SIZE,
@@ -307,7 +331,8 @@ impl DecodedTiles {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba32Float,
+                format: if self.display_encoded { wgpu::TextureFormat::Rgba8UnormSrgb }
+                    else { wgpu::TextureFormat::Rgba32Float },
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -354,7 +379,27 @@ impl DecodedTiles {
         uniforms: &wgpu::BindGroup,
         offset: u32,
     ) -> Result<u64, GpuRasterError> {
-        let bytes = if pending.data.is_some() {
+        let bytes = if pending.texture.format() == wgpu::TextureFormat::Rgba8UnormSrgb {
+            let Pixels::Image(source, coordinate) = &pending.pixels else { unreachable!() };
+            let samples = pending.pixels.native()?;
+            let decoded = r.device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
+            let valid = std::array::from_fn::<_, 2, _>(|i| source.extent[i].saturating_sub(coordinate[i] * PAGE_SIZE).min(PAGE_SIZE));
+            r.uploads.write_texture(encoder, &pending.texture, PAGE_SIZE * 4, |mapped| {
+                let mut row = [0u8; PAGE_SIZE as usize * 4];
+                for y in 0..PAGE_SIZE as usize {
+                    row.fill(0);
+                    if y < valid[1] as usize {
+                        let start = y * PAGE_SIZE as usize * 3;
+                        for x in 0..valid[0] as usize {
+                            row[x * 4..x * 4 + 3].copy_from_slice(&decoded[start + x * 3..start + x * 3 + 3]);
+                            row[x * 4 + 3] = 255;
+                        }
+                    }
+                    mapped.slice(y * row.len()..(y + 1) * row.len()).copy_from_slice(&row);
+                }
+            })?;
+            FLOAT_TILE_BYTES / 4
+        } else if pending.data.is_some() {
             let samples = pending.pixels.native()?;
             let index = samples.depth.bytes().ilog2() as usize;
             let pipelines = &r.scene_pipelines.source;

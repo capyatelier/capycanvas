@@ -12,7 +12,7 @@ use raw_window_handle::{
 };
 use std::ptr::NonNull;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -38,6 +38,7 @@ pub(crate) struct Surface {
     trace_timings: bool,
     // One surface-owned completion source for startup and update admission.
     completed_frames: Arc<AtomicU64>,
+    completion_observer: Option<Arc<Mutex<Vec<[u64; 4]>>>>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
     _instance: wgpu::Instance,
@@ -61,6 +62,32 @@ impl Surface {
 }
 pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+fn monotonic_ns() -> u64 {
+    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // CLOCK_MONOTONIC is also Android System.nanoTime's time base.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time); }
+    time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64
+}
+
+/// Opt-in bounded completion observations. This does not enable GPU queries,
+/// wait for the queue, or change the canvas update schedule.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_completionTimings(
+    mut env: JNIEnv, _: JClass, handle: jlong, enabled: jboolean,
+) -> jstring {
+    let a = unsafe { app(handle) };
+    let mut rows = Vec::new();
+    if let Some(surface) = &mut a.surface {
+        if let Some(observer) = surface.completion_observer.take() {
+            rows = observer.lock().unwrap().clone();
+        }
+        if enabled != 0 {
+            surface.completion_observer = Some(Arc::new(Mutex::new(Vec::with_capacity(32768))));
+        }
+    }
+    string(&mut env, Ok(serde_json::to_string(&rows).unwrap()))
 }
 
 /// Query the actual Vulkan surface, rather than inferring output support from
@@ -293,6 +320,7 @@ impl App {
             submitted_frames: 0,
             trace_timings: false,
             completed_frames: Arc::new(AtomicU64::new(0)),
+            completion_observer: None,
             logical_extent: [width, height],
             quarter_turns: 0,
             _instance: instance,
@@ -484,8 +512,16 @@ impl App {
         {
             let complete = surface.completed_frames.clone();
             let frame = surface.submitted_frames;
+            let observer = surface.completion_observer.clone();
+            let submitted_ns = observer.as_ref().map_or(0, |_| monotonic_ns());
+            let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
             gpu.queue().on_submitted_work_done(move || {
                 complete.fetch_max(frame, Ordering::Release);
+                if let Some(observer) = observer {
+                    let completed_ns = monotonic_ns();
+                    let mut rows = observer.lock().unwrap();
+                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame]); }
+                }
                 // Callback service time is an upper bound on GPU completion,
                 // not scanout or physical pen-to-photon latency.
                 unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }

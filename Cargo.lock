@@ -1293,6 +1293,7 @@ dependencies = [
  "layer-render-wgpu",
  "layer-ui",
  "layer-workspace",
+ "libc",
  "ndk-sys",
  "pollster",
  "raw-window-handle",
