@@ -433,7 +433,7 @@ impl App {
                 surface.presentation_switches += 1;
             }
         }
-        let _presentation = self.host.session.engine().backend().0.as_ref()
+        let _presentation = self.host.session.engine().backend().0.as_deref()
             .map(WgpuRasterizer::prioritize_raster_presentation);
         self.host
             .prepare_canvas_frame(now, presentation, self.blank_presented)?;

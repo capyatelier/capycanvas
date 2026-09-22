@@ -264,7 +264,23 @@ removing the obsolete acquisition wait produced raster work followed by
 acquisition timeouts and no presentation. See the
 [Wacom admission measurements](../docs/development/gpen-drawing-admission-20260920.md).
 
-All Android builds require this path for SDR and HDR. Unsupported drivers report
-a canvas initialization error; there is no Android FIFO fallback or build flag.
+Lost/outdated presentation results remain latched until swapchain recreation,
+so the next shared acquisition reaches the host's recovery path even though it
+does not call `vkAcquireNextImageKHR` again. Rejected presents still enqueue
+their fence/semaphore work; teardown waits for those fences too. Successful
+updates retain the same nonblocking acquisition path. Regression tests are in
+`wgpu-hal/src/vulkan/swapchain/native/tests.rs`.
+
+Run those tests from the repository root with:
+
+```sh
+cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --features vulkan --lib \
+  vulkan::swapchain::native::tests \
+  --config 'patch.crates-io.wgpu-types.path="vendor/wgpu-types"'
+```
+
+All Android builds require shared presentation for SDR and HDR pen input.
+Camera navigation uses FIFO until a new paint contact. Unsupported drivers report
+a canvas initialization error; there is no driver-support fallback or build flag.
 Other platform hosts retain their existing presentation modes. See
 [production qualification](../docs/development/android-front-buffer-production-2026-09-20.md).

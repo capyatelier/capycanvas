@@ -16,6 +16,9 @@ use crate::vulkan::{
     DeviceShared, InstanceShared,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) struct NativeSurface {
     raw: vk::SurfaceKHR,
     functor: khr::surface::Instance,
@@ -300,7 +303,7 @@ impl Surface for NativeSurface {
             raw, functor, device: Arc::clone(&device.shared), config: config.clone(),
             images: Vec::new(), fence: None, acquire_semaphores: Vec::new(),
             present_semaphores: Vec::new(), next_acquire_index: 0, next_present_time: None,
-            shared, shared_acquired: false, shared_initialized: false,
+            shared, shared_acquired: false, present_state: PresentState::default(),
             present_fences: Vec::new(), present_pending: Vec::new(),
         });
         let setup = (|| -> Result<(), crate::SurfaceError> {
@@ -351,7 +354,7 @@ impl Surface for NativeSurface {
 pub(crate) struct NativeSwapchain {
     shared: bool,
     shared_acquired: bool,
-    shared_initialized: bool,
+    present_state: PresentState,
     present_fences: Vec<vk::Fence>,
     present_pending: Vec<bool>,
     raw: vk::SwapchainKHR,
@@ -407,6 +410,47 @@ pub(crate) struct NativeSwapchain {
     /// This must only be set if [`wgt::Features::VULKAN_GOOGLE_DISPLAY_TIMING`] is enabled, and
     /// so the VK_GOOGLE_display_timing extension is present.
     next_present_time: Option<vk::PresentTimeGOOGLE>,
+}
+
+#[derive(Default)]
+struct PresentState {
+    initialized: bool,
+    error: Option<crate::SurfaceError>,
+}
+
+impl PresentState {
+    fn check(&self) -> Result<(), crate::SurfaceError> {
+        self.error.clone().map_or(Ok(()), Err)
+    }
+
+    fn complete(
+        &mut self,
+        result: Result<bool, vk::Result>,
+        fence_pending: Option<&mut bool>,
+    ) -> Result<bool, crate::SurfaceError> {
+        if let Some(pending) = fence_pending {
+            // These rejected presents still enqueue the semaphore waits and
+            // present fence. Retire them before destroying the old swapchain.
+            *pending = matches!(result, Ok(_) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR
+                | vk::Result::ERROR_SURFACE_LOST_KHR
+                | vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT));
+        }
+        match result {
+            Ok(suboptimal) => {
+                self.initialized = true;
+                Ok(suboptimal)
+            }
+            Err(error) => {
+                let error = match error {
+                    vk::Result::ERROR_OUT_OF_DATE_KHR => crate::SurfaceError::Outdated,
+                    vk::Result::ERROR_SURFACE_LOST_KHR => crate::SurfaceError::Lost,
+                    other => map_host_device_oom_and_lost_err(other).into(),
+                };
+                self.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
 }
 
 impl Drop for NativeSwapchain {
@@ -468,6 +512,10 @@ impl Swapchain for NativeSwapchain {
         timeout: Option<core::time::Duration>,
         fence: &crate::vulkan::Fence,
     ) -> Result<crate::AcquiredSurfaceTexture<crate::api::Vulkan>, crate::SurfaceError> {
+        // Queue::present cannot return a recoverable status to the caller.
+        // Shared images bypass vkAcquireNextImageKHR after their first acquire,
+        // so surface errors must remain visible here until reconfiguration.
+        self.present_state.check()?;
         let mut timeout_ns = match timeout {
             Some(duration) => duration.as_nanos() as u64,
             None => u64::MAX,
@@ -595,7 +643,7 @@ impl Swapchain for NativeSwapchain {
         let texture = crate::vulkan::SurfaceTexture {
             index,
             texture: crate::vulkan::Texture {
-                shared_present: self.shared, shared_initialized: self.shared_initialized,
+                shared_present: self.shared, shared_initialized: self.present_state.initialized,
                 raw: self.images[index as usize],
                 drop_guard: None,
                 memory: crate::vulkan::TextureMemory::External,
@@ -685,20 +733,12 @@ impl Swapchain for NativeSwapchain {
             unsafe { self.device.raw.reset_fences(fences) }.map_err(map_host_device_oom_and_lost_err)?;
             vk_info.push_next(&mut present_fence_info)
         } else { vk_info };
-        let suboptimal = {
+        let result = {
             profiling::scope!("vkQueuePresentKHR");
-            unsafe { self.functor.queue_present(queue.raw, &vk_info) }.map_err(|error| {
-                match error {
-                    vk::Result::ERROR_OUT_OF_DATE_KHR => crate::SurfaceError::Outdated,
-                    vk::Result::ERROR_SURFACE_LOST_KHR => crate::SurfaceError::Lost,
-                    // We don't use VK_EXT_full_screen_exclusive
-                    // VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
-                    _ => map_host_device_oom_and_lost_err(error).into(),
-                }
-            })?
+            unsafe { self.functor.queue_present(queue.raw, &vk_info) }
         };
-        if self.shared { self.present_pending[metadata.slot] = true; }
-        self.shared_initialized = self.shared;
+        let pending = if self.shared { Some(&mut self.present_pending[metadata.slot]) } else { None };
+        let suboptimal = self.present_state.complete(result, pending)?;
         if suboptimal {
             // We treat `VK_SUBOPTIMAL_KHR` as `VK_SUCCESS` on Android.
             // On Android 10+, libvulkan's `vkQueuePresentKHR` implementation returns `VK_SUBOPTIMAL_KHR` if not doing pre-rotation
