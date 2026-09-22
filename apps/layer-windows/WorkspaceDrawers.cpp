@@ -30,9 +30,9 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     J model,geometry,from;
     hstring modelKey,layoutKey,columnsKey,backgroundKey;
     std::map<std::wstring,J> panels;
-    struct Body {hstring key;std::unique_ptr<PanelBody> view;};
+    struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
-    struct Column {Grid frame;ScrollViewer scroll;StackPanel stack;std::vector<std::wstring> panels;};
+    struct Column {Grid frame;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;};
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
@@ -137,6 +137,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     void rebuild(){
         auto placements=array(object(geometry,L"placement"),L"columns"),models=array(model,L"columns");
         if(!placements.Size()||placements.Size()!=models.Size())return;
+        bool splitFilters=false;
+        for(auto members:models)for(auto member:members.GetArray())if(member.GetString()==L"filter_types")splitFilters=true;
         A signature;
         for(uint32_t i=0;i<models.Size();++i){
             double width=num(placements.GetObjectAt(i),L"width");A items;
@@ -209,11 +211,12 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 if(array(panel,L"tiles").Size()&&toolbar==toolbarLayouts.end()&&(!bodies.contains(panelId)||bodies.at(panelId).key!=panelStructure(panel).Stringify()))continue;
                 auto& body=bodies[panelId];keep.insert(panelId);column.panels.push_back(panelId);
                 bodyKey=panelStructure(panel).Stringify();
-                if(!body.view||body.key!=bodyKey){
+                if(!body.view||body.key!=bodyKey||body.splitFilters!=splitFilters){
                     auto placement=O({{L"bounds",O({{L"width",N(width)}})}});
+                    placement.Insert(L"split_filters",B(splitFilters));
                     if(toolbar!=toolbarLayouts.end())placement.Insert(L"tiles",toolbar->second);
                     body.view=std::make_unique<PanelBody>(data,panel,placement,[weak]{if(auto self=weak.lock())self->measured();},gestures,false);
-                    body.key=bodyKey;
+                    body.key=bodyKey;body.splitFilters=splitFilters;
                     if(toolbar!=toolbarLayouts.end())body.view->Root().Height(std::max(36.,num(toolbar->second,L"content_height")));
                 }
                 AutomationProperties::SetAutomationId(body.view->Root(),L"drawer-panel-"+hstring(panelId));
@@ -222,8 +225,8 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 body.view->Root().Width(width);body.view->Apply(true);column.stack.Children().Append(body.view->Root());
             }
             AutomationProperties::SetAutomationId(column.scroll,hstring(L"drawer-slot-"+id+L"-"+std::to_wstring(i)));
-            column.scroll.Content(column.stack);column.scroll.HorizontalScrollMode(ScrollMode::Disabled);
-            column.scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);column.scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+            column.scroll.Content(column.stack);column.scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+            column.scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);column.scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
             Grid::SetRow(column.scroll,1);column.frame.Children().Append(column.scroll);
             content.Children().Append(column.frame);columns.push_back(std::move(column));
         }

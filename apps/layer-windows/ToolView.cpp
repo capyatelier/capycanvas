@@ -35,31 +35,36 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     Canvas groups;
     std::vector<Button> groupButtons,subtoolButtons;
     hstring groupKey,subtoolKey;
+    hstring panel;
+    bool media()const{return panel==L"brush_sets"||panel==L"sculpt_sets";}
     double arrangedWidth=-1;
-    explicit ToolSetView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){}
+    ToolSetView(std::shared_ptr<WorkspaceData> data,hstring panel):data(std::move(data)),panel(std::move(panel)){}
     void init(){
         root.Spacing(8);list.Spacing(2);
         auto weak=weak_from_this();
         root.Children().Append(groups);root.Children().Append(list);
+        groups.Visibility(panel==L"tools"?Visibility::Collapsed:Visibility::Visible);
+        list.Visibility(media()?Visibility::Collapsed:Visibility::Visible);
         groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
     }
     void arrange(){
         double width=groups.ActualWidth();
         if(std::abs(arrangedWidth-width)<.01)return;arrangedWidth=width;
         int size=int(groupButtons.size());
-        int count=std::max(1,std::min(size,int((width+4)/74.)));
-        double height=58; // 16px icon + 8px gap + 24px line + 10px padding.
+        int count=media()?1:std::max(1,std::min(size,int((width+4)/74.)));
+        double height=media()?44:58;
+        double gap=media()?2:4;
         // Match the shared flex rows: 70 DIP minimum, four-DIP gaps, and equal
         // widths within each row, including a partially filled final row.
         for(int i=0;i<size;i++){
             int row=i/count,items=std::min(count,size-row*count);
-            double itemWidth=std::max(0.,(width-4*(items-1))/items);
+            double itemWidth=std::max(0.,(width-gap*(items-1))/items);
             auto const& pick=groupButtons[i];
-            Canvas::SetLeft(pick,(i%count)*(itemWidth+4));Canvas::SetTop(pick,row*(height+4));
+            Canvas::SetLeft(pick,(i%count)*(itemWidth+gap));Canvas::SetTop(pick,row*(height+gap));
             pick.Width(itemWidth);pick.Height(height);
         }
         int rows=(size+count-1)/count;
-        groups.Height(rows?rows*height+(rows-1)*4:0);
+        groups.Height(rows?rows*height+(rows-1)*gap:0);
     }
     void rebuild(A const& items,bool group){
         auto& buttons=group?groupButtons:subtoolButtons;buttons.clear();
@@ -71,10 +76,13 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
             pick.Padding({17,5,17,5});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
+            if(group&&media())AutomationProperties::SetAutomationId(pick,(panel==L"sculpt_sets"?L"sculpt-set-":L"brush-set-")+str(item,L"icon"));
             auto title=label(data,str(item,L"label"),true);
             title.FontSize(data->textSize()*(group?.85:1.));title.LineHeight(24);
             title.TextTrimming(TextTrimming::CharacterEllipsis);title.VerticalAlignment(VerticalAlignment::Center);
-            if(group){
+            if(group&&media()){
+                pick.Padding({6,5,6,5});pick.Content(toolLabel(data,item,false));
+            }else if(group){
                 StackPanel content;content.Spacing(8);
                 auto glyph=icon(str(item,L"icon"),data->theme());glyph.HorizontalAlignment(HorizontalAlignment::Center);
                 title.TextAlignment(TextAlignment::Center);content.Children().Append(glyph);content.Children().Append(title);
@@ -101,7 +109,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
         if(group){arrangedWidth=-1;arrange();}
     }
     void refresh(){
-        auto view=object(data->state,L"tool_set");
+        auto view=panel==L"brushes"?object(data->state,L"tool_set"):object(object(data->state,L"tool_panels"),panel.c_str());
         for(bool group:{true,false}){
             auto items=array(view,group?L"groups":L"subtools");auto key=itemSchema(items)+data->theme();
             auto& previous=group?groupKey:subtoolKey;
@@ -173,8 +181,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     }
 };
 }
-FrameworkElement ToolSetPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
-    auto view=std::make_shared<ToolSetView>(data);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
+FrameworkElement ToolSetPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings,hstring const& panel){
+    auto view=std::make_shared<ToolSetView>(data,panel);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
 }
 FrameworkElement ToolSettingsPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<SettingsView>(data);bindings.emplace_back([view]{view->refresh();});return view->root;

@@ -1,5 +1,10 @@
 # Capy Canvas for Windows
 
+The [2026-09-22 feature and performance report](../../docs/development/windows-features-20260922.md)
+records the Brush/Sculpt/Filters drawer integration and the reproducible 1000 px
+brush measurement. `scripts/exercise-new-features.ps1` supports guarded native
+pointer input and an explicit `-InputMode Automation` command-only review.
+
 Native Windows client using WinUI 3/C++/WinRT and the shared Rust/wgpu D3D12
 renderer. One GPU canvas covers the extended client area behind the title bar.
 The host supplies native controls, independent input collection and asynchronous

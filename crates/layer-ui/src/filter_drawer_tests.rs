@@ -1,8 +1,9 @@
-fn filters() -> (UiSession<Recorder>, u32) {
+fn filters() -> (UiSession<Recorder>, u32) { filters_on(Platform::Gtk) }
+fn filters_on(platform: Platform) -> (UiSession<Recorder>, u32) {
     let mut s = session();
-    s.set_platform(Platform::Gtk);
+    s.set_platform(platform);
     s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-        layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+        layout: WorkspacePreset::Painter.layout(platform), ..WorkspaceState::default()
     }) }).unwrap();
     let id = s.state.workspace.layout.header.entries().find(|e| e.item == HeaderItem::Tool {
         control: ToolbarControl::Panel { panel: Panel::Adjustments }
@@ -185,4 +186,25 @@ fn animated_speed_changes_preserve_playback_phase_including_zero_and_restored_sp
     effect.set("speed", layer_core::EffectValue::Number(1.)).unwrap();
     assert_eq!(clock.advance(&effect, 21.), 12.);
     assert_eq!(clock.advance(&effect, 22.), 13.);
+}
+
+#[test]
+fn windows_filter_drawer_uses_shared_replacement_cancel_and_history() {
+    let (mut s, opener) = filters_on(Platform::Windows);
+    assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
+        [vec![Panel::FilterTypes], vec![Panel::Adjustments], vec![Panel::Properties]]);
+    let original = s.engine.document().layers.len();
+    choose(&mut s, "brightness_contrast");
+    let id = s.engine.document().active_layer;
+    choose(&mut s, "exposure");
+    assert_eq!(s.engine.document().active_layer, id);
+    assert_eq!(s.engine.document().layers.len(), original + 1);
+    s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
+    s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
+    assert_eq!(s.state.layer_properties.layer, Some(id.0));
+    s.dispatch(UiAction::Effect { action: EffectAction::CancelFilter }).unwrap();
+    assert!(s.state.customization.drawer.is_none());
+    assert_eq!(s.engine.document().layers.len(), original);
+    s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+    assert!(s.engine.document().layers.iter().any(|layer| layer.id == id));
 }

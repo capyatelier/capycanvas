@@ -544,7 +544,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::DrawingBrush | Self::Sculpt => platform != Platform::Windows,
+            Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
             Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),

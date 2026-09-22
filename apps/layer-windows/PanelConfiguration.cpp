@@ -108,7 +108,8 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         return gate;
     }
     FrameworkElement control(hstring const& kind,hstring const& labelText){
-        if(kind==L"brushes")return ToolSetPanel(data,bindings);
+        if(kind==L"brushes"||kind==L"brush_sets"||kind==L"sculpt_sets"||kind==L"tools")return ToolSetPanel(data,bindings,kind);
+        if(kind==L"filter_types"){auto body=FilterTypesPanel(data,bindings);body.Height(440);return body;}
         if(kind==L"tool_settings")return ToolSettingsPanel(data,bindings);
         if(kind==L"color_wheel")return ColorPanel(data,bindings);
         if(kind==L"properties")return PropertiesPanel(data,bindings);

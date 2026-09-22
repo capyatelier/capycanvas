@@ -16,7 +16,7 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
     finally { clearInterval(timer); }
   })()`);
   await wait("!document.querySelector('dialog[open]')");
-  let photoTab;
+  let photoTab;const historyFailures=[];
   const saved = await evaluate('layerApp.state().settings');
   await action({type:'restore_settings',settings:{...saved,feedback:true,cursor:'none'}});
   await action({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
@@ -48,23 +48,36 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
         actual=await shot();
         if(delta(expected,actual.pixels)===0)return;
       } while(Date.now()<deadline);
-      await writeFile(`${directory}/history-mismatch.png`,Buffer.from(actual.data,'base64'));
-      assert.equal(delta(expected,actual.pixels),0,label);
+      const changed=delta(expected,actual.pixels);
+      await writeFile(`${directory}/${label.replace(/[^a-z0-9]+/gi,'-')}.png`,Buffer.from(actual.data,'base64'));
+      historyFailures.push({label,changed});console.error(`${label}: ${changed} channels differ by more than 3/255`);
     };
-    const presets=(process.env.LAYER_BRUSH_PRESETS || "2,25,26,27,1,28,29,30,31,32,33,34,3,4,5,6,7,9,15,16,17,18,8").split(",").map(Number);
-    for (const id of presets) {
-      await action({type:'select_brush',id});
-      await action({type:'set_brush_size',value:photoUrl?1000:70});
-      await wait('layerApp.app.brush_ready()');
-      assert.equal(await evaluate('layerApp.state().brush.preset'),id);
-      const before=await shot();
+    const stroke = async id => {
       for(let i=0;i<=48;i++) {
         const t=i/48,down=i<48;
         await call('Input.dispatchMouseEvent',{type:i===0?'mousePressed':down?'mouseMoved':'mouseReleased',pointerType:'pen',button:'left',buttons:down?1:0,clickCount:1,x:region.x+(t-.5)*region.width*.72,y:region.y+Math.sin(t*Math.PI*2)*region.height*.24,force:down?.2+.7*Math.sin(t*Math.PI):0,tiltX:id===26?40:0,tiltY:id===26?20:0});
         await settle();
       }
       await call('Input.dispatchMouseEvent',{type:'mouseMoved',pointerType:'pen',x:1,y:1,buttons:0});
+    };
+    const presets=(process.env.LAYER_BRUSH_PRESETS || "2,25,26,27,1,28,29,30,31,32,33,34,3,4,5,6,7,9,15,16,17,18,8").split(",").map(Number);
+    for (const id of presets) {
+      // Erase real paint above the retained photo, then remove that seed too.
+      if(id===3){
+        await action({type:'select_brush',id:1});
+        await action({type:'set_brush_size',value:photoUrl?1400:100});
+        await wait('layerApp.app.brush_ready()');await stroke(1);
+        await wait('layerApp.app.document_park_ready()');
+      }
+      await action({type:'select_brush',id});
+      await action({type:'set_brush_size',value:photoUrl?1000:70});
+      await wait('layerApp.app.brush_ready()');
+      assert.equal(await evaluate('layerApp.state().brush.preset'),id);
+      const before=await shot();
+      await stroke(id);
       await wait(`layerApp.state().commands.find(c=>c.id==='undo')?.enabled`);
+      // Wait for the committed native capture, not just an available Undo.
+      await wait('layerApp.app.document_park_ready()');
       const painted=await shot();
       assert.ok(delta(before.pixels,painted.pixels)>100,`Brush ${id} leaves a visible stroke`);
       await writeFile(`${directory}/${String(id).padStart(2,'0')}.png`,Buffer.from(painted.data,'base64'));
@@ -74,7 +87,8 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
       await expectPixels(painted.pixels,`Brush ${id}: redo restores stroke`);
       await invoke('undo');
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
-      console.log(`Brush ${id}: visible pressure/curve stroke, undo/redo passed`);
+      if(id===3)await invoke('undo');
+      console.log(`Brush ${id}: visible pressure/curve stroke; history ${historyFailures.some(f=>f.label.startsWith(`Brush ${id}:`))?"FAILED":"passed"}`);
     }
   } finally {
     await evaluate('window.showOpenFilePicker=contactTestOpen;delete window.contactTestOpen');
@@ -86,4 +100,5 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
       await wait(`!layerApp.state().tabs.some(t=>Number(t.id)===${photoTab})`);
     }
   }
+  assert.deepEqual(historyFailures,[], 'Committed browser history preserves presented pixels');
 }

@@ -1,0 +1,434 @@
+{
+  "canvas": [
+    9504,
+    6336
+  ],
+  "canvas_pixels": 60217344,
+  "brush_size_px": 1000,
+  "viewport": [
+    1600,
+    1000
+  ],
+  "backend": "D3D12",
+  "frames_per_repetition": 240,
+  "repetitions": 3,
+  "adapter": "Intel Iris Xe",
+  "driver": "32.0.101.6737",
+  "brushes": [
+    {
+      "preset": "Pencil",
+      "id": 2,
+      "generations_per_second": 82.0842326734578,
+      "median_ms": 10.665600000000001,
+      "p95_ms": 18.3937,
+      "repetitions_fps": [
+        87.67125529493286,
+        77.48509469275852,
+        81.72693647974775
+      ],
+      "vulkan_generations_per_second": 100.83073603160304,
+      "cross_backend_rgb_mean_absolute_error": 2e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Pencil"
+    },
+    {
+      "preset": "PointyPencil",
+      "id": 25,
+      "generations_per_second": 83.92798643052315,
+      "median_ms": 10.8916,
+      "p95_ms": 16.1805,
+      "repetitions_fps": [
+        85.2236440643028,
+        81.90446724369046,
+        84.73319036490419
+      ],
+      "vulkan_generations_per_second": 99.3237624404047,
+      "cross_backend_rgb_mean_absolute_error": 2.7708333333333334e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Pointy Pencil"
+    },
+    {
+      "preset": "ShadingPencil",
+      "id": 26,
+      "generations_per_second": 116.75800764524948,
+      "median_ms": 7.92895,
+      "p95_ms": 12.1697,
+      "repetitions_fps": [
+        120.1799755223435,
+        109.34417505127672,
+        121.53797803545405
+      ],
+      "vulkan_generations_per_second": 147.66060382481572,
+      "cross_backend_rgb_mean_absolute_error": 9.375000000000001e-06,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Shading Pencil"
+    },
+    {
+      "preset": "Charcoal",
+      "id": 27,
+      "generations_per_second": 95.45388161618695,
+      "median_ms": 10.029900000000001,
+      "p95_ms": 13.5612,
+      "repetitions_fps": [
+        91.64677104368336,
+        94.1069041098877,
+        101.10080664542342
+      ],
+      "vulkan_generations_per_second": 110.79208120985692,
+      "cross_backend_rgb_mean_absolute_error": 3.229166666666667e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Charcoal"
+    },
+    {
+      "preset": "GPen",
+      "id": 1,
+      "generations_per_second": 82.81570164999358,
+      "median_ms": 10.30195,
+      "p95_ms": 18.2886,
+      "repetitions_fps": [
+        79.66749707860949,
+        79.9609071125127,
+        89.551707510392
+      ],
+      "vulkan_generations_per_second": 107.37100615088231,
+      "cross_backend_rgb_mean_absolute_error": 4.375e-06,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "G-Pen"
+    },
+    {
+      "preset": "RoughGPen",
+      "id": 28,
+      "generations_per_second": 75.56253632117956,
+      "median_ms": 11.7226,
+      "p95_ms": 20.1639,
+      "repetitions_fps": [
+        75.72073360518338,
+        75.10958253374228,
+        75.8615333569326
+      ],
+      "vulkan_generations_per_second": 92.98600734938155,
+      "cross_backend_rgb_mean_absolute_error": 2.125e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Rough G-Pen"
+    },
+    {
+      "preset": "CalligraphyPen",
+      "id": 29,
+      "generations_per_second": 125.91167705067845,
+      "median_ms": 7.4909,
+      "p95_ms": 10.2618,
+      "repetitions_fps": [
+        134.3386416314667,
+        122.80799246695774,
+        121.36572854329773
+      ],
+      "vulkan_generations_per_second": 164.86039209846123,
+      "cross_backend_rgb_mean_absolute_error": 1.1874999999999999e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Calligraphy Pen"
+    },
+    {
+      "preset": "AntiquePen",
+      "id": 30,
+      "generations_per_second": 82.23464610057356,
+      "median_ms": 11.278749999999999,
+      "p95_ms": 17.6342,
+      "repetitions_fps": [
+        78.39798423102945,
+        79.13618371095745,
+        90.17864728196486
+      ],
+      "vulkan_generations_per_second": 114.9430737243438,
+      "cross_backend_rgb_mean_absolute_error": 2.6875e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Antique Pen"
+    },
+    {
+      "preset": "RealisticPen",
+      "id": 31,
+      "generations_per_second": 66.61287122208223,
+      "median_ms": 13.81195,
+      "p95_ms": 22.6672,
+      "repetitions_fps": [
+        65.46923079818832,
+        66.80271968345754,
+        67.60164244950495
+      ],
+      "vulkan_generations_per_second": 102.39791162872498,
+      "cross_backend_rgb_mean_absolute_error": 6.25e-06,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Realistic Pen"
+    },
+    {
+      "preset": "WetInk",
+      "id": 32,
+      "generations_per_second": 63.08505639869755,
+      "median_ms": 14.6538,
+      "p95_ms": 22.1671,
+      "repetitions_fps": [
+        61.931467515409906,
+        65.07182316037957,
+        62.34286189427383
+      ],
+      "vulkan_generations_per_second": 90.67521754118128,
+      "cross_backend_rgb_mean_absolute_error": 1.1874999999999999e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Wet Ink"
+    },
+    {
+      "preset": "BlottyInk",
+      "id": 33,
+      "generations_per_second": 50.45632136415953,
+      "median_ms": 18.279899999999998,
+      "p95_ms": 27.7091,
+      "repetitions_fps": [
+        48.95146871845116,
+        49.71846607842678,
+        52.866084085357045
+      ],
+      "vulkan_generations_per_second": 71.82516390427585,
+      "cross_backend_rgb_mean_absolute_error": 0.0001175,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Blotty Ink"
+    },
+    {
+      "preset": "BrushedInk",
+      "id": 34,
+      "generations_per_second": 53.19350691093736,
+      "median_ms": 17.020400000000002,
+      "p95_ms": 28.3292,
+      "repetitions_fps": [
+        60.07765487474973,
+        50.542256285082246,
+        50.081852527725005
+      ],
+      "vulkan_generations_per_second": 75.45998283222507,
+      "cross_backend_rgb_mean_absolute_error": 5.750000000000001e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Brushed Ink"
+    },
+    {
+      "preset": "Eraser",
+      "id": 3,
+      "generations_per_second": 74.36124465438185,
+      "median_ms": 12.397200000000002,
+      "p95_ms": 17.8316,
+      "repetitions_fps": [
+        81.93977112719695,
+        71.9358907341777,
+        70.2333831912317
+      ],
+      "vulkan_generations_per_second": 99.58757465748515,
+      "cross_backend_rgb_mean_absolute_error": 1.25e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Eraser"
+    },
+    {
+      "preset": "Paintbrush",
+      "id": 4,
+      "generations_per_second": 51.93128368875236,
+      "median_ms": 17.60915,
+      "p95_ms": 28.6584,
+      "repetitions_fps": [
+        50.38501287714966,
+        56.002537474972996,
+        49.837674540880805
+      ],
+      "vulkan_generations_per_second": 69.2209564946,
+      "cross_backend_rgb_mean_absolute_error": 4.520833333333333e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Paintbrush"
+    },
+    {
+      "preset": "Airbrush",
+      "id": 5,
+      "generations_per_second": 87.7092770760183,
+      "median_ms": 10.4604,
+      "p95_ms": 14.2079,
+      "repetitions_fps": [
+        91.35970535276894,
+        84.97917036606371,
+        87.02785935833779
+      ],
+      "vulkan_generations_per_second": 102.80806962813594,
+      "cross_backend_rgb_mean_absolute_error": 3.333333333333333e-06,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Airbrush"
+    },
+    {
+      "preset": "Chalk",
+      "id": 6,
+      "generations_per_second": 76.75144805731158,
+      "median_ms": 12.2299,
+      "p95_ms": 16.492,
+      "repetitions_fps": [
+        80.13307700097552,
+        73.93482331102135,
+        76.4377389296417
+      ],
+      "vulkan_generations_per_second": 93.21344737584339,
+      "cross_backend_rgb_mean_absolute_error": 0.0002997916666666667,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Chalk"
+    },
+    {
+      "preset": "Marker",
+      "id": 7,
+      "generations_per_second": 44.65209376954576,
+      "median_ms": 20.26565,
+      "p95_ms": 32.5755,
+      "repetitions_fps": [
+        44.55840173171773,
+        45.03932890499145,
+        44.363948524510526
+      ],
+      "vulkan_generations_per_second": 60.089217465632096,
+      "cross_backend_rgb_mean_absolute_error": 8.333333333333334e-07,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Marker"
+    },
+    {
+      "preset": "DualTexture",
+      "id": 9,
+      "generations_per_second": 56.926603368026115,
+      "median_ms": 16.3722,
+      "p95_ms": 23.9758,
+      "repetitions_fps": [
+        55.318432837095486,
+        52.649819338726175,
+        63.984179698289
+      ],
+      "vulkan_generations_per_second": 65.6399897634436,
+      "cross_backend_rgb_mean_absolute_error": 2.0416666666666667e-05,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Dual Texture"
+    },
+    {
+      "preset": "TexturedFlat",
+      "id": 15,
+      "generations_per_second": 49.69733014484466,
+      "median_ms": 18.3559,
+      "p95_ms": 30.2508,
+      "repetitions_fps": [
+        49.92892513488455,
+        49.691733192164634,
+        49.473420373983195
+      ],
+      "vulkan_generations_per_second": 72.22810864588217,
+      "cross_backend_rgb_mean_absolute_error": 0.00028395833333333333,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Textured Flat"
+    },
+    {
+      "preset": "DryScumble",
+      "id": 16,
+      "generations_per_second": 51.63853481768015,
+      "median_ms": 17.972,
+      "p95_ms": 27.2738,
+      "repetitions_fps": [
+        50.632599478501106,
+        51.81498836623973,
+        52.50283072293269
+      ],
+      "vulkan_generations_per_second": 74.14646299127592,
+      "cross_backend_rgb_mean_absolute_error": 0.0010108333333333334,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Dry Scumble"
+    },
+    {
+      "preset": "PastelBlock",
+      "id": 17,
+      "generations_per_second": 48.82432218871842,
+      "median_ms": 18.635550000000002,
+      "p95_ms": 29.2396,
+      "repetitions_fps": [
+        50.221536614544874,
+        47.528869134130545,
+        48.796757357880054
+      ],
+      "vulkan_generations_per_second": 64.37549280780901,
+      "cross_backend_rgb_mean_absolute_error": 0.0016427083333333335,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Pastel Block"
+    },
+    {
+      "preset": "TransparentGlaze",
+      "id": 18,
+      "generations_per_second": 49.618329264435076,
+      "median_ms": 18.31745,
+      "p95_ms": 30.579,
+      "repetitions_fps": [
+        49.45081979981154,
+        48.808326407635185,
+        50.630069058781324
+      ],
+      "vulkan_generations_per_second": 68.74251691159004,
+      "cross_backend_rgb_mean_absolute_error": 1.0416666666666667e-06,
+      "cross_backend_max_channel_error": 1,
+      "cross_backend_channels_over_3": 0,
+      "display_name": "Transparent Glaze"
+    }
+  ],
+  "environment": {
+    "prediction_ms": 16,
+    "ram_bytes": 16995729408,
+    "includes_gpu_completion": true,
+    "input_samples_hz": 240,
+    "brush_px": 1000,
+    "viewport": [
+      1600,
+      1000
+    ],
+    "includes_managed_presentation": true,
+    "input_samples_per_frame": 2,
+    "os_build": "26200",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-1255U",
+    "os": "Microsoft Windows 11 Home",
+    "repetitions": 3,
+    "frames_per_stroke": 240,
+    "document": [
+      9504,
+      6336
+    ],
+    "battery_percent": 100,
+    "start_utc": "2026-09-22T07:32:04Z",
+    "power_line": "Online",
+    "gpu": {
+      "Name": "Intel(R) Iris(R) Xe Graphics",
+      "DriverVersion": "32.0.101.6737"
+    },
+    "warmup_frames": 64
+  },
+  "source_reference": "e2979a27 with the Windows port; final integration a21a3f03 preserves measured brush/compositor paths",
+  "raw_evidence": {
+    "brush-frames-dx12.csv": {
+      "path": "artifacts/windows/september/brush-frames-dx12.csv",
+      "sha256": "bf520a0fcee435355dcc9291b56e24184aedee6f1f1fdaad200ee5d3c48de81f"
+    },
+    "brush-frames-vulkan.csv": {
+      "path": "artifacts/windows/september/brush-frames-vulkan.csv",
+      "sha256": "da73d47fa072626e9d1420051422e7eb8335fbb913c83b1d7d6bf81feaabf509"
+    }
+  }
+}

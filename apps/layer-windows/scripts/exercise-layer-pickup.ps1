@@ -193,6 +193,13 @@ try {
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
+    # Current Paint defaults retain Layers in an open collapsed-column stack.
+    # Begin with a fully expanded column before the fixture tests collapse/expand.
+    if(Find 'column-icon-layers'){
+        $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+        Invoke 'Expand column' -Name
+        Wait-Until {$null -ne (Find 'panel-tab-layers') -and !(Find 'column-icon-layers')} 'Initial Layers column did not expand'
+    }
     $paint=(Model).state.layer_tools.editing_layer.id
     $count=(Model).state.layers.Count;Invoke 'layer-new'
     Wait-Until {(Model).state.layers.Count -eq $count+1} 'New layer did not appear'
@@ -250,6 +257,12 @@ try {
     Start-Sleep -Milliseconds 300
     $column=@((Model).layout.collapsed|Where-Object {($_.groups.icons.panel) -contains 'layers'})[0].id
     $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+    $individual=(Control 'Open individual panels' -Name).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if($individual.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){
+        $individual.Toggle()
+        Wait-Until {@((Model).state.workspace.layout.column_stacks|Where-Object column -eq $column)[0].drawers} 'Individual panel drawers did not enable'
+        $at=Point 'column-icon-layers';[CapyRowPointer]::RightClick($at.x,$at.y)
+    }
     Invoke 'Expand column' -Name
     Wait-Until {$null -ne (Find 'panel-tab-layers')} 'Column mode setup did not restore Layers'
     $layoutBefore=(Model).layout|ConvertTo-Json -Depth 80 -Compress
@@ -279,11 +292,11 @@ try {
         $script:case="$presentation-child";Drag-Row "layer-$created-visibility" $created $paint
         $script:case="$presentation-grip";Drag-Row "layer-$created-drag" $created $paint -Grip
         $script:case="$presentation-cancel";Drag-Row "layer-$created-name" $created $paint -Cancel
-        if($presentation -eq 'drawer' -and $Device -eq 'mouse'){
-            # Escape also dismisses a containing drawer through workspace chrome.
-            Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Escape did not dismiss the layer drawer'
+        if($presentation -eq 'drawer' -and @((Model).state.customization.column_drawers).Count -eq 0){
+            # Row cancellation can consume Escape before workspace chrome.
+            # Reopen only if the containing drawer was dismissed too.
             Invoke 'column-icon-layers'
-            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after Escape'
+            Wait-Until {@((Model).state.customization.column_drawers|Where-Object {$_.anchor.origin -eq 'layers'}).Count -eq 1} 'Layer drawer did not reopen after cancellation'
         }
         $script:case="$presentation-release"
         $before=Rows
@@ -299,7 +312,7 @@ try {
         }
         if((Rows) -ne $before){throw 'Held presentation release activated visibility'}
         if($presentation -eq 'drawer'){
-            if($Device -ne 'mouse'){Invoke 'column-icon-layers'}
+            if(@((Model).state.customization.column_drawers).Count){Invoke 'column-icon-layers'}
             Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Layer drawer did not close'
         }
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'

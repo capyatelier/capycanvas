@@ -34,7 +34,14 @@ bool LayerRow::contextAllowed()const{auto view=owner.lock();return view&&(!view-
 void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchDocument(layerAction(operation),epoch);}
 void LayerRow::context(bool isMask,UIElement const& anchor){if(current())if(auto view=owner.lock())view->context(id,isMask,anchor);}
 void LayerRow::init(){
-    auto weak=weak_from_this();root.Child(body);root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
+    auto weak=weak_from_this();root.Child(swipeFrame);
+    swipeDelete=button(data,L"Delete",[weak]{if(auto self=weak.lock()){self->swipe(0);self->action(O({{L"op",S(L"delete")},{L"id",N(self->id)}}));}});
+    swipeDelete.HorizontalAlignment(HorizontalAlignment::Right);swipeDelete.VerticalAlignment(VerticalAlignment::Stretch);
+    swipeDelete.MinWidth(0);swipeDelete.Padding({0});swipeDelete.CornerRadius({0});swipeDelete.Background(fill({255,192,28,40}));swipeDelete.Foreground(fill({255,255,255,255}));
+    AutomationProperties::SetAutomationId(swipeDelete,L"layer-"+to_hstring(uint64_t(id))+L"-swipe-delete");
+    swipeFrame.Children().Append(swipeDelete);swipeFrame.Children().Append(body);body.RenderTransform(swipeTransform);swipe(0);
+    swipeFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->swipeFrame.Clip(clip);}});
+    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->swipe(0);});root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
     root.BorderBrush(fill({255,53,132,228}));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     AutomationProperties::SetName(root,L"Layer row");
@@ -76,6 +83,7 @@ void LayerRow::init(){
     for(auto pair:{std::pair{contentImage,contentTile},std::pair{maskImage,maskTile}}){
         pair.first.Width(28);pair.first.Height(28);pair.first.Stretch(Stretch::Fill);pair.first.IsHitTestVisible(false);pair.second.Children().Append(pair.first);
     }
+    contentGlyph.Width(28);contentGlyph.Height(28);contentGlyph.IsHitTestVisible(false);contentTile.Children().Append(contentGlyph);
     corners(contentCorners);corners(maskCorners);contentTile.Children().Append(contentCorners);maskTile.Children().Append(maskCorners);
     content.Content(contentTile);mask.Content(maskTile);
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
@@ -130,6 +138,10 @@ void LayerRow::init(){
     dropMark.IsHitTestVisible(false);dropMark.BorderBrush(fill({255,53,132,228}));dropMark.Margin({-6,-2,-6,-2});
     Grid::SetColumnSpan(dropMark,10);body.Children().Append(dropMark);
 }
+void LayerRow::swipe(double offset){
+    swipeOffset=std::clamp(offset,0.,72.);swipeTransform.X(-swipeOffset);
+    swipeDelete.Width(swipeOffset);swipeDelete.Visibility(swipeOffset>0?Visibility::Visible:Visibility::Collapsed);
+}
 void LayerRow::commit(bool cancel){
     if(!renaming||committing||data->updating||!current())return;
     if(renameTarget(data)!=id)return;
@@ -144,15 +156,18 @@ void LayerRow::highlight(int position){
 void LayerRow::refresh(){
     if(!current())return;auto layer=model();
     root.Background(flag(layer,L"selected")?selected():clear());
+    swipeDelete.IsEnabled(flag(layer,L"can_delete"));if(!flag(layer,L"can_delete")||renaming)swipe(0);
     title.Text(str(layer,L"label"));AutomationProperties::SetName(name,str(layer,L"label"));
     AutomationProperties::SetName(root,str(layer,L"label")+L" layer row");
     auto shown=flag(layer,L"visible")?L"eye":L"eye-hidden";
     auto icons=hstring(shown)+L":"+str(layer,L"selection_icon")+L":"+str(layer,L"content_icon")+L":"+
-        to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
+        to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"))+L":"+str(layer,L"content_icon_color");
     if(icons!=iconKey){
         iconKey=icons;eye.Content(icon(shown,data->theme()));check.Content(icon(str(layer,L"selection_icon"),data->theme()));
         auto contentIcon=flag(layer,L"group")?(flag(layer,L"collapsed")?L"folder":L"folder-open"):str(layer,L"content_icon");
-        if(!contentIcon.empty())contentImage.Source(icon(contentIcon,data->theme(),28).Source());else contentImage.Source(nullptr);
+        auto ink=str(layer,L"content_icon_color");
+        if(!ink.empty()){contentGlyph.Source(icon(contentIcon,color(ink).R>128?L"dark":L"light",28).Source());}
+        else{contentGlyph.Source(nullptr);if(!contentIcon.empty())contentImage.Source(icon(contentIcon,data->theme(),28).Source());else contentImage.Source(nullptr);}
         lockImage.Source(icon(flag(layer,L"locked")?L"lock":L"alpha-lock",data->theme(),12).Source());
     }
     AutomationProperties::SetName(eye,flag(layer,L"visible")?L"Hide layer":L"Show layer");
@@ -172,8 +187,7 @@ void LayerRow::refresh(){
     body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?12.:0.,GridUnitType::Pixel});
     grip.Visibility(flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);
     grip.Opacity(flag(layer,L"can_drop_below")?.6:0);grip.IsEnabled(flag(layer,L"can_drop_below")&&!flag(layer,L"locked"));
-    hstring details=num(layer,L"blend")?str(layer,L"blend_label"):L"";
-    if(num(layer,L"opacity",1)<1){if(!details.empty())details=details+L" · ";details=details+to_hstring(int(std::round(num(layer,L"opacity")*100)))+L"%";}
+    hstring details=str(layer,L"description");
     meta.Text(details);meta.Visibility(details.empty()?Visibility::Collapsed:Visibility::Visible);
     bool editing=renameTarget(data)==id;
     if(editing&&!renaming){renaming=true;committing=false;rename.Text(str(layer,L"label"));rename.Visibility(Visibility::Visible);name.Visibility(Visibility::Collapsed);
@@ -183,7 +197,7 @@ void LayerRow::refresh(){
 void LayerRow::thumbnails(std::vector<LayerThumbnail>& visible){
     if(!current())return;auto layer=model();
     for(bool isMask:{false,true}){
-        if(isMask?!flag(layer,L"has_mask"):(flag(layer,L"group")||!str(layer,L"content_icon").empty()))continue;
+        if(isMask?!flag(layer,L"has_mask"):(flag(layer,L"group")||(!str(layer,L"content_icon").empty()&&str(layer,L"content_icon_color").empty())))continue;
         auto item=thumbnail(layer,isMask);visible.push_back(item);
         auto source=LayerThumbnailSource(data->thumbnails,epoch,item);auto image=isMask?maskImage:contentImage;
         if(image.Source()!=source)image.Source(source);AutomationProperties::SetItemStatus(image,source?L"Ready":L"Pending");

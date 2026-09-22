@@ -1,3 +1,4 @@
+import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
@@ -153,7 +154,7 @@ function call(method, params = {}, sessionId = session) {
     const timer = setTimeout(() => {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
-    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
+    }, process.argv.includes('--drawing-tabs-recovery')?300000:process.argv.some(x=>["--contact-brushes","--filter-drawer","--drawing-tabs","--shared-workflows","--hdr","--hdr-performance","--proof","--portable-photo"].includes(x)) ? 180000 : 30000);
     requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
@@ -381,6 +382,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--color-panel")) {
     await checkColorPanel({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--filter-drawer")) {
+    await checkFilterDrawer({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--brush-drawers")) {
     await checkBrushDrawers({call,evaluate,settle});

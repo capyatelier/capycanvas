@@ -192,10 +192,10 @@ fn invalid_defaults_recover_through_controller_switch_and_preview() {
         "{:?}",
         f.controller.view.error
     );
-    assert_eq!(
-        f.host.session.capture_workspace().unwrap().working,
-        layer_ui::WorkspacePreset::Painter.working_state()
-    );
+    let mut expected = layer_ui::WorkspacePreset::Painter.working_state();
+    // Workspace colors adapt their picker precision to the active document.
+    expected.colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
+    assert_eq!(f.host.session.capture_workspace().unwrap().working, expected);
     f.input(serde_json::json!({"type":"open","page":"workspaces"}));
     f.input(serde_json::json!({"type":"select","id":DEFAULT_WORKSPACES[2].0}));
     assert!(f.controller.view.enabled);
@@ -279,7 +279,9 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
                 .entity
                 .capture()
                 .unwrap();
-            assert_eq!(f.host.session.capture_workspace().unwrap(), saved);
+            let mut displayed = saved.clone();
+            displayed.working.colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
+            assert_eq!(f.host.session.capture_workspace().unwrap(), displayed);
             if occupied == 0 {
                 assert_eq!(saved.working, capture.working);
             }
@@ -290,7 +292,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
             let reopened = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
             let incoming = pollster::block_on(reopened.initialize(f.backend.now.get())).unwrap();
             assert_eq!(incoming.entity.id, replacement);
-            assert_eq!(incoming.entity.capture().unwrap(), saved);
+            assert_eq!(incoming.entity.capture().unwrap(), displayed);
         }
         for id in &defaults[..occupied] {
             let saved = pollster::block_on(f.controller.manager.load(id)).unwrap();
@@ -973,7 +975,10 @@ fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
     f.input(serde_json::json!({"type":"select","id":p}));
     assert_eq!(shown(&f), [i.clone(), p.clone(), h.clone()]);
     f.input(serde_json::json!({"type":"cancel"}));
-    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+    let mut displayed = original.clone();
+    displayed.entity.working.as_mut().unwrap().colors
+        .set_document_depth(f.host.session.engine().document().color.depth).unwrap();
+    assert_eq!(f.controller.manager.current_record().unwrap(), displayed);
 
     // Pinning returns it to the saved order without duplicating it.
     f.input(

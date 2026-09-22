@@ -54,7 +54,9 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             navigator=std::make_unique<NavigatorView>(data,std::move(layoutChanged));
             auto view=navigator->Root();root=view;
         }else if(str(panel,L"id")==L"adjustments"&&shows(panel,L"adjustments")){
-            auto view=FiltersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
+            auto view=FiltersPanel(data,bindings,&contentHeight,&scrollMetrics,flag(geometry,L"split_filters"));root=view;
+        }else if(str(panel,L"id")==L"filter_types"){
+            root=FilterTypesPanel(data,bindings);
         }else if(str(panel,L"id")==L"layers"){
             auto view=LayersPanel(data,bindings,&contentHeight,&scrollMetrics);root=view;
         }else if(tileGeometry.Size()){
@@ -147,7 +149,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             for(auto value:array(panel,L"controls")){
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
                 auto kind=str(control,L"control");
-                if(kind==L"brushes")content.Children().Append(ToolSetPanel(data,bindings));
+                if(kind==L"brushes"||kind==L"brush_sets"||kind==L"sculpt_sets"||kind==L"tools")content.Children().Append(ToolSetPanel(data,bindings,kind));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel"){
@@ -190,13 +192,15 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 root=scroll;
             }else{
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
-                ScrollViewer scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollMode::Disabled);
-                scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);root=scroll;
+                ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root=scroll;
             }
         }
     if(!scrollable){
         auto id=str(panel,L"id");
-        if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
+        if(id==L"filter_types"||(id==L"adjustments"&&flag(geometry,L"split_filters")))root.Height(440);
+        else if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
         else if(navigator)root.Height(272);
     }
 }

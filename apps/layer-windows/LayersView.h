@@ -20,11 +20,15 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     double id=0;
     hstring epoch;
     Border root;
-    Grid body;
+    Grid body,swipeFrame;
+    Button swipeDelete{nullptr};
+    TranslateTransform swipeTransform;
+    double swipeOffset=0;
+    void swipe(double offset);
     Button eye{nullptr},check{nullptr},content{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
     Border indent,clip,dropMark;
     Grid contentTile,maskTile;
-    Image contentImage,maskImage,lockImage;
+    Image contentImage,contentGlyph,maskImage,lockImage;
     Canvas contentCorners,maskCorners;
     TextBlock title{nullptr},meta{nullptr};
     TextBox rename;
@@ -50,6 +54,8 @@ struct ElementFactory : implements<ElementFactory,IElementFactory> {
 struct LayersView : std::enable_shared_from_this<LayersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,values,footerFrame;
+    UIElement outsideSurface{nullptr};
+    PointerEventHandler outsidePress{nullptr};
     StackPanel header,tools,footer;
     ScrollView list;
     ItemsRepeater repeater;

@@ -27,6 +27,12 @@ function Close-Preferences {
 }
 function Draw([string]$Device){
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+ # Preferences and the input pane can move or resize the window. Read current
+ # physical bounds after they close instead of reusing startup coordinates.
+ Start-Sleep -Milliseconds 300
+ $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
+ $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
+ $x=[int]($canvas.X+($area.x+$area.width*.4)*$density);$y=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
  [CapyRowPointer]::Down($Device,$x,$y)
  for($i=1;$i -le 60;$i++){[CapyRowPointer]::Move($x+2*$i,$y+[int](12*[Math]::Sin($i*.08)));Start-Sleep -Milliseconds 8}
  [CapyRowPointer]::Up()
@@ -43,9 +49,6 @@ try {
  . (Join-Path $repo 'tools/performance/windows-pen-ui.ps1') -ProcessId $review.Id
  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Prediction review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
- $canvas=(Find 'Drawing canvas' -Name).Current.BoundingRectangle
- $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
- $x=[int]($canvas.X+($area.x+$area.width*.4)*$density);$y=[int]($canvas.Y+($area.y+$area.height*.5)*$density)
  Wait-Until {(Find 'tool-setting-size').Current.IsEnabled} 'Brush did not become editable'
  $size=Find 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('18')
  (Find 'tool-setting-opacity').SetFocus()

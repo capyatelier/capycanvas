@@ -7,6 +7,18 @@ use layer_engine::{
 use layer_render::ViewState;
 use layer_render_wgpu::WgpuRasterizer;
 
+// Retain one hardware device across trace variants. Recreating D3D12 devices
+// recompiles the same material pipelines and obscures the actual regression run.
+fn renderer() -> WgpuRasterizer {
+    static GPU: std::sync::OnceLock<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> = std::sync::OnceLock::new();
+    let (adapter, device, queue) = GPU.get_or_init(|| {
+        let gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
+        (gpu.adapter().clone(), gpu.device().clone(), gpu.queue().clone())
+    });
+    #[allow(deprecated)]
+    WgpuRasterizer::from_wgpu(adapter.clone(), device.clone(), queue.clone()).unwrap()
+}
+
 fn pixels(engine: &mut CanvasEngine<WgpuRasterizer>) -> Vec<u8> {
     engine.backend_mut().wait_idle().unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -55,7 +67,7 @@ fn physical_release_pixels_survive_batching_prediction_and_history() {
         ] {
             let (mut input, consumer) = input_queue(128);
             let mut engine = CanvasEngine::new(
-                WgpuRasterizer::new_headless().expect("physical GPU required"),
+                renderer(),
                 Document::new("captured release", 1024, 512),
                 consumer,
                 ViewState {
@@ -164,7 +176,7 @@ fn steady_light_keeps_literal_pixels_and_falling_pressure_is_smoothed() {
         for release in [0, limited] {
             let (mut input, consumer) = input_queue(16);
             let mut engine = CanvasEngine::new(
-                WgpuRasterizer::new_headless().expect("physical GPU required"),
+                renderer(),
                 Document::new("release control", 512, 256),
                 consumer,
                 ViewState {
@@ -228,7 +240,7 @@ fn steady_light_keeps_literal_pixels_and_falling_pressure_is_smoothed() {
 #[test]
 fn varying_radius_sweeps_preserve_the_edge_when_subdivided() {
     use layer_render::{CanvasRenderer, DabBatch, DabBatchKind, DabMode, DabStyle, FramePacket};
-    let mut gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
+    let mut gpu = renderer();
     let document = Document::new("analytic taper", 384, 256);
     let brush = default_brush(DefaultBrushPreset::GPen);
     let style = DabStyle {

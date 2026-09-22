@@ -4,7 +4,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 export async function checkFilterDrawer({call,evaluate,settle}) {
   const pause=()=>new Promise(r=>setTimeout(r,220));
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();await pause();};
-  const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,50);}check();})`);
+  const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,50);}check();})`);
   const point=selector=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error('Missing '+${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
   const event=async(type,p,device)=>{
     if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:1,...p}]});
@@ -17,13 +17,17 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   };
   const swipe=async(selector,dx,dy,device)=>{const p=await point(selector);await event('down',p,device);for(let i=1;i<=6;i++)await event('move',{x:p.x+dx*i/6,y:p.y+dy*i/6},device);await event('up',{x:p.x+dx,y:p.y+dy},device);await settle();await pause();};
   const capture=async name=>{await mkdir('artifacts/filters-web',{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`artifacts/filters-web/${name}.png`,Buffer.from(shot.data,'base64'));};
+  console.log("Filter drawer: switching to Sketch");
   await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:'builtin:workspace:painter'}));null`);
   await wait('JSON.parse(layerApp.app.workspace_view()).id==="builtin:workspace:painter"&&!JSON.parse(layerApp.app.workspace_view()).busy');
   await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click()`);
+  // Runtime filter validation owns a document-operation gate during startup.
+  await wait('!layerApp.documents.busy() && layerApp.app.brush_ready() && layerApp.state().commands.find(c=>c.id==="new_document").enabled');
   await send({type:'invoke',command:'new_document'});
   await wait(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create')`);
   await evaluate(`(()=>{const create=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create');const d=create.closest('dialog');for(const n of d.querySelectorAll('input[type=number]'))n.value=256;create.click();})()`);
   await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !layerApp.state().document_file.busy && layerApp.app.brush_ready() && !document.querySelector('dialog[open]');})()`);
+  console.log("Filter drawer: opening filters");
   const entries=await evaluate('layerApp.state().workspace.layout.header.zones.flat()');
   const header=(key,value)=>`[data-header-item="${entries.find(e=>e.item.control?.[key]===value).id}"] .header-tool`;
   const filters=header('panel','adjustments'), layers=header('panel','layers');

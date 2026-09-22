@@ -17,9 +17,23 @@ void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
         if(found!=view->rows.end()){found->second->commit(false);view->rows.erase(found);}
     }
 }
-LayersView::~LayersView(){if(pickup)pickup->Cancel();if(timer)timer.Stop();if(menu)menu.Hide();}
+LayersView::~LayersView(){if(outsideSurface)outsideSurface.RemoveHandler(UIElement::PointerPressedEvent(),box_value(outsidePress));if(pickup)pickup->Cancel();if(timer)timer.Stop();if(menu)menu.Hide();}
 void LayersView::init(){
     auto weak=weak_from_this();root.RowSpacing(0);
+    outsidePress=PointerEventHandler([weak](auto&&,PointerRoutedEventArgs const& event){if(auto self=weak.lock()){
+        auto original=event.OriginalSource().try_as<DependencyObject>();
+        for(auto const& [key,row]:self->rows){
+            bool within=false;for(auto node=original;node;node=VisualTreeHelper::GetParent(node))if(node==row->root){within=true;break;}
+            if(!within)row->swipe(0);
+        }
+    }});
+    root.Loaded([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->outsideSurface){
+        self->outsideSurface=self->root.XamlRoot().Content();
+        self->outsideSurface.AddHandler(UIElement::PointerPressedEvent(),box_value(self->outsidePress),true);
+    }});
+    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock();self&&self->outsideSurface){
+        self->outsideSurface.RemoveHandler(UIElement::PointerPressedEvent(),box_value(self->outsidePress));self->outsideSurface=nullptr;
+    }});
     AutomationProperties::SetAutomationId(root,L"layer-panel");
     for(auto unit:{GridUnitType::Auto,GridUnitType::Star,GridUnitType::Auto}){
         RowDefinition row;row.Height({1,unit});root.RowDefinitions().Append(row);
