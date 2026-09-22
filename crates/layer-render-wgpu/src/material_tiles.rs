@@ -226,8 +226,7 @@ impl WgpuRasterizer {
                 continue;
             }
             if self.compute_dry_material(batch) && local == PixelRect::full([PAGE_SIZE; 2]) {
-                let output = if in_place { &self.pipelines.dry_in_place }
-                    else { &self.pipelines.dry_material }.as_ref().unwrap().output(
+                let output = self.dry_material_pipeline(batch).output(
                     self,
                     destination,
                     coverage_surface,

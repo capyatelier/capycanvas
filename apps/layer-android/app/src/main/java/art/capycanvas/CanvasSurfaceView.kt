@@ -174,26 +174,33 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         val count = if (history) event.historySize else 0
         val used = (count + 1) * 9
         val samples = host.pointerBuffer(used)
-        for (h in 0..count) {
-            val historical = h < count
-            fun axis(axis: Int): Float = if (historical) event.getHistoricalAxisValue(axis, index, h) else event.getAxisValue(axis, index)
-            val tilt = axis(MotionEvent.AXIS_TILT)
-            val orientation = axis(MotionEvent.AXIS_ORIENTATION)
-            val time = if (Build.VERSION.SDK_INT >= 34) {
-                if (historical) event.getHistoricalEventTimeNanos(h) else event.eventTimeNanos
-            } else if (historical) event.getHistoricalEventTime(h) * 1_000_000L else event.eventTime * 1_000_000L
-            val offset = h * 9
-            samples[offset] = (if (historical) event.getHistoricalX(index, h) else event.getX(index)).toDouble()
-            samples[offset + 1] = (if (historical) event.getHistoricalY(index, h) else event.getY(index)).toDouble()
-            samples[offset + 2] = if (tool == 1) 1.0 else (if (historical) event.getHistoricalPressure(index, h) else event.getPressure(index)).toDouble()
-            samples[offset + 3] = (sin(orientation) * tilt).toDouble()
-            samples[offset + 4] = (-cos(orientation) * tilt).toDouble()
-            samples[offset + 5] = 0.0 // Android stylus orientation is tilt azimuth, not barrel twist.
-            samples[offset + 6] = axis(MotionEvent.AXIS_DISTANCE).toDouble()
-            samples[offset + 7] = time.toDouble()
-            samples[offset + 8] = (if (historical) { if (phase == 0) 0 else 2 } else phase).toDouble()
-        }
+        packPointerSamples(event, index, phase, count, tool == 1, samples)
         val id = (event.deviceId.toLong().and(0xffffffffL) shl 16) or event.getPointerId(index).toLong()
         host.pointer(id, tool, button, samples, used, predicted)
+    }
+}
+
+/** Shared packing for real, historical and Android-predicted samples. */
+internal fun packPointerSamples(event: MotionEvent, index: Int, phase: Int, historySize: Int,
+    mouse: Boolean, samples: DoubleArray) {
+    for (h in 0..historySize) {
+        val historical = h < historySize
+        fun axis(axis: Int): Float = if (historical) event.getHistoricalAxisValue(axis, index, h) else event.getAxisValue(axis, index)
+        val tilt = axis(MotionEvent.AXIS_TILT)
+        val orientation = axis(MotionEvent.AXIS_ORIENTATION)
+        val time = if (Build.VERSION.SDK_INT >= 34) {
+            if (historical) event.getHistoricalEventTimeNanos(h) else event.eventTimeNanos
+        } else if (historical) event.getHistoricalEventTime(h) * 1_000_000L else event.eventTime * 1_000_000L
+        val offset = h * 9
+        samples[offset] = (if (historical) event.getHistoricalX(index, h) else event.getX(index)).toDouble()
+        samples[offset + 1] = (if (historical) event.getHistoricalY(index, h) else event.getY(index)).toDouble()
+        samples[offset + 2] = if (mouse) 1.0 else (if (historical) event.getHistoricalPressure(index, h) else event.getPressure(index)).toDouble()
+        // Android azimuth points toward the tip; shared tilt points toward the barrel.
+        samples[offset + 3] = (-sin(orientation) * tilt).toDouble()
+        samples[offset + 4] = (cos(orientation) * tilt).toDouble()
+        samples[offset + 5] = 0.0 // Android stylus orientation is tilt azimuth, not barrel twist.
+        samples[offset + 6] = axis(MotionEvent.AXIS_DISTANCE).toDouble()
+        samples[offset + 7] = time.toDouble()
+        samples[offset + 8] = (if (historical) { if (phase == 0) 0 else 2 } else phase).toDouble()
     }
 }

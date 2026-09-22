@@ -48,6 +48,7 @@ fn use_uniform_dispatch(renderer: &mut WgpuRasterizer) {
             label: Some("material uniform-dispatch reference"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 &working_color::shader(&renderer.device),
+                &dry_material::shader_destination(false),
                 &source,
                 include_str!("../brush_geometry.wgsl"),
                 include_str!("../brush_coverage.wgsl"),

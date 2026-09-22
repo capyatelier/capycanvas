@@ -900,12 +900,9 @@ fn reservoir_fragment(@builtin(position) fragment_position: vec4<f32>) -> @locat
 fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
     return material_result(fragment_position);
 }
-@group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, write>;
+// dry_material::shader supplies material_color_output and dry_original.
 @group(0) @binding(2) var material_coverage_output: texture_storage_2d<r32float, write>;
 override MATERIAL_IN_PLACE: bool = false;
-fn dry_original(p: vec2<i32>) -> vec4<f32> {
-    return textureLoad(source_11, p, 0);
-}
 @compute @workgroup_size(32, 2)
 fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
     let result = material_result(vec4<f32>(vec2<f32>(id.xy) + 0.5, 0.0, 1.0));

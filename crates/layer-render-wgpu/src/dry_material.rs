@@ -4,6 +4,55 @@ use super::*;
 
 pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
 
+pub(super) fn shader_destination(in_place: bool) -> String {
+    let access = if in_place { "read_write" } else { "write" };
+    let original = if in_place { "material_color_output, p" } else { "source_11, p, 0" };
+    format!("
+        @group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, {access}>;
+        fn dry_original(p: vec2<i32>) -> vec4<f32> {{ return textureLoad({original}); }}")
+}
+
+pub(super) fn shader(device: &PipelineDevice, in_place: bool) -> Deferred<wgpu::ShaderModule> {
+    let device = device.clone();
+    Deferred::new(move || {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("layer destination brush shader"),
+            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                &working_color::shader(&device), &shader_destination(in_place), include_str!("material_brush.wgsl"),
+                include_str!("brush_geometry.wgsl"), include_str!("brush_coverage.wgsl"),
+                include_str!("contact.wgsl"), include_str!("selection_clip.wgsl"),
+            ])),
+        })
+    })
+}
+
+/// Bound the incoming pigment film; the shader applies stationary paper per pixel.
+pub(super) fn prepare_film(style: &layer_render::DabStyle, dabs: &mut [DabGpu]) {
+    let Some(contact) = style.contact else { return };
+    if style.rendering.accumulation != BrushAccumulation::Uniform { return; }
+    let mut ceiling = dabs.iter()
+        .map(|d| (d.dab.flow * d.dab.color_rgba_linear[3]).clamp(0., 1.))
+        .fold(0_f32, f32::max);
+    // Directional density can exceed one before coverage clamps. Only factor
+    // drying out of that clamp for unbiased contacts.
+    if contact.depletion > 0. && contact.tip_bias == 0. && contact.tilt_shading == 0. {
+        let distance = dabs.iter()
+            .map(|d| d.dab.contact[2].min(d.dab.previous_contact[2]))
+            .fold(f32::INFINITY, f32::min).max(0.);
+        let load = (-contact.depletion * distance).exp();
+        let factor = 1. - 0.85 * (1. - contact.fiber_strength) * (1. - load);
+        // Round upward for CPU/GPU exp and contraction differences.
+        ceiling = (ceiling * factor + 0.000002).min(1.);
+    }
+    let pressure = dabs.iter()
+        .map(|d| d.dab.contact[0].max(d.dab.previous_contact[0]))
+        .fold(0_f32, f32::max).clamp(0., 1.);
+    for dab in dabs {
+        dab.invariants[2] = ceiling;
+        dab.invariants[3] = pressure;
+    }
+}
+
 pub(super) struct Pipelines {
     in_place: bool,
     layouts: [wgpu::BindGroupLayout; 2],
@@ -183,6 +232,11 @@ impl Pipelines {
 }
 
 impl WgpuRasterizer {
+    pub(super) fn dry_material_pipeline(&self, batch: &DabBatch) -> &Pipelines {
+        if self.in_place_dry_material(batch) { &self.pipelines.dry_in_place }
+        else { &self.pipelines.dry_material }.as_ref().unwrap()
+    }
+
     pub(super) fn in_place_dry_material(&self, batch: &DabBatch) -> bool {
         batch.kind == DabBatchKind::Persistent && self.compute_dry_material(batch)
             && self.pipelines.dry_in_place.is_some()
@@ -205,6 +259,7 @@ impl WgpuRasterizer {
             return;
         }
         let operation = BrushPassPlan::for_device(&batch.style, &self.device).material;
+        let kernels = self.dry_material_pipeline(batch).for_style(&batch.style);
         let texture_key = Self::texture_set_key(&batch.style);
         let textures = self
             .texture_sets
@@ -218,14 +273,8 @@ impl WgpuRasterizer {
         pass.set_bind_group(3, &textures.bind_group, &[]);
         let mut active_coverage = None;
         for (output, source, coordinate, coverage, record_offset) in jobs {
-            let pipeline = &if self.in_place_dry_material(batch) {
-                &self.pipelines.dry_in_place
-            } else { &self.pipelines.dry_material }
-                .as_ref()
-                .unwrap()
-                .for_style(&batch.style)[operation as usize * 2 + usize::from(*coverage)];
             if active_coverage != Some(*coverage) {
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&kernels[operation as usize * 2 + usize::from(*coverage)]);
                 active_coverage = Some(*coverage);
             }
             pass.set_bind_group(0, output, &[batch_index as u32 * self.style_stride as u32]);

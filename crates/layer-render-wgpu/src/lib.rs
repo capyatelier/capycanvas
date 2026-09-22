@@ -2262,37 +2262,8 @@ impl WgpuRasterizer {
         self.dab_upload.clear();
         self.dab_upload.extend(packet.dabs.iter().copied().map(DabGpu::from));
         for batch in packet.dab_batches {
-            if batch.style.rendering.accumulation == BrushAccumulation::Uniform
-                && batch.style.contact.is_some() {
-                // Bound the whole incoming film, including translucent paper
-                // contacts. The stationary paper response is applied per pixel
-                // before deciding whether any contact can add more pigment.
-                let range = batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize;
-                let mut ceiling = self.dab_upload[range.clone()].iter()
-                    .map(|d| (d.dab.flow * d.dab.color_rgba_linear[3]).clamp(0., 1.))
-                    .fold(0_f32, f32::max);
-                let contact = batch.style.contact.unwrap();
-                // Directional density can exceed one before coverage clamps.
-                // Only factor drying out of that clamp for unbiased contacts.
-                if contact.depletion > 0. && contact.tip_bias == 0. && contact.tilt_shading == 0. {
-                    let distance = self.dab_upload[range.clone()].iter()
-                        .map(|d| d.dab.contact[2].min(d.dab.previous_contact[2]))
-                        .fold(f32::INFINITY, f32::min).max(0.);
-                    let load = (-contact.depletion * distance).exp();
-                    let factor = 1. - 0.85 * (1. - contact.fiber_strength) * (1. - load);
-                    // CPU/GPU exp and contraction can differ by a few ulps.
-                    // Round the bound upward; the retained film can exceed it
-                    // as a drying brush travels, without evaluating each hair.
-                    ceiling = (ceiling * factor + 0.000002).min(1.);
-                }
-                let pressure = self.dab_upload[range.clone()].iter()
-                    .map(|d| d.dab.contact[0].max(d.dab.previous_contact[0]))
-                    .fold(0_f32, f32::max).clamp(0., 1.);
-                for dab in &mut self.dab_upload[range] {
-                    dab.invariants[2] = ceiling;
-                    dab.invariants[3] = pressure;
-                }
-            }
+            let range = batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize;
+            dry_material::prepare_film(&batch.style, &mut self.dab_upload[range]);
         }
         for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles) {
             if batch.dab_count == 0 || batch.style.execution != BrushExecution::Dry
@@ -5776,48 +5747,14 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             })
         })
     };
-    let material_shader = {
-        let device = device.clone();
-        Deferred::new(move || {
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("layer destination brush shader"),
-                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                    &working_color::shader(&device),
-                    include_str!("material_brush.wgsl"),
-                    include_str!("brush_geometry.wgsl"),
-                    include_str!("brush_coverage.wgsl"),
-                    include_str!("contact.wgsl"),
-                    include_str!("selection_clip.wgsl"),
-                ])),
-            })
-        })
-    };
+    let material_shader = dry_material::shader(device, false);
     let dry_material = (device.working_format() == wgpu::TextureFormat::Rgba32Float)
         .then(|| dry_material::Pipelines::new(device, &layouts, &material_shader, false));
-    // Native hosts request this feature only after checking both Float32
-    // formats for read/write storage support. Each invocation owns one texel;
-    // separate coverage pages retain the existing stroke-reset contract.
+    // Native hosts request this feature only after checking Float32 read/write
+    // storage support. Each dry invocation owns exactly one destination texel.
     let dry_in_place = (dry_material.is_some()
         && device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES))
-        .then(|| {
-            let shader = {
-                let device = device.clone();
-                Deferred::new(move || {
-                    let source = include_str!("material_brush.wgsl")
-                        .replace("texture_storage_2d<rgba32float, write>", "texture_storage_2d<rgba32float, read_write>")
-                        .replace("return textureLoad(source_11, p, 0);", "return textureLoad(material_color_output, p);");
-                    device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("in-place dry brush shader"),
-                        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                            &working_color::shader(&device), &source,
-                            include_str!("brush_geometry.wgsl"), include_str!("brush_coverage.wgsl"),
-                            include_str!("contact.wgsl"), include_str!("selection_clip.wgsl"),
-                        ])),
-                    })
-                })
-            };
-            dry_material::Pipelines::new(device, &layouts, &shader, true)
-        });
+        .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, true), true));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {

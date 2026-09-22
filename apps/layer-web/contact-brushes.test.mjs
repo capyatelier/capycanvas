@@ -8,7 +8,13 @@ export async function checkContactBrushes({call, evaluate, settle}, photoUrl) {
   const invoke = command => action({type:'invoke',command});
   const directory = process.env.LAYER_TEST_ARTIFACTS || 'artifacts/contact-brushes/web';
   await mkdir(directory,{recursive:true});
-  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click()`);
+  // Recovery starts asynchronously and can offer several archives. Finish its
+  // prompts before injecting pen input, retaining every existing recovery.
+  await evaluate(`(async()=>{
+    const timer=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click(),30);
+    try { await layerApp.documents.startRecovery(); }
+    finally { clearInterval(timer); }
+  })()`);
   await wait("!document.querySelector('dialog[open]')");
   let photoTab;
   const saved = await evaluate('layerApp.state().settings');

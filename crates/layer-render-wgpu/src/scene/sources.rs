@@ -169,14 +169,14 @@ impl DecodedTiles {
     // display tiles. Their original codes occupy four bytes per texel; native
     // paint, color queries and captures continue using the Float32 cache.
     pub fn split_display_cache(&mut self) -> Self {
-        let slots = if self.destination == RgbSpace::Srgb && self.limits.slots >= 256 {
-            self.limits.slots / 4 * 4
+        let reserved = if self.destination == RgbSpace::Srgb && self.limits.slots >= 256 {
+            self.limits.slots / 4
         } else { 0 };
-        self.limits.slots -= slots / 4;
+        self.limits.slots -= reserved;
         Self {
             display_encoded: true,
             destination: self.destination,
-            limits: SourceLimits { slots, upload_bytes: self.limits.upload_bytes },
+            limits: SourceLimits { slots: reserved * 4, upload_bytes: self.limits.upload_bytes },
             in_flight: self.in_flight.clone(),
             ..Default::default()
         }
@@ -188,7 +188,10 @@ impl DecodedTiles {
             && source.interpretation.profile == ColorProfile::Builtin(RgbSpace::Srgb)
     }
     pub fn admitted_bytes(&self) -> [u64; 2] {
-        [self.limits.slots as u64 * FLOAT_TILE_BYTES / if self.display_encoded { 4 } else { 1 }, self.limits.upload_bytes]
+        [self.limits.slots as u64 * self.tile_bytes(), self.limits.upload_bytes]
+    }
+    fn tile_bytes(&self) -> u64 {
+        if self.display_encoded { FLOAT_TILE_BYTES / 4 } else { FLOAT_TILE_BYTES }
     }
     pub fn prepare_transfer(
         &mut self,
@@ -229,7 +232,7 @@ impl DecodedTiles {
         total
     }
     pub fn gpu_bytes(&self) -> u64 {
-        self.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum::<u64>()
+        self.slots.len() as u64 * self.tile_bytes()
             + self.transfer.gpu_bytes()
             + self
                 .inputs
