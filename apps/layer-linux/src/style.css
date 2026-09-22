@@ -180,6 +180,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .brush-choice label { font-size: 1em; }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
 .dock-panel .tool-group { padding: 0 6px; }
+.selection-modes > button { min-width: 0; padding: 0; }
 .dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
 .toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .dock-panel.expanded-panel { background: transparent; box-shadow: none; }
@@ -212,6 +213,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .filter-picker .filter-row { padding: 3px 6px; min-width: 0; min-height: 0; font-weight: normal; }
 .filter-category { margin: 8px; font-weight: bold; opacity: .55; }
 .effect-properties { margin: 6px; }
+.content-drawer .filter-types,
+.content-drawer .filter-picker-body,
+.content-drawer .effect-properties { margin: 8px; }
 .property-divider { margin-top: 3px; margin-bottom: 3px; }
 .property-section { margin-left: 6px; }
 .renderer-stats { margin: 6px; }

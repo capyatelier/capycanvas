@@ -401,6 +401,12 @@ fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> 
 }
 
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if let LayerCanvasTool::Selection { kind } = canvas_tool {
+        return crate::session::selection_tools::tool_set(kind);
+    }
+    if matches!(canvas_tool, LayerCanvasTool::SelectColor { .. }) {
+        return crate::session::selection_tools::tool_set(SelectionTool::Color);
+    }
     if matches!(
         canvas_tool,
         LayerCanvasTool::Move | LayerCanvasTool::Transform
@@ -523,6 +529,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
             LayerCanvasTool::Select => ("Lasso", "lasso"),
+            LayerCanvasTool::Selection { .. } | LayerCanvasTool::SelectColor { .. } => unreachable!(),
             LayerCanvasTool::LassoFill => ("Lasso fill", "lasso-fill"),
             LayerCanvasTool::Move | LayerCanvasTool::Transform => unreachable!(),
             LayerCanvasTool::Hand => ("Hand", "hand"),

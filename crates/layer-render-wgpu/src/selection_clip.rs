@@ -1,5 +1,5 @@
-//! One reusable, GPU-generated selection. Four coverage samples fit in a nibble;
-//! the buffer uses half a byte per pixel without consuming a brush texture slot.
+//! One reusable, GPU-generated selection. Legacy masks use coverage nibbles;
+//! feathered masks use bytes. Neither consumes a brush texture slot.
 use super::*;
 use std::{
     collections::BTreeMap,
@@ -151,7 +151,7 @@ impl SelectionClip {
             return buffer.clone();
         }
         let [w, h] = pixels.extent();
-        let mut bytes: Vec<_> = [0, 0, w, h, 0, 1, 0, 0]
+        let mut bytes: Vec<_> = [0, 0, w, h, 0, pixels.coverage_format(), 0, 0]
             .into_iter()
             .chain(pixels.words().iter().copied())
             .flat_map(u32::to_ne_bytes)
@@ -210,6 +210,8 @@ impl SelectionClip {
                 edges.extend([a.x, a.y, b.x, b.y]);
             }
         }
+        let packing = match &geometry.shape { layer_core::SelectionShape::Pixels(p) => p.pixels_per_word(), _ => 8 };
+        let format = match &geometry.shape { layer_core::SelectionShape::Pixels(p) => p.coverage_format(), _ => 1 };
         let requested = region
             .unwrap_or(PixelRect::full(extent))
             .intersect(PixelRect::full(extent));
@@ -238,12 +240,12 @@ impl SelectionClip {
                 // Retain complete source words. No coverage is rasterized or
                 // interpolated on the CPU, including partial right-edge words.
                 PixelRect::new(
-                    bounds.min_x() / 8 * 8,
+                    bounds.min_x() / packing * packing,
                     bounds.min_y(),
                     bounds
                         .max_x()
-                        .div_ceil(8)
-                        .saturating_mul(8)
+                        .div_ceil(packing)
+                        .saturating_mul(packing)
                         .min(pixels.extent()[0]),
                     bounds.max_y(),
                 )
@@ -255,11 +257,11 @@ impl SelectionClip {
             layer_core::SelectionShape::Pixels(_) if translation => source_region,
             _ => pixel_rect(geometry.bounds(), extent).intersect(requested),
         };
-        let words = (u64::from(bounds.width().div_ceil(8)) * u64::from(bounds.height())).max(1);
+        let words = (u64::from(bounds.width().div_ceil(packing)) * u64::from(bounds.height())).max(1);
         let bytes = (32 + words * 4).next_multiple_of(16);
         let source_bytes = match &geometry.shape {
             layer_core::SelectionShape::Pixels(_) => (32
-                + u64::from(source_region.width().div_ceil(8))
+                + u64::from(source_region.width().div_ceil(packing))
                     * u64::from(source_region.height())
                     * 4)
             .max(36)
@@ -300,7 +302,7 @@ impl SelectionClip {
             bounds.width(),
             bounds.height(),
             u32::from(geometry.inverted),
-            1,
+            format,
             offset.x.to_bits(),
             offset.y.to_bits(),
         ];
@@ -353,7 +355,7 @@ impl SelectionClip {
                 });
                 pass.set_pipeline(&self.resample);
                 pass.set_bind_group(0, &binding, &[]);
-                pass.dispatch_workgroups(bounds.width().div_ceil(512), bounds.height(), 1);
+                pass.dispatch_workgroups(bounds.width().div_ceil(packing * 64), bounds.height(), 1);
             }
             self.extent = Some(extent);
             self.geometry = Some(geometry.clone());
@@ -415,8 +417,9 @@ fn pixel_region_buffer(
     pixels: &layer_core::SelectionPixels,
     bounds: PixelRect,
 ) -> wgpu::Buffer {
-    let stride = pixels.extent()[0].div_ceil(8) as usize;
-    let width = bounds.width().div_ceil(8) as usize;
+    let packing = pixels.pixels_per_word();
+    let stride = pixels.extent()[0].div_ceil(packing) as usize;
+    let width = bounds.width().div_ceil(packing) as usize;
     let mut bytes = Vec::with_capacity(32 + width * bounds.height() as usize * 4);
     for value in [
         bounds.min_x(),
@@ -424,14 +427,14 @@ fn pixel_region_buffer(
         bounds.width(),
         bounds.height(),
         0,
-        1,
+        pixels.coverage_format(),
         0,
         0,
     ] {
         bytes.extend(value.to_ne_bytes());
     }
     for y in bounds.min_y() as usize..bounds.max_y() as usize {
-        let start = y * stride + bounds.min_x() as usize / 8;
+        let start = y * stride + bounds.min_x() as usize / packing as usize;
         for word in &pixels.words()[start..start + width] {
             bytes.extend(word.to_ne_bytes());
         }

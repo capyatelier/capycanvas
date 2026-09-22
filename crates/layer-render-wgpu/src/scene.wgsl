@@ -174,7 +174,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         let local = settings.extent.zw + v.uv * settings.rect.zw;
         let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
         var src: vec4<f32>;
-        if op == 11u { src = figure_color(p)*raw.r; }
+        if op == 11u { src = figure_color(p)*raw.a; }
         else {
             let delta = settings.backdrop.zw - settings.backdrop.xy;
             let length2 = max(dot(delta, delta), .000001);
@@ -183,7 +183,7 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
                 length(relative) * inverseSqrt(length2), settings.options.z > .5), 0., 1.);
             let first = vec4<f32>(settings.color.rgb * settings.color.a, settings.color.a);
             let last = vec4<f32>(settings.source_over.rgb * settings.source_over.a, settings.source_over.a);
-            src = mix(first, last, t) * raw.r;
+            src = mix(first, last, t) * raw.a;
         }
         let dst = scene_read(back,v);
         if op==11u && settings.options.y>=16. {
@@ -195,12 +195,14 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         return src + dst * (1. - src.a);
     }
     if op == 1u { return raw*settings.options.y; }
-    if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
+    // Store pooled mask coverage in alpha to avoid an sRGB encode/decode
+    // round trip quantizing feather coverage through a color channel.
+    if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
     if op == 7u || op == 13u { return scene_normal(raw,v); }
     let dst = scene_read(back,v);
     if op == 14u { return (raw + dst * (1. - raw.a)) * settings.options.y; }
-    if op == 3u { return raw*dst.r; }
-    if op == 5u { let a = (1.-raw.r)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
+    if op == 3u { return raw*dst.a; }
+    if op == 5u { let a = (1.-raw.a)*.42; return vec4<f32>(.46,.12,.8,1.)*a; }
     let src = raw*settings.options.y;
     let s = working_unassociate(src); let d = working_unassociate(dst);
     let b = blend(s,d,u32(settings.options.z));

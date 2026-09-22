@@ -948,6 +948,14 @@ impl Customization {
                     selected(button, tile.choice.selected);
                     button.set_sensitive(tile.enabled);
                     button.set_tooltip_text(Some(&tile.tooltip));
+                    if let Some(image) = button.child().and_then(|child| {
+                        if child.is::<gtk::Box>() { child.first_child() } else { Some(child) }
+                    }).and_downcast::<gtk::Image>() {
+                        let name = format!("layer-{}-symbolic", tile.choice.icon);
+                        if crate::icons::name(&image).as_deref() != Some(&name) {
+                            crate::icons::set(&image, Some(&name));
+                        }
+                    }
                 }
             }
         }

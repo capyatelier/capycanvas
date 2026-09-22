@@ -6,6 +6,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -16,6 +19,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,7 +69,7 @@ import org.json.JSONObject
                     SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                     Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
                 }
-            } else Row(Modifier.heightIn(min = if (kind == "set") 42.dp else 30.dp), verticalAlignment = Alignment.CenterVertically,
+            } else Row(Modifier.heightIn(min = 42.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                 Text(label, fontWeight = FontWeight.Bold, maxLines = if (kind == "set") 1 else 2, overflow = TextOverflow.Ellipsis)
@@ -74,7 +79,25 @@ import org.json.JSONObject
 }
 
 @Composable internal fun ToolSettingsControls(host: CanvasHost, state: JSONObject) {
+    val modes = setOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
+    val actions = state.array("tool_actions").objects()
+    val commands = state.array("commands").objects().associateBy { it.getString("id") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().selectableGroup().testTag("selection-mode-row")) {
+            actions.filter { it.getString("command") in modes }.forEach { action ->
+                val id = action.getString("command")
+                val command = commands.getValue(id)
+                val selected = command.getBoolean("selected")
+                HoverTip(command.getString("tooltip"), Modifier.weight(1f)) {
+                    Box(Modifier.fillMaxWidth().height(36.dp).testTag("tool-action-$id")
+                        .background(if (selected) LocalPalette.current.active else LocalPalette.current.panel, RoundedCornerShape(6.dp))
+                        .selectable(selected = selected, enabled = command.getBoolean("enabled"), role = Role.RadioButton) { host.invoke(id) },
+                        contentAlignment = Alignment.Center) {
+                        SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
         var group = ""
         state.array("tool_settings").objects().forEach { field ->
             val next = field.getString("group")
@@ -87,11 +110,13 @@ import org.json.JSONObject
                 }
             }
         }
-        state.array("tool_actions").objects().forEach { action ->
+        actions.filter { it.getString("command") !in modes }.forEach { action ->
             val id = action.getString("command")
-            state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
-                if (action.optBoolean("checkable")) Row(Modifier.testTag("tool-action-$id"), verticalAlignment = Alignment.CenterVertically) {
-                    EditorCheck(command.optBoolean("selected"), command.getString("label"), enabled = command.getBoolean("enabled")) { host.invoke(id) }
+            commands[id]?.let { command ->
+                if (action.optBoolean("checkable")) Row(Modifier.fillMaxWidth().testTag("tool-action-$id")
+                    .toggleable(command.getBoolean("selected"), enabled = command.getBoolean("enabled"), role = Role.Checkbox) { host.invoke(id) },
+                    verticalAlignment = Alignment.CenterVertically) {
+                    EditorCheck(command.optBoolean("selected"), command.getString("label"), Modifier.clearAndSetSemantics {}, enabled = command.getBoolean("enabled")) { host.invoke(id) }
                     Text(command.getString("label"))
                 } else TextButton({ host.invoke(id) }, Modifier.testTag("tool-action-$id"), enabled = command.getBoolean("enabled")) {
                     SharedIcon(command.getString("icon"), null)

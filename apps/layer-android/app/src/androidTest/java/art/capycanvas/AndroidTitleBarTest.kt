@@ -641,6 +641,62 @@ class AndroidTitleBarTest {
         assertFalse(editing()); assertEquals("Switch discards the temporary header", committed, model().toString())
         shot("sketch-default")
     }
+    @Test fun selectionDrawerToolsModesAndRememberedIcons() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        fun header(command: String) = "header-control-" + entries().first {
+            it.getJSONObject("item").objectOrNull("control")?.optString("command") == command
+        }.getInt("id")
+        fun command(id: String) = state().array("commands").objects().first { it.getString("id") == id }
+        fun invoke(id: String) = action(obj("type" to "invoke", "command" to id))
+        val select = header("select")
+        tap(select)
+        if (state().getJSONObject("customization").isNull("drawer")) tap(select)
+        assertEquals("[[\"tools\"],[\"tool_settings\"]]", state().getJSONObject("customization").getJSONObject("drawer").getJSONArray("columns").toString())
+        val choices = state().getJSONObject("tool_set").array("subtools").objects()
+        assertEquals(6, choices.size)
+        val modes = listOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
+        for ((i, choice) in choices.withIndex()) {
+            tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[i % 3]
+            val tag = "subtool-${choice.getString("label")}"
+            assertTrue("Touch-friendly tool row", bounds(tag).height / density >= 48f)
+            tap(tag)
+            assertEquals(choice.getString("icon"), command("select").getString("icon"))
+            assertFalse(state().getJSONObject("customization").isNull("drawer"))
+            assertNotNull(node("tool-setting-selection_feather"))
+            assertNotNull(node("tool-action-selection_antialias"))
+            val row = bounds("selection-mode-row")
+            for (id in modes) {
+                val button = bounds("tool-action-$id")
+                assertEquals(row.top, button.top, 1f)
+                assertTrue(button.right <= row.right + 1f)
+                tap("tool-action-$id")
+                assertTrue(command(id).getBoolean("selected"))
+                assertEquals(1, modes.count { command(it).getBoolean("selected") })
+                assertNull("Modes have no caption", node("tool-action-$id")!!.second.config.getOrNull(SemanticsProperties.Text))
+            }
+        }
+        tap("tool-action-selection_new")
+        invoke("rectangle_select"); tap("tool-action-selection_fixed_size")
+        assertNotNull(node("tool-setting-selection_width")); assertNotNull(node("tool-setting-selection_height"))
+        tap("tool-action-selection_fixed_size")
+        invoke("color_select")
+        for (id in listOf("tolerance", "expansion", "smoothing")) assertNotNull(node("tool-setting-$id"))
+        for (id in listOf("selection_visible", "selection_editing", "selection_reference")) assertNotNull(node("tool-action-$id"))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); shot("selection-drawer-$theme")
+        }
+        tap(header("drawing_brush"))
+        assertEquals("color-select", command("select").getString("icon"))
+        tap(select); assertTrue(command("color_select").getBoolean("selected"))
+        tap(select)
+        send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
+        for (id in listOf("rectangle_select", "ellipse_select", "polygon_select", "color_select"))
+            assertTrue("Photo toolbar $id", layout().contains("\"$id\""))
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        idle(); tap(select)
+        assertTrue(command("color_select").getBoolean("selected"))
+    }
+
     @Test fun brushAndSculptDrawersKeepIndependentSelections() {
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         fun header(command: String) = "header-control-" + entries().first {

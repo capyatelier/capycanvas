@@ -111,7 +111,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession};
+pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PredictionAlgorithm,
     PreferenceAction,
@@ -350,6 +350,15 @@ pub fn ui_catalog() -> UiCatalog {
             "liquify",
             "eraser",
             "lasso",
+            "select",
+            "rectangle-select",
+            "ellipse-select",
+            "polygon-select",
+            "color-select",
+            "selection-new",
+            "selection-add",
+            "selection-subtract",
+            "selection-intersect",
             "move",
             "alpha-lock",
             "clip",
@@ -488,6 +497,25 @@ pub enum CommandId {
     Blend,
     Liquify,
     Lasso,
+    Select,
+    RectangleSelect,
+    EllipseSelect,
+    PolygonSelect,
+    ColorSelect,
+    SelectionNew,
+    SelectionAdd,
+    SelectionSubtract,
+    SelectionIntersect,
+    SelectionAntialias,
+    SelectionConstrainAngles,
+    SelectionFixedRatio,
+    SelectionFixedSize,
+    SelectionFromCenter,
+    CompleteSelection,
+    CancelSelection,
+    SelectionVisible,
+    SelectionEditing,
+    SelectionReference,
     Move,
     ScaleRotate,
     ApplyTransform,
@@ -544,6 +572,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Select | Self::RectangleSelect | Self::EllipseSelect | Self::PolygonSelect | Self::ColorSelect | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter | Self::CompleteSelection | Self::CancelSelection | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::DrawingBrush | Self::Sculpt => true,
             Self::Drawings => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows),
             Self::SdrRendition | Self::PreviewSdr => color_management::enabled(platform),
@@ -610,7 +639,10 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::ZenMode
+            Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+                | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
+                | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
+                | Self::ZenMode
                 | Self::Fullscreen
                 | Self::ToggleTheme
                 | Self::FlipHorizontal
@@ -646,6 +678,26 @@ impl CommandId {
             Self::Blend => "blend",
             Self::Liquify => "liquify",
             Self::Lasso => "lasso",
+            Self::Select => "select",
+            Self::RectangleSelect => "rectangle-select",
+            Self::EllipseSelect => "ellipse-select",
+            Self::PolygonSelect => "polygon-select",
+            Self::ColorSelect => "color-select",
+            Self::SelectionNew => "selection-new",
+            Self::SelectionAdd => "selection-add",
+            Self::SelectionSubtract => "selection-subtract",
+            Self::SelectionIntersect => "selection-intersect",
+            Self::SelectionAntialias => "select",
+            Self::SelectionConstrainAngles => "ruler",
+            Self::SelectionFixedRatio => "rectangle-select",
+            Self::SelectionFixedSize => "rectangle-select",
+            Self::SelectionFromCenter => "select",
+            Self::CompleteSelection => "selection-checked",
+            Self::CancelSelection => "deselect",
+            Self::SelectionVisible => "eye",
+            Self::SelectionEditing => "layers",
+            Self::SelectionReference => "reference",
+
             Self::Move => "move",
             Self::ScaleRotate => "transform",
             Self::ApplyTransform => "check",
@@ -693,7 +745,7 @@ impl CommandId {
             Self::SourceCode => "source-code",
         })
     }
-    pub const ALL: [Self; 81] = [
+    pub const ALL: [Self; 100] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::SdrRendition,
@@ -725,6 +777,25 @@ impl CommandId {
         Self::Blend,
         Self::Liquify,
         Self::Lasso,
+        Self::Select,
+        Self::RectangleSelect,
+        Self::EllipseSelect,
+        Self::PolygonSelect,
+        Self::ColorSelect,
+        Self::SelectionNew,
+        Self::SelectionAdd,
+        Self::SelectionSubtract,
+        Self::SelectionIntersect,
+        Self::SelectionAntialias,
+        Self::SelectionConstrainAngles,
+        Self::SelectionFixedRatio,
+        Self::SelectionFixedSize,
+        Self::SelectionFromCenter,
+        Self::CompleteSelection,
+        Self::CancelSelection,
+        Self::SelectionVisible,
+        Self::SelectionEditing,
+        Self::SelectionReference,
         Self::Move,
         Self::ScaleRotate,
         Self::ApplyTransform,
@@ -776,7 +847,7 @@ impl CommandId {
         Self::SourceCode,
         Self::Drawings,
     ];
-    pub const TOOLS: [Self; 20] = [
+    pub const TOOLS: [Self; 25] = [
         Self::DrawingBrush,
         Self::Sculpt,
         Self::Pen,
@@ -788,6 +859,11 @@ impl CommandId {
         Self::Blend,
         Self::Liquify,
         Self::Lasso,
+        Self::Select,
+        Self::RectangleSelect,
+        Self::EllipseSelect,
+        Self::PolygonSelect,
+        Self::ColorSelect,
         Self::Move,
         Self::ScaleRotate,
         Self::Hand,
@@ -837,6 +913,26 @@ impl CommandId {
             Self::Blend => "Blend",
             Self::Liquify => "Liquify",
             Self::Lasso => "Lasso selection",
+            Self::Select => "Select",
+            Self::RectangleSelect => "Rectangle select",
+            Self::EllipseSelect => "Ellipse select",
+            Self::PolygonSelect => "Polygonal lasso",
+            Self::ColorSelect => "Select by color",
+            Self::SelectionNew => "New selection",
+            Self::SelectionAdd => "Add to selection",
+            Self::SelectionSubtract => "Subtract from selection",
+            Self::SelectionIntersect => "Intersect with selection",
+            Self::SelectionAntialias => "Anti-aliasing",
+            Self::SelectionConstrainAngles => "Constrain edges to 45°",
+            Self::SelectionFixedRatio => "Fixed aspect ratio",
+            Self::SelectionFixedSize => "Fixed size",
+            Self::SelectionFromCenter => "Draw from center",
+            Self::CompleteSelection => "Finish selection",
+            Self::CancelSelection => "Cancel selection",
+            Self::SelectionVisible => "Sample visible artwork",
+            Self::SelectionEditing => "Sample editing layer",
+            Self::SelectionReference => "Sample reference layers",
+
             Self::Move => "Operation",
             Self::ScaleRotate => "Scale / rotate",
             Self::ApplyTransform => "Apply transform",

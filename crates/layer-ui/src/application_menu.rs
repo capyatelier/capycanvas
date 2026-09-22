@@ -138,7 +138,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             CommandId::Deselect,
                             CommandId::InvertSelection,
                         ],
-                        &[CommandId::Lasso, CommandId::AutoSelect],
+                        &[CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::Lasso, CommandId::PolygonSelect, CommandId::AutoSelect, CommandId::ColorSelect],
                     ],
                     M::View => VIEW_MENU.sections,
                     M::Help => &[

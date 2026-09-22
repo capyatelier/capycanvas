@@ -314,9 +314,32 @@ pub enum RegionSource {
     Layer(LayerId),
     /// Composition snapshot with original indices and selected visibility.
     Layers(Vec<Layer>),
+    /// Rasterize selection geometry without color classification.
+    Selection(std::sync::Arc<layer_core::Selection>),
+}
+pub use layer_core::SelectionMode;
+#[derive(Clone, Debug)]
+pub struct SelectionRefinement {
+    pub mode: SelectionMode,
+    pub antialias: bool,
+    pub feather: f32,
+    pub previous: Option<std::sync::Arc<layer_core::Selection>>,
+    /// Maps the sampled layer's mask into document coordinates before feathering.
+    pub source_to_document: layer_core::Affine,
+}
+impl SelectionRefinement {
+    pub const MAX_FEATHER: f32 = 100.;
+    pub fn is_valid(&self) -> bool {
+        self.feather.is_finite() && (0.0..=Self::MAX_FEATHER).contains(&self.feather)
+            && self.source_to_document.inverse().is_some()
+    }
 }
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
+    /// Limit matching colors to the connected component containing the seed.
+    pub contiguous: bool,
+    /// Optional edge processing and combination, returning document-space byte coverage.
+    pub selection: Option<SelectionRefinement>,
     pub request_id: u64,
     pub source: RegionSource,
     pub position: [u32; 2],

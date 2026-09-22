@@ -72,6 +72,11 @@ impl Driver {
             .id;
         format!("header-item-{id}")
     }
+    fn header_icon(&self, command: CommandId, icon: &str) -> gtk::Widget {
+        let root = self.named(&self.header_tool(ToolbarControl::Command { command }));
+        find_named(&root, &format!("layer-{icon}-symbolic"))
+            .unwrap_or_else(|| panic!("{command:?} should display {icon}"))
+    }
     fn number(&mut self, root: &gtk::Widget, text: &str) {
         self.click(&find_css(root, "number-value").unwrap());
         let entry = find_css(root, "number-entry")
@@ -1489,6 +1494,7 @@ fn native_header_cancel_caption_input() {
 #[ignore = "isolated native-input.js --native-test=native_brush_drawer_input"]
 fn native_brush_drawer_input() {
     let mut d = Driver::new("art.capycanvas.BrushDrawer");
+    let brush_icon = d.header_icon(CommandId::DrawingBrush, "pen");
     let brush = ToolbarControl::Command { command: CommandId::DrawingBrush };
     let opener = d.header_tool(brush);
     d.click_name(&opener);
@@ -1512,6 +1518,7 @@ fn native_brush_drawer_input() {
         } else { d.click(&button); }
         assert!(state(&d.w).customization.drawer.is_some());
         assert_eq!(state(&d.w).brush.tool, group.tool());
+        assert_eq!(d.header_icon(CommandId::DrawingBrush, icon), brush_icon, "retain the header image while changing tools");
         assert!(state(&d.w).tool_panels.brush_sets.groups.iter().any(|g| g.selected && g.label == group.label()));
         assert_eq!(d.named("drawer-panel-BrushSets"), sets, "set list remains retained");
         let choices = state(&d.w).tool_set.subtools;
@@ -1541,6 +1548,8 @@ fn native_brush_drawer_input() {
     let p = d.point(&liquify);
     d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
     assert_eq!(state(&d.w).brush.tool, layer_ui::Tool::Liquify);
+    d.header_icon(CommandId::Sculpt, "liquify");
+    assert_eq!(d.header_icon(CommandId::DrawingBrush, "paint"), brush_icon);
     assert!(state(&d.w).customization.drawer.is_some());
     d.number(&find_named(&d.named("tool-drawer"), "tool-setting-size").unwrap(), "79");
     let sculpt_preset = state(&d.w).brush.preset;
@@ -1551,6 +1560,7 @@ fn native_brush_drawer_input() {
     }
     d.click_name(&opener);
     assert_eq!((state(&d.w).brush.preset, state(&d.w).brush.diameter), (remembered, 37.));
+    d.header_icon(CommandId::Sculpt, "liquify");
     d.click_name(&sculpt);
     assert_eq!((state(&d.w).brush.preset, state(&d.w).brush.diameter), (sculpt_preset, 79.));
     d.click_name(&opener);
@@ -3132,3 +3142,6 @@ fn native_header_window_actions_input() {
     assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
     d.finish();
 }
+
+#[path = "selection_tests.rs"]
+mod selection_tools;

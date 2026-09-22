@@ -471,6 +471,15 @@ impl Header {
                     .is_some_and(|d| d.anchor == DrawerAnchor::Header { id: item.entry.id });
                 selected(button, active);
                 customization::drawer_origin(button, drawer.then_some(Edge::Bottom));
+                if let HeaderItem::Tool { control } = item.entry.item
+                    && let Some(image) = button.child().and_downcast::<gtk::Image>()
+                {
+                    let icon = layer_ui::tool_icon(state, control);
+                    let name = format!("layer-{icon}-symbolic");
+                    if crate::icons::name(&image).as_deref() != Some(&name) {
+                        crate::icons::set(&image, Some(&name));
+                    }
+                }
                 if item.entry.item == HeaderItem::Fullscreen
                     && let Some(image) = button.child().and_downcast::<gtk::Image>()
                 {

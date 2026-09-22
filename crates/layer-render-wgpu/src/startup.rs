@@ -656,6 +656,8 @@ mod gpu_tests {
             })
             .unwrap();
         let request = layer_render::RegionRequest {
+            contiguous: true,
+            selection: None,
             request_id: 27,
             source: layer_render::RegionSource::Composite,
             position: [64, 64],

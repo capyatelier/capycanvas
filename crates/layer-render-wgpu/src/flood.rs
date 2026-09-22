@@ -155,7 +155,7 @@ impl Flood {
         selection: Option<&wgpu::Buffer>,
         refinement: RegionRefinement,
     ) -> Result<Region, GpuRasterError> {
-        self.encode_input(device, encoder, source, extent, seed, tolerance, selection, refinement, None)
+        self.encode_input(device, encoder, source, extent, seed, tolerance, selection, refinement, None, true)
     }
     /// A tiled classifier can populate eligibility without a full color image.
     /// The packed mask is reused by the existing morphology/connected components.
@@ -171,6 +171,7 @@ impl Flood {
         selection: Option<&wgpu::Buffer>,
         refinement: RegionRefinement,
         classified: Option<&wgpu::Buffer>,
+        contiguous: bool,
     ) -> Result<Region, GpuRasterError> {
         let [w, h] = extent;
         if w == 0
@@ -237,7 +238,7 @@ impl Flood {
             (refinement.gap_closing as f32).to_bits(),
             (refinement.expansion as f32).to_bits(),
             refinement.smoothing.to_bits(),
-            u32::from(classified.is_some()), 0, 0, 0,
+            u32::from(classified.is_some()), u32::from(!contiguous), 0, 0,
         ];
         let data: Vec<_> = params.into_iter().flat_map(u32::to_ne_bytes).collect();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -281,6 +282,7 @@ impl Flood {
         pass.set_bind_group(0, &group, &[]);
         for entry in stages(refinement).filter(|entry| classified.is_none() || *entry != "classify") {
             pass.set_pipeline(&self.pipelines[entry]);
+            if entry == "merge" && !contiguous { continue; }
             if entry == "initialize" {
                 pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
             } else {
@@ -308,6 +310,7 @@ fn dispatch_linear(pass: &mut wgpu::ComputePass<'_>, invocations: u64, limit: u3
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("selection_color_tests.rs");
     fn source(r: &WgpuRasterizer, extent: [u32; 2], pixels: &[u8]) -> wgpu::TextureView {
         let texture = r.device.create_texture_with_data(
             &r.queue,

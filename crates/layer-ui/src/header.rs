@@ -168,6 +168,7 @@ impl HeaderLayout {
 
     pub fn painter_for_platform(platform: Platform) -> Self {
         let mut header = Self::painter();
+        if CommandId::Select.available_on(platform) { header.replace_tool(CommandId::Lasso, CommandId::Select); }
         if !CommandId::DrawingBrush.available_on(platform) {
             header.replace_tool(CommandId::DrawingBrush, CommandId::Brush);
             header.replace_tool(CommandId::Sculpt, CommandId::Blend);
@@ -540,7 +541,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 let (enabled, selected, icon) = match entry.item {
                     HeaderItem::Tool { control } => {
                         let (enabled, selected) = tool_state(state, control);
-                        (enabled, selected, tool_choice(control).icon)
+                        (enabled, selected, tool_icon(state, control))
                     }
                     HeaderItem::Capy => (true, state.workspace.zen_mode, ""),
                     _ => (true, false, ""),
@@ -801,6 +802,16 @@ impl HeaderAction {
             action: CustomizationAction::Header { action: self },
         }
     }
+}
+
+/// Publish command icons from shared tool memory to every retained projection.
+pub fn tool_icon(state: &UiState, control: ToolbarControl) -> &'static str {
+    if let ToolbarControl::Command { command } = control
+        && let Some(icon) = state.commands.iter().find(|c| c.id == command).and_then(|c| c.icon)
+    {
+        return icon;
+    }
+    tool_choice(control).icon
 }
 
 /// The same selected/enabled policy is used by toolbar and window-bar tools.

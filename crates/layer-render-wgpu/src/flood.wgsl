@@ -72,7 +72,7 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>,
         atomicStore(&coverage.values[summary_index(4u)], 0);
     }
     workgroupBarrier();
-    if eligible {
+    if eligible && params.input.y == 0u {
         if lane % 16u != 0u && atomicLoad(&local_parent[lane-1u]) != NONE { join_local(lane,lane-1u); }
         if lane >= 16u && atomicLoad(&local_parent[lane-16u]) != NONE { join_local(lane,lane-16u); }
     }
@@ -157,7 +157,8 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
         for (var i = 0u; i < 8u && x+i < extent.x; i++) {
             var value = 0.;
             if refined { value = refined_coverage(vec2<i32>(i32(x+i),i32(y))); }
-            else if selected != NONE && root(y*extent.x+x+i) == selected { value = 1.; }
+            else if (params.input.y != 0u && atomicLoad(&parents[y*extent.x+x+i]) != NONE)
+                || (params.input.y == 0u && selected != NONE && root(y*extent.x+x+i) == selected) { value = 1.; }
             let samples = u32(round(value * brush_selection_at(vec2<f32>(f32(x+i)+.5, f32(y)+.5))*4.));
             if samples != 0u {
                 packed |= samples << (i*4u);

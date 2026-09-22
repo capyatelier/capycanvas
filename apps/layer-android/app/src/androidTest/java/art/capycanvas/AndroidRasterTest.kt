@@ -206,6 +206,72 @@ class AndroidRasterTest {
     }
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    @Test fun selectionToolsRenderAndCombineOnDevice() {
+        fun send(value: JSONObject) {
+            native { Native.dispatch(it, value.toString()) }
+            compose.waitUntil(30_000) { !tick() }
+        }
+        fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
+        fun selection() = native { state(it).getJSONObject("layer_tools").getBoolean("has_selection") }
+        fun waitSelection() = compose.waitUntil(30_000) { tick(); selection() }
+        fun drag(x1: Double, y1: Double, x2: Double, y2: Double) {
+            point(1, x1, y1); point(2, x2, y2); point(3, x2, y2); waitSelection()
+        }
+        invoke("fit_canvas")
+        for (id in listOf("rectangle_select", "ellipse_select", "polygon_select")) {
+            if (selection()) invoke("deselect")
+            invoke(id)
+            if (id == "polygon_select") {
+                for ((x, y) in listOf(-80.0 to -60.0, 80.0 to -60.0, 80.0 to 60.0)) {
+                    point(1, x, y); point(3, x, y)
+                }
+                invoke("complete_selection"); waitSelection()
+            } else drag(-80.0, -60.0, 80.0, 60.0)
+            invoke("undo"); assertFalse(selection())
+            invoke("redo"); assertTrue(selection())
+        }
+        invoke("deselect")
+        send(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, 0.0, 1.0))))
+        send(obj("type" to "set_brush_opacity", "value" to 1.0))
+        for (x in listOf(-180.0, 100.0)) {
+            invoke("rectangle_select"); drag(x, -80.0, x + 80.0, 0.0)
+            invoke("fill_selection"); invoke("deselect")
+        }
+        val camera = native { state(it).getJSONObject("camera") }
+        fun pixels(name: String): List<Int> {
+            val bytes = png(name)
+            val image = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val viewport = camera.getJSONArray("viewport"); val pan = camera.getJSONArray("translation")
+            val zoom = camera.getDouble("zoom")
+            return listOf(-140.0, 140.0).map { x ->
+                image.getPixel(((viewport.getDouble(0) * .5 + x - pan.getDouble(0)) / zoom).toInt(),
+                    ((viewport.getDouble(1) * .5 - 40 - pan.getDouble(1)) / zoom).toInt())
+            }.also { image.recycle() }
+        }
+        val original = pixels("selection-islands.png")
+        assertTrue(original.all { android.graphics.Color.red(it) > 240 && android.graphics.Color.blue(it) < 20 })
+        send(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(0.0, 0.0, 1.0, 1.0))))
+        invoke("rectangle_select")
+        drag(-180.0, -80.0, -100.0, 0.0)
+        invoke("selection_add")
+        drag(100.0, -80.0, 180.0, 0.0)
+        invoke("fill_selection")
+        assertTrue("Added selection includes both rectangles", pixels("added-selection.png").all { android.graphics.Color.blue(it) > 240 })
+        invoke("undo"); invoke("deselect"); invoke("selection_new")
+        for (id in listOf("auto_select", "color_select")) {
+            invoke(id)
+            send(obj("type" to "set_tool_setting", "id" to "selection_feather", "value" to 4.0))
+            point(1, -140.0, -40.0); point(3, -140.0, -40.0); waitSelection()
+            invoke("fill_selection")
+            val result = pixels("$id-islands.png")
+            assertTrue(android.graphics.Color.blue(result[0]) > 240)
+            if (id == "auto_select") assertEquals(original[1], result[1])
+            else assertTrue("Color selection reaches the disconnected island", android.graphics.Color.blue(result[1]) > 240)
+            invoke("undo"); invoke("deselect")
+        }
+        println("PASS native selection geometry, polygon completion, undo/redo, feathered GPU masks and disconnected color islands")
+    }
+
     @Test fun portablePhotoGainmapDelivery() {
         val root=requireNotNull(InstrumentationRegistry.getArguments().getString("photoDirectory")){"Supply -e photoDirectory with the portable photo fixtures"}
         require(Regex("/data/local/tmp/[A-Za-z0-9_/-]+").matches(root))

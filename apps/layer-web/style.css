@@ -569,10 +569,10 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 #header-start { min-width:0; }
 .header-menu .popover { max-height:calc(100dvh - 60px); overflow:auto; }
 .tool-groups { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
-.tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; }
+.tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; touch-action:manipulation; }
 .tool-choice-label { display:flex; align-items:center; gap:6px; }
 .tool-choice-button svg, .tool-choice-label svg { flex-shrink:0; }
-.tool-setting-action { display:flex; align-items:center; gap:6px; }
+.tool-setting-action { display:flex; align-items:center; gap:6px; touch-action:manipulation; }
 .tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
 .tool-subtools { display:flex; flex-direction:column; gap:2px; }
 .brush-sets-control .tool-groups, .sculpt-sets-control .tool-groups { flex-direction:column; flex-wrap:nowrap; gap:2px; margin-bottom:0; }
@@ -580,9 +580,14 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .brush-sets-control .tool-choice-label, .sculpt-sets-control .tool-choice-label { min-width:0; }
 .brush-sets-control .tool-choice-name, .sculpt-sets-control .tool-choice-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tool-subtools .tool-choice-button { flex-direction:column; align-items:stretch; gap:0; padding:3px 6px; }
+.tool-subtools .tool-choice-button:not([data-brush]) { min-height:44px; justify-content:center; }
 .tool-subtools .tool-choice-label { width:100%; min-width:0; }
 .tool-subtools .tool-choice-name { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tool-subtools .tool-choice-button:not([data-brush]) .tool-choice-name { text-align:left; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
+.selection-modes { display:flex; width:100%; }
+.selection-modes > button { flex:1; min-width:0; height:36px; padding:0; display:grid; place-items:center; }
+.selection-modes svg { width:20px; height:20px; }
 .tool-settings-control h3 { margin:4px 0; font-size:inherit; }
 /* Shared square allocations keep the curved controls clear at four tiles. */
 .color-wheel-control { display:flex; flex-direction:column; min-width:128px; max-height:100%; }
@@ -864,6 +869,7 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .filter-type-list { display:flex; flex-direction:column; gap:2px; flex:1; }
 .filter-types .filter-type { display:flex; align-items:center; gap:6px; min-height:44px; padding:0 6px; text-align:left; }
 .filter-types .cancel-filter { align-self:flex-start; }
+.content-drawer :is(.filter-types,.filter-picker,.effect-properties) { margin:8px; }
 .paper-color-property { display:flex; gap:6px; }
 .paper-color-property > :first-child { flex:1; min-width:0; height:36px; }
 .drawer-column > .layers-panel { padding:8px; }

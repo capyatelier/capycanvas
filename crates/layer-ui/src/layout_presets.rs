@@ -34,6 +34,25 @@ impl WorkspacePreset {
     }
 
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
+        let mut layout = self.legacy_selection_layout(platform);
+        if crate::CommandId::Select.available_on(platform) {
+            if self == Self::Painter {
+                replace_tool(&mut layout, crate::CommandId::Lasso, crate::CommandId::Select);
+            } else if self == Self::Photographer {
+                use crate::CommandId::*;
+                for (before_command, commands) in [(Lasso, &[RectangleSelect, EllipseSelect][..]), (AutoSelect, &[PolygonSelect][..]), (Fill, &[ColorSelect][..])] {
+                    let before = layout.panel(Panel::Toolbar).unwrap().tiles().iter()
+                        .find(|tile| tile.control == ToolbarControl::Command { command: before_command }).map(|tile| tile.id);
+                    let controls: Vec<_> = commands.iter().map(|&command| ToolbarControl::Command { command }).collect();
+                    layout.insert_tools(Panel::Toolbar, before, &controls).expect("included selection tools");
+                }
+            }
+        }
+        layout
+    }
+
+    /// Last shipped defaults before the selection family rollout.
+    pub fn legacy_selection_layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout=if self == Self::Photographer && platform != crate::Platform::Generic {
             Self::legacy_illustrator_primary_layout(platform)
         } else {
@@ -145,6 +164,7 @@ impl WorkspacePreset {
         // This builder also supplies the exact previous defaults for migration.
         // The current layout promotes Paint Brush and Blend to their tool classes.
         layout.header.replace_tool(DrawingBrush, Brush);
+        layout.header.replace_tool(Select, Lasso);
         layout.header.replace_tool(Sculpt, Blend);
         let tile_style = if self == Self::Painter {
             TileStyle::Medium
@@ -417,6 +437,7 @@ mod tests {
                     minimal && platform != Platform::Mac
                 );
                 let mut native = preset.layout(Platform::Gtk).header.projected_for(platform);
+                if !crate::CommandId::Select.available_on(platform) { native.replace_tool(crate::CommandId::Select, crate::CommandId::Lasso); }
                 // Hosts without these projections retain the prior tools.
                 if !crate::CommandId::DrawingBrush.available_on(platform) {
                     native.replace_tool(crate::CommandId::DrawingBrush, crate::CommandId::Brush);
@@ -578,7 +599,13 @@ mod tests {
     fn photo_adopts_the_reviewed_layout_and_paint_restores_its_original_default() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows, Platform::Mac, Platform::Ios] {
             for (preset,mut previous) in [(WorkspacePreset::Photographer,WorkspacePreset::legacy_illustrator_primary_layout(platform)),(WorkspacePreset::Illustrator,WorkspacePreset::legacy_illustrator_layout(platform))] {
-                let current=preset.layout(platform);
+                let mut current=preset.layout(platform);
+                if preset == WorkspacePreset::Photographer && crate::CommandId::Select.available_on(platform) {
+                    use crate::CommandId::*;
+                    current.panels.iter_mut().find(|p| p.id == Panel::Toolbar).unwrap().tiles_mut().unwrap().retain(|t|
+                        !matches!(t.control, ToolbarControl::Command { command: RectangleSelect | EllipseSelect | PolygonSelect | ColorSelect }));
+                    current.next_tile_id = previous.next_tile_id;
+                }
                 if Panel::Proof.available_on(platform) {
                     assert_eq!(current.panel_group(Panel::Proof),current.panel_group(Panel::Color));
                     let group=previous.panel_group(Panel::Color).unwrap();

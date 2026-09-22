@@ -289,6 +289,7 @@ impl ResolvedLayout {
 impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
+            Self::Command { command: CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Eraser } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Sculpt } => Some(vec![vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::DrawingBrush } => Some(vec![vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),

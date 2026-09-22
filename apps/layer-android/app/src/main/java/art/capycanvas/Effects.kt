@@ -53,7 +53,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     var emptyHeight by remember { mutableFloatStateOf(36f) }
     val categoryCount = if(splitPicker) 0 else choices.filterIndexed { i, choice -> i == 0 || choices[i - 1].getString("category") != choice.getString("category") }.size
     val listHeight = if (choices.isEmpty()) emptyHeight else choices.size * rowHeight + categoryCount * categoryHeight + (choices.size + categoryCount - 1) * 2f
-    val fixedHeight = if(splitPicker) 12f else headerHeight + 18f // Native outer padding and header/list gap.
+    val fixedHeight = if(splitPicker) 16f else headerHeight + 18f // Native outer padding and header/list gap.
     val measured = if (splitPicker || headerHeight > 0f) PanelContentSize(fixedHeight + listHeight, fixedHeight, rowHeight + 2f) else null
     SideEffect { measured?.let(onContent) }
     val currentChoices by rememberUpdatedState(choices)
@@ -73,7 +73,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             currentChoices.map { it.getString("id") }.filter { it in visible } to currentSize
         }.collect { (ids, size) -> cache.update(previewView, ids, size) }
     }
-    Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier.padding(if (splitPicker) 8.dp else 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if(!splitPicker) Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (search == null) SharedIcon(categories.firstOrNull { it.optString("id") == picker.optString("category") }?.getString("icon") ?: "adjustments", null)
             Box(Modifier.weight(1f)) {

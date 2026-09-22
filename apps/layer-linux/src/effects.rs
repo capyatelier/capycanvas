@@ -93,6 +93,7 @@ impl EffectPanels {
     }
     pub fn with_filter_types(split_picker: bool) -> Self {
         let filter_types = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        filter_types.add_css_class("filter-types");
         let type_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let types_scroll = crate::workspace::scroll(&type_list);
         types_scroll.set_vexpand(true);

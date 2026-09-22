@@ -949,6 +949,26 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Blend => "Mix and smear existing paint",
                 CommandId::Liquify => "Push and twist existing paint",
                 CommandId::Lasso => "Draw a freehand selection",
+                CommandId::Select => "Choose a selection tool",
+                CommandId::RectangleSelect => "Drag a rectangular selection; Shift constrains a square, Alt draws from center",
+                CommandId::EllipseSelect => "Drag an elliptical selection; Shift constrains a circle, Alt draws from center",
+                CommandId::PolygonSelect => "Click corners; click the first point or press Enter to finish, Backspace removes a point",
+                CommandId::ColorSelect => "Select matching colors throughout the image, including disconnected areas",
+                CommandId::SelectionNew => "Replace the selection with the next completed area",
+                CommandId::SelectionAdd => "Add the next area to the current selection",
+                CommandId::SelectionSubtract => "Remove the next area from the current selection",
+                CommandId::SelectionIntersect => "Keep only the overlap with the next area",
+                CommandId::SelectionAntialias => "Smooth the selection boundary with partial pixel coverage",
+                CommandId::SelectionConstrainAngles => "Snap polygon edges to 45-degree increments",
+                CommandId::SelectionFixedRatio => "Constrain the selection to the chosen width-to-height ratio",
+                CommandId::SelectionFixedSize => "Use exact selection dimensions in image pixels",
+                CommandId::SelectionFromCenter => "Place the center of the selection at the starting point",
+                CommandId::CompleteSelection => "Close the polygon and create the selection (Enter)",
+                CommandId::CancelSelection => "Discard the unfinished selection (Escape)",
+                CommandId::SelectionVisible => "Sample all visible artwork",
+                CommandId::SelectionEditing => "Sample only the editing layer",
+                CommandId::SelectionReference => "Sample layers marked as references",
+
                 CommandId::Move => "Move and transform artwork or guides",
                 CommandId::ScaleRotate => "Scale or rotate the selected paint",
                 CommandId::ApplyTransform => "Keep the displayed transform",
@@ -1199,6 +1219,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 ToolbarControl::Command { command } => {
                     if let Some(command) = state.commands.iter().find(|c| c.id == command) {
                         enabled = command.enabled;
+                        choice.icon = command.icon.unwrap_or(choice.icon);
                         command.selected
                     } else {
                         false

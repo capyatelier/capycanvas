@@ -12,6 +12,8 @@ pub enum LayerCanvasTool {
     Move,
     Transform,
     Select,
+    Selection { kind: SelectionTool },
+    SelectColor { source: RegionSource },
     LassoFill,
     Hand,
     PickVisible,
@@ -41,6 +43,22 @@ pub enum RegionSource {
     Reference,
 }
 impl LayerCanvasTool {
+    pub fn region(self) -> Option<(bool, RegionSource, bool)> {
+        match self {
+            Self::Region { fill, source } => Some((fill, source, true)),
+            Self::SelectColor { source } => Some((false, source, false)),
+            _ => None,
+        }
+    }
+    pub fn selection_tool(self) -> Option<SelectionTool> {
+        match self {
+            Self::Select => Some(SelectionTool::Lasso),
+            Self::Selection { kind } => Some(kind),
+            Self::Region { fill: false, .. } => Some(SelectionTool::Wand),
+            Self::SelectColor { .. } => Some(SelectionTool::Color),
+            _ => None,
+        }
+    }
     pub fn picks_color(self) -> bool {
         matches!(self, Self::PickVisible | Self::PickLayer)
     }
@@ -938,6 +956,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if let LayerCanvasTool::Selection { kind } = tool
+                    && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon) {
+                    return Err("Invalid geometric selection tool".into());
+                }
                 if tool == LayerCanvasTool::Transform {
                     return self.begin_transform();
                 }
@@ -951,7 +973,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.figure = (shape, paint);
                 }
                 self.cancel_layer_gesture()?;
-                if let LayerCanvasTool::Region { fill, source } = tool {
+                if let Some(kind) = tool.selection_tool() {
+                    self.selection_tools.options.tool = kind;
+                }
+                if let Some((fill, source, _)) = tool.region() {
                     self.region_tools.source[usize::from(fill)] = source;
                 }
                 if let LayerCanvasTool::Gradient {
@@ -1691,6 +1716,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
             return Err("Invalid canvas point".into());
         }
+        if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
+            return self.selection_pen(event, p, kind);
+        }
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. }) {
             return self.ruler_pen(event, p);
         }
@@ -1779,7 +1807,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if points.len() >= 3 {
                             let selection = Selection::polygon(points).map_err(error)?;
                             if self.layer_interaction.tool == LayerCanvasTool::Select {
-                                self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                                self.commit_tool_selection(selection)?;
                             } else {
                                 self.fill_selection(selection)?;
                             }
@@ -1803,10 +1831,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let sdr = self.cancel_sdr_gesture()?;
         let transform = self.cancel_transform()?;
         self.cancel_ruler_gesture();
+        let selection = self.selection_tools.cancel();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(region || transform || effect || sdr);
+            return Ok(selection || region || transform || effect || sdr);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine
@@ -1952,6 +1981,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 false,
                 layer_core::Affine::IDENTITY,
             );
+        }
+        let outline = self.selection_outline();
+        if !outline.is_empty() {
+            path(&outline, true, layer_core::Affine::IDENTITY);
         }
         if let Some(figure) = self.current_figure() {
             let guide = figure

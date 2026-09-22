@@ -33,7 +33,7 @@ using CapyCanvas theme colors, type, and compact spacing.
 
 | Workspace | Left | Top | Right |
 | --- | --- | --- | --- |
-| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Lasso, Scale/rotate | Centered workspace switcher | Brush, Sculpt, Eraser, Layers, Color (plus Full Screen on Web) |
+| Sketch (GTK/Web title bar) | Capy, Menu, Filters, Select, Scale/rotate | Centered workspace switcher | Brush, Sculpt, Eraser, Layers, Color (plus Full Screen on Web) |
 | Paint | Tools toolbar and expanded Tool Set/Tool/Brush size/Color column | Commands toolbar | Open collapsed stack for Navigator/Diagnostics, Properties/Filters and Layers |
 | Photo | Tools toolbar | Commands toolbar | Expanded Color/Diagnostics, Properties/Filters, Layers; inner collapsed strip for Tool Set, Tool/Brush size, Navigator |
 
@@ -56,6 +56,25 @@ remains a separate tool with a two-panel **Tools → Tool** drawer. Brush and Sc
 each restore their own last selection and settings, including after switching
 workspaces or restarting. Other hosts
 retain their previous entry points until their native projections are added.
+
+The GTK/Web/Android **Select** button replaces the Sketch Lasso entry and remembers the last
+selection tool. Its two-panel **Tools → Tool** drawer contains Rectangle select,
+Ellipse select, Lasso selection, Polygonal lasso, Auto select (the contiguous
+magic wand), and Select by color. Choosing a tool retains the drawer; its right
+panel shows the chosen tool's settings. Rectangle/ellipse support free sizing,
+fixed aspect ratio, exact image-pixel dimensions, and drawing from the center.
+Shift constrains a square/circle and Alt draws from the center. Polygonal lasso
+uses successive clicks; click the first point, press Enter, or use Finish
+selection to close it. Backspace removes a point and Escape cancels the outline.
+Select by color uses the existing GPU color tolerance and sampling sources,
+including disconnected matching regions. Expansion and edge smoothing apply to
+all matching regions; gap closing remains specific to the contiguous tool.
+
+Photo on these three hosts adds the four new tools to the existing selection group in the Tools
+toolbar. Untouched included Sketch/Photo layouts upgrade automatically;
+customized workspaces retain their layout and can use Restore Starting Layout.
+Other platforms retain their existing selection defaults. The SVGs use the shared
+icon bank. See [selection behavior and checks](../development/selection-tools.md).
 
 Untouched included GTK, Android and Web Sketch workspaces receive the new default automatically.
 Customized layouts keep their arrangement; Restore Starting Layout adopts the

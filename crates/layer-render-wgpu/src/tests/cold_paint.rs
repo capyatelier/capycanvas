@@ -144,6 +144,8 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
             let region = |r: &mut WgpuRasterizer| {
                 assert!(
                     r.request_region(layer_render::RegionRequest {
+                        contiguous: true,
+                        selection: None,
                         request_id: 9,
                         source: layer_render::RegionSource::Layer(id),
                         position: [259, 258],

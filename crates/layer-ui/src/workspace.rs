@@ -328,6 +328,8 @@ pub struct WorkspaceWorkingState {
     pub tools: crate::WorkspaceToolMemory,
     pub colors: crate::ColorState,
     pub canvas_tool: crate::LayerCanvasTool,
+    #[serde(default)]
+    pub selection: crate::SelectionOptions,
     pub region_values: std::collections::BTreeMap<String, f32>,
     pub region_sources: [crate::RegionSource; 2],
     pub gradient: [bool; 2],

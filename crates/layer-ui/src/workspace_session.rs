@@ -11,6 +11,7 @@ impl Default for WorkspaceWorkingState {
             tools: WorkspaceToolMemory::default(),
             colors: ColorState::default(),
             canvas_tool: LayerCanvasTool::Paint,
+            selection: SelectionOptions::default(),
             region_values: region
                 .controls()
                 .into_iter()
@@ -58,6 +59,11 @@ impl PreparedWorkspace {
             return Err("Unsupported workspace working-state version".into());
         }
         state.tools.validate()?;
+        state.selection.validate()?;
+        if let LayerCanvasTool::Selection { kind } = state.canvas_tool
+            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon) {
+            return Err("Invalid geometric selection tool".into());
+        }
         state.colors.validate()?;
         let mut brush = state.tools.brush(preset(state.preset)?);
         brush.color_rgba_linear = state.colors.definition().linear_in(layer_core::color::RgbSpace::Srgb)?;
@@ -187,6 +193,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tools: self.tools.clone(),
             colors: self.state.colors.clone(),
             canvas_tool: self.layer_interaction.tool,
+            selection: self.selection_tools.options.clone(),
             region_values: self
                 .region_tools
                 .controls()
@@ -380,6 +387,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.figure = working.figure;
         self.state.layer_tools.tool = working.canvas_tool;
         self.region_tools = region_tools;
+        self.selection_tools = selection_tools::SelectionTools::default();
+        self.selection_tools.options = working.selection;
         self.engine.set_tool(
             if self.state.brush.tool == Tool::Eraser || self.state.colors.transparent() {
                 StrokeTool::Eraser

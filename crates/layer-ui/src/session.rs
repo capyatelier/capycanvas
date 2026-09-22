@@ -17,6 +17,9 @@ pub use document_color_edit::ProofMode;
 pub(crate) mod figures;
 #[path = "operation.rs"]
 pub(crate) mod operation;
+#[path = "selection_tools.rs"]
+pub(crate) mod selection_tools;
+pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 #[path = "region_tools.rs"]
 mod region_tools;
 #[path = "rulers.rs"]
@@ -98,6 +101,7 @@ pub struct UiSession<R: CanvasRenderer> {
     filter_previews: filter_previews::Previews,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
+    selection_tools: selection_tools::SelectionTools,
     rulers: rulers::RulerInteraction,
     operation: operation::Operation,
     system_theme: Theme,
@@ -168,6 +172,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             filter_previews: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
+            selection_tools: Default::default(),
             rulers: Default::default(),
             operation: Default::default(),
             system_theme: Theme::Light,
@@ -868,7 +873,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     self.interaction.modifiers.alt = pressed;
                 }
-                if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
+                if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. } | LayerCanvasTool::Selection { .. })
                     && !self.layer_interaction.path.is_empty())
                     || self.update_ruler_preview()
                     || self.update_transform_drag()?
@@ -896,6 +901,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(reply);
                 }
                 let key = key.to_ascii_lowercase();
+                if pressed && !editing && self.state.preferences.capture.is_none() && self.selection_key(&key)? {
+                    self.refresh_commands();
+                    reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
+                    reply.handled = true;
+                    return Ok(reply);
+                }
                 if !pressed {
                     self.interaction.keys.remove(&key);
                     if self.interaction.pan_key.as_deref() == Some(&key) {
@@ -1782,12 +1793,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
-        if id == CommandId::ZenMode {
-            Some(self.state.settings.zen_icon.icon())
-        } else if id == CommandId::Fullscreen && self.state.fullscreen {
-            Some("fullscreen-exit")
-        } else {
-            id.icon()
+        match id {
+            CommandId::Select if CommandId::Select.available_on(self.state.platform) => {
+                self.selection_tools.options.tool.command().icon()
+            }
+            CommandId::DrawingBrush if CommandId::Select.available_on(self.state.platform) => {
+                Some(tools::group(self.tools.drawing()).icon())
+            }
+            CommandId::Sculpt if CommandId::Select.available_on(self.state.platform) => {
+                Some(tools::group(self.tools.sculpt()).icon())
+            }
+            CommandId::ZenMode => Some(self.state.settings.zen_icon.icon()),
+            CommandId::Fullscreen if self.state.fullscreen => Some("fullscreen-exit"),
+            _ => id.icon(),
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
@@ -1849,6 +1867,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .selected
                     .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
             }
+            CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
+            CommandId::CancelSelection => !self.layer_interaction.path.is_empty(),
             CommandId::Undo => idle && (self.operation.placing() || self.engine.can_undo()),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
@@ -1894,7 +1914,22 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ZoomOut => idle && self.state.camera.zoom > 0.02,
             _ => true,
         };
-        let selected = (self.layer_interaction.tool == LayerCanvasTool::Paint
+        let selection = self.layer_interaction.tool.selection_tool();
+        let selected = (id == CommandId::Select && selection.is_some())
+            || selection.is_some_and(|tool| tool.command() == id)
+            || matches!((id, self.selection_tools.options.mode),
+                (CommandId::SelectionNew, SelectionMode::New) | (CommandId::SelectionAdd, SelectionMode::Add)
+                | (CommandId::SelectionSubtract, SelectionMode::Subtract) | (CommandId::SelectionIntersect, SelectionMode::Intersect))
+            || (id == CommandId::SelectionAntialias && self.selection_tools.options.antialias)
+            || (id == CommandId::SelectionConstrainAngles && self.selection_tools.options.constrain_angles)
+            || (id == CommandId::SelectionFixedRatio && self.selection_tools.options.constraint == SelectionConstraint::Ratio)
+            || (id == CommandId::SelectionFixedSize && self.selection_tools.options.constraint == SelectionConstraint::Size)
+            || (id == CommandId::SelectionFromCenter && self.selection_tools.options.from_center)
+            || matches!((id, self.layer_interaction.tool.region()),
+                (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
+                | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
+                | (CommandId::SelectionReference, Some((false, RegionSource::Reference, _))))
+            || (self.layer_interaction.tool == LayerCanvasTool::Paint
             && ((id == CommandId::DrawingBrush && tools::is_drawing(self.state.brush.tool))
                 || (id == CommandId::Sculpt && tools::is_sculpt(self.state.brush.tool))
                 || id.paint_tool() == Some(self.state.brush.tool)))
@@ -2039,6 +2074,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let choosing_drawing_set = matches!(&action, UiAction::SelectBrushSet { .. })
             && self.state.customization.drawer.as_ref().is_some_and(|drawer|
                 drawer.columns.iter().flatten().any(|p| matches!(p, Panel::BrushSets | Panel::SculptSets)));
+        let choosing_selection = CommandId::Select.available_on(self.state.platform)
+            && self.layer_interaction.tool.selection_tool().is_some()
+            && self.state.customization.drawer.as_ref().is_some_and(|drawer| drawer.columns == [vec![Panel::Tools], vec![Panel::ToolSettings]])
+            && matches!(&action, UiAction::Invoke { command } if SelectionTool::ALL.iter().any(|tool| tool.command() == *command)
+                || matches!(command, CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference));
         let explicit_color = matches!(action, UiAction::Color { .. } | UiAction::SetColor { .. });
         let workspace_before = matches!(
             &action,
@@ -2566,12 +2606,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
-                if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. })
-                    && id != "opacity"
+                if self.layer_interaction.tool.region().is_some()
+                    && id != "opacity" && !id.starts_with("selection_")
                 {
                     self.region_tools.edit(&id, value)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
+                }
+                if id.starts_with("selection_") {
+                    self.selection_tools.options.edit(&id, value)?;
+                    self.region_tools.cancel();
+                    self.refresh_tools();
+                    return Ok(self.changed(BRUSH, true));
                 }
                 if id.starts_with("transform_") {
                     self.set_transform_control(&id, value)?;
@@ -2946,7 +2992,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .and_then(|panel| layout.active_panel(panel));
         }
         if self.state.customization.drawer.is_some()
-            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set)
+            && ((tool_before != (self.state.brush.tool, self.layer_interaction.tool) && !choosing_drawing_set && !choosing_selection)
                 || self.state.customization.expanded.is_some()
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
@@ -3082,7 +3128,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(());
         }
-        if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) {
+        if self.layer_interaction.tool.region().is_some() {
             self.region_pen(event);
             return Ok(());
         }
@@ -3624,6 +3670,61 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
+            CommandId::Select | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect => {
+                let kind = match command {
+                    CommandId::RectangleSelect => SelectionTool::Rectangle,
+                    CommandId::EllipseSelect => SelectionTool::Ellipse,
+                    CommandId::PolygonSelect => SelectionTool::Polygon,
+                    CommandId::ColorSelect => SelectionTool::Color,
+                    _ => self.selection_tools.options.tool,
+                };
+                self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(self.region_tools.source[0]) })?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::CompleteSelection => {
+                self.finish_polygon_selection()?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::CancelSelection => {
+                self.cancel_layer_gesture()?;
+                self.refresh_tools();
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionNew | CommandId::SelectionAdd | CommandId::SelectionSubtract | CommandId::SelectionIntersect
+            | CommandId::SelectionAntialias | CommandId::SelectionConstrainAngles => {
+                self.region_tools.cancel();
+                let options = &mut self.selection_tools.options;
+                match command {
+                    CommandId::SelectionNew => options.mode = SelectionMode::New,
+                    CommandId::SelectionAdd => options.mode = SelectionMode::Add,
+                    CommandId::SelectionSubtract => options.mode = SelectionMode::Subtract,
+                    CommandId::SelectionIntersect => options.mode = SelectionMode::Intersect,
+                    CommandId::SelectionAntialias => options.antialias = !options.antialias,
+                    _ => options.constrain_angles = !options.constrain_angles,
+                }
+                self.refresh_tools();
+                Ok((BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionFixedRatio | CommandId::SelectionFixedSize | CommandId::SelectionFromCenter => {
+                let options = &mut self.selection_tools.options;
+                if command == CommandId::SelectionFromCenter { options.from_center = !options.from_center; }
+                else {
+                    let value = if command == CommandId::SelectionFixedRatio { SelectionConstraint::Ratio } else { SelectionConstraint::Size };
+                    options.constraint = if options.constraint == value { SelectionConstraint::Free } else { value };
+                }
+                self.refresh_tools();
+                Ok((BRUSH | COMMANDS, true))
+            }
+            CommandId::SelectionVisible | CommandId::SelectionEditing | CommandId::SelectionReference => {
+                let source = match command {
+                    CommandId::SelectionVisible => RegionSource::Visible,
+                    CommandId::SelectionEditing => RegionSource::Editing,
+                    _ => RegionSource::Reference,
+                };
+                let kind = self.layer_interaction.tool.selection_tool().ok_or("Choose a selection tool first")?;
+                self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(source) })?;
+                Ok((BRUSH | COMMANDS, false))
+            }
             CommandId::AutoSelect | CommandId::Fill => {
                 let fill = command == CommandId::Fill;
                 self.layer_action(LayerAction::Tool {
@@ -4039,7 +4140,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
-        self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
+        self.state.tool_set = if CommandId::Select.available_on(self.state.platform)
+            && let Some(tool) = self.layer_interaction.tool.selection_tool() {
+            selection_tools::tool_set(tool)
+        } else { tools::view(&self.state.brush, self.layer_interaction.tool) };
+        if CommandId::Select.available_on(self.state.platform) && let Some(tool) = self.layer_interaction.tool.selection_tool() {
+            let commands: &[CommandId] = if tool.geometric() {
+                &[CommandId::SelectionFixedRatio, CommandId::SelectionFixedSize, CommandId::SelectionFromCenter]
+            } else if tool == SelectionTool::Polygon {
+                &[CommandId::SelectionConstrainAngles, CommandId::CompleteSelection, CommandId::CancelSelection]
+            } else if matches!(tool, SelectionTool::Color | SelectionTool::Wand) {
+                &[CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
+            } else { &[] };
+            self.state.tool_actions = [CommandId::SelectionNew, CommandId::SelectionAdd, CommandId::SelectionSubtract,
+                CommandId::SelectionIntersect, CommandId::SelectionAntialias].into_iter().chain(commands.iter().copied())
+                .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
+        }
 
         if matches!(self.state.platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Mac | Platform::Ios | Platform::Windows)
             && self.layer_interaction.tool.picks_color() {
@@ -4071,8 +4187,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     c
                 })
                 .collect()
-        } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
+        } else if let LayerCanvasTool::Selection { kind } = self.layer_interaction.tool {
+            if kind.geometric() { self.selection_tools.options.controls() } else { Vec::new() }
+        } else if let Some((fill, _, contiguous)) = self.layer_interaction.tool.region() {
             let mut controls = self.region_tools.controls();
+            if !contiguous { controls.retain(|c| c.id != "gap_closing"); }
+            if !fill && CommandId::Select.available_on(self.state.platform) && !self.selection_tools.options.antialias { controls.retain(|c| c.id != "smoothing"); }
             if fill {
                 controls.extend(
                     tool_settings::controls(self.engine.configured_brush())
@@ -4092,6 +4212,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             Vec::new()
         };
+        if CommandId::Select.available_on(self.state.platform) && self.layer_interaction.tool.selection_tool().is_some() {
+            self.state.tool_settings.extend(self.selection_tools.options.edge_controls());
+        }
     }
 
     fn require_idle(&self) -> Result<(), String> {
@@ -4580,6 +4703,7 @@ mod tests {
 
     include!("session_color_tests.rs");
     include!("session_source_tests.rs");
+    include!("selection_tests.rs");
 
     #[test]
     fn source_document_adoption_requires_renderer_support() {
@@ -6191,9 +6315,9 @@ mod tests {
                 s.pen(e).unwrap();
             };
             invoke(&mut s, CommandId::AutoSelect);
-            assert_eq!(s.state.tool_set.subtools.len(), 3);
+            assert_eq!(s.state.tool_set.subtools.len(), 6);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
-            assert_eq!(s.state.tool_settings.len(), 4);
+            assert_eq!(s.state.tool_settings.len(), 5);
             assert_eq!(s.region_tools.refinement.smoothing, 1.);
             for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
                 s.dispatch(UiAction::SetToolSetting {
@@ -6327,8 +6451,7 @@ mod tests {
             assert!(!s.region_tools.busy());
 
             invoke(&mut s, CommandId::AutoSelect);
-            s.dispatch(s.state.tool_set.subtools[2].action.clone())
-                .unwrap();
+            invoke(&mut s, CommandId::SelectionReference);
             send(&mut s, PenPhase::Down);
             send(&mut s, PenPhase::Up);
             assert!(s.frame(11, 11).unwrap_err().contains("reference layer"));
@@ -7464,6 +7587,11 @@ mod tests {
             invoke(&mut s, CommandId::Eraser);
             assert!(!s.command(CommandId::Sculpt).selected);
             assert!(!s.command(CommandId::DrawingBrush).selected);
+            let drawing_icon = if CommandId::Select.available_on(platform) { Some("pencil") } else { CommandId::DrawingBrush.icon() };
+            let sculpt_icon = if CommandId::Select.available_on(platform) { Some("liquify") } else { CommandId::Sculpt.icon() };
+            assert_eq!(s.command(CommandId::DrawingBrush).icon, drawing_icon);
+            assert_eq!(s.command(CommandId::Sculpt).icon, sculpt_icon);
+            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, sculpt_icon.unwrap());
             let eraser = s.state.workspace.layout.header.entries().find(|e|
                 e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
             s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
@@ -7475,7 +7603,10 @@ mod tests {
             let capture = s.capture_workspace().unwrap();
             let json = serde_json::to_string(&capture).unwrap();
             let mut restored = session();
+            restored.set_platform(platform);
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
+            assert_eq!(restored.command(CommandId::DrawingBrush).icon, drawing_icon);
+            assert_eq!(restored.command(CommandId::Sculpt).icon, sculpt_icon);
             invoke(&mut restored, CommandId::DrawingBrush);
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
             invoke(&mut restored, CommandId::Sculpt);

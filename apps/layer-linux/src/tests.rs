@@ -2776,7 +2776,7 @@ fn native_connected_tools() {
     w.dispatch(UiAction::Layer {
         action: LayerAction::ReferenceSelection,
     });
-    let reference_source = state(&w).tool_set.subtools[2].action.clone();
+    let reference_source = UiAction::Invoke { command: CommandId::SelectionReference };
     w.dispatch(reference_source);
     pump(100);
     let tolerance = find_named(

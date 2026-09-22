@@ -137,7 +137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let Some(mut point) = self.region_tools.contact.take() else {
                     return;
                 };
-                let LayerCanvasTool::Region { fill, source } = self.layer_interaction.tool else {
+                let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else {
                     return;
                 };
                 let doc = self.engine.document();
@@ -161,6 +161,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.region_tools.queued = Some(RegionRequest {
                     request_id: self.region_tools.generation,
+                    contiguous,
+                    selection: if fill { None } else { self.selection_refinement(basis) },
                     source: match source {
                         RegionSource::Visible => layer_render::RegionSource::Composite,
                         RegionSource::Editing => {
@@ -177,7 +179,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                     position: [point.x as u32, point.y as u32],
                     tolerance: self.region_tools.tolerance,
-                    refinement: self.region_tools.refinement,
+                    refinement: layer_render::RegionRefinement {
+                        gap_closing: if contiguous { self.region_tools.refinement.gap_closing } else { 0 },
+                        smoothing: if !fill && CommandId::Select.available_on(self.state.platform) && !self.selection_tools.options.antialias { 0. } else { self.region_tools.refinement.smoothing },
+                        ..self.region_tools.refinement
+                    },
                     limit: if fill {
                         doc.selection.as_ref().and_then(|s| s.transformed(inverse).ok()).map(std::sync::Arc::new)
                     } else {
@@ -189,12 +195,25 @@ impl<R: CanvasRenderer> UiSession<R> {
                     revision: doc.revision,
                     layer: doc.active_layer,
                     operation: fill.then(|| self.fill_operation()),
-                    basis,
+                    basis: if !fill && self.selection_refinement(basis).is_some() { layer_core::Affine::IDENTITY } else { basis },
                 });
             }
             PenPhase::Cancel => self.region_tools.cancel(),
             _ => (),
         }
+    }
+    pub(super) fn queue_selection(&mut self, selection: Selection, options: layer_render::SelectionRefinement) {
+        self.region_tools.cancel();
+        let doc = self.engine.document();
+        self.region_tools.queued = Some(RegionRequest {
+            request_id: self.region_tools.generation, contiguous: false, selection: Some(options),
+            source: layer_render::RegionSource::Selection(std::sync::Arc::new(selection)),
+            position: [0,0], tolerance: 0., refinement: Default::default(), limit: None,
+        });
+        self.region_tools.target = Some(Target {
+            generation: self.region_tools.generation, revision: doc.revision, layer: doc.active_layer,
+            operation: None, basis: layer_core::Affine::IDENTITY,
+        });
     }
     pub(super) fn poll_region_tool(&mut self) -> Result<(), String> {
         if let Some(error) = self.region_tools.failure.take() {

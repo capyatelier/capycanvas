@@ -189,6 +189,7 @@ impl RawRegions {
                 Some(Arc::new(frame))
             }
             layer_render::RegionSource::Layer(_) => None,
+            layer_render::RegionSource::Selection(_) => return Err(GpuRasterError::InvalidExtent),
         };
         let limit = r.device.limits();
         // Preflight the subsequent connected-component allocation before any

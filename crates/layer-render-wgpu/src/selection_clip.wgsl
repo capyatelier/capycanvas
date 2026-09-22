@@ -6,8 +6,12 @@ fn brush_selection_at(world: vec2<f32>) -> f32 {
     let p = vec2<i32>(floor(world - bitcast<vec2<f32>>(brush_selection.info.zw))) - vec2<i32>(brush_selection.rect.xy);
     var coverage = 0.;
     if all(p >= vec2<i32>(0)) && all(p < vec2<i32>(brush_selection.rect.zw)) {
-        let word = u32(p.y) * ((brush_selection.rect.z + 7u) / 8u) + u32(p.x) / 8u;
-        coverage = f32((brush_selection.values[word] >> ((u32(p.x) % 8u) * 4u)) & 15u) * .25;
+        let bytes = brush_selection.info.y == 2u;
+        let shift = select(3u,2u,bytes);
+        let count = 1u << shift;
+        let bits = select(4u, 8u, bytes);
+        let word = u32(p.y) * ((brush_selection.rect.z + count-1u) >> shift) + (u32(p.x) >> shift);
+        coverage = f32((brush_selection.values[word] >> ((u32(p.x) & (count-1u)) * bits)) & select(15u,255u,bytes)) * select(.25,1./255.,bytes);
     }
     return select(coverage, 1.-coverage, brush_selection.info.x != 0u);
 }

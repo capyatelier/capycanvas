@@ -5,6 +5,8 @@ use layer_core::{
     Rect, Selection, StrokeId,
 };
 use layer_render::{DabStyle, ViewState};
+#[path = "selection_option_tests.rs"]
+mod selection_options;
 #[path = "figure_tests.rs"]
 mod figures;
 #[path = "overview_tests.rs"]
@@ -613,6 +615,8 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
     let mut fill = Layer::paint(LayerId(2), "Fill");
     submit(&mut r, &[line.clone(), fill.clone()], &[], &[], true);
     let request = RegionRequest {
+        contiguous: true,
+        selection: None,
         request_id: 7,
         source: RegionSource::Layer(line.id),
         position: [64, 64],
@@ -698,6 +702,8 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
     ] {
         assert!(
             r.request_region(RegionRequest {
+                contiguous: true,
+                selection: None,
                 request_id: 8,
                 source: RegionSource::Composite,
                 position: seed,
@@ -760,6 +766,8 @@ fn refined_region_antialias_survives_fill_and_history_replay() {
     submit(&mut r, &[source], &[], &[], true);
     assert!(
         r.request_region(RegionRequest {
+            contiguous: true,
+            selection: None,
             request_id: 1,
             source: RegionSource::Composite,
             position: [64, 64],
@@ -889,6 +897,8 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
         submit(&mut r, &refs, &dabs, &batches, true);
         assert!(
             r.request_region(RegionRequest {
+                contiguous: true,
+                selection: None,
                 request_id: 1,
                 source: RegionSource::Composite,
                 position: [40, 64],
@@ -908,6 +918,8 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
         let before = r.readback_srgb_rgba8().unwrap();
         assert!(
             r.request_region(RegionRequest {
+                contiguous: true,
+                selection: None,
                 request_id: 2,
                 source: RegionSource::Layers(refs),
                 position: [40, 64],
@@ -1026,6 +1038,8 @@ fn region_request_latency() {
             let start = std::time::Instant::now();
             assert!(
                 r.request_region(RegionRequest {
+                    contiguous: true,
+                    selection: None,
                     request_id: i,
                     source: source.clone(),
                     position: [48, 48],
@@ -3315,11 +3329,15 @@ fn selected_brush_latency() {
         )
         .unwrap(),
     );
+    let byte_selection = std::sync::Arc::new(Selection::pixels(std::sync::Arc::new(
+        layer_core::SelectionPixels::bytes(extent, [0,0,extent[0],extent[1]],
+            vec![0xffffffff; (extent[0].div_ceil(4)*extent[1]) as usize]).unwrap()
+    )));
     for preset in [GPen, NaturalBlender, WatercolorWash] {
-        for selected in [false, true] {
+        for selected in ["none", "nibble", "byte"] {
             let mut b = batch(1);
             b.style = preset_style(preset);
-            b.style.selection = selected.then(|| selection.clone());
+            b.style.selection = match selected { "nibble" => Some(selection.clone()), "byte" => Some(byte_selection.clone()), _ => None };
             b.dab_count = 8;
             b.damage = Rect {
                 min: Point { x: 600., y: 550. },

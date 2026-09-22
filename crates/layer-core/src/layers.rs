@@ -411,11 +411,26 @@ pub struct LayerProperties {
     pub paper_color: Option<color::RgbColor>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionMode {
+    #[default]
+    New,
+    Add,
+    Subtract,
+    Intersect,
+}
+
 /// Immutable coverage survives subsequent edits, undo and renderer recreation.
-/// Each row contains ceil(width / 8) words, with eight 0..4 coverage nibbles.
+/// Legacy masks pack eight 0..4 coverage samples per word; refined masks pack
+/// four 0..255 coverage bytes. Rows pad their final word with zero coverage.
 /// Pixels are produced by the GPU; this type validates and retains their data.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SelectionPixels {
+    /// Older projects store four coverage samples in each nibble. Feathered
+    /// selections retain full 8-bit coverage, four pixels per word.
+    #[serde(default)]
+    byte_coverage: bool,
     extent: [u32; 2],
     bounds: [u32; 4],
     words: Arc<[u32]>,
@@ -426,11 +441,13 @@ impl SelectionPixels {
         bounds: [u32; 4],
         words: impl Into<Arc<[u32]>>,
     ) -> Result<Self, DocumentError> {
-        let value = Self {
-            extent,
-            bounds,
-            words: words.into(),
-        };
+        Self::with_coverage(extent, bounds, words.into(), false)
+    }
+    pub fn bytes(extent: [u32; 2], bounds: [u32; 4], words: impl Into<Arc<[u32]>>) -> Result<Self, DocumentError> {
+        Self::with_coverage(extent, bounds, words.into(), true)
+    }
+    fn with_coverage(extent: [u32; 2], bounds: [u32; 4], words: Arc<[u32]>, byte_coverage: bool) -> Result<Self, DocumentError> {
+        let value = Self { extent, bounds, words, byte_coverage };
         value.validate()?;
         Ok(value)
     }
@@ -439,9 +456,9 @@ impl SelectionPixels {
         let [x0, y0, x1, y1] = self.bounds;
         let words = &self.words;
         if w == 0 || h == 0 || x0 > x1 || y0 > y1 || x1 > w || y1 > h
-            || u64::from(w.div_ceil(8)) * u64::from(h) != words.len() as u64
+            || u64::from(w.div_ceil(self.pixels_per_word())) * u64::from(h) != words.len() as u64
             // Reject values >4 with eight parallel nibble comparisons.
-            || words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0)
+            || (!self.byte_coverage && words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0))
         {
             return Err(DocumentError::InvalidLayerOperation(
                 "Invalid selection coverage",
@@ -449,6 +466,8 @@ impl SelectionPixels {
         }
         Ok(())
     }
+    pub fn pixels_per_word(&self) -> u32 { if self.byte_coverage { 4 } else { 8 } }
+    pub fn coverage_format(&self) -> u32 { if self.byte_coverage { 2 } else { 1 } }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }

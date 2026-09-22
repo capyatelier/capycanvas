@@ -7,6 +7,7 @@ use layer_render::{RegionRequest, RegionResult};
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
     pub(super) raw: region_sources::RawRegions,
+    refiner: Option<selection_refine::SelectionRefiner>,
     readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
     waiting: Option<RegionRequest>,
@@ -27,6 +28,7 @@ impl RegionRequests {
         Self {
             flood: Flood::new(device),
             raw: region_sources::RawRegions::new(device),
+            refiner: None,
             readback: None,
             pending: None,
             waiting: None,
@@ -53,14 +55,23 @@ impl RegionRequests {
             || !request.tolerance.is_finite()
             || !(0.0..=1.).contains(&request.tolerance)
             || !request.refinement.is_valid()
+            || request.selection.as_ref().is_some_and(|s| !s.is_valid())
+            || (matches!(request.source, layer_render::RegionSource::Selection(_)) && request.selection.is_none())
         {
             return Err(GpuRasterError::InvalidExtent);
         }
+        if request.selection.is_some() && self.refiner.is_none() {
+            self.refiner = Some(selection_refine::SelectionRefiner::new(&r.device));
+        }
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
-            let mut ready = self.flood.prepare(&startup.compiler, request.refinement);
-            ready &= self.raw.prepare(&startup.compiler);
-            if request.limit.is_some() {
+            let mut ready = true;
+            if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
+                ready &= self.flood.prepare(&startup.compiler, request.refinement);
+                ready &= self.raw.prepare(&startup.compiler);
+            }
+            if request.selection.is_some() { ready &= self.refiner.as_ref().unwrap().prepare(&startup.compiler); }
+            if request.limit.is_some() || request.selection.is_some() {
                 for pipeline in [
                     &r.selection_clip.crossings,
                     &r.selection_clip.fill,
@@ -89,20 +100,35 @@ impl RegionRequests {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, selection)?;
         }
-        let classified = self.raw.encode(r, &request, &mut encoder)?;
+        let input = if let layer_render::RegionSource::Selection(selection) = &request.source {
+            r.selection_clip.prepare(&r.device, &mut encoder, extent, selection)?;
+            let buffer = r.selection_clip.buffer.as_ref().unwrap();
+            // The next prepare may reuse the clip allocation for the old mask.
+            let copy = r.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("incoming selection"), size: buffer.size(),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(buffer,0,&copy,0,buffer.size());
+            flood::Region { coverage: copy, bounds_offset: 0 }
+        } else {
+            let classified = self.raw.encode(r, &request, &mut encoder)?;
+            self.flood.encode_input(
+                &r.device, &mut encoder, &r.empty_view, extent, request.position,
+                request.tolerance, request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
+                request.refinement, Some(&classified), request.contiguous,
+            )?
+        };
         #[cfg(test)]
         let source_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
-        let region = self.flood.encode_input(
-            &r.device,
-            &mut encoder,
-            &r.empty_view,
-            extent,
-            request.position,
-            request.tolerance,
-            request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
-            request.refinement,
-            Some(&classified),
-        )?;
+        let (region, extent, byte_coverage) = if let Some(options) = &request.selection {
+            let extent = r.document_extent;
+            if let Some(previous) = &options.previous {
+                r.selection_clip.prepare(&r.device, &mut encoder, extent, previous)?;
+            }
+            let previous = options.previous.as_ref().and(r.selection_clip.buffer.as_ref());
+            (self.refiner.as_ref().unwrap().encode(&r.device, &mut encoder, extent, &input.coverage, previous, options)?, extent, true)
+        } else { (input, extent, false) };
         #[cfg(test)]
         let flood_ms = trace.map(|t| t.elapsed().as_secs_f64() * 1000.);
         let coverage_size = region.bounds_offset;
@@ -169,7 +195,7 @@ impl RegionRequests {
                         let read = |offset: usize| {
                             u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
                         };
-                        let words: std::sync::Arc<[u32]> = (0..extent[0].div_ceil(8) as usize
+                        let words: std::sync::Arc<[u32]> = (0..extent[0].div_ceil(if byte_coverage { 4 } else { 8 }) as usize
                             * extent[1] as usize)
                             .map(|i| read(32 + i * 4))
                             .collect();
@@ -178,7 +204,8 @@ impl RegionRequests {
                         } else {
                             std::array::from_fn(|i| read(coverage_size as usize + i * 4))
                         };
-                        let pixels = layer_core::SelectionPixels::new(extent, bounds, words)
+                        let pixels = if byte_coverage { layer_core::SelectionPixels::bytes(extent, bounds, words) }
+                            else { layer_core::SelectionPixels::new(extent, bounds, words) }
                             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
                         Ok(RegionResult {
                             request_id: request.request_id,

@@ -12,17 +12,21 @@ struct Packed { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 fn at(p: vec2<i32>) -> f32 {
     let q = p - vec2<i32>(source.rect.xy);
     if any(q < vec2<i32>(0)) || any(q >= vec2<i32>(source.rect.zw)) { return 0.; }
-    let word = u32(q.y) * ((source.rect.z + 7u) / 8u) + u32(q.x) / 8u;
-    return f32((source.values[word] >> ((u32(q.x) % 8u) * 4u)) & 15u);
+    let count = select(8u,4u,source.info.y == 2u);
+    let bits = 32u/count;
+    let word = u32(q.y) * ((source.rect.z + count-1u) / count) + u32(q.x) / count;
+    return f32((source.values[word] >> ((u32(q.x) % count) * bits)) & select(15u,255u,source.info.y == 2u));
 }
 
 @compute @workgroup_size(64)
 fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
-    let stride = (params.rect.z + 7u) / 8u;
+    let count = select(8u,4u,params.info.y == 2u);
+    let maximum = select(4u,255u,params.info.y == 2u);
+    let stride = (params.rect.z + count-1u) / count;
     if id.x >= stride || id.y >= params.rect.w { return; }
     var packed = 0u;
-    for (var i = 0u; i < 8u; i++) {
-        let x = id.x * 8u + i;
+    for (var i = 0u; i < count; i++) {
+        let x = id.x * count + i;
         if x >= params.rect.z { break; }
         let p = vec2<f32>(params.rect.xy + vec2<u32>(x, id.y)) + .5;
         let q = vec2<f32>(dot(params.inverse.xz, p), dot(params.inverse.yw, p)) + params.offset.xy - .5;
@@ -30,8 +34,8 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
         let f = fract(q);
         let value = mix(mix(at(base), at(base + vec2<i32>(1, 0)), f.x),
             mix(at(base + vec2<i32>(0, 1)), at(base + vec2<i32>(1, 1)), f.x), f.y);
-        // Preserve the existing four-level coverage format and bounded storage.
-        packed |= min(4u, u32(floor(value + .5))) << (i * 4u);
+        // Preserve the source coverage precision and bounded storage.
+        packed |= min(maximum, u32(floor(value + .5))) << (i * (32u/count));
     }
     output.values[id.y * stride + id.x] = packed;
 }

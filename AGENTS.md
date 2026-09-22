@@ -1,3 +1,8 @@
+# Before merging
+
+Follow the final checks in [the commit guide](docs/COMMIT_GUIDE.md) before
+merging to the default branch (`main`).
+
 # UI interaction rules
 
 When adding, changing, or reviewing draggable UI, follow the application-wide

@@ -123,7 +123,7 @@ import kotlin.math.roundToInt
         SideEffect {
             if (displayedHeight > 0f) { onHeight(displayedHeight); onContent(measured) }
         }
-        Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { contentHeight = it.height / density }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
+        Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { contentHeight = it.height / density }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties" -> if (splitFilters) 8.dp else 6.dp; "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             controls.forEach { item ->
                 when (item.getString("control")) {

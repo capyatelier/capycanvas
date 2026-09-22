@@ -70,6 +70,8 @@ fn raw_regions_preserve_sixteen_bit_distinctions_and_cross_the_bounded_source_ca
         });
         assert!(
             r.request_region(RegionRequest {
+                contiguous: true,
+                selection: None,
                 request_id: 1,
                 source: RegionSource::Layer(LayerId(1)),
                 position: seed,

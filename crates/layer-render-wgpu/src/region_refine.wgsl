@@ -99,7 +99,8 @@ fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_wor
     let selected = root(params.extent_seed.w * params.extent_seed.x + params.extent_seed.z);
     var packed = 0u;
     for (var i = 0u; i < 32u && p.x+i < params.extent_seed.x; i++) {
-        if selected != NONE && root(p.y*params.extent_seed.x+p.x+i) == selected { packed |= 1u << i; }
+        if (params.input.y != 0u && atomicLoad(&parents[p.y*params.extent_seed.x+p.x+i]) != NONE)
+            || (params.input.y == 0u && selected != NONE && root(p.y*params.extent_seed.x+p.x+i) == selected) { packed |= 1u << i; }
     }
     region_mask[word] = packed;
 }

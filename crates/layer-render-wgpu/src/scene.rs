@@ -813,7 +813,7 @@ impl Scene {
                 r: default,
                 g: default,
                 b: default,
-                a: 1.,
+                a: default,
             },
         );
         for ((id, c), page) in &r.layer_masks.pages {

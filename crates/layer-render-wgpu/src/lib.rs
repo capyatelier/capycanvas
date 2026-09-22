@@ -78,6 +78,7 @@ mod region_requests;
 mod region_sources;
 mod scene;
 mod selection_clip;
+mod selection_refine;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;

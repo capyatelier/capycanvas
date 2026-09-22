@@ -57,6 +57,8 @@ impl PlacementActions {
     }
 }
 
+const TOOL_ROW_HEIGHT: i32 = 44;
+
 /// A body can be projected in a dock or a tool drawer without reparenting the
 /// other view. Preview textures are shared by the existing immutable cache.
 pub struct ToolSet {
@@ -130,7 +132,7 @@ impl ToolSet {
                 button.set_hexpand(media);
                 button.set_size_request(
                     ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
-                    if media { 44 } else { layer_ui::TILE_SIZE as i32 },
+                    if media { TOOL_ROW_HEIGHT } else { layer_ui::TILE_SIZE as i32 },
                 );
                 button.set_child(Some(&aligned_icon_label(item.label, item.icon, if media { 0.0 } else { 1.0 })));
                 self.groups.insert(&button, -1);
@@ -162,6 +164,10 @@ impl ToolSet {
                     preview
                 });
                 if preview.is_none() {
+                    button.set_size_request(-1, TOOL_ROW_HEIGHT);
+                    if let UiAction::Invoke { command } = item.action {
+                        button.set_widget_name(&format!("tool-choice-{command:?}"));
+                    }
                     button.set_child(Some(&tool_label(item)));
                 }
                 self.list.append(&button);
@@ -248,6 +254,15 @@ impl ToolSettings {
             }
             fields.clear();
             actions.clear();
+            let mode_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            mode_row.set_homogeneous(true);
+            mode_row.set_widget_name("selection-mode-row");
+            mode_row.add_css_class("linked");
+            mode_row.add_css_class("selection-modes");
+            mode_row.update_property(&[gtk::accessible::Property::Label("Selection mode")]);
+            if state.layer_tools.tool.selection_tool().is_some() {
+                self.root.append(&mode_row);
+            }
             let mut group = "";
             for control in controls {
                 if group != control.group {
@@ -278,15 +293,45 @@ impl ToolSettings {
                 self.root.append(&input);
                 fields.push((control.clone(), input));
             }
+            let mut source_group: Option<gtk::CheckButton> = None;
+            let mut mode_group: Option<gtk::ToggleButton> = None;
             for action in &state.tool_actions {
                 let command = state
                     .commands
                     .iter()
                     .find(|c| c.id == action.command)
                     .expect("core command exists");
-                let widget: gtk::Widget = if action.checkable {
+                let mode = matches!(action.command, layer_ui::CommandId::SelectionNew | layer_ui::CommandId::SelectionAdd | layer_ui::CommandId::SelectionSubtract | layer_ui::CommandId::SelectionIntersect);
+                let widget: gtk::Widget = if mode {
+                    let button = gtk::ToggleButton::new();
+                    button.set_size_request(28, layer_ui::TILE_SIZE as i32);
+                    let image = crate::icons::image(&format!("layer-{}-symbolic", command.icon.unwrap()));
+                    image.set_pixel_size(20);
+                    button.set_child(Some(&image));
+                    button.update_property(&[gtk::accessible::Property::Label(command.label)]);
+                    if let Some(first) = &mode_group { button.set_group(Some(first)); }
+                    else { mode_group = Some(button.clone()); }
+                    let updating = self.updating.clone();
+                    let id = action.command;
+                    button.connect_toggled(glib::clone!(
+                        #[weak]
+                        workspace,
+                        move |button| {
+                            if !updating.get() && button.is_active() {
+                                workspace.dispatch(UiAction::Invoke { command: id });
+                            }
+                        }
+                    ));
+                    button.upcast()
+                } else if action.checkable {
                     let check = gtk::CheckButton::new();
+                    let source_choice = matches!(action.command, layer_ui::CommandId::SelectionVisible | layer_ui::CommandId::SelectionEditing | layer_ui::CommandId::SelectionReference);
+                    if source_choice {
+                        if let Some(first) = &source_group { check.set_group(Some(first)); }
+                        else { source_group = Some(check.clone()); }
+                    }
                     let label = gtk::Label::new(Some(command.label));
+                    check.set_tooltip_text(Some(command.label));
                     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                     label.set_xalign(0.);
                     check.set_child(Some(&label));
@@ -295,8 +340,8 @@ impl ToolSettings {
                     check.connect_toggled(glib::clone!(
                         #[weak]
                         workspace,
-                        move |_| {
-                            if !updating.get() {
+                        move |check| {
+                            if !updating.get() && (!source_choice || check.is_active()) {
                                 workspace.dispatch(UiAction::Invoke { command: id });
                             }
                         }
@@ -313,7 +358,8 @@ impl ToolSettings {
                     button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
-                self.root.append(&widget);
+                if mode { mode_row.append(&widget); }
+                else { self.root.append(&widget); }
                 actions.push((*action, widget));
             }
         }
@@ -326,6 +372,10 @@ impl ToolSettings {
                 widget.set_tooltip_text(Some(&command.tooltip));
                 if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
                     check.set_active(command.selected);
+                }
+                if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
+                    button.set_active(command.selected);
+                    selected(button, command.selected);
                 }
             }
         }

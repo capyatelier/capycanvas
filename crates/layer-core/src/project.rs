@@ -308,15 +308,17 @@ fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<()
             }
             // Bounds may be conservative, but must not omit nonzero coverage.
             // Check nonempty words, not each pixel, and reject row padding too.
-            let stride = p.extent()[0].div_ceil(8) as usize;
+            let count = p.pixels_per_word();
+            let bits = 32 / count;
+            let stride = p.extent()[0].div_ceil(count) as usize;
             let [x0, y0, x1, y1] = p.bounds();
             for (i, &word) in p.words().iter().enumerate().filter(|(_, w)| **w != 0) {
                 let y = (i / stride) as u32;
-                let x = (i % stride) as u32 * 8;
+                let x = (i % stride) as u32 * count;
                 if y < y0
                     || y >= y1
-                    || x + word.trailing_zeros() / 4 < x0
-                    || x + 7 - word.leading_zeros() / 4 >= x1
+                    || x + word.trailing_zeros() / bits < x0
+                    || x + count - 1 - word.leading_zeros() / bits >= x1
                 {
                     return Err("Selection bounds omit coverage".into());
                 }
@@ -413,6 +415,24 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_selection_project_roundtrip_rejects_omitted_coverage_and_padding() {
+        use std::sync::Arc;
+        let pixels = crate::SelectionPixels::bytes([5, 1], [1, 0, 5, 1], vec![0xff804000, 0x20]).unwrap();
+        let encoded = serde_json::to_string(&pixels).unwrap();
+        let restored: crate::SelectionPixels = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(pixels, restored);
+        let legacy: crate::SelectionPixels = serde_json::from_str(r#"{"extent":[8,1],"bounds":[0,0,8,1],"words":[1145324612]}"#).unwrap();
+        assert_eq!(legacy.coverage_format(), 1);
+        let mut document = Document::new("selection", 5, 1);
+        document.selection = Some(Selection::pixels(Arc::new(restored)));
+        assert!(validate_document(&document, ProjectLimits::default()).is_ok());
+        for (bounds, words) in [([2,0,5,1],vec![0xff804000,0x20]),([0,0,5,1],vec![0,0x2000])] {
+            document.selection = Some(Selection::pixels(Arc::new(crate::SelectionPixels::bytes([5,1],bounds,words).unwrap())));
+            assert!(validate_document(&document, ProjectLimits::default()).is_err());
+        }
+    }
 
     #[test]
     fn source_snapshot_prunes_only_unreferenced_assets_and_validates_shape() {

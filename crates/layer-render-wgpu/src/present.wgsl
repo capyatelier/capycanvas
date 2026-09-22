@@ -141,8 +141,10 @@ fn selected(p: vec2<f32>) -> bool {
     let q = vec2<i32>(floor(local)) - vec2<i32>(selection.rect.xy);
     var covered = false;
     if all(q >= vec2<i32>(0)) && all(q < vec2<i32>(selection.rect.zw)) {
-        let word = u32(q.y) * ((selection.rect.z+7u)/8u) + u32(q.x)/8u;
-        covered = ((selection.values[word] >> ((u32(q.x)%8u)*4u)) & 15u) >= 2u;
+        let bytes = selection.info.y == 2u;
+        let count = select(8u,4u,bytes);
+        let word = u32(q.y) * ((selection.rect.z+count-1u)/count) + u32(q.x)/count;
+        covered = ((selection.values[word] >> ((u32(q.x)%count)*(32u/count))) & select(15u,255u,bytes)) >= select(2u,128u,bytes);
     }
     return covered != (camera.selection.w > .5);
 }

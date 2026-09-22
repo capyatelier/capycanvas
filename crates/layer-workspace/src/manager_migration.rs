@@ -17,6 +17,7 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         return None;
     };
     let layout = layer_ui::WorkspacePreset::Painter.layout(platform);
+    let previous_selection = layer_ui::WorkspacePreset::Painter.legacy_selection_layout(platform);
     let previous = layer_ui::WorkspacePreset::legacy_painter_layout(platform);
     let previous_paint_drawer = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
     let mut previous_native_settings = previous.clone();
@@ -43,7 +44,8 @@ pub(super) fn updated_painter_default(entity: &Entity, platform: Platform) -> Op
         || (baseline.as_ref() != &previous && baseline.as_ref() != &portable
             && baseline.as_ref() != &previous_header && baseline.as_ref() != &previous_with_settings
             && baseline.as_ref() != &previous_native_settings
-            && baseline.as_ref() != &previous_paint_drawer)
+            && baseline.as_ref() != &previous_paint_drawer
+            && baseline.as_ref() != &previous_selection)
 
     {
         return None;
@@ -234,6 +236,7 @@ pub(super) fn updated_photographer_default(
         return None;
     }
     let layout = WorkspacePreset::Photographer.layout(platform);
+    let previous_selection = WorkspacePreset::Photographer.legacy_selection_layout(platform);
     let previous_columns = WorkspacePreset::legacy_photographer_layout(platform);
     let previous_primary = WorkspacePreset::legacy_illustrator_primary_layout(platform);
     let mut previous = previous_columns.clone();
@@ -246,7 +249,7 @@ pub(super) fn updated_photographer_default(
     }
     previous.bands[0].extent += TileStyle::Medium.size()[0] - TileStyle::Small.size()[0];
     if baseline.as_ref() == &layout || history.layout() != baseline.as_ref()
-        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary) {
+        || (baseline.as_ref() != &previous && baseline.as_ref() != &previous_columns && baseline.as_ref() != &previous_primary && baseline.as_ref() != &previous_selection) {
         return None;
     }
     let mut content = entity.content.clone();
@@ -412,5 +415,32 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut batch = CommitBatch::prepare(self.owner.clone(), Vec::new())?;
         batch.bindings.push((key.into(), Some(id)));
         self.publish(batch).await.map(|_| ())
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn selection_defaults_upgrade_only_untouched_sketch_and_photo() {
+    use layer_ui::{WorkspacePreset, LayoutHistory};
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for (preset, id, migrate) in [
+            (WorkspacePreset::Painter, DEFAULT_WORKSPACES[0].0, updated_painter_default as fn(&Entity,Platform)->Option<ItemContent>),
+            (WorkspacePreset::Photographer, DEFAULT_WORKSPACES[2].0, updated_photographer_default),
+        ] {
+            let old=preset.legacy_selection_layout(platform);
+            let mut working=preset.working_state();
+            working.selection.tool=layer_ui::SelectionTool::Ellipse;
+            working.selection.size=[500.,300.];
+            let mut entity=Entity::workspace(preset.name(),WorkspaceCapture {history:LayoutHistory::new(&old),working:working.clone()},old.clone(),None,1);
+            entity.id=id.into(); entity.metadata.builtin=true;
+            let mut updated=entity.clone(); updated.content=migrate(&entity,platform).unwrap();
+            assert_eq!(updated.capture().unwrap().history.layout(),&preset.layout(platform));
+            assert_eq!(updated.capture().unwrap().working,working);
+            assert!(migrate(&updated,platform).is_none());
+            let ItemContent::Workspace {history,..}=&mut entity.content else {panic!()};
+            let mut customized=old; customized.header.size=layer_ui::HeaderSize::Large;
+            history.append(&customized,"Custom header");
+            assert!(migrate(&entity,platform).is_none());
+        }
     }
 }
