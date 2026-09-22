@@ -51,6 +51,7 @@ pub struct NativeHost {
     pub startup: layer_render_wgpu::StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
     last_pen: Option<PenEvent>,
+    paint_start_sequence: u64,
     last_snapshot: Option<SnapshotKey>,
     last_model_snapshot: Option<Vec<u8>>,
     last_workspace_model_revision: Option<u64>,
@@ -113,6 +114,7 @@ impl NativeHost {
             },
             deferred_contacts: Default::default(),
             last_pen: None,
+            paint_start_sequence: 0,
             last_snapshot: None,
             last_model_snapshot: None,
             last_workspace_model_revision: None,
@@ -410,6 +412,11 @@ impl NativeHost {
         view_revision >= self.document_view_revision
             && !self.session.state().document_file.close_ready
     }
+    /// Latest admitted real paint contact, before a frame consumes its input.
+    /// Surface hosts can prepare low-latency presentation before issuing ink.
+    pub fn paint_start_sequence(&self) -> u64 {
+        self.paint_start_sequence
+    }
     pub fn pointer_batch(&mut self, batch: PointerBatch<'_>) -> Result<(), String> {
         self.pointer_batch_updates(batch, &[], false)
     }
@@ -610,6 +617,9 @@ impl NativeHost {
         if paint && !preparing && self.session.engine().backend().0.is_some() {
             self.sequence += 1;
             self.enqueue(event)?;
+            if !predicted && phase == PenPhase::Down {
+                self.paint_start_sequence = self.sequence;
+            }
             if !predicted {
                 self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
                     None
@@ -1431,6 +1441,7 @@ mod tests {
         };
         app.pointer_event(event, PointerButton::Primary).unwrap();
         assert!(app.deferred_contacts.contains(&1));
+        assert_eq!(app.paint_start_sequence(), 0);
         event.phase = PenPhase::Up;
         event.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::PREDICTED.0);
         app.pointer_event(event, PointerButton::Primary).unwrap();
@@ -1539,6 +1550,7 @@ mod tests {
         .unwrap();
         host.session.frame(0, 0).unwrap();
         assert!(host.paint_ready());
+        assert_eq!(host.paint_start_sequence(), 0);
         let revision = host.session.state().camera.revision;
         for (token, pending, x, phase, time) in [
             (9001, 1, 20., 1., 10_000_000.),
@@ -1558,6 +1570,10 @@ mod tests {
                 false,
             )
             .unwrap();
+            if phase == 1. {
+                assert!(host.paint_start_sequence() > 0, "pen-down is visible before rendering ink");
+                assert!(!host.session.engine().has_active_stroke(), "the frame has not consumed pen-down yet");
+            }
             host.session.frame(time as u64, time as u64).unwrap();
         }
         assert!(host.last_pen.is_none());
@@ -1572,6 +1588,7 @@ mod tests {
             .copy_rgba8_srgb(&mut before_pixels, 64 * 4)
             .unwrap();
         let camera = json!(host.session.state().camera);
+        let paint_start = host.paint_start_sequence();
         host.pointer_batch_updates(
             PointerBatch {
                 id: 7,
@@ -1585,6 +1602,7 @@ mod tests {
             true,
         )
         .unwrap();
+        assert_eq!(host.paint_start_sequence(), paint_start, "corrected down samples do not start another contact");
         host.session.frame(30_000_000, 30_000_000).unwrap();
         let after = &host.session.engine().document().layers[0].raster;
         assert_ne!(
@@ -1668,6 +1686,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(app.sequence, 0);
+        assert_eq!(app.paint_start_sequence(), 0);
         assert!(app.session.state().camera.revision > before);
     }
 }

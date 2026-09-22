@@ -617,10 +617,10 @@ class AndroidRasterTest {
             // queue from tone publication. Drain both before reading pixels.
             compose.waitForIdle()
             compose.waitUntil(10_000) { !tick() }
-            // Read the actual shared image, preserving HDR values. Android's
-            // PixelCopy has no queued buffer to acquire in shared presentation.
+            // Preserve HDR values: read the shared image or redraw the current
+            // view into a newly acquired FIFO image using the same presenter.
             val status=native{JSONObject(Native.displayStatus(it))}
-            assertEquals("SharedDemandRefresh",status.getString("present_mode"))
+            assertTrue(status.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             val format=status.getString("format")
             val hdr=status.getString("color_space")=="Bt2100Pq"
             val extent=status.getJSONArray("extent")
@@ -671,7 +671,7 @@ class AndroidRasterTest {
                 s.opt("presented_hdr")==hdr&&s.optString("color_space")==if(hdr)"Bt2100Pq" else "Srgb"
             }}}
             val surface=native{JSONObject(Native.displayStatus(it))}
-            assertEquals("SharedDemandRefresh",surface.getString("present_mode"))
+            assertTrue(surface.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             val expected=if(hdr)"Rgba16Float" else surface.getJSONArray("formats").objects()
                 .firstOrNull{it.getString("format").endsWith("Srgb")}?.getString("format")
             if(expected!=null)assertEquals("Presentation format follows the output mode",expected,surface.getString("format"))
@@ -2217,14 +2217,42 @@ class AndroidRasterTest {
         compose.onNodeWithText("Close").performClick()
         assertNull(host.failure)
     }
+    @Test fun navigationBuffersAndPenReturnsToFrontBuffer() {
+        fun display() = native { JSONObject(Native.displayStatus(it)) }
+        repeat(3) { index ->
+            point(1, 0.0, index * 20.0)
+            assertEquals("The first ink frame uses the front buffer", "SharedDemandRefresh", display().getString("present_mode"))
+            for (step in 1..6) { SystemClock.sleep(10); point(2, step * 15.0, index * 20.0) }
+            point(3, 90.0, index * 20.0)
+            assertEquals("SharedDemandRefresh", display().getString("present_mode"))
+            assertTrue(display().getBoolean("retained_target"))
+            assertEquals(1, display().getInt("desired_maximum_frame_latency"))
+            val painted = hash(png("presentation-before-$index.png"))
+            val revision = native { state(it).getJSONObject("document_file").getLong("revision") }
+            native { Native.dispatch(it, obj("type" to "invoke", "command" to "zoom_in").toString()) }
+            compose.waitUntil(10_000) { !tick() }
+            assertEquals("Fifo", display().getString("present_mode"))
+            assertFalse(display().getBoolean("retained_target"))
+            assertEquals(3, display().getInt("desired_maximum_frame_latency"))
+            assertEquals(revision, native { state(it).getJSONObject("document_file").getLong("revision") })
+            assertEquals(painted, hash(png("presentation-after-$index.png")))
+            val pixels = native { Native.surfacePixelsForTest(it) }
+            assertTrue("Buffered view contains artwork", (pixels.indices step 97).map { pixels[it] }.toSet().size > 8)
+        }
+        stroke(80.0)
+        assertEquals("SharedDemandRefresh", display().getString("present_mode"))
+        assertTrue(display().getBoolean("retained_target"))
+        assertTrue(display().getLong("presentation_switches") >= 6)
+        assertNull(host.failure)
+    }
     @Test fun frontBufferSurfaceLifecycle() {
         fun ready() {
             compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready")==true }
             compose.waitUntil(10_000) { !tick() }
             assertNull(host.failure)
             val display=native { JSONObject(Native.displayStatus(it)) }
-            assertEquals("SharedDemandRefresh",display.getString("present_mode"))
-            assertTrue(display.getBoolean("retained_target"))
+            assertTrue(display.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
+            assertEquals(display.getString("present_mode") == "SharedDemandRefresh", display.getBoolean("retained_target"))
         }
         stroke(0.0)
         val painted=hash(png("front-painted.png"))
@@ -2249,7 +2277,7 @@ class AndroidRasterTest {
                 ready()
                 assertEquals(painted,hash(png("front-rotated-$rotation.png")))
                 val bytes=native { Native.surfacePixelsForTest(it) }
-                assertTrue("Rotated retained image has content",(bytes.indices step 97).map {bytes[it]}.toSet().size>8)
+                assertTrue("Rotated surface image has content",(bytes.indices step 97).map {bytes[it]}.toSet().size>8)
             }
         } finally {
             automation.setRotation(originalRotation)

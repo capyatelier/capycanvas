@@ -1,9 +1,10 @@
 # Android development
 
-Android rendering requires Vulkan shared-demand presentation and swapchain-maintenance
-present fences. Unsupported drivers show a canvas initialization error; no buffered
-fallback is shipped. Both SDR and HDR use the retained front buffer. See
-[front-buffer requirements and qualification](android-front-buffer-production-2026-09-20.md).
+Android pen rendering requires Vulkan shared-demand presentation and swapchain-maintenance
+present fences. Unsupported drivers show a canvas initialization error. Pen strokes use
+the retained front buffer; whole-view navigation uses FIFO buffering to avoid scanout
+artifacts. See [buffered navigation and pen handoff qualification](android-buffered-navigation-20260921.md)
+and the earlier [front-buffer qualification](android-front-buffer-production-2026-09-20.md).
 
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)

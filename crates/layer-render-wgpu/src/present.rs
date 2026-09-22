@@ -755,10 +755,10 @@ impl ViewportPresenter {
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
 
-    /// Retain destination contents. The caller guarantees the same image
-    /// survives presentations. Reset this state on every reconfiguration.
-    pub fn retain_target(&mut self) {
-        self.retained = Some(Default::default());
+    /// Reset destination history on every swapchain reconfiguration. Retention
+    /// requires the same image to survive presentations; buffered images redraw fully.
+    pub fn set_target_retention(&mut self, retained: bool) {
+        self.retained = retained.then(Default::default);
     }
 
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {

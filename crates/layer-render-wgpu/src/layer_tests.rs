@@ -238,13 +238,15 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     });
     let target = make_target();
     let reference = make_target();
+    let buffered = make_target();
+    let shared_again = make_target();
     let mut layer = Layer::paint(LayerId(1), "scene paint");
     layer.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
     let layers = [layer];
     let camera = ViewState { width_px: 512, height_px: 512,
         background_rgba_linear: [0.2, 0.3, 0.4, 1.], ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
-    retained.retain_target();
+    retained.set_target_retention(true);
     for (i, (x, y, preview)) in [(85., 90., false), (365., 330., true),
         (95., 370., true), (360., 100., false)].into_iter().enumerate() {
         let mut ink = dab([0.8, 0.1, 0.2, 0.7]);
@@ -265,6 +267,14 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
     }
+    // A swapchain mode change replaces the image even when the scene and view
+    // are unchanged. Neither transition may inherit old image damage/history.
+    retained.set_target_retention(false);
+    retained.present(&r, &buffered.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+    assert_eq!(page_bytes(&r, &buffered), page_bytes(&r, &reference), "new buffered image");
+    retained.set_target_retention(true);
+    retained.present(&r, &shared_again.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+    assert_eq!(page_bytes(&r, &shared_again), page_bytes(&r, &reference), "new shared image");
 }
 
 #[test]
@@ -407,7 +417,7 @@ fn retained_viewport_matches_full_redraw_after_paint_and_preview_replacement() {
         let mut cached =
             crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb)
                 .unwrap();
-        if retained { cached.retain_target(); }
+        cached.set_target_retention(retained);
         cached.gpu_timings(&r, true);
         for (zoom, turns) in [(0.5, 0), (1., 1), (3.7, 2), (8., 3)] {
             let camera = ViewState {

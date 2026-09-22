@@ -18,6 +18,10 @@ use std::sync::{
 
 mod surface_capture;
 
+// Allow CPU, GPU and display consumption to overlap during full-view motion.
+// Depths 1–2 stalled near 96 FPS on Wacom; 3 sustained approximately 119 FPS.
+const NAVIGATION_FRAME_LATENCY: u32 = 3;
+
 struct Window(NonNull<ndk_sys::ANativeWindow>);
 impl Drop for Window {
     fn drop(&mut self) {
@@ -41,6 +45,10 @@ pub(crate) struct Surface {
     completion_observer: Option<Arc<Mutex<Vec<[u64; 4]>>>>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
+    last_view: Option<layer_render::ViewState>,
+    last_paint_start: u64,
+    presentation_switches: u64,
+    last_presentation_switch_ns: u64,
     _instance: wgpu::Instance,
     _window: Window,
 }
@@ -56,7 +64,7 @@ impl Surface {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(gpu.device(), &self.config);
-        self.presenter.retain_target();
+        self.presenter.set_target_retention(self.config.present_mode == wgpu::PresentMode::SharedDemandRefresh);
         Ok(())
     }
 }
@@ -108,6 +116,9 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "overview_count": a.overviews.len(),
                 "extent": [surface.config.width, surface.config.height],
                 "desired_maximum_frame_latency": surface.config.desired_maximum_frame_latency,
+                "display_memory_limits": gpu.display_memory_limits(),
+                "presentation_switches": surface.presentation_switches,
+                "last_presentation_switch_ns": surface.last_presentation_switch_ns,
                 "surface_quarter_turns": surface.quarter_turns,
                 // Submission progress is not proof that Android displayed a buffer.
                 "submitted_frames": surface.submitted_frames,
@@ -184,7 +195,9 @@ impl App {
                 surface.config.format,
                 surface.color,
             ).expect("The negotiated surface encoding remains valid");
-            surface.presenter.retain_target();
+            surface.presenter.set_target_retention(surface.config.present_mode == wgpu::PresentMode::SharedDemandRefresh);
+            surface.last_view = None;
+            surface.last_paint_start = self.host.paint_start_sequence();
         }
         self.blank_presented = true;
         self.sync_hdr_display();
@@ -323,6 +336,10 @@ impl App {
             completion_observer: None,
             logical_extent: [width, height],
             quarter_turns: 0,
+            last_view: None,
+            last_paint_start: 0,
+            presentation_switches: 0,
+            last_presentation_switch_ns: 0,
             _instance: instance,
             _window: window,
         };
@@ -387,6 +404,35 @@ impl App {
         if self.surface.as_ref().is_some_and(|s| s.submitted_frames.saturating_sub(s.completed_frames.load(Ordering::Acquire)) >= 2) { return Ok(true); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
+        // Reconfigure before submitting new brush work: Vulkan configuration
+        // drains the old swapchain. Doing it afterward serializes the first ink
+        // update behind that drain and delays pen-down by its GPU execution time.
+        let view = self.host.session.state().camera.view();
+        let paint_start = self.host.paint_start_sequence();
+        {
+            let surface = self.surface.as_mut().unwrap();
+            let gpu = self.host.session.engine().backend().0.as_ref().unwrap();
+            // Navigation rewrites the whole displayed image. Keep it buffered even
+            // after the gesture settles; only a new brush stroke returns to shared
+            // presentation. A simultaneous view change takes precedence over ink.
+            let present_mode = if surface.last_view.is_some_and(|previous| previous != view) {
+                wgpu::PresentMode::Fifo
+            } else if paint_start != surface.last_paint_start {
+                wgpu::PresentMode::SharedDemandRefresh
+            } else {
+                surface.config.present_mode
+            };
+            if surface.config.present_mode != present_mode {
+                surface.config.present_mode = present_mode;
+                surface.config.desired_maximum_frame_latency = if present_mode == wgpu::PresentMode::Fifo {
+                    NAVIGATION_FRAME_LATENCY
+                } else { 1 };
+                let switch_started = std::time::Instant::now();
+                surface.configure(gpu, [view.width_px, view.height_px])?;
+                surface.last_presentation_switch_ns = switch_started.elapsed().as_nanos() as u64;
+                surface.presentation_switches += 1;
+            }
+        }
         let _presentation = self.host.session.engine().backend().0.as_ref()
             .map(WgpuRasterizer::prioritize_raster_presentation);
         self.host
@@ -508,6 +554,8 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
+        surface.last_view = Some(view);
+        surface.last_paint_start = paint_start;
         surface.submitted_frames += 1;
         {
             let complete = surface.completed_frames.clone();

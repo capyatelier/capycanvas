@@ -49,14 +49,15 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val prediction = arguments.getString("prediction", "true") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
             check(duration in 1000..60000 && repeats in 1..10)
-            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual"))
+            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "visual", "pinch"))
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
             val root = File(targetContext.cacheDir, "brush-benchmark-$label-${System.nanoTime()}")
             CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
             RecoveryController.directoryForTest = File(root, "recovery")
             ColorPreferencesStore.directoryForTest = File(root, "color")
             DocumentController.nativeFileJobsForTest = true
-            val photo = File(targetContext.filesDir, "brush-benchmark.jpg")
+            val photo = (if (mode == "pinch") File(targetContext.getExternalFilesDir(null), "photo.capy").takeIf { it.isFile } else null)
+                ?: File(targetContext.filesDir, "brush-benchmark.jpg")
             if (!photo.isFile) ParcelFileDescriptor.AutoCloseInputStream(
                 uiAutomation.executeShellCommand("cat /data/local/tmp/capy-brush-photo.jpg")
             ).use { input -> photo.outputStream().use { input.copyTo(it) } }
@@ -149,6 +150,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val rx = 520.0
             val ry = 299.0
             val sampleInterval = 5_000_000L
+            if (mode == "pinch") {
+                runPinchBenchmark(this, arguments, host, output, label, cx, cy)
+                result.putString("stream", "PINCH_COMPLETE $label\n")
+                finish(Activity.RESULT_OK, result)
+                return
+            }
             fun stroke(milliseconds: Int, kind: String = mode): JSONObject {
                 val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 7; toolType = MotionEvent.TOOL_TYPE_STYLUS })
                 val coords = arrayOf(MotionEvent.PointerCoords())
@@ -202,7 +209,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 waitFor { host.snapshot?.optBoolean("brush_ready") == true }
             }
             val displayInfo = display()
-            check(displayInfo.getString("present_mode") == "SharedDemandRefresh")
+            check(displayInfo.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             File(output, "$label-info.json").writeText(obj("label" to label, "preset" to preset,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
@@ -216,6 +223,14 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             sendStatus(0, Bundle().apply { putString("stream", "BRUSH_READY $label\n") })
             if (arguments.getString("waitForTrace") == "true") waitFor { File(output, "$label-go").isFile }
             repeat(repeats) { run ->
+                if (arguments.getString("navigationBetweenStrokes") == "true") {
+                    invoke("zoom_in")
+                    SystemClock.sleep(250)
+                    invoke("fit_canvas")
+                    SystemClock.sleep(arguments.getString("navigationSettleMs", "750")!!.toLong().coerceIn(0, 5000))
+                    check(display().getString("present_mode") == "Fifo")
+                    check(!display().getBoolean("retained_target"))
+                }
                 val beforeRevision = state().getJSONObject("document_file").getLong("revision")
                 val before = stats()
                 val displayBefore = display()
@@ -224,6 +239,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 native { Native.completionTimings(it, true) }
                 val motion = stroke(duration)
                 val displayAfterInput = display()
+                check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
+                check(displayAfterInput.getBoolean("retained_target"))
                 SystemClock.sleep(1000)
                 val data = report(false)
                 val present = native { JSONArray(Native.presentationTimings(it, false)) }

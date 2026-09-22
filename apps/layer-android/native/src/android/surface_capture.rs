@@ -1,16 +1,18 @@
-//! Instrumentation reads the retained image itself: PixelCopy cannot acquire an
-//! already acquired shared swapchain. Never used by the production render loop.
+//! Instrumentation reads the shared image, or redraws the current view into a
+//! freshly acquired buffered image. Never used by the production render loop.
 use super::*;
 use jni::sys::jbyteArray;
 use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-fn pixels(a: &App) -> Result<Vec<u8>, String> {
+fn pixels(a: &mut App) -> Result<Vec<u8>, String> {
     if !a.profiling {
         return Err("Surface capture requires a debug test session".into());
     }
-    let surface = a.surface.as_ref().ok_or("Missing test surface")?;
+    let view = a.host.session.state().camera.view();
+    let surround = a.host.session.state().palette.surround_linear;
+    let surface = a.surface.as_mut().ok_or("Missing test surface")?;
     let gpu = a
         .host
         .session
@@ -44,6 +46,12 @@ fn pixels(a: &App) -> Result<Vec<u8>, String> {
         | wgpu::TextureFormat::Bgra8UnormSrgb => 4,
         other => return Err(format!("Unsupported test surface format: {other:?}")),
     };
+    // A FIFO acquisition need not contain the last displayed frame. Render
+    // using the configured presenter before readback, including HDR/proof state.
+    if !surface.presenter.retains_target() {
+        surface.presenter.present(gpu, &target.texture.create_view(&Default::default()), view, surround)
+            .map_err(error)?;
+    }
     let stride = surface.config.width * bytes_per_pixel;
     let padded =
         stride.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
