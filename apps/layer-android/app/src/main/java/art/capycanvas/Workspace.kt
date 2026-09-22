@@ -122,6 +122,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     MaterialTheme(typography = typography, colorScheme = scheme) {
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
+                StrokeRecordingSave(host)
                 DocumentRequests(host)
                 WorkspaceManager(host)
                 // Status/navigation bars overlay this immersive workspace. Their

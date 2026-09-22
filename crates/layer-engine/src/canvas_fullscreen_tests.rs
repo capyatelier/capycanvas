@@ -21,7 +21,7 @@ fn fullscreen_prediction_with_wide_brushes_and_independent_clocks() {
                 )
                 .unwrap();
                 let cfg = InstantFeedbackConfig {
-                    prediction_algorithm: crate::PredictionAlgorithm::Trajectory,
+
                     use_platform_prediction: false,
                     prediction_horizon_micros: 32_000,
                     timestamp_resolution_micros: 1000,

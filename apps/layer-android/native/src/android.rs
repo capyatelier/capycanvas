@@ -1216,3 +1216,50 @@ pub extern "system" fn Java_art_capycanvas_Native_colorFieldPixels(
         }
     }
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_strokeRecording(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    action: jint,
+) -> jstring {
+    let mut recorder = unsafe { app(handle) }.host.session.stroke_recording();
+    let result = (|| {
+        match action {
+            1 => recorder.start("android").map_err(error)?,
+            2 => recorder.stop(layer_engine::recording::StopReason::Manual),
+            3 => recorder.saved(),
+            0 => (),
+            _ => return Err("Unknown recording action".to_owned()),
+        }
+        serde_json::to_string(&recorder.status()).map_err(error)
+    })();
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_strokeRecordingData(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jni::sys::jbyteArray {
+    let result = unsafe { app(handle) }
+        .host
+        .session
+        .stroke_recording()
+        .snapshot()
+        .map_err(error)
+        .and_then(|bytes| {
+            env.byte_array_from_slice(&bytes)
+                .map(|a| a.into_raw())
+                .map_err(error)
+        });
+    match result {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            fail(&mut env, Err(e));
+            std::ptr::null_mut()
+        }
+    }
+}

@@ -14,7 +14,7 @@ pub(super) fn point(x: f32, y: f32, time: u32) -> StrokePoint {
 
 pub(super) fn config() -> InstantFeedbackConfig {
     InstantFeedbackConfig {
-        prediction_algorithm: PredictionAlgorithm::Trajectory,
+
         prediction_horizon_micros: 16_000,
         use_platform_prediction: false,
         ..Default::default()

@@ -1,7 +1,11 @@
 use serde::Serialize;
 
-/// Flicker is a change in prediction error at each prediction's own target time.
-/// Actual motion, including genuine turns and stops, therefore scores zero.
+/// Legacy endpoint accuracy and error-step diagnostics, not a flicker measure.
+/// Error steps cannot distinguish useful convergence from oscillation, do not
+/// cover the preview body, and do not measure visible duration. Use the full
+/// frame export with tools/prediction/analysis.py for those objectives.
+/// Perfect predictions of actual motion, including turns and stops, have zero
+/// error step, but this alone does not validate perceptual stability.
 #[derive(Debug, Default, Serialize)]
 pub struct Accuracy {
     pub graded_queries: usize,

@@ -66,7 +66,7 @@ fn replay_is_causal_and_keeps_native_precedence_and_corrections() {
     let mut outputs = Vec::new();
     for changed in [false, true] {
         let mut csv = Vec::new();
-        let summary = replay(recording(changed).as_slice(), None, &mut csv).unwrap();
+        let summary = replay(recording(changed).as_slice(), &mut csv).unwrap();
         assert_eq!(summary.contacts, 1);
         assert_eq!(summary.samples, 40);
         assert_eq!(summary.queries, 30);
@@ -87,6 +87,49 @@ fn replay_is_causal_and_keeps_native_precedence_and_corrections() {
 }
 
 #[test]
+fn frame_export_is_causal_includes_corrections_and_does_not_change_predictions() {
+    let input = recording(false);
+    let mut plain = Vec::new();
+    replay(input.as_slice(), &mut plain).unwrap();
+    let mut csv = Vec::new();
+    let mut frames = Vec::new();
+    replay_with_frames(input.as_slice(), &mut csv, &mut frames).unwrap();
+    assert_eq!(csv, plain);
+    let frames: Vec<serde_json::Value> = std::str::from_utf8(&frames)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames[0]["geometry"], "pre_brush");
+    assert_eq!(frames.len(), 31);
+    let mut real: Vec<serde_json::Value> = Vec::new();
+    for f in &frames[1..] {
+        let start = f["real_start"].as_u64().unwrap() as usize;
+        real.truncate(start);
+        real.extend(f["real"].as_array().unwrap().iter().cloned());
+        let curve = f["preview"].as_array().unwrap();
+        assert_eq!(curve[0], *real.last().unwrap());
+        assert_eq!(curve.last().unwrap()[0], f["target_us"]);
+        assert!(
+            real.iter()
+                .all(|s| s[0].as_u64() <= f["latest_us"].as_u64())
+        );
+    }
+    assert!((real[2][1].as_f64().unwrap() - 8.1).abs() < 1e-5);
+    assert_eq!(frames[11]["source"], "Platform");
+    let mut future = Vec::new();
+    replay_with_frames(recording(true).as_slice(), io::sink(), &mut future).unwrap();
+    for (a, b) in frames.iter().take(21).zip(
+        std::str::from_utf8(&future)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()),
+    ) {
+        assert_eq!(*a, b, "future truth must never leak into exported previews");
+    }
+}
+
+#[test]
 fn refuses_incomplete_unknown_and_invalid_datasets() {
     let valid = String::from_utf8(recording(false)).unwrap();
     for malformed in [
@@ -98,7 +141,7 @@ fn refuses_incomplete_unknown_and_invalid_datasets() {
         valid.replace("\"query\":[11,", "\"query\":[10,"),
     ] {
         assert!(
-            replay(malformed.as_bytes(), None, io::sink()).is_err(),
+            replay(malformed.as_bytes(), io::sink()).is_err(),
             "{malformed}"
         );
     }
@@ -126,31 +169,38 @@ fn collected_recording_bank_preserves_accuracy_and_useful_prediction() {
     let mut recordings: Vec<_> = std::fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|p| p.to_string_lossy().ends_with(".jsonl.gz"))
+        .filter(|p| p.extension().is_some_and(|e| e == "capystrokes"))
         .collect();
     recordings.sort();
     assert!(!recordings.is_empty());
     for path in recordings {
-        let reader = io::BufReader::new(flate2::read::GzDecoder::new(
-            std::fs::File::open(&path).unwrap(),
-        ));
-        let actual = replay(reader, Some(PredictionAlgorithm::Trajectory), io::sink()).unwrap();
-        let baseline_path = path.with_file_name(
-            path.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .replace(".jsonl.gz", ".expected.json"),
+        let baseline_path = path.with_extension("expected.json");
+        let fixture: serde_json::Value = serde_json::from_reader(
+            std::fs::File::open(&baseline_path)
+                .unwrap_or_else(|e| panic!("{}: {e}", baseline_path.display())),
+        )
+        .unwrap();
+        assert_eq!(
+            fixture["version"],
+            1,
+            "{}: unsupported baseline",
+            path.display()
         );
-        let baseline: serde_json::Value =
-            serde_json::from_reader(std::fs::File::open(baseline_path).unwrap()).unwrap();
+
+        let baseline = &fixture["summary"];
+        assert!(baseline.is_object(), "{}: missing baseline", path.display());
+        let reader = io::BufReader::new(std::fs::File::open(&path).unwrap());
+        let actual = replay(reader, io::sink()).unwrap();
         let measured = serde_json::to_value(&actual).unwrap();
         for key in ["contacts", "samples", "queries"] {
             assert_eq!(measured[key], baseline[key], "{} {key}", path.display());
         }
         for key in ["graded_queries", "transitions"] {
             assert_eq!(
-                measured["accuracy"][key], baseline["accuracy"][key],
-                "{key}"
+                measured["accuracy"][key],
+                baseline["accuracy"][key],
+                "{} {key}",
+                path.display()
             );
         }
         for key in [

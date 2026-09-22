@@ -117,12 +117,12 @@ fn solve(mut a: Matrix, mut b: [f64; 6]) -> Option<[f64; 6]> {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Sample {
-    time: u32,
-    position: Vector,
+pub(super) struct Sample {
+    pub time: u32,
+    pub position: Vector,
 }
 
-fn observations(
+pub(super) fn observations(
     real: &[StrokePoint],
     transform: [f32; 6],
 ) -> Option<([Sample; MAX_SAMPLES], usize)> {
@@ -166,7 +166,7 @@ fn observations(
 // weaken the cadence prior instead of being forced onto a uniform grid.
 // Each adjustment stays inside a centered half-tick cell. Rounding versus
 // truncation changes an unknown common phase, not the reconstructed intervals.
-fn reconstruct_times(samples: &mut [Sample], quantum: u32) {
+pub(super) fn reconstruct_times(samples: &mut [Sample], quantum: u32) {
     if quantum == 0 || samples.len() < 4 {
         return;
     }
@@ -360,7 +360,7 @@ fn equations(samples: &[Sample], p: [f64; 6], span: f64) -> (f64, Matrix, [f64; 
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Trajectory {
+pub(super) struct MotionFit {
     parameters: [f64; 6],
     covariance: Matrix,
     measurement_variance: f64,
@@ -370,7 +370,7 @@ pub(super) struct Trajectory {
     inverse: [f64; 4],
 }
 
-impl Trajectory {
+impl MotionFit {
     pub(super) fn fit(
         real: &[StrokePoint],
         transform: [f32; 6],
@@ -827,10 +827,6 @@ impl Trajectory {
         }
         requested.min((duration * 1000.).max(0.) as u32)
     }
-
-    pub(super) fn horizon(&self, requested: u32, config: InstantFeedbackConfig) -> u32 {
-        self.motion_horizon(self.confidence_horizon(requested), config)
-    }
 }
 
 #[cfg(test)]
@@ -910,7 +906,7 @@ mod tests {
                     position: evaluate(parameters, i as f64 / 15.).0,
                 })
                 .collect();
-            let original = Trajectory::fit_window(&samples, 0.04).unwrap();
+            let original = MotionFit::fit_window(&samples, 0.04).unwrap();
             for shift in [-0.004, 0.004] {
                 let mut rebased = original.clone();
                 rebased.translate_time(shift);
@@ -948,7 +944,7 @@ mod tests {
                 })
                 .collect();
             let variance = 0.04;
-            let fit = Trajectory::fit_window(&samples, variance).unwrap();
+            let fit = MotionFit::fit_window(&samples, variance).unwrap();
             let mut numerical = [[0.; 6]; 6];
             let epsilon = 0.001;
             // Differentiate the actual nonlinear weighted fit with respect to
@@ -957,9 +953,9 @@ mod tests {
                 for axis in 0..2 {
                     let original = samples[sample].position[axis];
                     samples[sample].position[axis] = original + epsilon;
-                    let plus = Trajectory::fit_window(&samples, variance).unwrap();
+                    let plus = MotionFit::fit_window(&samples, variance).unwrap();
                     samples[sample].position[axis] = original - epsilon;
-                    let minus = Trajectory::fit_window(&samples, variance).unwrap();
+                    let minus = MotionFit::fit_window(&samples, variance).unwrap();
                     samples[sample].position[axis] = original;
                     let sensitivity: [f64; 6] = std::array::from_fn(|i| {
                         (plus.parameters[i] - minus.parameters[i]) / (2. * epsilon)

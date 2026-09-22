@@ -24,6 +24,7 @@ export async function checkPrediction({call, evaluate, settle}) {
       await action({type:'open_settings', page:'input'});
       assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').disabled"), !available);
       assert.equal(await evaluate("document.querySelector('#setting-tip-lock')"), null);
+      assert.equal(await evaluate("document.querySelector('#setting-prediction-algorithm')"), null);
       assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), available);
       assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 23);
       assert.ok(Math.abs(await evaluate("layerApp.state().settings.tip_lock") - .3) < .000001);

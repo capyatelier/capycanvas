@@ -373,8 +373,8 @@ impl WebApp {
     }
     /// Display-only hover data, independent of the high-rate paint queue.
     pub fn cursor_input(&mut self, sample: &[f64]) {
-        let event = (sample.len() == 8).then(|| PenEvent {
-            device_id: 0,
+        let event = (sample.len() == 11).then(|| PenEvent {
+            device_id: sample[7] as u64,
             sequence: 0,
             timestamp_ns: (sample[6] * 1_000_000.0) as u64,
             view_revision: self.session.state().camera.revision,
@@ -386,13 +386,17 @@ impl WebApp {
             tilt_radians: [sample[3] as f32, sample[4] as f32],
             twist_radians: sample[5] as f32,
             distance: 0.0,
-            phase: PenPhase::Hover,
-            tool: match sample[7] as u8 {
+            phase: if sample[8] != 0. {
+                PenPhase::Move
+            } else {
+                PenPhase::Hover
+            },
+            tool: match sample[9] as u8 {
                 1 => ToolKind::Mouse,
                 2 => ToolKind::Eraser,
                 _ => ToolKind::Pen,
             },
-            flags: SampleFlags::PRIMARY,
+            flags: SampleFlags(sample[10] as u16),
         });
         self.session.cursor_input(event);
     }
@@ -1022,6 +1026,27 @@ impl WebApp {
                 .configure(gpu.renderer.device(), &gpu.config);
         }
         serialize(&change)
+    }
+
+    pub fn stroke_recording_status(&mut self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.stroke_recording().status())
+    }
+    pub fn start_stroke_recording(&mut self) -> Result<(), JsValue> {
+        self.session.stroke_recording().start("web").map_err(js)
+    }
+    pub fn stop_stroke_recording(&mut self) {
+        self.session
+            .stroke_recording()
+            .stop(layer_engine::recording::StopReason::Manual);
+    }
+    pub fn stroke_recording_bytes(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.session.stroke_recording().bytes().map_err(js)
+    }
+    pub fn stroke_recording_data(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.session.stroke_recording().snapshot().map_err(js)
+    }
+    pub fn stroke_recording_saved(&mut self) {
+        self.session.stroke_recording().saved();
     }
 
     /// Transient browser API capability; the preference remains persisted.

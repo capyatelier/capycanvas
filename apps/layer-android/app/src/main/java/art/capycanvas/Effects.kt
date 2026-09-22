@@ -322,5 +322,8 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 }
             }
         }
+        Button(onClick = host.strokeRecording::click, enabled = !host.strokeRecording.busy, modifier = Modifier.testTag("stroke-recording")) {
+            Text(host.strokeRecording.status?.optString("label") ?: "Start stroke recording")
+        }
     }
 }

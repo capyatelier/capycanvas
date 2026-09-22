@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum PenPhase {
     Hover,
     Down,
@@ -19,11 +20,7 @@ pub enum PenPhase {
     Cancel,
 }
 
-#[cfg_attr(
-    feature = "prediction-bench",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ToolKind {
     Pen,
@@ -36,11 +33,7 @@ pub enum ToolKind {
     Unknown,
 }
 
-#[cfg_attr(
-    feature = "prediction-bench",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct SampleFlags(pub u16);
 
@@ -68,6 +61,7 @@ impl SampleFlags {
 /// Stable C-compatible event written directly by platform adapters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PenEvent {
     pub device_id: u64,
     pub sequence: u64,
@@ -86,7 +80,7 @@ pub struct PenEvent {
     pub flags: SampleFlags,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PressureCurve {
     pub dead_zone: f32,
     pub gamma: f32,
@@ -111,7 +105,7 @@ impl PressureCurve {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ViewTransform {
     pub revision: u64,
     /// Affine transform `[a, b, c, d, tx, ty]`.

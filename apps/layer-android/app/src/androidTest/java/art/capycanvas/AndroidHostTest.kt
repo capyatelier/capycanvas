@@ -790,6 +790,60 @@ class AndroidHostTest {
         capture("adjustments-stats-dark")
         action(obj("type" to "set_theme", "theme" to "light"));capture("adjustments-stats-light")
     }
+    @Test fun strokeRecordingSavesRawStylusInput() {
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
+        floatPanel("stats", 100f, 120f)
+        compose.onNodeWithTag("stroke-recording").performClick()
+        compose.waitUntil(5_000) { host.strokeRecording.status?.optBoolean("recording") == true }
+        compose.onNodeWithTag("stroke-recording").assertTextContains("Stop stroke recording")
+        penStroke(40)
+        compose.waitUntil(5_000) { (host.strokeRecording.status?.optLong("raw_events") ?: 0) >= 41 }
+        compose.onNodeWithTag("stroke-recording").performClick()
+        fun node(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
+            fun find(n: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
+                n ?: return null
+                if (predicate(n)) return n
+                for (i in 0 until n.childCount) find(n.getChild(i))?.let { return it }
+                return null
+            }
+            return find(instrumentation.uiAutomation.rootInActiveWindow)
+        }
+        fun chooser(): android.view.accessibility.AccessibilityNodeInfo {
+            val until = SystemClock.uptimeMillis() + 15_000
+            while (SystemClock.uptimeMillis() < until) {
+                node { it.isEditable && it.packageName?.toString()?.contains("documentsui") == true }?.let { return it }
+                SystemClock.sleep(100)
+            }
+            error("Recording system save chooser did not open")
+        }
+        compose.waitUntil(5_000) { host.strokeRecording.busy && host.strokeRecording.status?.optBoolean("ready") == true }
+        chooser()
+        instrumentation.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        compose.waitUntil(5_000) { !host.strokeRecording.busy }
+        assertTrue(host.strokeRecording.status!!.getBoolean("ready"))
+        compose.onNodeWithTag("stroke-recording").assertTextContains("Save stroke recording").performClick()
+        compose.waitUntil(5_000) { host.strokeRecording.busy }
+        val name = "capy-stroke-test-${System.currentTimeMillis()}.capystrokes"
+        assertTrue(chooser().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
+            putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, name)
+        }))
+        val save = node { it.isClickable && it.text?.toString()?.equals("save", ignoreCase = true) == true }
+        assertNotNull("System Save action", save)
+        assertTrue(save!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        compose.waitUntil(15_000) { !host.strokeRecording.busy && host.strokeRecording.status?.optBoolean("ready") == false }
+        assertNull(host.actionError)
+        compose.onNodeWithTag("stroke-recording").assertTextContains("Start stroke recording")
+        // The native workspace owner revalidates asynchronously after SAF returns.
+        compose.waitUntil(10_000) {
+            kotlinx.coroutines.runBlocking {
+                host.withNative { handle -> runCatching {
+                    Native.dispatch(handle, obj("type" to "set_theme", "theme" to "light").toString())
+                }.isSuccess }
+            }
+        }
+        println("STROKE_RECORDING_FILE=$name")
+    }
+
     @Test fun diagnosticsFollowSharedOrder() {
         customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
         floatPanel("stats", 650f, 120f)

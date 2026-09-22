@@ -77,6 +77,7 @@ class AndroidPredictionTest {
     @Before fun ready() {
         savedSettings = preferences.getString("settings", null)
         CanvasHost.workspaceDirectoryForTest = File(context.filesDir, "prediction-tests/${UUID.randomUUID()}").absolutePath
+        RecoveryController.directoryForTest = File(CanvasHost.workspaceDirectoryForTest!!, "recovery")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { host = it.host }
         compose.waitUntil(60_000) {
@@ -112,6 +113,7 @@ class AndroidPredictionTest {
             try { if (::scenario.isInitialized) scenario.close() }
             finally {
                 CanvasHost.workspaceDirectoryForTest = null
+                RecoveryController.directoryForTest = null
                 preferences.edit().apply {
                     if (savedSettings == null) remove("settings") else putString("settings", savedSettings)
                 }.commit()
@@ -120,6 +122,8 @@ class AndroidPredictionTest {
     }
     @Test fun nativePredictionCanBeComparedAndUnavailableControlIsDisabled() {
         val ids = rows().map { it.getString("id") }
+        assertFalse(ids.contains("prediction_algorithm"))
+        compose.onNodeWithTag("preference-prediction_algorithm").assertDoesNotExist()
         assertEquals("platform_prediction", ids[ids.indexOf("feedback") + 1])
         assertEquals("Use Android stroke prediction", row().getString("title"))
         manualControls(!actualSupport || !settings().getBoolean("platform_prediction"))
@@ -164,7 +168,7 @@ class AndroidPredictionTest {
         compose.onNodeWithTag(tag).assertIsEnabled().assertIsOn()
         capability(false)
         manualControls(true)
-        compose.onNodeWithTag(tag).assertIsNotEnabled().assertIsOn()
+        compose.onNodeWithTag(tag).assertIsNotEnabled().assertIsOff()
         assertTrue("Losing support preserves the user's choice", settings().getBoolean("platform_prediction"))
         assertEquals("Manual prediction time survives native mode", 32.0, settings().getDouble("prediction_ms"), 0.0)
         compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()

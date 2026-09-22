@@ -2,7 +2,8 @@
 #[path = "gradient_preview.rs"]
 mod gradient_preview;
 use crate::{number_control::NumberControl, workspace::Workspace};
-use gtk::{glib, prelude::*};
+use adw::prelude::*;
+use gtk::glib;
 use layer_core::EffectValue;
 use layer_ui::{
     EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction, UiState,
@@ -38,6 +39,9 @@ pub struct EffectPanels {
     preview_request: Cell<u64>,
     pub properties: gtk::Box,
     pub stats: gtk::Box,
+    recording_button: gtk::Button,
+    recording_save_open: Cell<bool>,
+    recording_was_active: Cell<bool>,
     title: gtk::Label,
     body: gtk::Box,
     schema: RefCell<Option<LayerPropertiesView>>,
@@ -142,6 +146,10 @@ impl EffectPanels {
         properties.append(&body);
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
+        let recording_button = gtk::Button::with_label("Start stroke recording");
+        recording_button.set_widget_name("stroke-recording");
+        recording_button.set_tooltip_text(Some("Record tablet input for up to 10 minutes"));
+        stats.append(&recording_button);
         let stats_plot = gtk::DrawingArea::builder()
             .content_width(180)
             .content_height(46)
@@ -201,6 +209,9 @@ impl EffectPanels {
             preview_request: Cell::new(0),
             properties,
             stats,
+            recording_button,
+            recording_save_open: Cell::new(false),
+            recording_was_active: Cell::new(false),
             title,
             body,
             schema: RefCell::new(None),
@@ -217,6 +228,13 @@ impl EffectPanels {
         self.cancel_filter.connect_clicked(glib::clone!(#[weak] w, move |_| {
             w.dispatch(UiAction::Effect { action: EffectAction::CancelFilter });
         }));
+        self.recording_button.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                w.effects.recording_clicked(&w);
+            }
+        ));
         // One producer services every projection, including open drawers.
         if Rc::ptr_eq(self, &w.effects) {
             let weak = Rc::downgrade(w);
@@ -224,6 +242,7 @@ impl EffectPanels {
                 let Some(w) = weak.upgrade() else {
                     return glib::ControlFlow::Break;
                 };
+                w.effects.recording_tick(&w);
                 let extra: Vec<_> = w.drawers().iter().filter_map(|d| d.effects()).collect();
                 for view in std::iter::once(&w.effects).chain(extra.iter()) {
                     if view.stats.is_mapped() {
@@ -675,6 +694,125 @@ impl EffectPanels {
         }
         *self.schema.borrow_mut() = Some(view.clone());
     }
+    fn recording_error(w: &Rc<Workspace>, message: &str) {
+        let dialog = adw::AlertDialog::builder()
+            .heading("Stroke recording")
+            .body(message)
+            .build();
+        dialog.add_response("ok", "OK");
+        let w = w.clone();
+        glib::spawn_future_local(async move {
+            crate::alert::choose(dialog, &w.window).await;
+        });
+    }
+    fn recording_tick(self: &Rc<Self>, w: &Rc<Workspace>) {
+        let Some(status) = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .map(|g| g.session.stroke_recording().status())
+        else {
+            return;
+        };
+        let was_active = self.recording_was_active.replace(status.recording);
+        let extra: Vec<_> = w.drawers().iter().filter_map(|d| d.effects()).collect();
+        for view in std::iter::once(self).chain(extra.iter()) {
+            view.recording_button.set_label(status.label);
+            view.recording_button
+                .set_sensitive(!self.recording_save_open.get());
+        }
+        if was_active && status.ready {
+            self.save_recording(w);
+        }
+    }
+    fn recording_clicked(self: &Rc<Self>, w: &Rc<Workspace>) {
+        if self.recording_save_open.get() {
+            return;
+        }
+        let result = {
+            let mut gpu = w.gpu.borrow_mut();
+            let Some(g) = gpu.as_mut() else {
+                return;
+            };
+            let mut recorder = g.session.stroke_recording();
+            let status = recorder.status();
+            if status.recording {
+                recorder.stop(layer_engine::recording::StopReason::Manual);
+                Ok(true)
+            } else if status.ready {
+                Ok(true)
+            } else {
+                recorder.start("gtk").map(|_| false)
+            }
+        };
+        match result {
+            Ok(true) => {
+                self.recording_was_active.set(false);
+                self.save_recording(w);
+            }
+            Ok(false) => (),
+            Err(e) => Self::recording_error(w, e),
+        }
+        self.recording_tick(w);
+    }
+    fn save_recording(self: &Rc<Self>, w: &Rc<Workspace>) {
+        if self.recording_save_open.replace(true) {
+            return;
+        }
+        let this = self.clone();
+        let w = w.clone();
+        glib::spawn_future_local(async move {
+            let result: Result<(), String> = async {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Save stroke recording")
+                    .initial_name("stroke-recording.capystrokes")
+                    .modal(true)
+                    .build();
+                let file = match dialog.save_future(Some(&w.window)).await {
+                    Ok(file) => file,
+                    Err(e)
+                        if e.matches(gtk::DialogError::Dismissed)
+                            || e.matches(gtk::DialogError::Cancelled) =>
+                    {
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e.to_string()),
+                };
+                let data = w
+                    .gpu
+                    .borrow_mut()
+                    .as_mut()
+                    .ok_or("Canvas unavailable")?
+                    .session
+                    .stroke_recording()
+                    .snapshot()
+                    .map_err(|e| e.to_string())?;
+                let bytes =
+                    gtk::gio::spawn_blocking(move || layer_engine::recording::compress(&data))
+                        .await
+                        .map_err(|_| "Recording compression failed")?
+                        .map_err(|e| e.to_string())?;
+                file.replace_contents_future(
+                    bytes,
+                    None,
+                    false,
+                    gtk::gio::FileCreateFlags::REPLACE_DESTINATION,
+                )
+                .await
+                .map_err(|(_, e)| e.to_string())?;
+                if let Some(g) = w.gpu.borrow_mut().as_mut() {
+                    g.session.stroke_recording().saved();
+                }
+                Ok(())
+            }
+            .await;
+            this.recording_save_open.set(false);
+            if let Err(e) = result {
+                Self::recording_error(&w, &e);
+            }
+            this.recording_tick(&w);
+        });
+    }
     fn refresh_stats(&self, w: &Workspace) {
         let Some(view) = w.gpu.borrow().as_ref().map(|g| g.session.renderer_stats()) else {
             return;
@@ -687,10 +825,14 @@ impl EffectPanels {
                 value.add_css_class("numeric");
                 let row = row(metric.label, &value);
                 row.set_tooltip_text(Some(metric.description));
-                self.stats.append(&row);
+                self.stats
+                    .insert_child_after(&row, self.recording_button.prev_sibling().as_ref());
                 self.stats_labels.borrow_mut().push(value);
                 if index + 1 == view.chart_after_rows {
-                    self.stats.append(&self.stats_plot);
+                    self.stats.insert_child_after(
+                        &self.stats_plot,
+                        self.recording_button.prev_sibling().as_ref(),
+                    );
                 }
             }
         }

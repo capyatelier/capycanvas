@@ -885,7 +885,6 @@ fn decode_feedback(
         use_platform_prediction: settings.use_platform_prediction != 0,
         use_engine_prediction: settings.use_engine_prediction != 0,
         // New policy fields do not change the stable C ABI.
-        prediction_algorithm: layer_engine::PredictionAlgorithm::default(),
         timestamp_resolution_micros: InstantFeedbackConfig::default().timestamp_resolution_micros,
         finalization_lag_micros: settings.finalization_lag_micros,
         prediction_horizon_micros: settings.prediction_horizon_micros,

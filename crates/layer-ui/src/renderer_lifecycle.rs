@@ -53,6 +53,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// layout/history/settings forward without overwriting this drawing's view,
     /// tools, history, dirty checkpoint or color interpretation.
     pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
+        // A recording is window state, shared by parked and active documents.
+        self.engine.recording = previous.engine.recording.clone();
         self.state.platform = previous.state.platform;
         self.platform_prediction_available = previous.platform_prediction_available;
         self.system_theme = previous.system_theme;
@@ -249,6 +251,49 @@ mod tests {
         assert!(session.state().document_file.close_ready);
         assert!(session.rendering_suspended());
         assert!(session.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).is_err());
+    }
+
+    #[test]
+    fn stroke_recording_follows_the_window_when_switching_drawings() {
+        let mut active = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        let mut parked = UiSession::blank(Backend::default(), [800, 600]).unwrap();
+        active.stroke_recording().start("test").unwrap();
+        let event = layer_engine::PenEvent {
+            device_id: 1,
+            sequence: 1,
+            timestamp_ns: 1,
+            view_revision: 0,
+            surface_position: layer_core::Point { x: 5., y: 6. },
+            pressure: 0.,
+            tilt_radians: [0.; 2],
+            twist_radians: 0.,
+            distance: 0.2,
+            phase: layer_engine::PenPhase::Hover,
+            tool: layer_engine::ToolKind::Pen,
+            flags: layer_engine::SampleFlags::NONE,
+        };
+        active.cursor_input(Some(event));
+        parked.inherit_window_state(&active).unwrap();
+        assert!(parked.stroke_recording().status().recording);
+        drop(active);
+        parked.cursor_input(Some(layer_engine::PenEvent {
+            sequence: 2,
+            timestamp_ns: 2,
+            ..event
+        }));
+        assert_eq!(parked.stroke_recording().status().raw_events, 2);
+        parked
+            .stroke_recording()
+            .stop(layer_engine::recording::StopReason::Manual);
+        let data = parked.stroke_recording().bytes().unwrap();
+        assert_eq!(
+            layer_engine::recording::read(data.as_slice())
+                .unwrap()
+                .iter()
+                .filter(|r| matches!(r, layer_engine::recording::Record::Raw { .. }))
+                .count(),
+            2
+        );
     }
 
     #[test]

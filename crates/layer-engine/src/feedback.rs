@@ -4,34 +4,15 @@ use crate::input::{PenEvent, SampleFlags, ToolKind};
 use layer_core::{Point, StrokePoint};
 use std::collections::VecDeque;
 
+mod drawing_state;
+mod local_motion;
 #[cfg(test)]
-mod adversarial_tests;
-#[cfg(test)]
-mod fullscreen_tests;
-#[cfg(test)]
-mod longitudinal_tests;
+mod local_motion_tests;
+mod motion_fit;
 mod output;
 mod prediction_clock;
 #[cfg(test)]
 mod test_support;
-mod trajectory;
-#[cfg(test)]
-mod trajectory_tests;
-
-/// Selects only the shared, disposable preview predictor. Native prediction
-/// still takes precedence when enabled and available; recorded ink is unchanged.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PredictionAlgorithm {
-    #[default]
-    #[serde(
-        alias = "linear",
-        alias = "kalman",
-        alias = "trajectory_tapered",
-        alias = "trajectory_tapered_filtered"
-    )]
-    Trajectory,
-}
 
 pub(crate) const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
 const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
@@ -39,16 +20,11 @@ const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part
 /// of a brush preset or persisted stroke.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    feature = "prediction-bench",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InstantFeedbackConfig {
     pub enabled: bool,
     pub use_platform_prediction: bool,
     pub use_engine_prediction: bool,
-    pub prediction_algorithm: PredictionAlgorithm,
     /// Input clock quantum, supplied by the host (GTK/GDK: 1 ms). This is
     /// measurement uncertainty, not prediction time or a user preference.
     pub timestamp_resolution_micros: u32,
@@ -57,7 +33,7 @@ pub struct InstantFeedbackConfig {
     /// Engine lookahead, also used without a presentation timestamp. Native
     /// samples use their own horizon, capped independently at 64 ms.
     pub prediction_horizon_micros: u32,
-    /// Physical-pixel distance limit, independent of document zoom. Trajectory
+    /// Physical-pixel distance limit, independent of document zoom. Smooth Motion
     /// prediction applies this to future travel beyond frame time, separately
     /// compensating for input age; total extrapolation is still capped at 512 px.
     /// Native predictors measure this from the latest observation.
@@ -78,7 +54,6 @@ impl Default for InstantFeedbackConfig {
             enabled: true,
             use_platform_prediction: true,
             use_engine_prediction: true,
-            prediction_algorithm: PredictionAlgorithm::Trajectory,
             timestamp_resolution_micros: 1,
             finalization_lag_micros: 8_000,
             prediction_horizon_micros: 8_000,
@@ -145,11 +120,78 @@ pub(crate) struct TipEstimate {
 /// Per-contact, preview-only state. Never changes recorded stroke samples.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PredictionState {
+    correction_field: Option<output::CorrectionField>,
     pressure: VecDeque<(u64, f32)>,
     lead: Option<(u32, f32, Point)>,
-    trajectory: Option<output::Output>,
-    prediction_clock: prediction_clock::PredictionClock,
-    trajectory_policy: Option<InstantFeedbackConfig>,
+    output: Option<output::Output>,
+    immediate: MotionState,
+    sustained: MotionState,
+    policy: Option<InstantFeedbackConfig>,
+}
+
+/// Motion and timing components of Smooth Motion. Neither is an independently
+/// selectable predictor: the immediate component supplies prompt stop/turn
+/// response, while the sustained component preserves ordinary preview continuity.
+#[derive(Clone, Debug, Default)]
+struct MotionState {
+    clock: prediction_clock::PredictionClock,
+    local: Option<local_motion::LocalMotion>,
+}
+
+impl MotionState {
+    fn forecast(
+        &mut self,
+        real: &[StrokePoint],
+        motion: &motion_fit::MotionFit,
+        requested: u32,
+        now: u32,
+        lifetime: u32,
+        transform: [f32; 6],
+        config: InstantFeedbackConfig,
+        history: Option<drawing_state::DrawingState>,
+    ) -> Option<output::Output> {
+        let age = now.saturating_sub(real.last()?.elapsed_micros);
+        let requested = requested
+            .saturating_sub(now.max(real.last()?.elapsed_micros))
+            .min(config.prediction_horizon_micros);
+        let horizon = if requested == 0 {
+            0
+        } else {
+            self.clock.horizon(
+                motion,
+                requested,
+                now,
+                lifetime,
+                config,
+                history.map_or(0., |h| h.reach),
+            )
+        };
+        let memory = history.map(|h| (config.prediction_horizon_micros, h.smooth));
+        if horizon == 0 {
+            // Preserve hidden sustained motion through a temporary statistical
+            // confidence loss; timing phase must not pulse off and on.
+            self.local = memory.and_then(|memory| {
+                local_motion::LocalMotion::fit(
+                    real,
+                    transform,
+                    config.timestamp_resolution_micros,
+                    config.prediction_horizon_micros,
+                    Some(memory),
+                    self.local.as_ref(),
+                )
+            });
+            return None;
+        }
+        let output = output::Output::new(
+            motion.clone(),
+            horizon,
+            transform,
+            motion.display_distance_budget(age, config),
+        )
+        .with_local_motion(real, config, age, memory, self.local.as_ref());
+        self.local = output.local_motion();
+        Some(output)
+    }
 }
 
 impl PredictionState {
@@ -261,12 +303,29 @@ impl PredictionState {
         transform: [f32; 6],
         config: InstantFeedbackConfig,
     ) -> Option<TipEstimate> {
-        if self.trajectory_policy != Some(config) {
-            self.prediction_clock.clear();
-
-            self.trajectory_policy = Some(config);
+        if self.policy != Some(config) {
+            self.immediate = MotionState::default();
+            self.sustained = MotionState::default();
+            self.correction_field = None;
+            self.policy = Some(config);
         }
         let latest = *real.last()?;
+        let drawing = if config.use_engine_prediction {
+            drawing_state::DrawingState::measure(real, transform)
+        } else {
+            Default::default()
+        };
+        let interrupted = drawing.interrupted
+            || drawing.stop_in_micros
+                <= f64::from(
+                    config
+                        .prediction_horizon_micros
+                        .saturating_add(24_000)
+                        .saturating_add(now.saturating_sub(latest.elapsed_micros)),
+                );
+        if interrupted {
+            self.correction_field = None;
+        }
         let mut intervals = [0; 8];
         let mut count = 0;
         for pair in real.windows(2).rev() {
@@ -289,9 +348,9 @@ impl PredictionState {
             .max(config.prediction_horizon_micros)
             .min(MAX_PREDICTION_HORIZON_MICROS);
         if now.saturating_sub(latest.elapsed_micros) > lifetime {
-            self.trajectory = None;
-
-            self.prediction_clock.clear();
+            self.output = None;
+            self.immediate = MotionState::default();
+            self.sustained = MotionState::default();
             self.lead = None;
             return Some(TipEstimate {
                 point: latest,
@@ -303,61 +362,75 @@ impl PredictionState {
         let limited = horizon.map_or(requested, |h| {
             requested.min(latest.elapsed_micros.saturating_add(h))
         });
-        self.trajectory = None;
+        self.output = None;
         let native = config.use_platform_prediction
             && platform
                 .iter()
                 .any(|p| p.elapsed_micros > latest.elapsed_micros);
         if config.use_engine_prediction && !native {
             self.lead = None;
-            let motion = match config.prediction_algorithm {
-                PredictionAlgorithm::Trajectory => {
-                    trajectory::Trajectory::fit(real, transform, config.timestamp_resolution_micros)
-                }
-            };
-            if let Some(motion) = motion {
-                // Pressure controls brush footprint, not motion lookahead.
-                // A falling pressure trend is not a pen-up observation: broad
-                // strokes vary pressure while maintaining steady motion.
-                let requested_horizon = requested
-                    .saturating_sub(now.max(latest.elapsed_micros))
-                    .min(config.prediction_horizon_micros);
-                let horizon = if requested_horizon == 0 {
-                    0
+            if let Some(motion) =
+                motion_fit::MotionFit::fit(real, transform, config.timestamp_resolution_micros)
+            {
+                // Two components of Smooth Motion: keep the immediate fit warm
+                // while sustained motion retains confidence and corrections.
+                // The expensive trajectory fit and drawing-state scan are shared.
+                let immediate = self.immediate.forecast(
+                    real, &motion, requested, now, lifetime, transform, config, None,
+                );
+                let sustained = self.sustained.forecast(
+                    real,
+                    &motion,
+                    requested,
+                    now,
+                    lifetime,
+                    transform,
+                    config,
+                    Some(drawing),
+                );
+                let output = if drawing.speed < 1400. || interrupted || drawing.reach == 0. {
+                    immediate
                 } else {
-                    self.prediction_clock
-                        .horizon(&motion, requested_horizon, now, lifetime, config)
+                    sustained
                 };
-                if horizon > 0 {
-                    let maximum_distance = motion
-                        .display_distance_budget(now.saturating_sub(latest.elapsed_micros), config);
-                    let output = output::Output::new(motion, horizon, transform, maximum_distance);
-                    let point = output.point_at(horizon);
-                    self.trajectory = Some(output);
-                    return Some(TipEstimate {
-                        point,
+                self.output = if interrupted {
+                    self.correction_field = None;
+                    output
+                } else {
+                    output.map(|output| {
+                        let (output, field) = output.smooth_corrections(
+                            self.correction_field.as_ref(),
+                            now,
+                            drawing.smooth,
+                        );
+                        self.correction_field = Some(field);
+                        output
+                    })
+                };
+                return Some(self.output.as_ref().map_or(
+                    TipEstimate {
+                        point: latest,
+                        source: TipSource::Real,
+                    },
+                    |output| TipEstimate {
+                        point: output.point_at(output.horizon),
                         source: TipSource::Engine,
-                    });
-                }
-                // Keep the learned timing phase even when this frame has no
-                // attainable future point; resetting here creates an on/off loop.
-
-                return Some(TipEstimate {
-                    point: latest,
-                    source: TipSource::Real,
-                });
+                    },
+                ));
             }
-
-            self.prediction_clock.clear();
+            self.immediate = MotionState::default();
+            self.sustained = MotionState::default();
             return Some(TipEstimate {
                 point: latest,
                 source: TipSource::Real,
             });
         }
 
-        self.prediction_clock.clear();
+        self.immediate = MotionState::default();
+        self.sustained = MotionState::default();
+        self.correction_field = None;
         let mut estimate = estimate_tip(real, platform, limited, transform, config)?;
-        if let Some(distance) = trajectory::braking_distance(
+        if let Some(distance) = motion_fit::braking_distance(
             real,
             transform,
             config.timestamp_resolution_micros,
@@ -422,9 +495,9 @@ impl PredictionState {
     /// Intermediate engine samples follow the same model and accepted horizon
     /// as the endpoint. Evaluating a shorter time preserves the curve geometry.
     pub fn engine_intermediates(&self) -> impl Iterator<Item = StrokePoint> + '_ {
-        self.trajectory.iter().flat_map(|output| {
-            (1..=output.horizon.saturating_sub(1) / trajectory::STEP_MICROS)
-                .map(|i| output.point_at(i * trajectory::STEP_MICROS))
+        self.output.iter().flat_map(|output| {
+            (1..=output.horizon.saturating_sub(1) / motion_fit::STEP_MICROS)
+                .map(|i| output.point_at(i * motion_fit::STEP_MICROS))
         })
     }
 
@@ -506,30 +579,15 @@ pub(crate) fn estimate_tip(
         });
     }
 
-    if config.use_engine_prediction
-        && target_time > latest.elapsed_micros
-        && let Some(point) = trajectory::Trajectory::fit(
+    if config.use_engine_prediction && target_time > latest.elapsed_micros {
+        return PredictionState::default().estimate_for(
             real,
+            &[],
+            target_time,
+            latest.elapsed_micros,
             document_to_surface,
-            config.timestamp_resolution_micros,
-        )
-        .and_then(|motion| {
-            let horizon = motion.horizon(target_time - latest.elapsed_micros, config);
-            (horizon > 0).then(|| {
-                output::Output::new(
-                    motion,
-                    horizon,
-                    document_to_surface,
-                    config.max_prediction_distance_px,
-                )
-                .point_at(horizon)
-            })
-        })
-    {
-        return Some(TipEstimate {
-            point,
-            source: TipSource::Engine,
-        });
+            config,
+        );
     }
 
     Some(TipEstimate {
@@ -941,7 +999,14 @@ mod tests {
             assert_eq!(
                 estimate.point.position,
                 Point {
-                    x: 18.0,
+                    // The default adaptive model may shorten a forecast with
+                    // only 30 ms of history. It must still follow the real
+                    // line at its honest output time, not the native bend.
+                    x: if enabled {
+                        18.0
+                    } else {
+                        10. + (estimate.point.elapsed_micros - 30_000) as f32 * 0.001
+                    },
                     y: if enabled { 16.0 } else { 0.0 }
                 }
             );

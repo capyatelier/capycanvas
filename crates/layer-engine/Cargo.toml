@@ -6,15 +6,16 @@ description = "Portable input, brush, document orchestration, and render submiss
 license.workspace = true
 
 [features]
-prediction-bench = ["dep:serde_json", "dep:flate2"]
+prediction-bench = []
 
 [dependencies]
 web-time = "1.1.0"
 layer-core = { path = "../layer-core" }
 layer-render = { path = "../layer-render" }
 rtrb = "0.4.0"
-flate2 = { version = "1", optional = true }
-serde_json = { version = "1", optional = true, features = ["float_roundtrip"] }
+flate2 = "1"
+bincode = { version = "=2.0.1", default-features = false, features = ["std", "serde"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
 serde = { version = "1", features = ["derive"] }
 
 [lib]
@@ -22,4 +23,8 @@ path = "src/lib.rs"
 
 [[example]]
 name = "prediction-replay"
+required-features = ["prediction-bench"]
+
+[[example]]
+name = "stroke-recording"
 required-features = ["prediction-bench"]

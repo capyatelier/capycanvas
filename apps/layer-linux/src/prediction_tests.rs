@@ -1,92 +1,32 @@
 use super::*;
-use layer_ui::{PredictionAlgorithm, PreferenceAction, PreferenceId, SettingsPage, UiAction};
+use layer_ui::{PreferenceAction, PreferenceId, SettingsPage, UiAction};
 
 #[test]
-#[ignore = "native GTK settings and persistence; requires isolated settings/workspaces and Wayland/Vulkan"]
-fn native_prediction_algorithm() {
-    let path = std::path::PathBuf::from(
-        std::env::var_os("LAYER_SETTINGS_FILE").expect("use isolated settings"),
-    );
-    assert!(!path.exists(), "use fresh settings for this test");
-    let app = native_test_app("art.capycanvas.PredictionAlgorithmTest");
+#[ignore = "native GTK settings; requires isolated settings/workspaces and Wayland/Vulkan"]
+fn native_prediction_settings() {
+    let app = native_test_app("art.capycanvas.PredictionSettingsTest");
     let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
     crate::install_actions(&app, &windows);
     app.activate_action("new-window", None);
     let w = windows.borrow()[0].clone();
-    pump(300);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !w
+        .gpu
+        .borrow()
+        .as_ref()
+        .is_some_and(|g| g.session.engine().backend().startup.complete)
+    {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Input,
     });
     pump(200);
-    let choice = || {
-        find_named(
-            w.preferences.dialog.upcast_ref(),
-            "setting-prediction-algorithm",
-        )
-        .unwrap()
-        .downcast::<adw::ComboRow>()
-        .unwrap()
-    };
-    assert_eq!(choice().title(), "Prediction algorithm");
-    assert_eq!(choice().selected(), 0);
-    assert!(choice().is_sensitive());
-    assert_eq!(choice().model().unwrap().n_items(), 1);
-    assert_eq!(
-        state(&w).settings.prediction_algorithm,
-        PredictionAlgorithm::Trajectory
-    );
-    // Persist through a real preference edit; selecting the sole current choice
-    // is intentionally a no-op in GTK.
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::PredictionHorizon,
-            value: layer_ui::PreferenceValue::Number(17.),
-        },
-    });
-    pump(100);
-    assert_eq!(
-        crate::preferences::load()
-            .unwrap()
-            .unwrap()
-            .prediction_algorithm,
-        PredictionAlgorithm::Trajectory
-    );
-    w.dispatch(UiAction::CloseSettings);
-    w.dispatch(UiAction::OpenSettings {
-        page: SettingsPage::Input,
-    });
-    pump(100);
-    assert_eq!(choice().selected(), 0);
-    let feedback = find_named(w.preferences.dialog.upcast_ref(), "setting-feedback")
-        .unwrap()
-        .downcast::<adw::SwitchRow>()
-        .unwrap();
-    feedback.set_active(false);
-    assert!(!choice().is_sensitive());
-    feedback.set_active(true);
-    assert!(choice().is_sensitive());
-    assert_eq!(choice().selected(), 0);
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Reset {
-            id: PreferenceId::PredictionAlgorithm,
-        },
-    });
-    assert_eq!(choice().selected(), 0);
-    choice().set_selected(0);
-    w.dispatch(UiAction::CloseSettings);
-    pump(100);
-    // A new workspace loads the persisted selection through the real host path.
-    app.activate_action("new-window", None);
-    let next = windows.borrow().last().unwrap().clone();
-    pump(200);
-    assert_eq!(
-        state(&next).settings.prediction_algorithm,
-        PredictionAlgorithm::Trajectory
-    );
-    next.window.destroy();
+    assert!(find_named(w.window.upcast_ref(), "setting-prediction-algorithm").is_none());
+    assert!(find_named(w.window.upcast_ref(), "setting-prediction-horizon").is_some());
     w.window.destroy();
     pump(100);
-    // Match normal application shutdown before the test unloads the driver.
     layer_render_wgpu::finish_shader_compiler_shutdown();
 }
 
@@ -123,12 +63,6 @@ fn native_fullscreen_prediction() {
         );
         pump(5);
     }
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::PredictionAlgorithm,
-            value: layer_ui::PreferenceValue::Choice(0),
-        },
-    });
     let camera = state(&w).camera;
     let m = camera.document_to_surface();
     w.dispatch(UiAction::SetBrushSize {
@@ -219,7 +153,7 @@ fn native_fullscreen_prediction() {
     assert!(after.engine_prediction_frames > before.engine_prediction_frames + 10);
     assert!(after.last_tip_gap_surface_px < 0.1);
     eprintln!(
-        "native trajectory viewport={:?} samples={samples} predicted_frames={} gap={}px",
+        "native Smooth Motion viewport={:?} samples={samples} predicted_frames={} gap={}px",
         camera.viewport,
         after.engine_prediction_frames - before.engine_prediction_frames,
         after.last_tip_gap_surface_px
@@ -247,6 +181,7 @@ fn native_fullscreen_prediction() {
         before.committed_strokes + 1
     );
     assert!(!w.status.is_visible(), "{}", w.status.text());
+
     w.window.destroy();
     pump(100);
     layer_render_wgpu::finish_shader_compiler_shutdown();

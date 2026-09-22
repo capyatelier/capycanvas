@@ -74,6 +74,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         std::mem::swap(&mut self.state.colors, &mut candidate.state.colors);
         self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
+        // Capture belongs to the window, including across document switches.
+        self.engine.recording.end(true);
+        std::mem::swap(&mut self.engine.recording, &mut candidate.engine.recording);
         std::mem::swap(&mut self.engine, &mut candidate.engine);
         std::mem::swap(&mut self.pen, &mut candidate.pen);
         self.input_pending = false;

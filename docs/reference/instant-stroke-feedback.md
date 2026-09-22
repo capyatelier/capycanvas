@@ -149,6 +149,21 @@ configured horizon.
 The **Prediction amount** slider defaults to 16 ms for new settings and Reset;
 existing saved values are preserved.
 
+**Smooth Motion** is the sole shared predictor on every platform and in the C
+API. There is no algorithm setting. Older saved algorithm choices are discarded
+while all other preferences remain intact.
+
+The predictor combines a recent acceleration fit with 100 ms of causal drawing
+history. Sustained smooth motion supports stable reach; slow/medium detail keeps
+prompt response without unnecessarily shortening steady lines. A bounded
+correction field smooths the whole preview at matching future times, while stops
+and abrupt direction changes release that memory promptly. Measured ink, sensor
+values, native precedence and physical distance limits remain authoritative.
+
+See [recording and evaluation](../development/stroke-recording.md) for the
+whole-preview metrics and regression bank. The chosen continuity behavior can
+trade a small amount of instantaneous accuracy for smoother corrections.
+
 The native-prediction switch appears directly below **Enable stroke prediction** on
 every host. Android reports framework `MotionPredictor` availability for the
 connected stylus; Web checks for `getPredictedEvents`; iPadOS uses UIKit predicted

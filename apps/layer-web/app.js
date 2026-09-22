@@ -301,8 +301,8 @@ function cursorInput(e) {
           ((e.tiltX || 0) * Math.PI) / 180,
           ((e.tiltY || 0) * Math.PI) / 180,
           ((e.twist || 0) * Math.PI) / 180,
-          e.timeStamp,
-          e.pointerType === "pen" ? ((e.buttons & 32) ? 2 : 0) : 1,
+          e.timeStamp, e.pointerId, e.buttons, e.pointerType === "pen" ? ((e.buttons & 32) ? 2 : 0) : 1,
+          (e.buttons & 1 ? 2 : 0) | (e.buttons & 2 ? 4 : 0),
         ])
       : new Float64Array(),
   );
@@ -705,7 +705,7 @@ function buildPanels() {
   }
   panels.get("sizes").append(controls, grid);
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext(), contentChanged: panelContentChanged });
-  effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
+  effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
     contentChanged:panelContentChanged});
 }
 function contentPanel(id, splitPicker=false) {
@@ -717,7 +717,7 @@ function contentPanel(id, splitPicker=false) {
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
-    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,contentChanged:()=>{},splitPicker});
+    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,contentChanged:()=>{},splitPicker});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else {
     for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));

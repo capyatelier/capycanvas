@@ -1,3 +1,4 @@
+import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
@@ -9,7 +10,7 @@ export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=
   const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
   return libraryOnly ? app.load_filter_library(manifest,modules,mode) : app.load_filter_package(manifest,modules,mode);
 }
-export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false}) {
+export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
   const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
@@ -78,6 +79,8 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),body=element("div","property-controls");properties.append(title,body);panels.get("properties").append(properties);
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
+  const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
+  const disposeRecording=strokeRecordingControl(app,recordButton,message);
   let schema,fields=new Map(),metricLabels=[];
   const svg=(tag,attributes={})=>{const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const [k,v] of Object.entries(attributes))e.setAttribute(k,v);return e;};
   const chart=svg("svg",{viewBox:"0 0 200 46",class:"renderer-chart","aria-hidden":"true"});
@@ -85,7 +88,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   const statsTimer = setInterval(()=>{
     if(!stats.isConnected||!stats.getClientRects().length||document.hidden)return;
     const view=app.renderer_stats();
-    if(!metricLabels.length){for(const [index,metric] of view.rows.entries()){const row=element("div","property-row"),value=element("span","numeric");row.title=metric.description;row.append(element("span","",metric.label),value);stats.append(row);metricLabels.push(value);if(index+1===Number(view.chart_after_rows))stats.append(chart);}contentChanged("stats");}
+    if(!metricLabels.length){for(const [index,metric] of view.rows.entries()){const row=element("div","property-row"),value=element("span","numeric");row.title=metric.description;row.append(element("span","",metric.label),value);stats.insertBefore(row,recordButton);metricLabels.push(value);if(index+1===Number(view.chart_after_rows))stats.insertBefore(chart,recordButton);}contentChanged("stats");}
     view.rows.forEach((r,i)=>metricLabels[i].textContent=r.value);chart.setAttribute("aria-label",view.chart_label);
     const max=Math.max(view.budget_ms,...view.samples)*1.1,y=ms=>46*(1-ms/max);
     budget.setAttribute("d",`M0 ${y(view.budget_ms)}H200`);
@@ -144,7 +147,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
-  return {refresh,dispose(){disposePreviews();clearInterval(statsTimer);}};
+  return {refresh,dispose(){disposePreviews();clearInterval(statsTimer);disposeRecording();}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
     let stops=[],selected=0,rampKey;

@@ -83,6 +83,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 if active {
                     self.builder.replace_real(index, new);
+                    self.recording
+                        .event(crate::recording::Event::Replace(index, new.into()));
                     changed = true;
                 } else {
                     if let Some(stroke) = self.completed_stroke.as_mut()
@@ -101,6 +103,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     // A late sensor update is not fresh pressure/motion. Drop
                     // preview history instead of treating delivery as input.
                     active.prediction = PredictionState::default();
+                    self.recording.event(crate::recording::Event::Reset);
                     if !active.feedback.enabled || estimate.index < self.finalized_real_points {
                         self.rebuild_corrected_active();
                     }

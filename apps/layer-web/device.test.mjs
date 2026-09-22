@@ -1,6 +1,7 @@
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
+import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
@@ -93,6 +94,8 @@ try {
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
   if (process.argv.includes("--filter-drawer")) {
     await checkFilterDrawer({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--stroke-recording")) {
+    await checkStrokeRecording({call,evaluate,settle}); assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--contact-brushes")) {
     await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
     assert.deepEqual(errors,[]);

@@ -5,6 +5,8 @@
 mod native_penup;
 #[path = "prediction_tests.rs"]
 mod prediction;
+#[path = "stroke_recording_tests.rs"]
+mod stroke_recording;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
 #[path = "editing_tools_tests.rs"]

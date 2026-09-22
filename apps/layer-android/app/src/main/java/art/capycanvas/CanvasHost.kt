@@ -43,6 +43,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
         @Volatile internal var workspaceDirectoryForTest: String? = null
     }
+    internal val strokeRecording = StrokeRecording(this)
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
     internal var workspaceManager by mutableStateOf<JSONObject?>(null)

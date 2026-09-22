@@ -52,6 +52,9 @@ The [shared workflow centralization handoff](shared-workflow-centralization-hand
 tracks portable color/photo, export, profile-library and recovery rules that Web
 and Android should consolidate before Windows adds the same workflows.
 
+[Stroke recording and prediction datasets](stroke-recording.md) explains how to
+collect tablet input from Diagnostics and replay it for predictor comparisons.
+
 ## Validate a change
 
 The [testing guide](testing.md) separates model tests, native interaction checks

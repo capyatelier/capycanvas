@@ -1,12 +1,12 @@
 use super::{Accuracy, Contact, DatasetHeader, Event, Policy, Sample};
 use crate::{
-    PenEvent, PenPhase, PredictionAlgorithm,
+    PenEvent, PenPhase,
     feedback::{PredictionState, TipSource},
 };
 use layer_core::{Point, StrokePoint};
 use std::{
     collections::HashSet,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
 };
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -84,15 +84,46 @@ fn reference(points: &[StrokePoint], time: u32, transform: [f32; 6]) -> Option<[
     Some([pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1])])
 }
 
-/// Replay one recording causally. Override only the algorithm; keep the input,
-/// policy, native precedence and query schedule identical between candidates.
+/// Replay one recording causally through Smooth Motion, preserving input,
+/// policy, native precedence and the recorded query schedule.
 /// CSV positions and truth are physical surface pixels. Unavailable truth is
 /// blank, never treated as zero error. Query IDs allow exact pair matching.
-pub fn replay(
+pub fn replay(reader: impl BufRead, csv: impl Write) -> io::Result<ReplaySummary> {
+    replay_internal(reader, csv, None)
+}
+
+/// Export the full causal preview path as well as endpoint accuracy. Actual
+/// samples are incremental document-space replacements starting at real_start;
+/// prediction includes the measured anchor and the production intermediate
+/// points. This is pre-brush geometry, not a claim to reproduce an unrecorded
+/// brush/material or actual GPU presentation timestamps.
+pub fn replay_with_frames(
     reader: impl BufRead,
-    algorithm: Option<PredictionAlgorithm>,
-    mut csv: impl Write,
+    csv: impl Write,
+    mut frames: impl Write,
 ) -> io::Result<ReplaySummary> {
+    writeln!(
+        frames,
+        "{}",
+        serde_json::json!({"format":"capy-prediction-frames","version":1,"coordinates":"document","geometry":"pre_brush","clock":"recorded_query"})
+    )?;
+    let summary = replay_internal(reader, csv, Some(&mut frames))?;
+    frames.flush()?;
+    Ok(summary)
+}
+
+fn replay_internal(
+    mut reader: impl BufRead,
+    csv: impl Write,
+    frames: Option<&mut dyn Write>,
+) -> io::Result<ReplaySummary> {
+    let mut prefix = [0; 8];
+    reader.read_exact(&mut prefix)?;
+    let binary = &prefix == crate::recording::MAGIC;
+    let reader = io::BufReader::new(io::Cursor::new(prefix).chain(reader));
+    if binary {
+        return replay_binary(reader, csv, frames);
+    }
     let mut lines = reader.lines();
     let header: DatasetHeader = serde_json::from_str(
         &lines
@@ -105,6 +136,20 @@ pub fn replay(
     if header.contacts == 0 || header.events == 0 {
         return Err(invalid("empty dataset"));
     }
+    replay_contacts(
+        header,
+        lines.map(|line| Ok(serde_json::from_str::<Contact>(&line?)?)),
+        csv,
+        frames,
+    )
+}
+
+fn replay_contacts(
+    header: DatasetHeader,
+    contacts: impl IntoIterator<Item = io::Result<Contact>>,
+    mut csv: impl Write,
+    mut frames: Option<&mut dyn Write>,
+) -> io::Result<ReplaySummary> {
     let mut summary = ReplaySummary::default();
     let mut ids = HashSet::new();
     let mut event_count = 0;
@@ -113,8 +158,8 @@ pub fn replay(
         csv,
         "contact,query,frame_us,latest_us,requested_us,target_us,source,x,y,truth_x,truth_y"
     )?;
-    for line in lines {
-        let contact: Contact = serde_json::from_str(&line?)?;
+    for contact in contacts {
+        let contact = contact?;
         if !ids.insert(contact.id) {
             return Err(invalid("duplicate contact"));
         }
@@ -126,6 +171,7 @@ pub fn replay(
         let mut platform = Vec::new();
         let mut rows = Vec::new();
         let mut queries = HashSet::new();
+        let mut traced_real = 0;
         for event in contact.events {
             event_count += 1;
             match event {
@@ -142,6 +188,7 @@ pub fn replay(
                 }
                 Event::Stationary(sample) => real.push(point(sample)?),
                 Event::Replace(index, sample) => {
+                    traced_real = traced_real.min(index);
                     *real
                         .get_mut(index)
                         .ok_or_else(|| invalid("invalid correction index"))? = point(sample)?;
@@ -179,13 +226,64 @@ pub fn replay(
                         .last()
                         .ok_or_else(|| invalid("query without input"))?
                         .elapsed_micros;
-                    let mut config = policy.config;
-                    if let Some(value) = algorithm {
-                        config.prediction_algorithm = value;
-                    }
+                    let config = policy.config;
                     let forecast = state
                         .estimate_for(&real, &platform, requested, now, policy.transform, config)
                         .ok_or_else(|| invalid("missing forecast for nonempty input"))?;
+                    if let Some(writer) = frames.as_mut() {
+                        let anchor = *real.last().unwrap();
+                        let mut preview = vec![Sample::from(anchor)];
+                        if forecast.source == TipSource::Platform {
+                            let raw = crate::feedback::estimate_tip(
+                                &real,
+                                &platform,
+                                forecast.point.elapsed_micros,
+                                policy.transform,
+                                config,
+                            )
+                            .unwrap()
+                            .point;
+                            preview.extend(
+                                platform
+                                    .iter()
+                                    .copied()
+                                    .filter(|p| {
+                                        p.elapsed_micros > latest
+                                            && p.elapsed_micros < forecast.point.elapsed_micros
+                                    })
+                                    .map(|p| {
+                                        Sample::from(PredictionState::platform_point(
+                                            anchor,
+                                            p,
+                                            raw,
+                                            forecast.point,
+                                            policy.transform,
+                                            config.max_prediction_distance_px,
+                                        ))
+                                    }),
+                            );
+                        }
+                        preview.extend(state.engine_intermediates().map(Sample::from));
+                        if forecast.point != anchor {
+                            preview.push(forecast.point.into());
+                        }
+                        let actual: Vec<_> = real[traced_real..]
+                            .iter()
+                            .copied()
+                            .map(Sample::from)
+                            .collect();
+                        serde_json::to_writer(
+                            &mut **writer,
+                            &serde_json::json!({
+                                "contact":contact.id,"query":id,"frame_us":now,"latest_us":latest,
+                                "requested_us":requested,"target_us":forecast.point.elapsed_micros,
+                                "source":format!("{:?}",forecast.source),"transform":policy.transform,
+                                "real_start":traced_real,"real":actual,"preview":preview,
+                            }),
+                        )?;
+                        writeln!(writer)?;
+                        traced_real = real.len();
+                    }
                     summary.queries += 1;
                     predictions += usize::from(forecast.source != TipSource::Real);
                     summary.mean_sample_horizon_ms +=
@@ -203,9 +301,6 @@ pub fn replay(
                     });
                 }
             }
-        }
-        if rows.is_empty() {
-            return Err(invalid("contact without prediction queries"));
         }
         // Sorting is restricted to offline truth, after prediction has finished.
         real.sort_by_key(|p| p.elapsed_micros);
@@ -245,9 +340,11 @@ pub fn replay(
     if summary.contacts != header.contacts || event_count != header.events {
         return Err(invalid("incomplete dataset: contact/event counts differ"));
     }
-    summary.prediction_coverage = predictions as f64 / summary.queries as f64;
-    summary.mean_sample_horizon_ms /= summary.queries as f64;
-    summary.mean_display_lead_ms /= summary.queries as f64;
+    if summary.queries > 0 {
+        summary.prediction_coverage = predictions as f64 / summary.queries as f64;
+        summary.mean_sample_horizon_ms /= summary.queries as f64;
+        summary.mean_display_lead_ms /= summary.queries as f64;
+    }
     summary.accuracy.finish();
     csv.flush()?;
     Ok(summary)
@@ -256,3 +353,56 @@ pub fn replay(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+fn replay_binary(
+    reader: impl io::Read,
+    csv: impl Write,
+    frames: Option<&mut dyn Write>,
+) -> io::Result<ReplaySummary> {
+    use crate::recording::Record;
+    let records = crate::recording::read(reader)?;
+    let mut contacts = Vec::new();
+    let mut active: Option<Contact> = None;
+    for record in records {
+        match record {
+            Record::Begin { id, policy, .. } => {
+                if active.is_some() {
+                    return Err(invalid("nested contact"));
+                }
+                active = Some(Contact {
+                    id,
+                    policy,
+                    events: Vec::new(),
+                    cancelled: false,
+                });
+            }
+            Record::Predictor(event) => active
+                .as_mut()
+                .ok_or_else(|| invalid("event outside contact"))?
+                .events
+                .push(event),
+            Record::End {
+                cancelled,
+                interrupted,
+            } => {
+                let mut contact = active
+                    .take()
+                    .ok_or_else(|| invalid("end outside contact"))?;
+                contact.cancelled = cancelled || interrupted;
+                contacts.push(contact);
+            }
+            _ => (),
+        }
+    }
+    if active.is_some() {
+        return Err(invalid("unterminated contact"));
+    }
+    let header = DatasetHeader {
+        format: "capy-pen-dataset".into(),
+        version: 2,
+        contacts: contacts.len(),
+        events: contacts.iter().map(|c| c.events.len()).sum(),
+        metadata: Default::default(),
+    };
+    replay_contacts(header, contacts.into_iter().map(Ok), csv, frames)
+}

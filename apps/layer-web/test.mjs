@@ -1,6 +1,7 @@
 import {checkSelectionTools} from "./selection-tools.test.mjs";
 import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
+import {checkStrokeRecording} from './stroke-recording.test.mjs';
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
 import {checkDrawingTabs,checkDrawingTabRecovery} from "./drawing-tabs.test.mjs";
@@ -406,6 +407,8 @@ try {
   } else if (process.argv.includes("--filter-bench")) {
     await benchmarkFilters({ evaluate });
     assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--stroke-recording")) {
+    await checkStrokeRecording({call,evaluate,settle});
   } else if (process.argv.includes("--diagnostics")) {
     await checkDiagnostics({evaluate,settle});
     assert.deepEqual(errors, []);

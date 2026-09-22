@@ -96,6 +96,7 @@ struct ActiveStroke {
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
+    pub recording: crate::recording::Recording,
     backend: B,
     editor: Editor,
     input: InputConsumer<PenEvent>,
@@ -173,6 +174,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transforms.push_back(input_transform);
         let dab_generator = DabGenerator::new(document.color.space);
         Ok(Self {
+            recording: Default::default(),
             backend,
             editor: Editor::new(document),
             input,
@@ -626,6 +628,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.tool = tool;
     }
 
+    pub fn record_raw_input(&mut self, event: PenEvent, transform: ViewTransform) {
+        let transform = self
+            .transforms
+            .iter()
+            .rev()
+            .find(|t| t.revision == event.view_revision)
+            .copied()
+            .unwrap_or(transform);
+        self.recording.raw(event, transform, self.pressure);
+    }
+
     pub fn set_pressure_curve(&mut self, pressure: PressureCurve) {
         self.pressure = pressure;
     }
@@ -1017,6 +1030,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let feedback = active.feedback.enabled;
         let id = active.id;
         if let Some(point) = self.builder.append_stationary(timestamp_ns) {
+            self.recording
+                .event(crate::recording::Event::Stationary(point.into()));
             let source = self.builder.last_real_source();
             for estimate in self.estimates.values_mut().filter(|e| {
                 e.stroke == id
@@ -1304,7 +1319,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     ruler,
                 };
                 self.active_stroke = Some(active);
+                self.recording.begin(
+                    event.timestamp_ns,
+                    crate::recording::Policy {
+                        config: feedback,
+                        transform: self.view.document_to_surface,
+                    },
+                );
                 if feedback.enabled {
+                    self.recording.observe(event);
                     self.active_stroke
                         .as_mut()
                         .unwrap()
@@ -1314,6 +1337,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.pending_smudge_dabs.clear();
                 self.finalized_real_points = 0;
                 self.builder.begin(event, transform, self.pressure);
+                self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 self.dab_generator
                     .reset_for_stroke(id, &self.active_stroke.as_ref().expect("set above").brush);
@@ -1337,8 +1361,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 self.builder.push(event, transform, self.pressure);
+                self.record_builder_sample(event);
                 let active = self.active_stroke.as_mut().unwrap();
                 if active.feedback.enabled {
+                    self.recording.observe(event);
                     active.prediction.observe(event);
                 }
                 self.track_estimate(event, transform);
@@ -1363,6 +1389,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 self.builder.push(event, transform, self.pressure);
+                self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED) {
                     if self
@@ -1382,6 +1409,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.finish_persistent_stroke();
                 self.record_material_update();
                 let active = self.active_stroke.take().expect("checked above");
+                self.recording.end(false);
                 let points = self.builder.finish().unwrap_or_default();
                 let has_end_taper = active.brush.taper.end_distance_diameters > 0.0;
                 let alpha_locked = active.style.alpha_locked;
@@ -1606,6 +1634,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let now_elapsed = timestamp_ns
             .and_then(|timestamp| self.builder.elapsed_micros_at(timestamp))
             .unwrap_or(latest.elapsed_micros);
+        self.recording.query(
+            crate::recording::Policy {
+                config: active.feedback,
+                transform: self.view.document_to_surface,
+            },
+            now_elapsed,
+            requested_elapsed,
+        );
         let estimate = active.prediction.estimate_for(
             self.builder.real_points(),
             self.builder.predicted_points(),
@@ -1896,7 +1932,19 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
     }
 
+    fn record_builder_sample(&mut self, event: PenEvent) {
+        use crate::recording::Event;
+        if event.flags.contains(SampleFlags::PREDICTED) {
+            if let Some(&p) = self.builder.predicted_points().last() {
+                self.recording.event(Event::Predicted(p.into()));
+            }
+        } else if let Some(&p) = self.builder.real_points().last() {
+            self.recording.event(Event::Sample(p.into()));
+        }
+    }
+
     fn cancel_active(&mut self) {
+        self.recording.end(true);
         self.dabs.clear();
         self.batches.clear();
         if let Some(active) = &self.active_stroke {
@@ -2090,6 +2138,7 @@ impl<E> From<DocumentError> for EngineError<E> {
 #[cfg(test)]
 mod tests {
     include!("canvas_fullscreen_tests.rs");
+    include!("recording/canvas_tests.rs");
     use super::*;
     use crate::input::{SampleFlags, ToolKind, input_queue};
     use layer_core::{AssetId, DefaultBrushPreset, Point, default_brush};
@@ -4369,16 +4418,15 @@ mod tests {
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
         }
-        for (lead, expected) in leads.into_iter().zip([0., 3.2, 6.4, 25.6]) {
-            assert!(
-                (lead - expected).abs() < 0.25,
-                "Manual prediction should reach its selected time beyond real input: {lead} vs {expected}"
-            );
+        assert!(leads[0].abs() < 0.05);
+        assert!(leads.windows(2).all(|pair| pair[1] > pair[0] + 1.));
+        for (lead, maximum) in leads.into_iter().zip([0., 3.2, 6.4, 25.6]) {
+            assert!(lead <= maximum + 0.25, "prediction amount is an upper limit");
         }
     }
 
     #[test]
-    fn trajectory_preview_renders_the_predicted_arc_and_expires_without_new_input() {
+    fn preview_renders_the_prediction_curve_and_expires_without_new_input() {
         let (mut input, consumer) = input_queue(8);
         let mut engine = CanvasEngine::new(
             RecordingRenderer::default(),
@@ -4393,7 +4441,6 @@ mod tests {
         .unwrap();
         engine
             .set_instant_feedback(InstantFeedbackConfig {
-                prediction_algorithm: crate::feedback::PredictionAlgorithm::Trajectory,
                 use_platform_prediction: false,
                 prediction_horizon_micros: 16_000,
                 ..Default::default()
@@ -4431,15 +4478,18 @@ mod tests {
         assert!(engine.metrics().engine_prediction_frames > 0);
         let preview = &engine.backend().preview;
         assert!(!preview.is_empty());
-        // A single future endpoint would draw a chord dipping 1.52 px inside
-        // this circle. Intermediate forecast samples must preserve the arc.
-        for dab in preview {
-            let radius = (dab.center.x - 100.).hypot(dab.center.y - 100.);
-            assert!((radius - 30.).abs() < 0.2, "radius={radius}");
+        // Follow the predictor's complete accepted curve, including adaptive
+        // horizon and fitted-anchor correction, instead of assuming a perfect
+        // circle at a fixed 16 ms lookahead from the retired model.
+        let now = engine.builder.elapsed_micros_at(last.timestamp_ns).unwrap();
+        let active = engine.active_stroke.as_mut().unwrap();
+        let tip = active.prediction.estimate_for(engine.builder.real_points(), &[],
+            now + 16_000, now, engine.view.document_to_surface, active.feedback).unwrap();
+        for point in active.prediction.engine_intermediates().chain([tip.point]) {
+            assert!(dabs_cover_point(&engine.backend.preview, point.position));
         }
-        let future = position(99. * 0.004 + 0.016);
-        let tip = preview.last().unwrap().center;
-        assert!((tip.x - future.x).hypot(tip.y - future.y) < 0.3);
+        let rendered = engine.backend.preview.last().unwrap().center;
+        assert!((rendered.x - tip.point.position.x).hypot(rendered.y - tip.point.position.y) < 0.3);
         engine
             .render_frame_for(
                 last.timestamp_ns + 500_000_000,
@@ -4451,7 +4501,7 @@ mod tests {
     }
 
     #[test]
-    fn trajectory_taper_changes_only_predicted_width_and_preserves_swept_joins() {
+    fn prediction_taper_changes_only_predicted_width_and_preserves_swept_joins() {
         let render = |prediction, contact| {
             let (mut input, consumer) = input_queue(8);
             let mut engine = CanvasEngine::new(
@@ -4501,6 +4551,10 @@ mod tests {
                     .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
                     .unwrap();
             }
+            let now = engine.builder.elapsed_micros_at(last.timestamp_ns).unwrap();
+            let active = engine.active_stroke.as_mut().unwrap();
+            let expected = active.prediction.estimate_for(engine.builder.real_points(), &[], now + 16_000,
+                now, engine.view.document_to_surface, active.feedback).unwrap().point.position;
             let preview = engine.backend().preview.clone();
             last.phase = PenPhase::Up;
             last.timestamp_ns += 1_000_000;
@@ -4508,14 +4562,14 @@ mod tests {
             engine
                 .render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000)
                 .unwrap();
-            (preview, engine.backend().persistent.clone())
+            (preview, engine.backend().persistent.clone(), expected)
         };
         for contact in [false, true] {
-            let (plain, plain_ink) = render(false, contact);
-            let (tapered, tapered_ink) = render(true, contact);
+            let (plain, plain_ink, _) = render(false, contact);
+            let (tapered, tapered_ink, expected) = render(true, contact);
             assert_eq!(plain_ink, tapered_ink);
             let tip = tapered.last().unwrap();
-            assert!((tip.center.x - 196.).abs() < 0.01);
+            assert!(surface_distance(tip.center, expected, [1., 0., 0., 1., 0., 0.]) < 0.01);
             for axis in 0..2 {
                 assert!((tip.radii[axis] / plain.last().unwrap().radii[axis] - 0.75).abs() < 0.001);
             }

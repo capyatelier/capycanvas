@@ -1,0 +1,318 @@
+{
+  "version": 1,
+  "recording_sha256": "dc30c7cc1cfb60beda7b37919175181d76c950243b81d8791cee0d979b960d86",
+  "device": "Wacom Pro 27",
+  "device_label_source": "user",
+  "platform": "gtk",
+  "raw_input": true,
+  "correction_stability": {
+    "version": 2,
+    "metrics": {
+      "ordinary correction tip": {
+        "mean": 1.99001127759427,
+        "eligible_seconds": 27.726517,
+        "ge0.5_seconds": 22.597707,
+        "ge1_seconds": 16.468103,
+        "ge2_seconds": 9.103148000000001,
+        "ge4_seconds": 3.2203850000000003,
+        "ge8_seconds": 0.7590530000000002,
+        "ge16_seconds": 0.075092
+      },
+      "oscillation tip": {
+        "mean": 0.05115388513149,
+        "eligible_seconds": 52.430178000000005,
+        "ge0.5_seconds": 2.2685,
+        "ge1_seconds": 1.209072,
+        "ge2_seconds": 0.6089620000000001,
+        "ge4_seconds": 0.133469,
+        "ge8_seconds": 0.0,
+        "ge16_seconds": 0.0
+      },
+      "straight retreat tip": {
+        "mean": 1.0638720425889903,
+        "eligible_seconds": 47.345055,
+        "ge0.5_seconds": 11.144359,
+        "ge1_seconds": 8.518262,
+        "ge2_seconds": 5.631715000000001,
+        "ge4_seconds": 2.879414,
+        "ge8_seconds": 1.502443,
+        "ge16_seconds": 0.6525350000000002
+      },
+      "ordinary correction body": {
+        "mean": 1.9518352227776679,
+        "eligible_seconds": 27.726517,
+        "ge0.5_seconds": 23.833422000000002,
+        "ge1_seconds": 17.963877,
+        "ge2_seconds": 9.261655000000001,
+        "ge4_seconds": 2.8367080000000002,
+        "ge8_seconds": 0.5254970000000001,
+        "ge16_seconds": 0.058413999999999994
+      },
+      "oscillation body": {
+        "mean": 0.03700508532480505,
+        "eligible_seconds": 52.430178000000005,
+        "ge0.5_seconds": 1.8680440000000003,
+        "ge1_seconds": 0.692369,
+        "ge2_seconds": 0.20021100000000003,
+        "ge4_seconds": 0.0,
+        "ge8_seconds": 0.0,
+        "ge16_seconds": 0.0
+      },
+      "straight retreat body": {
+        "mean": 0.5517625590361599,
+        "eligible_seconds": 47.345055,
+        "ge0.5_seconds": 8.677966999999999,
+        "ge1_seconds": 4.866439,
+        "ge2_seconds": 2.3535269999999997,
+        "ge4_seconds": 1.335687,
+        "ge8_seconds": 0.7104760000000001,
+        "ge16_seconds": 0.19298300000000002
+      },
+      "braking off_path_tip": {
+        "mean": 4.217391073304779,
+        "eligible_seconds": 4.4900269999999995,
+        "ge1_seconds": 2.2487139999999997,
+        "ge8_seconds": 0.8001740000000002,
+        "ge16_seconds": 0.31757799999999997
+      },
+      "braking flash_tip": {
+        "mean": 2.8100651030676396,
+        "eligible_seconds": 4.4900269999999995,
+        "ge1_seconds": 1.9808510000000004,
+        "ge8_seconds": 0.4837000000000001,
+        "ge16_seconds": 0.10845300000000001
+      },
+      "braking flash_body": {
+        "mean": 1.2473648215892688,
+        "eligible_seconds": 4.4900269999999995,
+        "ge1_seconds": 1.493783,
+        "ge8_seconds": 0.07508100000000001,
+        "ge16_seconds": 0.008338
+      },
+      "all gap_0": {
+        "mean": 1.3896055703908214,
+        "eligible_seconds": 90.876283
+      },
+      "all gap_8": {
+        "mean": 6.597668304895837,
+        "eligible_seconds": 90.851259
+      },
+      "all gap_16": {
+        "mean": 15.612191816916024,
+        "eligible_seconds": 90.220974
+      },
+      "all gap_24": {
+        "mean": 27.534637923319565,
+        "eligible_seconds": 89.562848
+      },
+      "all off_path_tip": {
+        "mean": 2.544969473113657,
+        "eligible_seconds": 89.562848,
+        "ge2_seconds": 30.051977,
+        "ge8_seconds": 8.413658999999999,
+        "ge16_seconds": 1.435758,
+        "ge32_seconds": 0.083434,
+        "ge64_seconds": 0.0
+      },
+      "all off_path_body": {
+        "mean": 1.2802251381414562,
+        "eligible_seconds": 89.562848,
+        "ge2_seconds": 19.102328,
+        "ge8_seconds": 1.410422,
+        "ge16_seconds": 0.025037000000000004,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow motion gap_0": {
+        "mean": 0.2991840692293009,
+        "eligible_seconds": 20.872329
+      },
+      "slow motion gap_8": {
+        "mean": 1.9665190377384332,
+        "eligible_seconds": 20.872329
+      },
+      "slow motion gap_16": {
+        "mean": 4.226954898998542,
+        "eligible_seconds": 20.872329
+      },
+      "slow motion gap_24": {
+        "mean": 7.0665817347909545,
+        "eligible_seconds": 20.872329
+      },
+      "slow motion off_path_tip": {
+        "mean": 0.44091378902802764,
+        "eligible_seconds": 20.872329,
+        "ge2_seconds": 0.9097960000000002,
+        "ge8_seconds": 0.008344,
+        "ge16_seconds": 0.0,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow motion off_path_body": {
+        "mean": 0.2139193838774989,
+        "eligible_seconds": 20.872329,
+        "ge2_seconds": 0.11648499999999999,
+        "ge8_seconds": 0.0,
+        "ge16_seconds": 0.0,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "medium motion gap_0": {
+        "mean": 0.5314612051881503,
+        "eligible_seconds": 26.1588
+      },
+      "medium motion gap_8": {
+        "mean": 3.1896037542193865,
+        "eligible_seconds": 26.1588
+      },
+      "medium motion gap_16": {
+        "mean": 7.7315297777508185,
+        "eligible_seconds": 26.1588
+      },
+      "medium motion gap_24": {
+        "mean": 14.321527162771458,
+        "eligible_seconds": 26.1588
+      },
+      "medium motion off_path_tip": {
+        "mean": 1.2645735072111062,
+        "eligible_seconds": 26.1588,
+        "ge2_seconds": 4.577242000000001,
+        "ge8_seconds": 0.5535370000000001,
+        "ge16_seconds": 0.12513900000000003,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "medium motion off_path_body": {
+        "mean": 0.6287978431894066,
+        "eligible_seconds": 26.1588,
+        "ge2_seconds": 1.606622,
+        "ge8_seconds": 0.09147800000000002,
+        "ge16_seconds": 0.0,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow/medium steady gap_0": {
+        "mean": 0.350961513887486,
+        "eligible_seconds": 17.991233
+      },
+      "slow/medium steady gap_8": {
+        "mean": 1.8908695911382347,
+        "eligible_seconds": 17.991233
+      },
+      "slow/medium steady gap_16": {
+        "mean": 4.602212028884167,
+        "eligible_seconds": 17.991233
+      },
+      "slow/medium steady gap_24": {
+        "mean": 9.26770088033703,
+        "eligible_seconds": 17.991233
+      },
+      "slow/medium steady off_path_tip": {
+        "mean": 0.9228412737894299,
+        "eligible_seconds": 17.991233,
+        "ge2_seconds": 1.826993,
+        "ge8_seconds": 0.17522199999999993,
+        "ge16_seconds": 0.033642,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow/medium steady off_path_body": {
+        "mean": 0.44928056429523466,
+        "eligible_seconds": 17.991233,
+        "ge2_seconds": 0.433809,
+        "ge8_seconds": 0.008342,
+        "ge16_seconds": 0.0,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow/medium changing gap_0": {
+        "mean": 0.613407089474729,
+        "eligible_seconds": 10.047273
+      },
+      "slow/medium changing gap_8": {
+        "mean": 3.6325829569272967,
+        "eligible_seconds": 10.047273
+      },
+      "slow/medium changing gap_16": {
+        "mean": 7.948875173534951,
+        "eligible_seconds": 10.047273
+      },
+      "slow/medium changing gap_24": {
+        "mean": 13.479575767109461,
+        "eligible_seconds": 10.047273
+      },
+      "slow/medium changing off_path_tip": {
+        "mean": 0.9281003176192301,
+        "eligible_seconds": 10.047273,
+        "ge2_seconds": 1.1574399999999998,
+        "ge8_seconds": 0.24424899999999997,
+        "ge16_seconds": 0.06672800000000001,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "slow/medium changing off_path_body": {
+        "mean": 0.4605682738750315,
+        "eligible_seconds": 10.047273,
+        "ge2_seconds": 0.6632969999999998,
+        "ge8_seconds": 0.066724,
+        "ge16_seconds": 0.0,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      },
+      "fast predictable gap_0": {
+        "mean": 1.9010376624143872,
+        "eligible_seconds": 36.915207
+      },
+      "fast predictable gap_8": {
+        "mean": 9.665746889230999,
+        "eligible_seconds": 36.915207
+      },
+      "fast predictable gap_16": {
+        "mean": 24.84830804394482,
+        "eligible_seconds": 36.915207
+      },
+      "fast predictable gap_24": {
+        "mean": 45.05376616961219,
+        "eligible_seconds": 36.915207
+      },
+      "fast predictable off_path_tip": {
+        "mean": 4.6655552017213875,
+        "eligible_seconds": 36.915207,
+        "ge2_seconds": 23.223709,
+        "ge8_seconds": 7.175658,
+        "ge16_seconds": 1.134576,
+        "ge32_seconds": 0.05840500000000001,
+        "ge64_seconds": 0.0
+      },
+      "fast predictable off_path_body": {
+        "mean": 2.361696096747214,
+        "eligible_seconds": 36.915207,
+        "ge2_seconds": 16.369318999999997,
+        "ge8_seconds": 1.1512229999999999,
+        "ge16_seconds": 0.025037000000000004,
+        "ge32_seconds": 0.0,
+        "ge64_seconds": 0.0
+      }
+    }
+  },
+  "correction_stability_review": "docs/development/stroke-recording.md",
+  "summary": {
+    "contacts": 81,
+    "samples": 22029,
+    "queries": 10985,
+    "prediction_coverage": 0.8773782430587165,
+    "mean_sample_horizon_ms": 11.820216477014112,
+    "mean_display_lead_ms": 8.802757032316853,
+    "accuracy": {
+      "graded_queries": 10946,
+      "transitions": 10865,
+      "tiny_4_to_8": 1504,
+      "small_8_to_16": 474,
+      "medium_16_to_32": 71,
+      "severe_ge32": 4,
+      "position_rms_px": 6.424501969519101,
+      "error_step_rms_px": 3.96192762656797,
+      "worst_step_px": 41.11941527195786
+    }
+  }
+}
