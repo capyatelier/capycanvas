@@ -373,7 +373,7 @@ impl WebApp {
     }
     /// Display-only hover data, independent of the high-rate paint queue.
     pub fn cursor_input(&mut self, sample: &[f64]) {
-        let event = (sample.len() == 7).then(|| PenEvent {
+        let event = (sample.len() == 8).then(|| PenEvent {
             device_id: 0,
             sequence: 0,
             timestamp_ns: (sample[6] * 1_000_000.0) as u64,
@@ -387,7 +387,11 @@ impl WebApp {
             twist_radians: sample[5] as f32,
             distance: 0.0,
             phase: PenPhase::Hover,
-            tool: ToolKind::Pen,
+            tool: match sample[7] as u8 {
+                1 => ToolKind::Mouse,
+                2 => ToolKind::Eraser,
+                _ => ToolKind::Pen,
+            },
             flags: SampleFlags::PRIMARY,
         });
         self.session.cursor_input(event);

@@ -43,7 +43,8 @@ impl CapyPointer {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.phase > 4 || self.tool > 3 || self.button > 2 || self.flags & !0x0f != 0 {
+        if self.phase > 4 || self.tool > 3 || self.button > 2
+            || self.flags & !(0x0f | u32::from(SampleFlags::INDIRECT_POINTER.0)) != 0 {
             return Err("Invalid pointer enum or flags");
         }
         if ![
@@ -147,6 +148,17 @@ mod tests {
         last.timestamp_ns = 0;
         assert!(validate_batch(&[point(1), last]).is_err());
     }
+    #[test]
+    fn indirect_tablet_flag_preserves_pen_identity() {
+        let mut record = point(1);
+        record.flags |= u32::from(SampleFlags::INDIRECT_POINTER.0);
+        record.validate().unwrap();
+        assert_eq!(record.event().tool, ToolKind::Pen);
+        assert!(record.event().flags.contains(SampleFlags::INDIRECT_POINTER));
+        record.flags |= 0x80;
+        assert!(record.validate().is_err());
+    }
+
     #[test]
     fn typed_conversion_preserves_capture_precision_and_all_axes() {
         let mut record = point(31);

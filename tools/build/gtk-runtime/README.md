@@ -4,6 +4,19 @@ The normal Linux packager invokes `build.sh BUILD_DIRECTORY PREFIX` and ships
 the resulting GTK 4.22.4 library. `pad-event-surface.patch` prevents a null
 Wayland pad-mode event surface from being dereferenced before keyboard focus.
 Device state and targeted input remain enabled.
+`tablet-proximity-cursor.patch` waits for the pen's first positioned motion
+before delivering its window entry. A proximity-only frame must not choose a
+cursor using stale coordinates and briefly flash an arrow over the canvas.
+It also suppresses GDK's cached surface cursor during entry, allowing GTK's
+widget pick to install the first visible cursor.
+
+After building, check the actual patched callbacks with split proximity/motion
+frames, stale cursor suppression, canvas/control cursors, repeated motion, and
+departure before any motion:
+
+```sh
+python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.22.4
+```
 
 The source archive is pinned by SHA-256. The build needs GTK's system development
 dependencies, Meson, Ninja, `pkg-config`, a C compiler and `glslc`. It neither

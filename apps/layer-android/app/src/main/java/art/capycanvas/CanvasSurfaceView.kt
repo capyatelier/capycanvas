@@ -162,11 +162,13 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         return super.onGenericMotionEvent(event)
     }
     private fun send(event: MotionEvent, index: Int, phase: Int, history: Boolean, predicted: Boolean = false) {
+        val indirect = event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
         val tool = when (event.getToolType(index)) {
+            MotionEvent.TOOL_TYPE_STYLUS -> 0
             MotionEvent.TOOL_TYPE_MOUSE -> 1
             MotionEvent.TOOL_TYPE_ERASER -> 2
-            MotionEvent.TOOL_TYPE_FINGER -> 3
-            else -> 0
+            MotionEvent.TOOL_TYPE_FINGER -> if (indirect) 1 else 3
+            else -> if (indirect) 1 else 0
         }
         val button = if (event.buttonState and (MotionEvent.BUTTON_TERTIARY or MotionEvent.BUTTON_SECONDARY) != 0 && tool == 1) 1 else 0
         val count = if (history) event.historySize else 0

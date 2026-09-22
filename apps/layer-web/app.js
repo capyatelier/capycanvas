@@ -300,6 +300,7 @@ function cursorInput(e) {
           ((e.tiltY || 0) * Math.PI) / 180,
           ((e.twist || 0) * Math.PI) / 180,
           e.timeStamp,
+          e.pointerType === "pen" ? ((e.buttons & 32) ? 2 : 0) : 1,
         ])
       : new Float64Array(),
   );

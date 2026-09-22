@@ -234,7 +234,8 @@ struct CursorVertex {
     let corners = array<vec2<f32>, 6>(vec2<f32>(0.,-1.), vec2<f32>(1.,-1.), vec2<f32>(0.,1.), vec2<f32>(0.,1.), vec2<f32>(1.,-1.), vec2<f32>(1.,1.));
     if marker > 1.5 {
         let half = abs(end_point - start_point) * 0.5;
-        let local = vec2<f32>(corners[vertex].x * 2. - 1., corners[vertex].y) * (half + 0.5);
+        let margin = select(0.5, 0.75 * scale + 0.5, marker > 3.5);
+        let local = vec2<f32>(corners[vertex].x * 2. - 1., corners[vertex].y) * (half + margin);
         let point = (start_point + end_point) * 0.5 + local;
         return CursorVertex(surface_clip(point), local, vec4<f32>(half, marker, scale));
     }
@@ -256,7 +257,7 @@ struct CursorVertex {
         alpha = clamp(0.5 - d, 0., 1.);
         white = clamp(0.5 - scale - d, 0., 1.);
     }
-    if v.line.z > 2.5 {
+    if v.line.z > 2.5 && v.line.z < 3.5 {
         // Clockwise triangle, with its upper-left tip at the input position.
         let a = -v.line.xy;
         let b = vec2<f32>(0., v.line.y);
@@ -272,6 +273,21 @@ struct CursorVertex {
             (ca.x * pc.y - ca.y * pc.x) / length(ca));
         alpha = clamp(0.5 - d, 0., 1.);
         white = alpha - clamp(0.5 - scale - d, 0., 1.);
+    }
+    if v.line.z > 3.5 {
+        let p = abs(v.local);
+        let half_stroke = max(1., round(scale)) * 0.5;
+        var d = min(max(p.x - v.line.x, p.y - half_stroke),
+            max(p.y - v.line.y, p.x - half_stroke));
+        if v.line.z > 4.5 {
+            // Four square-ended arms with a clear center gap and a dark dot.
+            let arm = abs(p - vec2<f32>(5. * scale)) - vec2<f32>(2. * scale);
+            d = min(min(max(arm.x, p.y - half_stroke),
+                max(arm.y, p.x - half_stroke)), max(p.x, p.y) - half_stroke);
+        }
+        alpha = clamp(0.75 * scale + 0.5 - d, 0., 1.);
+        let dark = clamp(0.5 - d, 0., 1.);
+        white = alpha - dark;
     }
     let clip = window_coverage(logical_surface(v.position.xy));
     return view_store(vec4<f32>(vec3<f32>(white), alpha) * clip);

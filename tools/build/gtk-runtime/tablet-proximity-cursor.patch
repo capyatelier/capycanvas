@@ -1,0 +1,97 @@
+--- a/gdk/wayland/gdkdevice-wayland-private.h
++++ b/gdk/wayland/gdkdevice-wayland-private.h
+@@ -151,6 +151,8 @@
+   GdkSeat *seat;
+   GdkWaylandPointerData pointer_info;
+   GList *events;
++  gboolean proximity_enter_pending;
++  gboolean cursor_update_inhibited;
+ 
+   GList *pads;
+ 
+--- a/gdk/wayland/gdkseat-wayland.c
++++ b/gdk/wayland/gdkseat-wayland.c
+@@ -2791,13 +2791,25 @@
+       if (!tablet->current_tool)
+         continue;
+ 
+-      if (tablet_event->event_type == GDK_PROXIMITY_OUT)
++      if (tablet_event->event_type == GDK_PROXIMITY_OUT &&
++          !tablet->proximity_enter_pending)
+         emulate_crossing (tablet->pointer_info.focus, NULL,
+                           tablet->logical_device, GDK_LEAVE_NOTIFY,
+                           GDK_CROSSING_NORMAL, time);
+ 
+       switch (tablet_event->event_type)
+         {
++        case GDK_ENTER_NOTIFY:
++          /* GDK's surface entry would install the previous widget's cached
++           * cursor before GTK can pick the widget at the new coordinates.
++           * Let GTK's ensuing cursor update be the first visible one.
++           */
++          tablet->cursor_update_inhibited = TRUE;
++          emulate_crossing (tablet->pointer_info.focus, NULL,
++                            tablet->logical_device, GDK_ENTER_NOTIFY,
++                            GDK_CROSSING_NORMAL, time);
++          tablet->cursor_update_inhibited = FALSE;
++          break;
+         case GDK_PROXIMITY_IN:
+           event = gdk_proximity_event_new (GDK_PROXIMITY_IN,
+                                            tablet->pointer_info.focus,
+@@ -2859,15 +2871,12 @@
+                                               event);
+         }
+ 
+-      if (tablet_event->event_type == GDK_PROXIMITY_IN)
+-        emulate_crossing (tablet->pointer_info.focus, NULL,
+-                          tablet->logical_device, GDK_ENTER_NOTIFY,
+-                          GDK_CROSSING_NORMAL, time);
+-      else if (tablet_event->event_type == GDK_PROXIMITY_OUT)
++      if (tablet_event->event_type == GDK_PROXIMITY_OUT)
+         {
+           g_object_unref (tablet->pointer_info.focus);
+           tablet->pointer_info.focus = NULL;
+           tablet->pointer_info.has_cursor_surface = FALSE;
++          tablet->proximity_enter_pending = FALSE;
+ 
+           tablet->pointer_info.button_modifiers &=
+             ~(GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK |
+@@ -2998,6 +3007,7 @@
+   tablet->current_tool = tool;
+ 
+   tablet->pointer_info.enter_serial = serial;
++  tablet->proximity_enter_pending = TRUE;
+ 
+   tablet->pointer_info.focus = g_object_ref (surface);
+   tablet->pointer_info.cursor_shape = 0;
+@@ -3079,6 +3089,16 @@
+                   "tablet motion %f %f",
+                   tablet->pointer_info.surface_x,
+                   tablet->pointer_info.surface_y);
++
++  /* A proximity frame can arrive before coordinates. Picking with the old
++   * position would briefly install a chrome/default cursor over the canvas.
++   * Enter only once the new position is known, before delivering its motion.
++   */
++  if (tablet->proximity_enter_pending)
++    {
++      tablet->proximity_enter_pending = FALSE;
++      gdk_wayland_tablet_add_frame_event (tablet, GDK_ENTER_NOTIFY, 0);
++    }
+ 
+   gdk_wayland_tablet_add_frame_event (tablet, GDK_MOTION_NOTIFY, 0);
+ }
+--- a/gdk/wayland/gdkdevice-wayland.c
++++ b/gdk/wayland/gdkdevice-wayland.c
+@@ -47,6 +47,11 @@
+   GdkWaylandDevice *wayland_device = GDK_WAYLAND_DEVICE (device);
+   GdkWaylandPointerData *pointer =
+     gdk_wayland_device_get_pointer (wayland_device);
++
++  GdkWaylandTabletData *tablet = gdk_wayland_seat_find_tablet (seat, device);
++
++  if (tablet && tablet->cursor_update_inhibited)
++    return;
+ 
+   if (device == seat->logical_touch)
+     return;

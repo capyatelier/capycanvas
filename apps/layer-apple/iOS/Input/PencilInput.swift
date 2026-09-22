@@ -1,5 +1,12 @@
 import UIKit
 
+extension CanvasView: UIPointerInteractionDelegate {
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        // Rust renders the selected cursor, including the None hover fallback.
+        .hidden()
+    }
+}
+
 struct PencilContact {
     let id: UInt64
     let tool: UInt32
@@ -175,6 +182,16 @@ extension CanvasView {
             recognizer.rollAngle, recognizer.zOffset,
             CACurrentMediaTime() * 1_000_000_000, recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
         store.native?.pointer(id: 0, tool: 0, button: 0, records: record, predicted: false, revision: store.cameraRevision)
+        wake()
+    }
+    @objc func mouseHovered(_ recognizer: UIHoverGestureRecognizer) {
+        guard contacts.isEmpty else { return }
+        updateModifiers(recognizer.modifierFlags)
+        let point = recognizer.location(in: self)
+        let record: [Double] = [point.x * contentScaleFactor, point.y * contentScaleFactor,
+            1, 0, 0, 0, 0, CACurrentMediaTime() * 1_000_000_000,
+            recognizer.state == .ended || recognizer.state == .cancelled ? 4 : 0]
+        store.native?.pointer(id: 0, tool: 1, button: 0, records: record, predicted: false, revision: store.cameraRevision)
         wake()
     }
     func routeKeys(_ presses: Set<UIPress>, pressed: Bool) {

@@ -163,6 +163,9 @@ fn cursor_triangle_and_single_pixel_dot_render_at_native_scale() {
     }
     presenter.set_surface_rotation(0);
     for background in [[0., 0., 0., 1.], [1.; 4]] {
+        let mut fill = dab(background);
+        fill.radii = [100.; 2];
+        submit(&mut r, &[Layer::paint(LayerId(1), "Background")], &[fill], &[batch(1)], true);
         let camera = ViewState {
             background_rgba_linear: background,
             ..view()
@@ -261,6 +264,117 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
         full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
+    }
+}
+
+#[test]
+fn cursor_marks_have_dark_centers_light_surrounds_and_matching_silhouettes() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    submit(&mut r, &[Layer::paint(LayerId(1), "Empty")], &[], &[], true);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("cursor mark reference"),
+        size: wgpu::Extent3d {
+            width: 128,
+            height: 128,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut presenter =
+        crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    for (name, marker, radius) in [("cross", 4., 5.), ("dot", 4., 1.5), ("sight", 5., 7.)] {
+        for scale in [1.0_f32, 2., 3.] {
+            let center = (64. + (scale % 2.) * 0.5) / scale;
+            for light in [false, true] {
+                let background = if light { [1.; 4] } else { [0., 0., 0., 1.] };
+                let mut fill = dab(background);
+                fill.radii = [100.; 2];
+                submit(
+                    &mut r,
+                    &[Layer::paint(LayerId(1), "Background")],
+                    &[fill],
+                    &[batch(1)],
+                    true,
+                );
+                let camera = ViewState {
+                    background_rgba_linear: background,
+                    ..view()
+                };
+                presenter.set_cursor(
+                    r.device(),
+                    &[layer_render::CursorSegment {
+                        from: [center - radius; 2],
+                        to: [center + radius; 2],
+                        distance: 0.,
+                        marker,
+                        scale: 1.,
+                    }],
+                    scale,
+                );
+                presenter
+                    .present(
+                        &r,
+                        &target.create_view(&Default::default()),
+                        camera,
+                        background,
+                    )
+                    .unwrap();
+                let pixels = page_bytes(&r, &target);
+                let at = |x, y| pixels[(y * 128 + x) * 4];
+                assert!(at(64, 64) < 16, "{name} center is dark at scale {scale}");
+                if scale == 1. {
+                    if name == "dot" {
+                        for y in -2_i32..=2 {
+                            for x in -2_i32..=2 {
+                                if light {
+                                    assert_eq!(
+                                        at((64 + x) as usize, (64 + y) as usize) < 16,
+                                        (x == 0 && y.abs() <= 1) || (y == 0 && x.abs() <= 1),
+                                        "Dot is a five-pixel cross, not a square or ring: {x},{y}"
+                                    );
+                                }
+                            }
+                        }
+                        assert!(at(65, 65) > 180, "light surround at cross corners");
+                    } else if name == "sight" {
+                        for (x, y) in [(59, 64), (69, 64), (64, 59), (64, 69)] {
+                            assert!(at(x, y) < 16, "sight arms are dark");
+                        }
+                        assert!(at(69, 65) > 180, "sight has a light surround");
+                        assert_eq!(
+                            at(66, 66),
+                            if light { 255 } else { 0 },
+                            "sight center gap remains open"
+                        );
+                    } else {
+                        assert!(at(67, 64) < 16);
+                        assert!(at(67, 65) > 180);
+                    }
+                }
+                if let Some(dir) = std::env::var_os("CAPY_CURSOR_TEST_ARTIFACTS") {
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let file = std::fs::File::create(std::path::Path::new(&dir).join(format!(
+                        "{name}-{scale}-{}.png",
+                        if light { "light" } else { "dark" }
+                    )))
+                    .unwrap();
+                    let mut encoder = png::Encoder::new(file, 128, 128);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder
+                        .write_header()
+                        .unwrap()
+                        .write_image_data(&pixels)
+                        .unwrap();
+                }
+            }
+        }
     }
 }
 

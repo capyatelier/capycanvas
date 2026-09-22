@@ -56,6 +56,9 @@ impl SampleFlags {
     /// Replace the registered sample with this token; never append a point,
     /// route a pointer action, or use the correction's delivery-time camera.
     pub const CORRECTION: Self = Self(1 << 5);
+    /// The host confirmed that this pen controls an indirect, screenless tablet.
+    /// This affects cursor presentation only; the device is still a pen.
+    pub const INDIRECT_POINTER: Self = Self(1 << 6);
 
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0

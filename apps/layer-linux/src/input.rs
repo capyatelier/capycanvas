@@ -13,6 +13,8 @@ use std::{
     collections::{HashMap, VecDeque},
     rc::Rc,
 };
+#[path = "tablet_input.rs"]
+mod tablet;
 
 /// Only direct touch/stylus contacts open menus on a primary-button hold.
 pub(crate) fn touch_or_pen(gesture: &impl IsA<gtk::Gesture>) -> bool {
@@ -37,6 +39,7 @@ pub struct Input {
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
     next_touch: Cell<u64>,
     clock: Cell<Option<(u32, u64)>>,
+    tablets: tablet::TabletDevices,
 }
 
 pub fn install(workspace: &Rc<Workspace>) {
@@ -420,6 +423,8 @@ impl Input {
             ToolKind::Mouse
         };
         let timestamp_ns = self.timestamp(gesture.current_event_time());
+        let tablet_flags = gesture.current_event().and_then(|event| event.device())
+            .map_or(SampleFlags::NONE, |device| self.tablets.flags(&device, tool.as_ref()));
         let dpi = workspace.area.scale_factor() as f32;
         let axis = |a| gesture.axis(a).unwrap_or(0.0) as f32;
         let event = PenEvent {
@@ -445,7 +450,7 @@ impl Input {
             distance: axis(gdk::AxisUse::Distance),
             phase,
             tool: tool_kind,
-            flags: SampleFlags::PRIMARY,
+            flags: SampleFlags(SampleFlags::PRIMARY.0 | tablet_flags.0),
         };
         workspace.cursor_input(Some(event));
         if phase == PenPhase::Hover {

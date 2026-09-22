@@ -5,3 +5,4 @@ vendor/wgpu-hal/** -text -whitespace
 vendor/wgpu-types/** -text -whitespace
 vendor/wgpu-color-passthrough.patch -whitespace
 vendor/wgpu-webgpu-async-pipelines.patch -whitespace
+tools/build/gtk-runtime/*.patch -whitespace

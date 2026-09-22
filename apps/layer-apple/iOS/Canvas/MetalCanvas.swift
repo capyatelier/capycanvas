@@ -47,6 +47,10 @@ final class CanvasView: UIView {
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
+        let mouseHover = UIHoverGestureRecognizer(target: self, action: #selector(mouseHovered(_:)))
+        mouseHover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        addGestureRecognizer(mouseHover)
+        addInteraction(UIPointerInteraction(delegate: self))
         installIndirectGestures()
         store.wake = { [weak self] in self?.wake() }
         store.observeDisplayHeadroom = { [weak self] in self?.updateHeadroom() }

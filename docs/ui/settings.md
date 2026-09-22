@@ -31,10 +31,18 @@ outlines with no center marker, a cross, a dot, or a single-pixel dot. The
 brush-size options retain the resolved brush-tip shape and dynamics. Existing
 saved cursor modes remain valid, and Reset still selects the brush-size outline.
 Single-pixel markers occupy one physical display pixel at any host scale.
+Dot is a tiny cross. Cross, Dot, and Sight use dark strokes with a light surround;
+Sight also has a center dot. Their silhouettes match the shared dropdown icons.
+
+With None selected, mouse and trackpad hover still show Sight. Confirmed
+screenless tablet pens do too; display pens and pens whose device type is unknown
+stay hidden. GTK reads the tablet's native pointer property, and Windows reads
+the native pen device type. Hosts without that information leave pens unknown.
+This only changes cursor presentation: screenless pens retain pen input behavior.
 
 **Hide cursor when painting** hides the painting cursor during contact, except
 that brush-size outlines and their center markers stay visible for the Eraser,
-transparent color, and a pen's physical eraser. None always remains invisible.
+transparent color, and a pen's physical eraser. None stays invisible during contact.
 The shared Rust cursor model and GPU presenter apply this behavior on every host.
 
 ## Keyboard shortcuts

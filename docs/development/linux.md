@@ -286,7 +286,8 @@ dist/capycanvas-linux/bin/capycanvas
 ```
 
 Normal packaging builds pinned GTK 4.22.4 with the null-surface tablet-pad
-startup fix. Meson, Ninja, GTK development dependencies and `glslc` are required.
+startup fix and the pen-entry cursor fix. Meson, Ninja, GTK development
+dependencies and `glslc` are required.
 The cache defaults to `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it).
 The package launcher selects `lib/capycanvas/gtk/libgtk-4.so.1` before executing
 `bin/capycanvas-bin`; use `bin/capycanvas` for both ordinary and file launches.

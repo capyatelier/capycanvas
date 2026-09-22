@@ -462,6 +462,14 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
     if(phase==1)dispatcher.TryEnqueue([weak=weak_from_this()]{
         if(auto self=weak.lock())if(!self->closing)self->canvasFocus.Focus(FocusState::Pointer);
     });
+    uint32_t deviceFlags=0;
+    auto current=e.CurrentPoint();
+    if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen) {
+        POINTER_INFO info{};
+        POINTER_DEVICE_INFO device{};
+        if(GetPointerInfo(current.PointerId(),&info) && GetPointerDevice(info.sourceDevice,&device)
+            && device.pointerDeviceType==POINTER_DEVICE_TYPE_EXTERNAL_PEN) deviceFlags=0x40;
+    }
     auto capture=[&](Microsoft::UI::Input::PointerPoint const& point,bool predicted) {
         auto props=point.Properties();
         auto type=point.PointerDeviceType();
@@ -476,7 +484,7 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());
         p.phase=phase;p.tool=tool;
         p.button=props.IsMiddleButtonPressed()?1:props.IsRightButtonPressed()?2:0;
-        p.flags=(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
+        p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0)|(props.IsBarrelButtonPressed()?4:0)|(props.IsInverted()?8:0);
         if(!PrepareCanvasPrediction(p))return true;
         latencyTrace.Input(p,arrival);
         samples.push_back(p);

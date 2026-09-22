@@ -28,7 +28,10 @@ pub struct CursorSegment {
     pub distance: f32,
     /// 0: dashed line, 1: solid line, 2: filled rectangular handle (`from`/`to`
     /// are opposite corners), 3: filled triangle in the `from`/`to` bounds with
-    /// its tip at `from`. Filled shapes have a one-pixel contrasting border.
+    /// its tip at `from`, 4: dark cross, 5: dark sight with a center dot.
+    /// Cross/sight bounds describe their outer size; their light surround is
+    /// composited around the whole shape, never between intersecting strokes.
+    /// Filled shapes have a one-pixel contrasting border.
     pub marker: f32,
     pub scale: f32,
 }

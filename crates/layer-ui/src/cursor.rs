@@ -99,12 +99,10 @@ impl Cursor {
         let [cx, cy] = view.center;
         match mode {
             CursorMode::Cross | CursorMode::BrushSizeCross => {
-                view.line([cx - 6.0, cy], [cx + 6.0, cy], 0.0, true);
-                view.line([cx, cy - 6.0], [cx, cy + 6.0], 0.0, true);
+                view.mark([cx, cy], 5.0, 4.0, scale);
             }
             CursorMode::Dot | CursorMode::BrushSizeDot => {
-                view.line([cx - 1.0, cy], [cx + 1.0, cy], 0.0, true);
-                view.line([cx, cy - 1.0], [cx, cy + 1.0], 0.0, true);
+                view.mark([cx, cy], 1.5, 4.0, scale);
             }
             CursorMode::SinglePixelDot | CursorMode::BrushSizeSinglePixelDot => {
                 // Snap to one physical pixel, including fractional host scale.
@@ -119,20 +117,7 @@ impl Cursor {
                 });
             }
             CursorMode::Sight => {
-                for direction in [-1.0, 1.0] {
-                    view.line(
-                        [cx + direction * 5.0, cy],
-                        [cx + direction * 11.0, cy],
-                        0.0,
-                        true,
-                    );
-                    view.line(
-                        [cx, cy + direction * 5.0],
-                        [cx, cy + direction * 11.0],
-                        0.0,
-                        true,
-                    );
-                }
+                view.mark([cx, cy], 7.0, 5.0, scale);
             }
             CursorMode::Triangle => {
                 view.segments.push(CursorSegment {
@@ -195,6 +180,19 @@ impl Cursor {
 }
 
 impl CanvasCursor {
+    fn mark(&mut self, center: [f32; 2], radius: f32, marker: f32, scale: f32) {
+        // Align the one-point dark stroke to physical pixels. One composite
+        // primitive keeps the pale surround out of intersections and the dot.
+        let width = scale.round().max(1.0);
+        let center = center.map(|v| ((v * scale).floor() + (width % 2.0) * 0.5) / scale);
+        self.segments.push(CursorSegment {
+            from: center.map(|v| v - radius),
+            to: center.map(|v| v + radius),
+            distance: 0.0,
+            marker,
+            scale: 1.0,
+        });
+    }
     fn line(&mut self, from: [f32; 2], to: [f32; 2], distance: f32, marker: bool) {
         self.segments.push(CursorSegment {
             from,

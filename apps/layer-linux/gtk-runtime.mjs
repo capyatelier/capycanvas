@@ -1,4 +1,4 @@
-// Build and ship the pinned GTK startup fix, with replaceable library and source.
+// Build and ship the pinned GTK tablet fixes, with replaceable library and source.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync } from "node:fs";

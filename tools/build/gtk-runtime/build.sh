@@ -19,10 +19,11 @@ import hashlib, pathlib, sys
 assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() == '51bd9f60c7d23a665a556c7364c21fb2e4e282566b3e7e092455e8f910330893', 'GTK source hash mismatch'
 PY
 # Re-extract the verified archive before applying a changed patch.
-gtk_patch_hash=$(sha256sum "$gtk_recipe/pad-event-surface.patch" | cut -d ' ' -f 1)
+gtk_patch_hash=$(cat "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" | sha256sum | cut -d ' ' -f 1)
 if [[ ! -f "$gtk_build/patched.sha256" ]] || [[ $(cat "$gtk_build/patched.sha256") != "$gtk_patch_hash" ]]; then
     tar -xf "$gtk_build/$gtk_archive" -C "$gtk_build"
     patch -d "$gtk_build/gtk-4.22.4" -p1 < "$gtk_recipe/pad-event-surface.patch"
+    patch -d "$gtk_build/gtk-4.22.4" -p1 < "$gtk_recipe/tablet-proximity-cursor.patch"
     echo "$gtk_patch_hash" > "$gtk_build/patched.sha256"
 fi
 if [[ -d "$gtk_build/deps/usr" ]]; then
@@ -40,13 +41,14 @@ cp "$gtk_build/build/gtk/libgtk-4.so.1.2200.4" "$gtk_prefix/lib/libgtk-4.so.1.ne
 mv -f "$gtk_prefix/lib/libgtk-4.so.1.new" "$gtk_prefix/lib/libgtk-4.so.1"
 cp "$gtk_build/gtk-4.22.4/COPYING" "$gtk_docs/COPYING"
 cp "$gtk_build/$gtk_archive" "$gtk_docs/sources/"
-cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/build.sh" "$gtk_docs/"
+cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/build.sh" "$gtk_docs/"
 python3 - "$gtk_prefix" <<'PY'
 import hashlib, json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 files = ['lib/libgtk-4.so.1', 'share/doc/capycanvas-gtk/COPYING',
          'share/doc/capycanvas-gtk/sources/gtk-4.22.4.tar.xz',
-         'share/doc/capycanvas-gtk/pad-event-surface.patch', 'share/doc/capycanvas-gtk/build.sh']
+         'share/doc/capycanvas-gtk/pad-event-surface.patch',
+         'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch', 'share/doc/capycanvas-gtk/build.sh']
 manifest = dict(version='4.22.4', license='LGPL-2.1-or-later',
                 source='https://download.gnome.org/sources/gtk/4.22/gtk-4.22.4.tar.xz',
                 rebuild='bash share/doc/capycanvas-gtk/build.sh /tmp/capy-gtk-build /tmp/capy-gtk-prefix',

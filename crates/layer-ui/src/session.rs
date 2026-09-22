@@ -547,6 +547,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.state.colors.transparent()
             || event.tool == layer_engine::ToolKind::Eraser
             || event.flags.contains(layer_engine::SampleFlags::INVERTED);
+        let painting = self.layer_interaction.tool == LayerCanvasTool::Paint;
+        let contact = self.interaction.pointer.is_some_and(|p| p.paint);
+        let mode = if !painting {
+            CursorMode::Cross
+        } else if self.state.settings.cursor == CursorMode::None
+            && !contact
+            && (event.tool == layer_engine::ToolKind::Mouse
+                || event.flags.contains(layer_engine::SampleFlags::INDIRECT_POINTER))
+        {
+            CursorMode::Sight
+        } else {
+            self.state.settings.cursor
+        };
         if self.interaction.pan_key.is_some()
             || self.layer_interaction.tool == LayerCanvasTool::Hand
             || self.interaction.pointer.is_some_and(|p| !p.paint)
@@ -556,8 +569,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Contact ownership changes before queued ink is rendered, and ends
             // on release/cancel without waiting for stroke backing to finish.
             || (self.state.settings.hide_cursor_while_drawing
-                && self.layer_interaction.tool == LayerCanvasTool::Paint
-                && self.interaction.pointer.is_some_and(|p| p.paint)
+                && painting
+                && contact
                 && !(self.state.settings.cursor.has_brush_size() && erasing))
         {
             return false;
@@ -577,11 +590,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             &dabs,
             &self.state.camera,
             scale,
-            if self.layer_interaction.tool == LayerCanvasTool::Paint {
-                self.state.settings.cursor
-            } else {
-                CursorMode::Cross
-            },
+            mode,
             view,
         );
         true
@@ -13954,8 +13963,8 @@ mod tests {
         s.dispatch(UiAction::EditSettings { settings }).unwrap();
         s.dispatch(UiAction::CloseSettings).unwrap();
         let cross = s.canvas_cursor().unwrap();
-        assert_eq!(cross.segments.len(), 2);
-        assert!(cross.segments.iter().all(|segment| segment.marker == 1.0));
+        assert_eq!(cross.segments.len(), 1);
+        assert_eq!(cross.segments[0].marker, 4.0);
         s.cursor_input(None);
         assert!(s.canvas_cursor().is_none());
         let old: Settings = serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.0}"#).unwrap();
@@ -14112,6 +14121,67 @@ mod tests {
     }
 
     #[test]
+    fn none_cursor_uses_sight_only_for_confirmed_indirect_hover() {
+        let mut s = session();
+        s.state.settings.cursor = CursorMode::None;
+        for (tool, flags, sight) in [
+            (ToolKind::Mouse, SampleFlags::PRIMARY, true),
+            (ToolKind::Pen, SampleFlags::INDIRECT_POINTER, true),
+            (ToolKind::Eraser, SampleFlags::INDIRECT_POINTER, true),
+            (ToolKind::Pen, SampleFlags::PRIMARY, false),
+            (ToolKind::Eraser, SampleFlags::PRIMARY, false),
+            (ToolKind::Unknown, SampleFlags::NONE, false),
+        ] {
+            for hide in [true, false] {
+                s.state.settings.hide_cursor_while_drawing = hide;
+                for end in [ContactPhase::Up, ContactPhase::Cancel] {
+                    s.cursor_input(Some(PenEvent {
+                        tool,
+                        flags,
+                        ..event(&s, 1, PenPhase::Hover, 0.0)
+                    }));
+                    let hover = s.canvas_cursor().unwrap();
+                    assert_eq!(
+                        hover.mode,
+                        if sight {
+                            CursorMode::Sight
+                        } else {
+                            CursorMode::None
+                        }
+                    );
+                    assert_eq!(!hover.segments.is_empty(), sight);
+                    for phase in [ContactPhase::Down, ContactPhase::Move, end] {
+                        s.input(UiInput::Pointer {
+                            id: 1,
+                            phase,
+                            kind: if tool == ToolKind::Mouse {
+                                PointerKind::Mouse
+                            } else {
+                                PointerKind::Pen
+                            },
+                            button: PointerButton::Primary,
+                            position: [225.0, 300.0],
+                        })
+                        .unwrap();
+                        let cursor = s.canvas_cursor();
+                        assert_eq!(
+                            cursor.is_some_and(|c| !c.segments.is_empty()),
+                            sight && phase == end
+                        );
+                        assert_eq!(
+                            s.state.settings.cursor,
+                            CursorMode::None,
+                            "fallback never changes saved settings"
+                        );
+                    }
+                }
+            }
+        }
+        s.input(UiInput::Blur).unwrap();
+        assert!(s.canvas_cursor().is_none());
+    }
+
+    #[test]
     fn cursor_markers_keep_their_size_and_outline_at_fractional_dpi() {
         let mut s = session();
         for pixels in [500, 750, 1000, 1500] {
@@ -14140,24 +14210,19 @@ mod tests {
                         assert_eq!(markers[0].marker, 3.0);
                     }
                     CursorMode::Sight => {
-                        assert_eq!(markers.len(), 4);
-                        for segment in markers {
-                            for point in [segment.from, segment.to] {
-                                assert!(
-                                    (point[0] - cursor.center[0])
-                                        .hypot(point[1] - cursor.center[1])
-                                        >= 5.0
-                                );
-                            }
-                        }
+                        assert_eq!(markers.len(), 1);
+                        assert_eq!(markers[0].marker, 5.0);
+                        assert_eq!(markers[0].to[0] - markers[0].from[0], 14.0);
                     }
                     CursorMode::Cross | CursorMode::BrushSizeCross => {
-                        assert_eq!(markers.len(), 2);
-                        assert_eq!(markers[0].to[0] - markers[0].from[0], 12.0);
+                        assert_eq!(markers.len(), 1);
+                        assert_eq!(markers[0].marker, 4.0);
+                        assert_eq!(markers[0].to[0] - markers[0].from[0], 10.0);
                     }
                     CursorMode::Dot | CursorMode::BrushSizeDot => {
-                        assert_eq!(markers.len(), 2);
-                        assert_eq!(markers[0].to[0] - markers[0].from[0], 2.0);
+                        assert_eq!(markers.len(), 1);
+                        assert_eq!(markers[0].marker, 4.0);
+                        assert_eq!(markers[0].to[0] - markers[0].from[0], 3.0);
                     }
                     _ => assert!(markers.is_empty()),
                 }

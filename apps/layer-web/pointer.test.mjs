@@ -5,6 +5,25 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
+
+test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
+  const canvas = {}, samples = [];
+  const context = {
+    gpuReady: true, canvas, lastPenEvent: null,
+    document: { elementFromPoint: () => canvas },
+    position: () => [20, 30], wake() {},
+    app: { cursor_input: sample => samples.push(Array.from(sample)) },
+  };
+  runInNewContext(source.slice(source.indexOf("let canvasCursorActive"), source.indexOf("function wake()")), context);
+  for (const [pointerType, buttons, kind] of [["mouse", 0, 1], ["pen", 0, 0], ["pen", 32, 2]]) {
+    context.cursorInput({ pointerType, buttons, pointerId: 1, target: canvas, clientX: 20,
+      clientY: 30, timeStamp: 12, pressure: .5 });
+    assert.equal(samples.at(-1).length, 8);
+    assert.equal(samples.at(-1)[7], kind);
+  }
+  context.cursorInput({ pointerType: "touch" });
+  assert.deepEqual(samples.at(-1), []);
+});
 function harness({ raw = false, prediction = false } = {}) {
   const listeners = new Map(), records = [], phases = [], cursors = [];
   let contact = null;

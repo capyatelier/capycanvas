@@ -25,7 +25,7 @@ typedef struct CapyPointer {
     uint32_t phase; /* hover=0, down=1, move=2, up=3, cancel=4 */
     uint32_t tool;  /* pen=0, mouse=1, eraser=2, touch=3 */
     uint32_t button; /* primary=0, pan=1, other=2 */
-    uint32_t flags; /* shared predicted/primary/barrel/inverted bits */
+    uint32_t flags; /* shared predicted/primary/barrel/inverted bits; 0x40 indirect pen */
 } CapyPointer;
 
 /* Create on XAML thread with Microsoft ISwapChainPanelNative interface pointer.
