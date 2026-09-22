@@ -609,7 +609,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
         matches!(
             self.state.platform,
-            Platform::Gtk | Platform::Android | Platform::Web | Platform::Windows
+            Platform::Gtk | Platform::Android | Platform::Web | Platform::Windows | Platform::Mac | Platform::Ios
         ) && self
             .state
             .customization

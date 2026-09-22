@@ -21,7 +21,7 @@ struct ExportForm: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Export image").font(.headline)
             Text("Export a profiled copy. The editable drawing stays unchanged.")
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if editor.loaded {
                         choices.disabled(editor.busy || readingProfile)

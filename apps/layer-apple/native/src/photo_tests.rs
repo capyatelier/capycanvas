@@ -334,7 +334,7 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
                     })).unwrap();
                     session.renderer_mut().0 = Some(layer_render_wgpu::WgpuRasterizer::from_wgpu_native_staged(
                         adapter, device, queue, session.engine().document().color,
-                    ).unwrap());
+                    ).unwrap().into());
                 },
                 _ => (),
             }

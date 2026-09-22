@@ -182,7 +182,7 @@ import SwiftUI
             .contentShape(Rectangle())
     }
     private func overflowEditor(_ zone: Int) -> some View {
-        ScrollView {
+        EditorScrollView {
             VStack(spacing: 2) {
                 ForEach(geometry["hidden"][zone].array, id: \.uint) { id in
                     if let entry = entries.first(where: { $0["id"].uint == id.uint }) {

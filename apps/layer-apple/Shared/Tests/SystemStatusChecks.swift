@@ -2,9 +2,14 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkTitleBarToolDrawers(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:painter"}}]"#
         app.launch()
-        workspaceActivate(app.buttons["workspace-switch-builtin:workspace:painter"])
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 60)
+        let sketch = app.buttons["workspace-switch-builtin:workspace:painter"]
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: sketch)
+        waitForExpectations(timeout: 30)
         let toolbar = app.descendants(matching: .any)["toolbar-options-toolbar"].firstMatch
         XCTAssertTrue(toolbar.waitForNonExistence(timeout: 10), "Sketch tools belong in the shared title bar")
         let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
@@ -21,10 +26,63 @@ extension XCTestCase {
         workspaceActivate(app.buttons["Brush"])
         XCTAssertTrue(wheel.waitForNonExistence(timeout: 10), "Another header tool switches the drawer in one click")
         XCTAssertTrue(drawer.exists)
+        let pencil = app.buttons["brush_sets-Pencil"]
+        XCTAssertTrue(pencil.waitForExistence(timeout: 10))
+        workspaceActivate(pencil)
+        workspaceActivate(app.buttons["brush-2"])
+        let size = app.buttons["number-value-tool-size"]
+        workspaceActivate(size)
+        app.textFields["number-entry-tool-size"].typeText("37\n")
+        expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
+        waitForExpectations(timeout: 10)
+        attachEditor(in: app, name: "brush-three-column-drawer")
+        workspaceActivate(app.buttons["Sculpt"])
+        workspaceActivate(app.buttons["sculpt_sets-Liquify"])
+        XCTAssertTrue(app.buttons["brush-12"].waitForExistence(timeout: 10))
+        XCTAssertFalse(pencil.exists)
+        attachEditor(in: app, name: "sculpt-three-column-drawer")
+        workspaceActivate(app.buttons["Brush"])
+        XCTAssertTrue(pencil.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
+        waitForExpectations(timeout: 10)
         workspaceActivate(app.buttons["Brush"])
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10), "The current opener toggles its drawer closed")
+        workspaceActivate(app.buttons["Filters panel"])
+        let brightness = app.buttons["adjustment-brightness_contrast"], curves = app.buttons["adjustment-curves"]
+        workspaceActivate(brightness)
+        XCTAssertTrue(app.buttons["number-value-property-brightness"].waitForExistence(timeout: 10))
+        workspaceActivate(curves)
+        XCTAssertTrue(app.buttons["property-channel"].waitForExistence(timeout: 10))
+        XCTAssertFalse(brightness.isSelected); XCTAssertTrue(curves.isSelected)
+        workspaceActivate(app.buttons["Filters panel"])
+        workspaceActivate(app.buttons["Filters panel"])
+        XCTAssertTrue(curves.isSelected, "Reopening retains the selected filter")
+        attachEditor(in: app, name: "filter-three-column-drawer")
+        workspaceActivate(app.buttons["cancel-filter"])
+        XCTAssertTrue(drawer.waitForNonExistence(timeout: 10))
         workspaceActivate(app.buttons["Layers panel"])
         XCTAssertTrue(app.buttons["layer-New layer"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 2)
+        workspaceActivate(app.buttons["layer-thumbnail-2-content"])
+        workspaceActivate(app.buttons["Filters panel"])
+        let bucket = app.buttons["paper-color-bucket"]
+        XCTAssertTrue(bucket.waitForExistence(timeout: 10))
+        let paperPoint = CGPoint(x: 0.35, y: 0.7) // Exposed paper below the drawer.
+        let beforePaper = editorPixels(in: app, at: paperPoint)
+        workspaceActivate(bucket)
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app, at: paperPoint) != beforePaper }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        attachEditor(in: app, name: "paper-color-property")
+        workspaceActivate(app.buttons["Layers panel"])
+        #if os(iOS)
+        let paper = app.descendants(matching: .any)["layer-row-2"].firstMatch
+        let start = paper.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.5))
+        start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: -90, dy: 0)))
+        workspaceActivate(app.buttons["layer-delete-2"])
+        XCTAssertTrue(paper.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["Undo"])
+        XCTAssertTrue(paper.waitForExistence(timeout: 10))
+        #endif
         #if os(macOS)
         let capture = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         #else
@@ -35,6 +93,10 @@ extension XCTestCase {
         XCTAssertTrue(wheel.waitForExistence(timeout: 10))
         workspaceActivate(app.buttons["Brush color"])
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["zen-button"])
+        XCTAssertTrue(sketch.waitForNonExistence(timeout: 10))
+        workspaceActivate(app.buttons["zen-button"])
+        XCTAssertTrue(sketch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 

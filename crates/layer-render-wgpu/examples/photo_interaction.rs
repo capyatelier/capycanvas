@@ -1,5 +1,5 @@
 //! Reproduce large-photo interaction without host UI automation.
-//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [cache-MiB] [stroke-frames] [brush-px] [circles|zigzag]
+//! Usage: photo_interaction INPUT.capy OUTPUT.csv [samples-per-frame] [cache-MiB] [stroke-frames] [brush-px] [circles|zigzag] [preset-id]
 //! Reads a copy of a project; never modifies its input. Timings include an
 //! offscreen managed presentation and queue completion, not display latency.
 use layer_core::*;
@@ -40,7 +40,11 @@ fn roots(engine: &Engine) -> Result<BTreeMap<LayerId, Vec<u8>>> {
 }
 
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+    replay(std::env::args().skip(1))
+}
+
+/// Shared by the command-line and physical iPad benchmark wrapper.
+pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
     let input = args.next().ok_or("INPUT.capy is required")?;
     let output = args.next().ok_or("OUTPUT.csv is required")?;
     let samples: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(2);
@@ -48,6 +52,9 @@ fn main() -> Result<()> {
     let frames: u64 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(360);
     let diameter: f32 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(570.7);
     let path = args.next().unwrap_or_else(|| "circles".into());
+    let preset_id: u32 = args.next().map(|v| v.parse()).transpose()?.unwrap_or(1);
+    let preset = OPTIMIZED_PRESETS.iter().find(|p| **p as u32 == preset_id)
+        .copied().ok_or("Unknown optimized preset")?;
     assert!((1..=256).contains(&samples) && frames > 0);
     assert!(diameter.is_finite() && diameter > 0.);
     assert!(matches!(path.as_str(), "circles" | "zigzag"));
@@ -72,10 +79,10 @@ fn main() -> Result<()> {
         enabled: true, use_platform_prediction: false, prediction_horizon_micros: 8_000,
         ..Default::default()
     })?;
-    let mut brush = default_brush(DefaultBrushPreset::GPen);
+    let mut brush = default_brush(preset);
     brush.diameter = diameter;
     brush.color_rgba_linear = [0.8, 0.04, 0.2, 1.];
-    engine.set_brush(brush)?;
+    engine.set_brush(brush.clone())?;
     engine.render_frame()?;
     engine.backend_mut().wait_idle()?;
     let format = wgpu::TextureFormat::Rgba16Float;
@@ -87,16 +94,23 @@ fn main() -> Result<()> {
     }).create_view(&Default::default());
     let mut presenter = ViewportPresenter::for_surface(engine.backend(), format,
         SdrSurfaceColor::ExtendedLinearSrgb)?;
-    let original = roots(&engine)?;
+    let mut original = roots(&engine)?;
     let mut csv = BufWriter::new(std::fs::File::create(&output)?);
     writeln!(csv, "phase,frame,cpu_ms,completed_ms,prepare_ms,paint_ms,capture_ms,prediction_ms,composition_ms,submission_ms,dabs,composited_pixels,source_misses,display_batches,display_bytes")?;
     let mut sequence = 0;
-    for phase in ["circles", "zoom"] {
-        for frame in 0..if phase == "circles" { frames } else { 360 } {
+    for phase in if preset == DefaultBrushPreset::Eraser { vec!["seed", "circles", "zoom"] } else { vec!["circles", "zoom"] } {
+        if phase == "seed" {
+            let mut seed = default_brush(DefaultBrushPreset::GPen);
+            seed.diameter = diameter * 2.;
+            seed.color_rgba_linear = brush.color_rgba_linear;
+            engine.set_brush(seed)?;
+        } else if phase == "circles" { engine.set_brush(brush.clone())?; }
+        for frame in 0..if phase == "zoom" { 360 } else { frames } {
+            frame_pool(|| -> Result<()> {
             let before = engine.backend().metrics();
             let now = 1_000_000_000 + (frame + 1) * samples * 4_166_667;
             let start = Instant::now();
-            if phase == "circles" {
+            if phase != "zoom" {
                 for j in 0..samples {
                     let index = frame * samples + j;
                     let t = index as f32 / 240.;
@@ -111,7 +125,7 @@ fn main() -> Result<()> {
                         surface_position: Point { x: SIZE[0] as f32 * 0.5 + path_radius[0]*position[0],
                             y: SIZE[1] as f32 * 0.5 + path_radius[1]*position[1] },
                         pressure: 1., tilt_radians: [0.; 2], twist_radians: 0., distance: 0.,
-                        tool: ToolKind::Pen, flags: SampleFlags::PRIMARY,
+                        tool: if preset == DefaultBrushPreset::Eraser && phase == "circles" { ToolKind::Eraser } else { ToolKind::Pen }, flags: SampleFlags::PRIMARY,
                         phase: if index == 0 { PenPhase::Down }
                             else if index == frames*samples-1 { PenPhase::Up } else { PenPhase::Move },
                     }).map_err(|_| "Input queue overflow")?;
@@ -138,7 +152,10 @@ fn main() -> Result<()> {
                 after.source_tile_misses-before.source_tile_misses,
                 after.display_composition_submissions-before.display_composition_submissions,
                 after.composite_storage_bytes)?;
+            Ok(())
+            })?;
         }
+        if phase == "seed" { original = roots(&engine)?; }
         csv.flush()?;
         println!("Completed {phase}");
     }
@@ -155,4 +172,22 @@ fn main() -> Result<()> {
     assert_eq!(roots(&engine)?, painted);
     println!("Exact native Undo/Redo roots preserved");
     Ok(())
+}
+
+pub const OPTIMIZED_PRESETS: &[DefaultBrushPreset] = &[
+    DefaultBrushPreset::GPen, DefaultBrushPreset::Pencil, DefaultBrushPreset::Eraser,
+    DefaultBrushPreset::Paintbrush, DefaultBrushPreset::Airbrush, DefaultBrushPreset::Chalk,
+    DefaultBrushPreset::Marker, DefaultBrushPreset::Spray, DefaultBrushPreset::DualTexture,
+    DefaultBrushPreset::TexturedFlat, DefaultBrushPreset::DryScumble, DefaultBrushPreset::PastelBlock,
+    DefaultBrushPreset::TransparentGlaze, DefaultBrushPreset::PointyPencil,
+    DefaultBrushPreset::ShadingPencil, DefaultBrushPreset::Charcoal, DefaultBrushPreset::RoughGPen,
+    DefaultBrushPreset::CalligraphyPen, DefaultBrushPreset::AntiquePen, DefaultBrushPreset::RealisticPen,
+    DefaultBrushPreset::WetInk, DefaultBrushPreset::BlottyInk, DefaultBrushPreset::BrushedInk,
+];
+
+fn frame_pool<T>(run: impl FnOnce() -> T) -> T {
+    #[cfg(target_vendor = "apple")]
+    { objc2::rc::autoreleasepool(|_| run()) }
+    #[cfg(not(target_vendor = "apple"))]
+    { run() }
 }

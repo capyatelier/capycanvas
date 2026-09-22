@@ -58,6 +58,7 @@ extension CanvasView {
         wake()
     }
     func route(_ touches: Set<UITouch>, event: UIEvent?, phase: Double) {
+        if phase == 1 { store.layerSwipe.close() }
         if let event { updateModifiers(event.modifierFlags, force: phase == 1) }
         let ordered = touches.sorted { $0.timestamp < $1.timestamp }
         for touch in ordered {

@@ -273,7 +273,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         assert_eq!(unsafe { capy_apple_suspend_renderer(restored.0) }, 0);
         let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(options.color).unwrap();
         let a = unsafe { &mut *restored.0 };
-        a.metal.install_renderer(&mut a.host, gpu).unwrap();
+        a.metal.install_renderer(&mut a.host, gpu.into()).unwrap();
         restored.draw_until_idle();
         assert_project_document(
             unsafe { &*restored.0 }.host.session.engine().document(),

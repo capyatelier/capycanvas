@@ -1542,7 +1542,7 @@ mod tests {
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::from_project(
-            Renderer(Some(gpu)),
+            Renderer(Some(gpu.into())),
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],

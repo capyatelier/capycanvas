@@ -16,7 +16,7 @@ use layer_ui::{ColorWorkflow, ColorPreparation};
 
 struct Task {
     workflow: ColorWorkflow,
-    renderer: Option<WgpuRasterizer>,
+    renderer: Option<Box<WgpuRasterizer>>,
     gpu: SnapshotGpu,
     control: CaptureControl,
     brush: BrushSnapshot,
@@ -128,7 +128,7 @@ fn work(
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        t.renderer = Some(canvas.take_ready().map_err(error)?);
+        t.renderer = Some(canvas.take_ready().map_err(error)?.into());
     }
     serde_json::to_string(
         &serde_json::json!({"color":color,"clipped_channels":t.clipped}),

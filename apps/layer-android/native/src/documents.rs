@@ -49,7 +49,7 @@ enum Payload {
         name: String,
     },
     Retired {
-        _renderer: Option<WgpuRasterizer>,
+        _renderer: Option<Box<WgpuRasterizer>>,
     },
 }
 struct Task {
@@ -302,7 +302,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    let mut next = UiSession::from_project(Renderer(Some(gpu)), project, None, e.viewport)?;
+    let mut next = UiSession::from_project(Renderer(Some(gpu.into())), project, None, e.viewport)?;
     next.frame(0, 0)?;
     *candidate = Some(Box::new(next));
     Ok(())

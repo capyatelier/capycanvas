@@ -738,7 +738,7 @@ mod tests {
             .unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
-            UiSession::from_project(Renderer(Some(gpu)), project, None, [48, 36]).unwrap();
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36]).unwrap();
         let environment = crate::documents::Environment::capture(&host.session).unwrap();
         host.session =
             *crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap();

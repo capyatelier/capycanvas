@@ -975,3 +975,68 @@ fn apple_collapsed_toolbar_child_drawers_follow_live_tiles_and_preserve_topology
         );
     }
 }
+
+#[test]
+fn apple_current_main_drawers_paper_and_zen_use_shared_actions() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let policy = unsafe { &*app.0 }.host.session.state().platform;
+        app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
+            layout: layer_ui::WorkspacePreset::Painter.layout(policy), ..Default::default()
+        }}));
+        let header = unsafe { &*app.0 }.host.session.state().workspace.layout.header.clone();
+        let opener = |control| header.entries().find(|entry|
+            entry.item == layer_ui::HeaderItem::Tool { control }).unwrap().id;
+        let brush = opener(layer_ui::ToolbarControl::Command { command: layer_ui::CommandId::DrawingBrush });
+        let sculpt = opener(layer_ui::ToolbarControl::Command { command: layer_ui::CommandId::Sculpt });
+        let filter = opener(layer_ui::ToolbarControl::Panel { panel: layer_ui::Panel::Adjustments });
+        let items = [brush,sculpt,filter].map(|id|
+            json!({"id":id,"bounds":{"x":300,"y":0,"width":40,"height":60}}));
+        app.action(json!({"type":"measure_header","height":60,"items":items}));
+        let open = |id| app.action(json!({"type":"activate_header_item","id":id}));
+        open(brush);
+        assert_eq!(app.state()["customization"]["drawer"]["columns"], json!([["brush_sets"],["tools"],["tool_settings"]]));
+        let sets = app.state()["tool_panels"]["brush_sets"]["groups"].as_array().unwrap().clone();
+        assert_eq!(sets.len(), 10);
+        for set in sets { app.action(set["action"].clone()); }
+        app.action(json!({"type":"set_brush_size","value":77}));
+        let remembered = app.state()["brush"].clone();
+        open(sculpt);
+        assert_eq!(app.state()["customization"]["drawer"]["columns"], json!([["sculpt_sets"],["tools"],["tool_settings"]]));
+        assert_eq!(app.state()["tool_panels"]["sculpt_sets"]["groups"].as_array().unwrap().len(), 2);
+        app.invoke("drawing_brush");
+        assert_eq!(app.state()["brush"], remembered);
+        open(filter);
+        assert_eq!(app.state()["customization"]["drawer"]["columns"], json!([["filter_types"],["adjustments"],["properties"]]));
+        app.action(json!({"type":"effect","action":{"op":"insert","effect":"brightness_contrast"}}));
+        let selected = app.state()["layer_tools"]["editing_layer"]["id"].clone();
+        open(filter); open(filter);
+        app.action(json!({"type":"effect","action":{"op":"insert","effect":"curves"}}));
+        assert_eq!(app.state()["layer_tools"]["editing_layer"]["id"], selected);
+        assert_eq!(app.state()["filter_picker"]["selected"], "curves");
+        assert!(app.state()["layers"].as_array().unwrap().iter().any(|l| l["id"] == 1 && l["drawing"] == true));
+        app.action(json!({"type":"effect","action":{"op":"cancel_filter"}}));
+        assert!(app.state()["customization"]["drawer"].is_null());
+        app.invoke("undo");
+        assert_eq!(app.state()["layers"][0]["id"], selected);
+        app.action(json!({"type":"layer","action":{"op":"select","id":2,"mask":false}}));
+        let control = app.state()["layer_properties"]["controls"][0].clone();
+        assert_eq!(control["key"], "paper_color");
+        assert!(app.state()["layer_tools"]["can_delete"].as_bool().unwrap());
+        app.action(json!({"type":"set_color","rgba":[0.2,0.4,0.8,1]}));
+        app.action(control["color_action"].clone());
+        let paper = app.state()["layer_properties"].clone();
+        app.invoke("undo");
+        assert_ne!(app.state()["layer_properties"], paper);
+        app.invoke("redo");
+        assert_eq!(app.state()["layer_properties"], paper);
+        let layout = app.state()["workspace"]["layout"].clone();
+        app.invoke("zen_mode");
+        let result = app.request(1, json!({"type":"chrome","event":{"kind":"refresh"},"facts":{"held":false,"dragging":false,"popup_open":false},"viewport":[1200,900]})).unwrap();
+        assert!(result["keep_zen_button"].as_bool().unwrap());
+        assert_eq!(app.state()["workspace"]["layout"], layout);
+        app.action(json!({"type":"preferences","action":{"type":"edit","id":"zen_show_capy","value":false}}));
+        let result = app.request(1, json!({"type":"chrome","event":{"kind":"refresh"},"facts":{"held":false,"dragging":false,"popup_open":false},"viewport":[1200,900]})).unwrap();
+        assert!(!result["keep_zen_button"].as_bool().unwrap());
+    }
+}

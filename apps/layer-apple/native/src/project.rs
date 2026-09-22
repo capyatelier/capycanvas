@@ -69,7 +69,7 @@ enum Payload {
     },
     Export(Box<export::Task>),
     Retired {
-        _renderer: Option<WgpuRasterizer>,
+        _renderer: Option<Box<WgpuRasterizer>>,
     },
 }
 struct State {
@@ -570,7 +570,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
             std::thread::sleep(Duration::from_millis(2));
         }
         let mut prepared =
-            UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, environment.viewport)?;
         prepared.frame(0, 0)?;
         task.check_cancelled()?;
         *candidate = Some(Box::new(prepared));

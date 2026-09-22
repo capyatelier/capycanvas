@@ -6,7 +6,7 @@ struct PanelConfiguration: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var fontSize: CGFloat { max(1, store.catalog["text_size_pt"].number * 4 / 3) }
     var body: some View {
-        ScrollView {
+        EditorScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Text(panel["configuration_title"].string).fontWeight(.bold)
@@ -52,7 +52,7 @@ struct PanelConfiguration: View {
         case "size_presets": configurationSizes
         case "brush_color":
             BrushColorButton(store: store, label: item["label"].string)
-        case "brushes": ScrollView { ToolSetControls(store: store) }.frame(height: 250)
+        case "brushes": EditorScrollView { ToolSetControls(store: store) }.frame(height: 250)
         case "color_wheel": ColorPanel(store: store)
         case "navigator": NavigatorPanel(store: store).frame(height: 240)
         case "adjustments": AdjustmentPanel(store: store).frame(height: 280)

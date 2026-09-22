@@ -33,6 +33,19 @@ struct EditorView<Canvas: View>: View {
                     }.placed(store.snapshot["layout"]["status"])
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
+                if store.snapshot["keep_zen_button"].bool {
+                    let command = store.command("zen_mode")
+                    IconTile(icon: command["icon"].string, label: command["tooltip"].string,
+                        enabled: command["enabled"].bool) { store.invoke("zen_mode") }
+                        .frame(width: 36, height: 36)
+                        .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                        .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: {
+                            store.workspace.zenButton = $0
+                        }
+                        .onDisappear { store.workspace.zenButton = nil }
+                        .offset(x: 6, y: 6).accessibilityIdentifier("zen-button")
+                }
                 if store.command("placement_original_size")["enabled"].bool {
                     PhotoPlacementControls(store: store)
                 }
@@ -79,6 +92,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(EditorPopoverHost())
         .coordinateSpace(name: "editor-workspace")
         .editorChromeContact { point in
+            store.layerSwipe.contact(at: point)
             store.workspace.chrome(["kind": "contact", "position": [point.x, point.y], "canvas": false])
         }
         .onContinuousHover(coordinateSpace: .named("editor-workspace")) { phase in

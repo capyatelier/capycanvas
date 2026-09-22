@@ -23,6 +23,7 @@ struct PanelControls: View {
     let panel: JSON
     var scrollable = true
     var measureForWorkspace = true
+    var splitFilters = false
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var padding: CGFloat { panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8 }
     var body: some View {
@@ -35,9 +36,10 @@ struct PanelControls: View {
     @ViewBuilder private var contents: some View {
         if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof) }
         else if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        else if panel["id"].string == "filter_types" { FilterTypesPanel(store: store) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
-                AdjustmentPanel(store: store)
+                AdjustmentPanel(store: store, splitPicker: splitFilters)
             }
         }
         else if panel["id"].string == "navigator" {
@@ -51,7 +53,7 @@ struct PanelControls: View {
         Group {
             if scrollable {
                 GeometryReader { viewport in
-                    ScrollView {
+                    EditorScrollView {
                         controlBody(maximumHeight: max(128, viewport.size.height - padding * 2))
                     }
                     // Workspace layout already reserves space above the keyboard.
@@ -73,7 +75,7 @@ struct PanelControls: View {
     }
     @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {
-        case "brushes": ToolSetControls(store: store)
+        case "brushes", "brush_sets", "sculpt_sets", "tools": ToolSetControls(store: store, panel: panel["id"].string)
         case "tool_settings": ToolSettingsControls(store: store)
         // Match the shared panel's fit-to-viewport wheel while retaining its
         // readable minimum size and scrolling for smaller/customized panels.

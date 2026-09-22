@@ -506,7 +506,7 @@ impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
         if matches!(self, Self::FilterTypes | Self::BrushSets | Self::SculptSets | Self::Tools) {
-            return matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Generic);
+            return platform != crate::Platform::Windows;
         }
         if self == Self::Proof { return crate::color_management::enabled(platform) || platform == crate::Platform::Generic; }
         if matches!(

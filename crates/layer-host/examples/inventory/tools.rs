@@ -20,7 +20,7 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
             wgpu::DeviceType::Cpu,
             "GPU inventory requires a hardware adapter"
         );
-        host.session.renderer_mut().0 = Some(gpu);
+        host.session.renderer_mut().0 = Some(gpu.into());
         // Transform controls require real content and a renderer-owned preview.
         // Fill a disposable drawing through ordinary actions, without UI input.
         let actions = [

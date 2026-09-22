@@ -47,6 +47,7 @@ import QuartzCore
         if event.subtype == .tabletProximity { proximity(event); return }
         updateModifiers(event.modifierFlags, force: phase == 1)
         if phase == 1 {
+            store.layerSwipe.close()
             guard contact == nil else { return }
             view?.window?.makeFirstResponder(view)
             nextContact &+= 1

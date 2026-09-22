@@ -27,6 +27,7 @@ struct SettingsView: View {
                             SharedIcon(name: p["icon"].string).accessibilityHidden(true)
                             Text(p["title"].string)
                         }.tag(p["id"].string)
+                            .background(NativePenScroll().frame(width: 0, height: 0))
                             .accessibilityIdentifier("settings-page-" + p["id"].string)
                     }
                 }
@@ -57,7 +58,7 @@ struct SettingsView: View {
                             Text(result["title"].string)
                             Text(result["description"].string).font(.caption).foregroundStyle(.secondary)
                         }
-                    }
+                    }.background(NativePenScroll().frame(width: 0, height: 0))
                 }
                 if model["search_results"].array.isEmpty { Text("No matching settings") }
             }
@@ -71,7 +72,10 @@ struct SettingsView: View {
                         Section(group["title"].string) {
                             ForEach(group["rows"].array.indices, id: \.self) { rowIndex in
                                 let row = group["rows"][rowIndex]
-                                if row["visible"].bool { preference(row).id(row["id"].string) }
+                                if row["visible"].bool {
+                                    preference(row).id(row["id"].string)
+                                        .background(NativePenScroll().frame(width: 0, height: 0))
+                                }
                             }
                         }
                     }

@@ -107,8 +107,15 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ recognizer: NSGestureRecognizer) -> Bool {
         if recognizer === secondary { return model?.enabled == true }
         guard let model, model.contact.validate() else { return false }
-        if recognizer === pan && model.contact.requiresHold && !model.contact.held { model.contact.cancel(); return false }
+        if recognizer === pan && model.contact.requiresHold && !model.contact.held {
+            let point = NSApp.currentEvent.map { convert($0.locationInWindow, from: nil) } ?? recognizer.location(in: self)
+            if model.beginSwipe(at: point) { return true }
+            model.contact.cancel(); return false
+        }
         return true
+    }
+    func precedesScrolling(_ recognizer: NSGestureRecognizer) -> Bool {
+        recognizer === pan && model?.contact.target != nil
     }
     func gestureRecognizer(_ recognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith other: NSGestureRecognizer) -> Bool {
         // SwiftUI's button recognizer begins on mouse-down. Keep the retained
@@ -123,13 +130,14 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         switch recognizer.state {
         case .began: model?.recognizeHold()
         case .ended: finish()
-        case .cancelled: cancel()
+        case .cancelled: if model?.swiping != true { cancel() }
         default: break
         }
     }
     @objc private func panned(_ recognizer: NSPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
+            if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
             if move(recognizer.location(in: self)) && timer == nil {
                 let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.track() } }
                 RunLoop.main.add(timer, forMode: .common); self.timer = timer
@@ -140,6 +148,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         }
     }
     private func finish() {
+        model?.finishSwipe(cancelled: false)
         model?.contact.release(at: pan.location(in: self)); downEvent = nil
         timer?.invalidate(); timer = nil
     }

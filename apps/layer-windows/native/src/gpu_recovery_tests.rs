@@ -40,7 +40,7 @@ pub(crate) fn renderer() -> (Renderer, Arc<DeviceState>) {
         let gpu = WgpuRasterizer::from_wgpu(adapter, device, queue).unwrap();
         assert!(!state.is_lost(Some(gpu.device())));
         state.check().unwrap();
-        return (Renderer(Some(gpu)), state);
+        return (Renderer(Some(gpu.into())), state);
     }
 }
 

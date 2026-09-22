@@ -48,7 +48,7 @@ struct WorkspaceSwitcher: View {
     private var segments: some View {
         WorkspaceNameWidth(natural: naturalWidth, maximum: maximumWidth) {
             ScrollViewReader { scroll in
-                ScrollView(.horizontal, showsIndicators: false) {
+                EditorScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
                         ForEach(choices, id: \.switcherID) { workspace in
                             choice(workspace).id(workspace["id"].string)

@@ -3,26 +3,27 @@ use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOut
 use layer_render_wgpu::{GpuRasterError, WgpuRasterizer};
 
 /// Not a CPU fallback: until a GPU device is attached, only UI/viewport
-/// bookkeeping is available. Pixel operations fail explicitly.
+/// bookkeeping is available. Pixel operations fail explicitly. Keep the large
+/// GPU owner on the heap so native render-thread stacks can replace it safely.
 #[derive(Default)]
-pub struct Renderer(pub Option<WgpuRasterizer>);
+pub struct Renderer(pub Option<Box<WgpuRasterizer>>);
 impl Renderer {
     fn gpu(&mut self) -> Result<&mut WgpuRasterizer, GpuRasterError> {
-        self.0.as_mut().ok_or(GpuRasterError::AdapterUnavailable)
+        self.0.as_deref_mut().ok_or(GpuRasterError::AdapterUnavailable)
     }
 }
 impl CanvasRenderer for Renderer {
     fn document_color(&self) -> layer_core::color::DocumentColor {
-        self.0.as_ref().map(CanvasRenderer::document_color).unwrap_or_default()
+        self.0.as_deref().map(CanvasRenderer::document_color).unwrap_or_default()
     }
     fn adopt_prepared_color(&mut self, color: layer_core::color::DocumentColor) -> Result<bool, Self::Error> {
         self.gpu()?.adopt_prepared_color(color)
     }
     fn supports_tiled_sources(&self) -> bool {
-        self.0.as_ref().is_some_and(CanvasRenderer::supports_tiled_sources)
+        self.0.as_deref().is_some_and(CanvasRenderer::supports_tiled_sources)
     }
     fn supports_raster_damage(&self) -> bool {
-        self.0.as_ref().is_some_and(CanvasRenderer::supports_raster_damage)
+        self.0.as_deref().is_some_and(CanvasRenderer::supports_raster_damage)
     }
     fn raster_dependencies_ready(&self, packet: FramePacket<'_>) -> bool {
         self.0
@@ -147,4 +148,9 @@ impl CanvasRenderer for Renderer {
     fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.0.as_mut()?.take_readback()
     }
+}
+
+#[test]
+fn renderer_replacement_keeps_native_stack_usage_bounded() {
+    assert_eq!(std::mem::size_of::<Renderer>(), std::mem::size_of::<usize>());
 }

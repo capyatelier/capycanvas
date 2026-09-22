@@ -233,7 +233,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 assert_eq!(unsafe { capy_apple_suspend_renderer(restored.0) }, 0);
                 let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(color).unwrap();
                 let owner = unsafe { &mut *restored.0 };
-                owner.metal.install_renderer(&mut owner.host, gpu).unwrap();
+                owner.metal.install_renderer(&mut owner.host, gpu.into()).unwrap();
                 restored.draw_until_idle();
                 assert_project_document(
                     unsafe { &*restored.0 }.host.session.engine().document(),

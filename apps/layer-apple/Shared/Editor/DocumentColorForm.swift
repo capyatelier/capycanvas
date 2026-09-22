@@ -28,7 +28,7 @@ struct DocumentColorForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(editor.title).font(.headline)
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if editor.properties {
                         ForEach(Array(editor.rows.enumerated()), id: \.offset) { _, row in

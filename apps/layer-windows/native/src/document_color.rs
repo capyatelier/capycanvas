@@ -6,7 +6,7 @@ use layer_ui::{ColorPreparation, ColorWorkflow};
 
 pub(super) struct Task {
     pub(super) workflow: ColorWorkflow,
-    renderer: Option<WgpuRasterizer>,
+    renderer: Option<Box<WgpuRasterizer>>,
     gpu: SnapshotGpu,
     device: wgpu::Device,
     brush: layer_core::BrushSnapshot,
@@ -155,7 +155,7 @@ impl Task {
             renderer
                 .configure_ui_previews(layer_core::color::RgbSpace::Srgb)
                 .map_err(|e| e.to_string())?;
-            self.renderer = Some(renderer);
+            self.renderer = Some(renderer.into());
         }
         if !self.workflow.is_history() {
             self.workflow.comparison_completed()?;

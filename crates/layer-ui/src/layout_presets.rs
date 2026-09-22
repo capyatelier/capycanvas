@@ -348,18 +348,21 @@ mod tests {
             assert!(gtk.panel_group(panel).is_none());
             assert!(panel.available_on(Platform::Gtk));
         }
+        for platform in [Platform::Mac, Platform::Ios] {
+            assert!(crate::CommandId::DrawingBrush.available_on(platform));
+            assert!(Panel::BrushSets.available_on(platform));
+            assert!(Panel::Tools.available_on(platform));
+        }
         assert!(Panel::BrushSets.default_width() < Panel::Tools.default_width());
         assert_eq!(Panel::BrushSets.label(), "Brushes");
         assert_eq!(Panel::Tools.label(), "Tools");
-        for platform in [Platform::Windows, Platform::Mac, Platform::Ios] {
-            assert!(!crate::CommandId::DrawingBrush.available_on(platform));
-            assert!(!Panel::BrushSets.available_on(platform));
-            assert!(!Panel::Tools.available_on(platform));
-            let layout = WorkspacePreset::Painter.layout(platform);
-            assert!(layout.header.entries().any(|entry| entry.item == HeaderItem::Tool {
-                control: ToolbarControl::Command { command: crate::CommandId::Brush },
-            }));
-        }
+        assert!(!crate::CommandId::DrawingBrush.available_on(Platform::Windows));
+        assert!(!Panel::BrushSets.available_on(Platform::Windows));
+        assert!(!Panel::Tools.available_on(Platform::Windows));
+        let layout = WorkspacePreset::Painter.layout(Platform::Windows);
+        assert!(layout.header.entries().any(|entry| entry.item == HeaderItem::Tool {
+            control: ToolbarControl::Command { command: crate::CommandId::Brush },
+        }));
         // Existing workspaces gain hidden registrations without losing layout.
         let mut saved = serde_json::to_value(&gtk).unwrap();
         saved["panels"].as_array_mut().unwrap().retain(|panel|

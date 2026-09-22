@@ -63,7 +63,7 @@ struct ColorProfileLibrary: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Color Profile Library").font(.headline)
             Text("Imported profiles are saved as exact copies. Removing one leaves original files and profiles embedded in drawings or export presets intact.")
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(entries, id: \.id) { entry in
                         VStack(alignment: .leading, spacing: 4) {

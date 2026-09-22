@@ -79,7 +79,7 @@ impl MetalHost {
 
     /// Each device records failures separately; a retired callback cannot stop
     /// its replacement. All session changes still happen on the serial owner.
-    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, mut renderer: WgpuRasterizer) -> Result<(), String> {
+    pub(crate) fn install_renderer(&mut self, host: &mut NativeHost, mut renderer: Box<WgpuRasterizer>) -> Result<(), String> {
         renderer.configure_ui_previews(crate::DISPLAY_SPACE).map_err(error)?;
         let failure = Arc::new(OnceLock::new());
         let lost = failure.clone();
@@ -241,7 +241,7 @@ impl MetalHost {
             self.install_renderer(host,
                 WgpuRasterizer::from_wgpu_native_staged_cached(adapter, device, queue, cache,
                     host.session.engine().document().color)
-                    .map_err(error)?,
+                    .map_err(error)?.into(),
             )?;
         }
         let [width, height] = host.session.state().camera.viewport;

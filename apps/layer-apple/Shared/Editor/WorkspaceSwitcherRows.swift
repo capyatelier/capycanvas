@@ -14,7 +14,7 @@ struct WorkspaceSwitcherRows: View {
             && !library.switcherBusy && !manager.processing && manager.prompt == nil
     }
     var body: some View {
-        ScrollView { content }
+        EditorScrollView { content }
             .accessibilityIdentifier("workspace-manager-rows")
             .onScrollPhaseChange { _, phase in
                 if phase != .idle && !interaction.contact.held && !interaction.contact.dragging { interaction.cancel() }

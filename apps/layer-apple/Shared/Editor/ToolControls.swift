@@ -4,12 +4,17 @@ import SwiftUI
 /// the desktop host. This includes non-paint tools and their command actions.
 struct ToolSetControls: View {
     @ObservedObject var store: EditorStore
+    var panel = "brushes"
+    private var model: JSON { panel == "brushes" ? store.state["tool_set"] : store.state["tool_panels"][panel] }
+    private var sets: Bool { panel == "brush_sets" || panel == "sculpt_sets" }
     var body: some View {
         VStack(spacing: 8) {
-            ToolGroupsLayout {
-                items(store.state["tool_set"]["groups"], group: true)
+            if sets {
+                VStack(spacing: 2) { items(model["groups"], group: true) }
+            } else {
+                ToolGroupsLayout { items(model["groups"], group: true) }
             }
-            VStack(spacing: 2) { items(store.state["tool_set"]["subtools"], group: false) }
+            VStack(spacing: 2) { items(model["subtools"], group: false) }
         }
     }
 
@@ -20,7 +25,13 @@ struct ToolSetControls: View {
                 ? store.command(item["action"]["command"].string) : JSON()
             Button { store.dispatch(item["action"]) } label: {
                 Group {
-                    if group {
+                    if group && sets {
+                        HStack(spacing: 6) {
+                            SharedIcon(name: item["icon"].string)
+                            Text(item["label"].string).fontWeight(.bold).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }.padding(.horizontal, 6).frame(minHeight: 44)
+                    } else if group {
                         VStack(spacing: 8) {
                             SharedIcon(name: item["icon"].string)
                             Text(item["label"].string).fontWeight(.bold)
@@ -50,7 +61,7 @@ struct ToolSetControls: View {
                 .help(command.isNull ? item["label"].string : command["tooltip"].string)
                 .accessibilityLabel(item["label"].string)
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
-                .accessibilityIdentifier(item["preview"].isNull ? "tool-\(group ? "group" : "subtool")-\(index)" : "brush-\(item["preview"].uint)")
+                .accessibilityIdentifier(sets ? "\(panel)-\(item["label"].string)" : item["preview"].isNull ? "tool-\(group ? "group" : "subtool")-\(index)" : "brush-\(item["preview"].uint)")
         }
     }
 }

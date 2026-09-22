@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LayerRowFrame: Equatable {
     var row: CGRect = .zero
+    var root: CGRect = .zero
     var grip: CGRect = .zero
     var name: CGRect = .zero
     var mask: CGRect = .zero
@@ -11,6 +12,7 @@ struct LayerRowFrames: PreferenceKey {
     static func reduce(value: inout [UInt64: LayerRowFrame], nextValue: () -> [UInt64: LayerRowFrame]) {
         value.merge(nextValue()) { old, next in
             LayerRowFrame(row: next.row == .zero ? old.row : next.row,
+                root: next.root == .zero ? old.root : next.root,
                 grip: next.grip == .zero ? old.grip : next.grip,
                 name: next.name == .zero ? old.name : next.name,
                 mask: next.mask == .zero ? old.mask : next.mask)
@@ -25,13 +27,28 @@ struct LayerRowMeasurement: ViewModifier {
         if enabled {
         content.background(GeometryReader { geometry in
             let frame = geometry.frame(in: .named("layer-rows"))
-            let value = { var value = LayerRowFrame(); value[keyPath: part] = frame; return value }()
+            let value = {
+                var value = LayerRowFrame(); value[keyPath: part] = frame
+                if part == \.row { value.root = geometry.frame(in: .named("editor-workspace")) }
+                return value
+            }()
             Color.clear.preference(key: LayerRowFrames.self, value: [id: value])
         })
         } else { content }
     }
 }
 enum LayerMenuSource: Equatable { case row(UInt64), footer }
+
+/// One revealed native row per editor, including retained drawer instances.
+@MainActor final class LayerSwipe: ObservableObject {
+    @Published var owner: UUID?
+    @Published var layer: UInt64?
+    @Published var offset: CGFloat = 0
+    @Published var tracking = false
+    var bounds = CGRect.zero
+    func close() { owner = nil; layer = nil; offset = 0; tracking = false }
+    func contact(at point: CGPoint) { if owner != nil && !bounds.contains(point) { close() } }
+}
 
 /// Native pickup and measured feedback only. Rust owns context selection,
 /// menu capabilities, hierarchy edits and the single completed drop transaction.
@@ -46,6 +63,10 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     }
     weak var store: EditorStore?
     let contact = ReorderContact()
+    let swipeOwner = UUID()
+    private var swipeOrigin = CGPoint.zero
+    private var swipeStart: CGFloat = 0
+    private var contactLayer: UInt64?
     var frames: [UInt64: LayerRowFrame] = [:]
     var viewport: CGRect = .zero
     @Published private(set) var drag: Drag?
@@ -70,6 +91,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         guard let row = row(at: point), let frame = frames[row["id"].uint] else { return nil }
         closeMenu()
         let id = row["id"].uint, currentEpoch = epoch
+        contactLayer = id
         let mask = row["has_mask"].bool && frame.mask.contains(point)
         return ReorderTarget(id: identity(id), surface: frame.grip.contains(point) ? .handle : .row,
             canDrag: row["can_drop_below"].bool,
@@ -78,7 +100,10 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
                 return enabled && epoch == currentEpoch && renaming != id && layers.contains { $0["id"].uint == id }
             }, openContext: { [weak self] in self?.openMenu(id: id, mask: mask) },
             closeContext: { [weak self] in self?.closeMenu() },
-            begin: { [weak self] origin in self?.drag = Drag(id: id, bounds: frame.row, origin: origin, point: origin) },
+            begin: { [weak self] origin in
+                self?.store?.layerSwipe.close()
+                self?.drag = Drag(id: id, bounds: frame.row, origin: origin, point: origin)
+            },
             move: { [weak self] point in self?.move(point) },
             finish: { [weak self] point in
                 guard let self else { return }
@@ -87,6 +112,31 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
                     store?.layer(["op": "drop", "id": id, "target": target, "fraction": completed.fraction])
                 }
             }, cancel: { [weak self] in self?.drag = nil })
+    }
+    var swiping: Bool { store?.layerSwipe.owner == swipeOwner && store?.layerSwipe.tracking == true }
+    func beginSwipe(at point: CGPoint) -> Bool {
+        guard let store, contact.device != .mouse, contact.target?.surface == .row, !contact.held,
+              let id = contactLayer, let row = layers.first(where: { $0["id"].uint == id }), row["can_delete"].bool,
+              let frame = frames[id] else { return false }
+        let delta = CGPoint(x: point.x - contact.origin.x, y: point.y - contact.origin.y)
+        let swipe = store.layerSwipe
+        let start = swipe.owner == swipeOwner && swipe.layer == id ? swipe.offset : 0
+        guard abs(delta.x) > abs(delta.y), delta.x < 0 || start > 0 else { return false }
+        swipeOrigin = contact.origin; swipeStart = start
+        contact.suppressActivation(); closeMenu()
+        swipe.owner = swipeOwner; swipe.layer = id; swipe.bounds = frame.root; swipe.tracking = true
+        moveSwipe(to: point)
+        return true
+    }
+    func moveSwipe(to point: CGPoint) {
+        guard swiping, let swipe = store?.layerSwipe else { return }
+        swipe.offset = min(72, max(0, swipeStart - (point.x - swipeOrigin.x)))
+    }
+    func finishSwipe(cancelled: Bool) {
+        guard swiping, let swipe = store?.layerSwipe else { return }
+        swipe.tracking = false
+        if cancelled || swipe.offset < 72 * 0.4 { swipe.close() }
+        else { swipe.offset = 72 }
     }
     private func move(_ point: CGPoint) {
         guard var drag else { return }
@@ -107,6 +157,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     }
     func openMenu(id: UInt64, mask: Bool, source: LayerMenuSource? = nil) {
         guard let store, layers.contains(where: { $0["id"].uint == id }) else { return }
+        store.layerSwipe.close()
         menuSource = source ?? .row(id)
         let request = UUID(), currentEpoch = epoch; menuRequest = request
         store.layer(["op": "context", "id": id, "mask": mask])
@@ -121,8 +172,11 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         // A document edit can remove the source while the pointer is stationary.
         // Retire it on publication, without waiting for a native move or release.
         if contact.target != nil, !contact.validate() { cancel() }
+        if let swipe = store?.layerSwipe, swipe.owner == swipeOwner,
+           !layers.contains(where: { $0["id"].uint == swipe.layer && $0["can_delete"].bool }) { swipe.close() }
     }
     func cancel() {
         contact.cancel(); if drag != nil { drag = nil }; closeMenu()
+        if store?.layerSwipe.owner == swipeOwner { store?.layerSwipe.close() }
     }
 }

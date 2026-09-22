@@ -13,10 +13,18 @@ import CoreGraphics
     func recognizeHold()
     func cancel()
     func nativeInputDetached()
+    var swiping: Bool { get }
+    func beginSwipe(at point: CGPoint) -> Bool
+    func moveSwipe(to point: CGPoint)
+    func finishSwipe(cancelled: Bool)
 }
 
 extension NativeReorderModel {
-    func recognizeHold() { contact.recognizeHold() }
+    var swiping: Bool { false }
+    func beginSwipe(at point: CGPoint) -> Bool { false }
+    func moveSwipe(to point: CGPoint) {}
+    func finishSwipe(cancelled: Bool) {}
+    func recognizeHold() { if !swiping { contact.recognizeHold() } }
     func nativeInputDetached() {
         // Native recognizers are already detached. SwiftUI can still own its
         // graph exclusively; defer publication and preserve a remounted contact.

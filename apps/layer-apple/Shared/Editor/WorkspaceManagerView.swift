@@ -87,7 +87,7 @@ struct WorkspaceManagerView: View {
             } }
             if manager.page == "workspaces" {
                 WorkspaceSwitcherRows(manager: manager, library: library)
-            } else { ScrollView {
+            } else { EditorScrollView {
                 LazyVStack(spacing: 8) {
                     if manager.view["rows"].array.isEmpty { Text("No items found.").foregroundStyle(.secondary).padding(20) }
                     ForEach(manager.view["rows"].array, id: \.managerID) { row in
@@ -147,7 +147,7 @@ struct WorkspaceManagerView: View {
     }
     private var history: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ScrollView {
+            EditorScrollView {
                 LazyVStack(spacing: 6) {
                     ForEach(manager.history["rows"].array, id: \.managerID) { row in
                         Button { manager.selectHistory(row["id"].string) } label: {

@@ -33,7 +33,7 @@ struct EditorActionMenu: View {
     private var initialFocus: Int? { enabled.first { entries[$0].selected == true } ?? enabled.first }
     var body: some View {
         ScrollViewReader { reader in
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     header
                     ForEach(sections.indices, id: \.self) { section in sectionView(section) }

@@ -11,7 +11,7 @@ struct WorkspacePanelHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             GeometryReader { viewport in
-                ScrollView(.horizontal) { HStack(spacing: 0) { tabs } }
+                EditorScrollView(.horizontal) { HStack(spacing: 0) { tabs } }
                     .scrollIndicators(.hidden)
                     .scrollDisabled(store.workspace.tabSlide.grab != nil)
                     .environment(\.workspaceClip, viewport.frame(in: .named("editor-workspace")).intersection(clip))

@@ -17,11 +17,13 @@ struct LayerPanel: View {
             VStack(spacing: 0) {
                 if visible("layer_opacity") { header.modifier(PanelBodyMeasurement(panel: "layers", part: "header")) }
                 if visible("layers") {
-                    ScrollView {
+                    EditorScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(layers, id: \.id) { layer in
                                 let thumbnailToken = "\(popupID):\(layer["id"].uint)"
-                                LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
+                                LayerSwipeRow(store: store, swipe: store.layerSwipe, owner: interaction.swipeOwner, layer: layer) {
+                                    LayerRow(store: store, layer: layer, previews: store.layerThumbnails, interaction: interaction)
+                                }
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                                     .overlay { dropMark(layer) }
@@ -135,6 +137,32 @@ struct LayerPanel: View {
     }
 }
 
+private struct LayerSwipeRow<Content: View>: View {
+    @ObservedObject var store: EditorStore
+    @ObservedObject var swipe: LayerSwipe
+    let owner: UUID
+    let layer: JSON
+    @ViewBuilder var content: () -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var offset: CGFloat { swipe.owner == owner && swipe.layer == layer["id"].uint ? swipe.offset : 0 }
+    var body: some View {
+        content().offset(x: -offset)
+            .background(alignment: .trailing) {
+                if offset > 0 {
+                    Button {
+                        swipe.close(); store.layer(["op": "delete", "id": layer["id"].raw])
+                    } label: {
+                        Text("Delete").foregroundStyle(.white).frame(width: offset)
+                            .frame(maxHeight: .infinity).background(Color(red: 0.78, green: 0.16, blue: 0.16))
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(!layer["can_delete"].bool)
+                        .accessibilityIdentifier("layer-delete-\(layer["id"].uint)")
+                }
+            }.clipped()
+            .animation(swipe.tracking || reduceMotion ? nil : .easeOut(duration: 0.12), value: offset)
+    }
+}
+
 /// The isolated UI workflow reads complete order, including unmounted rows.
 /// Ordinary builds keep the native scroll view's accessibility value unchanged.
 private struct LayerInputCheckOrder: ViewModifier {
@@ -174,12 +202,6 @@ private struct LayerRow: View {
     var interaction: LayerRowInteraction?
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var id: UInt64 { layer["id"].uint }
-    private var metadata: String {
-        var parts: [String] = layer["editable"].bool ? [] : ["Protected"]
-        if layer["blend"].uint != 0 { parts.append(layer["blend_label"].string) }
-        if layer["opacity"].number < 1 { parts.append("\(Int((layer["opacity"].number * 100).rounded()))%") }
-        return parts.joined(separator: " · ")
-    }
     var body: some View {
         HStack(spacing: 2) {
             LayerButton(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: layer["visible"].bool ? "Hide layer" : "Show layer", height: 36) {
@@ -201,7 +223,7 @@ private struct LayerRow: View {
             }.padding(.leading, min(CGFloat(layer["depth"].uint) * 8, 24))
             VStack(alignment: .leading, spacing: 0) {
                 LayerName(store: store, layer: layer, preview: preview, allowsAction: { interaction?.contact.consumeClick() != true })
-                if !metadata.isEmpty { Text(metadata).lineLimit(1).opacity(0.55) }
+                if !layer["description"].string.isEmpty { Text(layer["description"].string).lineLimit(1).opacity(0.55) }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
                 .modifier(LayerRowMeasurement(id: id, part: \.name, enabled: !preview))
                 .contentShape(Rectangle()).onTapGesture {
@@ -223,7 +245,7 @@ private struct LayerRow: View {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
                 })
             .accessibilityElement(children: .contain)
-            .accessibilityValue(!layer["editable"].bool ? "Paper is protected; select a paint layer to draw" : layer["mask_selected"].bool ? "Editing mask" : layer["editing"].bool ? "Drawing target" : layer["selected"].bool ? "Selected" : "")
+            .accessibilityValue(layer["mask_selected"].bool ? "Editing mask" : layer["drawing"].bool ? "Drawing target" : layer["selected"].bool ? "Selected" : "")
             .accessibilityIdentifier("layer-row-\(id)")
     }
     private func thumbnail(mask: Bool) -> some View {
@@ -232,10 +254,16 @@ private struct LayerRow: View {
         } label: {
             ZStack {
                 if !mask && layer["group"].bool { SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28) }
-                else if !mask && !layer["content_icon"].isNull { SharedIcon(name: layer["content_icon"].string, size: 28) }
-                else if let image = previews.images[LayerThumbnails.key(id, mask)] {
-                    Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
-                        .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
+                else {
+                    if mask || layer["content_icon"].isNull || !layer["content_icon_color"].isNull,
+                       let image = previews.images[LayerThumbnails.key(id, mask)] {
+                        Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
+                            .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
+                    }
+                    if !mask && !layer["content_icon"].isNull {
+                        SharedIcon(name: layer["content_icon"].string, size: 28)
+                            .foregroundStyle(layer["content_icon_color"].isNull ? palette["text"] : Color(hex: layer["content_icon_color"].string))
+                    }
                 }
             }.frame(width: 30, height: 30)
                 .background(!mask && layer["group"].bool ? Color.clear : palette["input"], in: RoundedRectangle(cornerRadius: 3))
@@ -247,7 +275,7 @@ private struct LayerRow: View {
                 // Bound the hit region as well as the drawing. Without this,
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : !layer["editable"].bool ? "Paper is protected; select a paint layer to draw" : "Edit layer content")
+        }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : "Edit layer content")
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
@@ -293,7 +321,7 @@ private struct LayerName: View {
                 TextField("Layer name", text: $name).textFieldStyle(.plain).focused($focused)
                     .onSubmit { finish() }.onKeyPress(.escape) { finish(cancel: true); return .handled }
             } else {
-                Text(layer["label"].string).lineLimit(1).help(layer["editable"].bool ? layer["label"].string : "Paper is protected; select a paint layer to draw")
+                Text(layer["label"].string).lineLimit(1).help(layer["label"].string)
                     .onTapGesture(count: 2) {
                         if allowsAction(), layer["editable"].bool && !layer["locked"].bool { store.layer(["op": "begin_rename", "id": layer["id"].raw]) }
                     }

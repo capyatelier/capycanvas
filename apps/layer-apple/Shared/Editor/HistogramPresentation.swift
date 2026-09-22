@@ -11,7 +11,7 @@ struct HistogramPresentation: View {
     var body: some View {
         if model.isOpen {
             GeometryReader { geometry in
-                ScrollView {
+                EditorScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("Histogram").font(.headline)

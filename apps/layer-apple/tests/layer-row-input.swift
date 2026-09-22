@@ -47,6 +47,33 @@ import SwiftUI
         try event(.leftMouseUp, at: start, marker: marker, number: 1002); try await drain()
         blocker.removeFromSuperview()
         try require(!admittedCoveredRow, "A covered layer row must not take another view's contact")
+        try await edit(store, ["type": "layer", "action": ["op": "select", "id": original, "mask": false]])
+        window.setContentSize(CGSize(width: 380, height: 90)); try await drain()
+        guard let scroll = marker.enclosingScrollView else { throw HostFailure(message: "Layer scroll view missing") }
+        let scrollStart = body(added), scrollEnd = CGPoint(x: scrollStart.x, y: scrollStart.y - 60)
+        try event(.leftMouseDown, at: scrollStart, marker: marker, number: 1003, tablet: true); try await drain(0.02)
+        try event(.leftMouseDragged, at: scrollEnd, marker: marker, number: 1004, tablet: true); try await drain(0.03)
+        try event(.leftMouseUp, at: scrollEnd, marker: marker, number: 1005, tablet: true); try await drain()
+        try require(scroll.contentView.bounds.minY > 0 && model.drag == nil && model.menu.isNull && order(store) == initial
+            && store.state["layer_tools"]["editing_layer"]["id"].uint == original,
+            "Pre-hold pen movement scrolls the native list without editing or opening a menu")
+        scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView)
+        window.setContentSize(CGSize(width: 380, height: 260)); try await drain()
+        start = body(original); end = CGPoint(x: start.x, y: model.frames[added]!.row.minY + 2)
+        let swipeEnd = CGPoint(x: start.x - 90, y: start.y)
+        try event(.leftMouseDown, at: start, marker: marker, number: 1010, tablet: true); try await drain(0.02)
+        try event(.leftMouseDragged, at: swipeEnd, marker: marker, number: 1011, tablet: true); try await drain(0.04)
+        try event(.leftMouseUp, at: swipeEnd, marker: marker, number: 1012, tablet: true); try await drain()
+        try require(store.layerSwipe.offset == 72 && store.layerSwipe.layer == original && model.drag == nil && model.menu.isNull,
+            "A pen row swipe reveals Delete without reordering or opening a menu")
+        try require(order(store) == initial, "Revealing Delete does not edit the document")
+        let delete = CGPoint(x: model.frames[original]!.row.maxX - 24, y: model.frames[original]!.row.midY)
+        try event(.leftMouseDown, at: delete, marker: marker, number: 1013)
+        try event(.leftMouseUp, at: delete, marker: marker, number: 1014)
+        try await wait("Revealed Delete must invoke the shared deletion action") { !order(store).contains(original) }
+        try await edit(store, ["type": "invoke", "command": "undo"])
+        try require(order(store) == initial, "One Undo restores swipe deletion")
+        try await drain()
         try event(.leftMouseDown, at: start, marker: marker, number: 1, tablet: true); try await drain(0.02)
         try event(.leftMouseDragged, at: end, marker: marker, number: 2, tablet: true); try await drain(0.04)
         try event(.leftMouseUp, at: end, marker: marker, number: 3, tablet: true); try await drain()

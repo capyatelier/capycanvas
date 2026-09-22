@@ -25,7 +25,7 @@ private struct WorkspaceCollapsedColumn: View {
     var body: some View {
         let base = column["bounds"], clip = column["content"]
         ZStack(alignment: .topLeading) {
-            ScrollView(.vertical) {
+            EditorScrollView(.vertical) {
                 let bottom = column["groups"].array.map { $0["bounds"].rect.maxY }.max() ?? clip.rect.minY
                 ZStack(alignment: .topLeading) {
                     ForEach(column["groups"].array.indices, id: \.self) { index in
@@ -103,11 +103,12 @@ private struct WorkspaceContentDrawer: View {
                                 WorkspacePanelHeader(store: store, group: tabs.replacing("id", with: tabs["group"]), drawer: true)
                             }
                             GeometryReader { clip in
-                                ScrollView(.vertical) {
+                                EditorScrollView(.vertical, showsIndicators: false) {
                                     VStack(spacing: 6) {
                                         ForEach(drawer.model["columns"][index].array.indices, id: \.self) { row in
                                             let panel = drawer.panel(drawer.model["columns"][index][row])
-                                            DrawerPanelBody(store: store, panel: panel, width: bounds.rect.width)
+                                            DrawerPanelBody(store: store, panel: panel, width: bounds.rect.width,
+                                                splitFilters: drawer.model["columns"].array.contains { $0.array.contains { $0.string == "filter_types" } })
                                         }
                                     }.frame(maxWidth: .infinity, alignment: .topLeading)
                                         .background(GeometryReader { body in
@@ -118,7 +119,6 @@ private struct WorkspaceContentDrawer: View {
                             }
                         }.placed(bounds)
                     }
-
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
                     .background(palette["panel"]).clipShape(DrawerBodyShape(corners: connection["square_corners"]))
                     .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
@@ -147,6 +147,7 @@ private struct DrawerPanelBody: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
     let width: CGFloat
+    let splitFilters: Bool
     @State private var tiles = JSON()
     private var tileKey: String { JSON([panel["id"].raw, panel["tiles"].array.map { [$0["id"].raw, $0["control"].raw] }, panel["tile_style"].raw, width]).stableKey }
     var body: some View {
@@ -161,8 +162,8 @@ private struct DrawerPanelBody: View {
                         if !Task.isCancelled { tiles = result }
                     }
             } else {
-                PanelControls(store: store, panel: panel, scrollable: false, measureForWorkspace: false)
-                    .frame(height: panel["id"].string == "layers" || panel["id"].string == "adjustments" ? 480 : panel["id"].string == "navigator" ? 240 : nil)
+                PanelControls(store: store, panel: panel, scrollable: false, measureForWorkspace: false, splitFilters: splitFilters)
+                    .frame(height: ["layers", "adjustments", "filter_types"].contains(panel["id"].string) ? 480 : panel["id"].string == "navigator" ? 240 : nil)
             }
         }
     }

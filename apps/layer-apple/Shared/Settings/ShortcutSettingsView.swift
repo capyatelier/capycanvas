@@ -23,6 +23,7 @@ struct ShortcutSettingsView: View {
                             Text(row["shortcut"].string).foregroundStyle(.secondary)
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("shortcut-" + row["id"].string)
+                        .background(NativePenScroll().frame(width: 0, height: 0))
                 }
             }
             HStack {

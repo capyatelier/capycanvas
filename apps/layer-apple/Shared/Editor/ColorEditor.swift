@@ -44,7 +44,7 @@ struct ColorEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Edit Color").font(.headline)
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(form["description"].string)
                     if !form["preview"].isNull {

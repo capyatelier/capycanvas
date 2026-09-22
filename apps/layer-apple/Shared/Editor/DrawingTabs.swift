@@ -259,7 +259,7 @@ struct DrawingTabsPresentation: ViewModifier {
         }.sheet(isPresented: $tabs.presented) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Drawings").font(.headline)
-                ScrollView { DrawingTabList(store: store, tabs: tabs, vertical: true) }
+                EditorScrollView { DrawingTabList(store: store, tabs: tabs, vertical: true) }
                 if !tabs.view["storage_error"].isNull { Text(tabs.view["storage_error"].string).foregroundStyle(.red) }
                 HStack {
                     Button("Undo Tab Order") { tabs.edit(["op":"history","redo":false]) }.disabled(!tabs.view["can_undo"].bool)

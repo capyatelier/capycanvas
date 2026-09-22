@@ -383,7 +383,7 @@ fn prepare(
         std::thread::sleep(Duration::from_millis(2));
     }
     let mut candidate =
-        UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;
+        UiSession::from_project(Renderer(Some(gpu.into())), project, None, environment.viewport)?;
     candidate.frame(0, 0)?;
     check_cancelled(cancel)?;
     Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(Box::new(candidate)) } else { Completed::Prepared(Box::new(candidate)) })
@@ -1806,7 +1806,7 @@ mod gpu_tests {
         }
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
-            UiSession::from_project(Renderer(Some(gpu)), project, None, [31, 29]).unwrap();
+            UiSession::from_project(Renderer(Some(gpu.into())), project, None, [31, 29]).unwrap();
         host.session.set_platform(Platform::Windows);
         host.session.set_document_replacement(true);
         host.resize(31, 29, 1.).unwrap();
@@ -1973,7 +1973,7 @@ mod gpu_tests {
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let mut host = NativeHost::new(Platform::Gtk).unwrap();
         host.session = UiSession::from_project(
-            Renderer(Some(gpu)),
+            Renderer(Some(gpu.into())),
             layer_ui::new_drawing(64, 48).unwrap(),
             None,
             [64, 48],

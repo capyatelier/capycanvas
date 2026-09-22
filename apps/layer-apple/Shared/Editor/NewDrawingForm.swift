@@ -50,7 +50,7 @@ struct NewDrawingForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(spec["title"].string).font(.headline)
-            ScrollView {
+            EditorScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     FormPicker("Preset", selection: preset) {
                         Text("Custom").tag(-1)

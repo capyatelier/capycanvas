@@ -43,7 +43,7 @@ struct ColorLibraryView: View {
                 apply(["op": "store", "palette": selected, "name": name, "color": store.state["colors"][slot].raw])
             }.accessibilityIdentifier("color-library-store")
             if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("color-library-error") }
-            ScrollView {
+            EditorScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if palette["swatches"].array.isEmpty { Text("No saved colors yet.").foregroundStyle(.secondary) }
                     ForEach(palette["swatches"].array, id: \.paletteID) { swatch in

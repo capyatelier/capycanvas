@@ -24,8 +24,8 @@ mod hdr;
 mod document_tabs;
 #[path = "photo_tests.rs"]
 mod photo;
-fn native_renderer() -> layer_render_wgpu::WgpuRasterizer {
-    layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).expect("Native SDR hardware GPU required")
+fn native_renderer() -> Box<layer_render_wgpu::WgpuRasterizer> {
+    layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).expect("Native SDR hardware GPU required").into()
 }
 #[path = "header_tests.rs"]
 mod header;
@@ -352,6 +352,7 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
             let key = match target {
                 "gaussian_blur" => "sigma",
                 "split_tone" => "shadows",
+                "paper" => "paper_color",
                 _ => "opacity",
             };
             let state = app.state();
@@ -368,7 +369,7 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
                     json!({"kind":"number","value":6}),
                     json!({"kind":"number","value":12}),
                 ),
-                "split_tone" => (
+                "split_tone" | "paper" => (
                     json!({"kind":"color","value":{"space":"Srgb","rgba":[0.4,0.2,0.1,1]}}),
                     json!({"kind":"color","value":{"space":"Srgb","rgba":[0.8,0.2,0.1,1]}}),
                 ),
@@ -1282,7 +1283,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         let restored = App::new(platform);
         let host = &mut unsafe { &mut *restored.0 }.host;
         host.session =
-            layer_ui::UiSession::new(layer_host::Renderer(Some(gpu)), document, [1200, 900])
+            layer_ui::UiSession::new(layer_host::Renderer(Some(gpu.into())), document, [1200, 900])
                 .unwrap();
         host.session
             .set_platform(source.host.session.state().platform);
@@ -1413,13 +1414,13 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
             Default::default(),
         )
         .unwrap();
-        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(reference);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(reference.into());
         app.action(json!({"type": "set_color", "rgba": [0,0,0,1]}));
         // Accepted engine work must survive the first paper-only submission.
         app.stroke();
         {
             let host = &mut unsafe { &mut *app.0 }.host;
-            host.session.renderer_mut().0 = Some(staged);
+            host.session.renderer_mut().0 = Some(staged.into());
             host.startup = Default::default();
             host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, false)
                 .unwrap();

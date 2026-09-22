@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AdjustmentPanel: View {
     @ObservedObject var store: EditorStore
+    var splitPicker = false
     @State private var projection = UUID().uuidString
     @Environment(\.displayScale) private var scale
     @Environment(\.scenePhase) private var phase
@@ -13,7 +14,7 @@ struct AdjustmentPanel: View {
     private func send(_ action: [String: Any]) { store.dispatch(["type": "filter_picker", "action": action]) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
+            if !splitPicker { HStack(spacing: 6) {
                 if !picker["search"].isNull {
                     EditorTextField(picker["search_label"].string, value: picker["search"].string) {
                         send(["op": "search", "query": $0])
@@ -34,13 +35,13 @@ struct AdjustmentPanel: View {
                 IconTile(icon: "search", label: picker["search_label"].string) {
                     send(["op": "toggle_search"])
                 }.frame(width: 48, height: 34).accessibilityIdentifier("filter-search-toggle")
-            }.frame(minHeight: 34).modifier(PanelBodyMeasurement(panel: "adjustments", part: "header"))
+            }.frame(minHeight: 34).modifier(PanelBodyMeasurement(panel: "adjustments", part: "header")) }
             GeometryReader { viewport in
-                ScrollView {
+                EditorScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(choices.indices, id: \.self) { index in
                             let choice = choices[index]
-                            if index == 0 || choice["category"].string != choices[index - 1]["category"].string {
+                            if !splitPicker && (index == 0 || choice["category"].string != choices[index - 1]["category"].string) {
                                 HStack(spacing: 6) {
                                     SharedIcon(name: choice["category_icon"].string)
                                     Text(choice["category_label"].string).fontWeight(.bold)
@@ -92,8 +93,36 @@ private struct AdjustmentRow: View {
                     Text(choice["label"].string).lineLimit(1)
                 }.frame(height: 18)
             }.padding(.horizontal, 6).padding(.vertical, 3).contentShape(RoundedRectangle(cornerRadius: 6))
-        }.buttonStyle(.plain).help(choice["tooltip"].string)
+        }.buttonStyle(EditorControlButtonStyle(selected: store.state["filter_picker"]["selected"].string == choice["id"].string))
+            .help(choice["tooltip"].string)
+            .accessibilityAddTraits(store.state["filter_picker"]["selected"].string == choice["id"].string ? .isSelected : [])
             .accessibilityIdentifier("adjustment-" + choice["id"].string)
             .accessibilityValue(previews.images[choice["id"].string] == nil ? "Preview pending" : "Preview ready")
+    }
+}
+
+struct FilterTypesPanel: View {
+    @ObservedObject var store: EditorStore
+    var body: some View {
+        VStack(spacing: 6) {
+            EditorScrollView {
+                VStack(spacing: 2) {
+                    ForEach(store.state["filter_categories"].array.indices, id: \.self) { index in
+                        let category = store.state["filter_categories"][index]
+                        Button { store.dispatch(["type": "filter_picker", "action": ["op": "category", "category": category["id"].raw]]) } label: {
+                            HStack(spacing: 6) {
+                                SharedIcon(name: category["icon"].string)
+                                Text(category["label"].string).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }.padding(.horizontal, 6).frame(minHeight: 44).contentShape(Rectangle())
+                        }.buttonStyle(EditorControlButtonStyle(selected: category["id"].stableKey == store.state["filter_picker"]["category"].stableKey))
+                            .accessibilityIdentifier("filter-type-" + category["id"].string)
+                    }
+                }.modifier(PanelBodyMeasurement(panel: "filter_types", part: "choices", kind: .scroll))
+            }
+            Button("Cancel") { store.dispatch(["type": "effect", "action": ["op": "cancel_filter"]]) }
+                .accessibilityIdentifier("cancel-filter")
+                .modifier(PanelBodyMeasurement(panel: "filter_types", part: "footer"))
+        }.padding(8).modifier(PanelBodyMeasurement(panel: "filter_types", part: "insets", intrinsicHeight: 22))
     }
 }

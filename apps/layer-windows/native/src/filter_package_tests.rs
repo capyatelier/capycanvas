@@ -289,7 +289,7 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     let gpu = layer_render_wgpu::WgpuRasterizer::from_wgpu_staged(adapter, device, queue).unwrap();
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     native.session = layer_ui::UiSession::from_project(
-        layer_host::Renderer(Some(gpu)),
+        layer_host::Renderer(Some(gpu.into())),
         layer_ui::new_drawing(64, 48).unwrap(),
         None,
         [64, 48],

@@ -148,7 +148,7 @@ fn painter_upgrade_preserves_working_values_and_never_resets_edits() {
 #[cfg(test)]
 #[test]
 fn brush_drawer_upgrade_only_replaces_untouched_defaults() {
-    for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+    for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
         let previous = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
         let mut saved = serde_json::to_value(previous.clone()).unwrap();
         saved["panels"].as_array_mut().unwrap().retain(|panel|

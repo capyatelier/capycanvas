@@ -28,8 +28,8 @@ struct Activation {
     epoch: u64,
     context: Option<Context>,
     color: layer_core::color::DocumentColor,
-    retired: Option<WgpuRasterizer>,
-    renderer: Option<WgpuRasterizer>,
+    retired: Option<Box<WgpuRasterizer>>,
+    renderer: Option<Box<WgpuRasterizer>>,
     tiles: Vec<layer_core::raster_storage::RetainedTiles>,
     budget: usize,
     storage_only: bool,
@@ -49,12 +49,12 @@ impl CapyApple {
                 .ok_or_else(|| "Drawing tab is no longer open".into())
         }
     }
-    pub(crate) fn retire_document_gpu(&mut self) -> Option<WgpuRasterizer> {
+    pub(crate) fn retire_document_gpu(&mut self) -> Option<Box<WgpuRasterizer>> {
         self.metal.document_changed();
         self.dismissed_contacts.clear();
         let renderer = self.host.session.renderer_mut().0.take();
         if let Some(gpu) = &renderer {
-            self.document_gpu = Some(Context::from(gpu));
+            self.document_gpu = Some(Context::from(gpu.as_ref()));
         }
         renderer
     }
@@ -211,7 +211,7 @@ impl CapyApple {
     }
     fn document_job(
         &self,
-        retired: Option<WgpuRasterizer>,
+        retired: Option<Box<WgpuRasterizer>>,
         storage_only: bool,
     ) -> *mut CapyDocumentTask {
         Box::into_raw(Box::new(CapyDocumentTask(Mutex::new(Activation {
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn capy_document_prepare(
         )
         .map_err(|e| e.to_string())?;
         gpu.finish_startup_cache();
-        job.renderer = Some(gpu);
+        job.renderer = Some(gpu.into());
         Ok(())
     }))
     .unwrap_or_else(|_| Err("Drawing activation failed".into()));

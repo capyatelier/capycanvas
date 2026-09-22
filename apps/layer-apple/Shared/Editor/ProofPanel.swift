@@ -23,7 +23,7 @@ struct ProofPanel: View {
             if model["mode"].string == "sdr" {
                 ProofDial(store: store, controller: controller)
             } else if model["mode"].string == "print" {
-                ScrollView { PrintProofControls(controller: controller, model: model, store: store) }
+                EditorScrollView { PrintProofControls(controller: controller, model: model, store: store) }
             } else { Spacer(minLength: 0) }
         }.padding(.horizontal, 8).padding(.vertical, 6)
             .modifier(PanelBodyMeasurement(panel: "proof", kind: .fixed))

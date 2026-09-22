@@ -39,7 +39,7 @@ private struct WorkspaceDialog: View {
             }
             EditorTextField(view["search_hint"].string, value: view["query"].string) { store.customize(["type": "picker_search", "query": $0]) }
                 .textFieldStyle(.roundedBorder).accessibilityIdentifier("tool-picker-search")
-            ScrollView {
+            EditorScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(view["choices"].array, id: \.workspaceChoiceKey) { choice in
                         Button {
@@ -96,7 +96,7 @@ private struct WorkspaceDialog: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(view["title"].string).font(.headline)
             Text(view["description"].string).foregroundStyle(.secondary)
-            ScrollView {
+            EditorScrollView {
                 VStack(spacing: 0) {
                     if view["toolbars"].array.isEmpty { Text(view["empty_label"].string).padding(40) }
                     ForEach(view["toolbars"].array, id: \.workspacePanelKey) { toolbar in

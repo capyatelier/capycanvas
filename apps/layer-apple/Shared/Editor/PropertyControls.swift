@@ -97,8 +97,14 @@ private struct PropertyField: View {
                     background: EditorPalette(source: store.state["palette"])["input"]) { change($0, revision: revision) }
             }
         case "color":
-            ManagedColorButton(label: label, identifier: "property-" + key, value: value,
-                documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) { change($0.raw, revision: revision) }
+            HStack(spacing: 6) {
+                ManagedColorButton(label: label, identifier: "property-" + key, value: value,
+                    documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) { change($0.raw, revision: revision) }
+                if !control["color_action"].isNull {
+                    IconTile(icon: "fill", label: "Use selected color") { store.dispatch(control["color_action"]) }
+                        .frame(width: 40, height: 36).accessibilityIdentifier("paper-color-bucket")
+                }
+            }
         case "gradient":
             GradientProperty(store: store, control: control, effect: {
                 effect($0, revision: revision, phase: $1, completion: $2)

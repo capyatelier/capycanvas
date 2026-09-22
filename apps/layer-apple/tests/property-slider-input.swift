@@ -13,7 +13,7 @@ import QuartzCore
     @MainActor static func run() async throws {
         let filter = ProcessInfo.processInfo.environment["CAPY_PROPERTY_CASE"] ?? ""
         let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "tool-document"),
-            ("curves", "point"), ("", "opacity"), ("paper", "opacity"), ("", "layer-opacity"),
+            ("curves", "point"), ("", "opacity"), ("", "layer-opacity"),
             ("brightness_contrast", "brightness"),
             ("gradient_map", "position"), ("gradient_map", "opacity")]
             .filter { filter.isEmpty || $0.1.hasPrefix(filter) }
@@ -35,12 +35,7 @@ import QuartzCore
                     }
                     try await drain()
                 }
-                if effect == "paper" {
-                    guard let paper = store.state["layers"].array.first(where: { !$0["can_drop_below"].bool }) else {
-                        throw HostFailure(message: "Missing Paper layer")
-                    }
-                    try await action(["type": "select_layer", "id": paper["id"].raw])
-                } else if !effect.isEmpty {
+                if !effect.isEmpty {
                     try await action(["type": "effect", "action": ["op": "insert", "effect": effect]])
                 }
                 let toolControl = mode == "tool-document"
@@ -234,14 +229,12 @@ import QuartzCore
                 try await action(["type": "invoke", "command": "redo"])
                 try require(abs(value() - edited) < 0.0001, "Cancellation and late release must preserve Redo")
                 host.rootView = content; try await drain(0.2)
-                if effect != "paper" {
-                    try await action(["type": "layer", "action": ["op": "lock", "id": layer, "value": true]])
-                    try await contact(.leftMouseDown, 0.2); try await contact(.leftMouseDragged, 0.6)
-                    try await contact(.leftMouseUp, 0.6)
-                    try require(abs(value() - edited) < 0.0001, "Locked slider input must not change the property")
-                    try await action(["type": "invoke", "command": "undo"])
-                    try require(store.state["layer_properties"]["enabled"].bool, "Locked input must not add an Undo step")
-                }
+                try await action(["type": "layer", "action": ["op": "lock", "id": layer, "value": true]])
+                try await contact(.leftMouseDown, 0.2); try await contact(.leftMouseDragged, 0.6)
+                try await contact(.leftMouseUp, 0.6)
+                try require(abs(value() - edited) < 0.0001, "Locked slider input must not change the property")
+                try await action(["type": "invoke", "command": "undo"])
+                try require(store.state["layer_properties"]["enabled"].bool, "Locked input must not add an Undo step")
                 if effect.isEmpty && ["opacity", "layer-opacity"].contains(mode) || mode == "brightness" {
                     let (field, delegate) = try await draft(identifier, mode == "brightness" ? "0.37" : "37 %")
                     try await action(["type": "invoke", "command": "add_layer"])

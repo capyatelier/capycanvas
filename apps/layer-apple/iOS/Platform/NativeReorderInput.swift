@@ -116,6 +116,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         if recognizer === secondary { return model?.enabled == true }
         guard let model, model.contact.validate() else { return false }
         if recognizer === pan && model.contact.requiresHold && !model.contact.held {
+            if model.beginSwipe(at: touch?.location(in: self) ?? recognizer.location(in: self)) { return true }
             model.contact.cancel(); return false // The scroll view can keep this contact.
         }
         return true
@@ -132,19 +133,21 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         // A grip or mouse row gets the first chance at movement. Touch/pen row
         // bodies still fail early pans so the list can scroll before a hold.
         recognizer === pan && other === contactScroll?.panGestureRecognizer
-            && model?.contact.target != nil && (model?.contact.requiresHold == false || model?.contact.held == true)
+            && model?.contact.target != nil && (model?.contact.requiresHold == false || model?.contact.held == true
+                || model?.contact.target?.surface == .row)
     }
     @objc private func pressed(_ recognizer: UILongPressGestureRecognizer) {
         switch recognizer.state {
         case .began: model?.recognizeHold()
         case .ended: finish()
-        case .cancelled: cancel()
+        case .cancelled: if model?.swiping != true { cancel() }
         default: break
         }
     }
     @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
+            if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }
             if moveReorder(recognizer.location(in: self)) && link == nil {
                 let link = CADisplayLink(target: self, selector: #selector(track)); link.add(to: .main, forMode: .common); self.link = link
             }
@@ -154,6 +157,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         }
     }
     private func finish() {
+        model?.finishSwipe(cancelled: false)
         model?.contact.release(at: pan.location(in: self)); touch = nil
         link?.invalidate(); link = nil
     }

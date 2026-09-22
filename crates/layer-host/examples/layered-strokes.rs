@@ -40,7 +40,7 @@ fn main() {
     let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
     let mut host = NativeHost::new(Platform::Mac).unwrap();
     host.session =
-        UiSession::from_project(Renderer(Some(gpu)), project, None, [1600, 1200]).unwrap();
+        UiSession::from_project(Renderer(Some(gpu.into())), project, None, [1600, 1200]).unwrap();
     host.session.set_platform(Platform::Mac);
     host.resize(1600, 1200, 1.).unwrap();
     for layer in 0..7 {

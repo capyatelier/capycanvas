@@ -37,8 +37,8 @@ struct Activation {
     context: Option<DocumentGpu>,
     color: layer_core::color::DocumentColor,
     cache: String,
-    retired: Option<WgpuRasterizer>,
-    renderer: Option<WgpuRasterizer>,
+    retired: Option<Box<WgpuRasterizer>>,
+    renderer: Option<Box<WgpuRasterizer>>,
 }
 impl App {
     pub(crate) fn document_session(&self, id: u64) -> Result<&UiSession<Renderer>, String> {
@@ -62,7 +62,7 @@ impl App {
         }
         Ok(session.retained_document_tiles().try_blobs()?.is_some())
     }
-    pub(crate) fn retire_document_gpu(&mut self) -> Option<WgpuRasterizer> {
+    pub(crate) fn retire_document_gpu(&mut self) -> Option<Box<WgpuRasterizer>> {
         if let Some(control) = self.tone.pending.take() {
             control.cancel();
         }
@@ -277,7 +277,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeWork(
         )
         .map_err(error)?;
         gpu.finish_startup_cache();
-        job.renderer = Some(gpu);
+        job.renderer = Some(gpu.into());
         Ok(())
     })();
     fail(&mut env, result)

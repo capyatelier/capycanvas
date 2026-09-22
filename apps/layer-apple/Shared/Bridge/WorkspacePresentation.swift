@@ -15,6 +15,7 @@ import SwiftUI
     private var geometryKey = ""
     private var animation: Task<Void, Never>?
     var tabs: [JSON] = []
+    var zenButton: CGRect? { didSet { if zenButton != oldValue { refreshChrome() } } }
     var sourceInstances: [String: WorkspaceSource] = [:] { didSet { inputState?.validate() } }
     // Aggregate lookup remains useful for geometry checks; native hit testing
     // keeps every presentation, including a column icon and its open drawer tab.
@@ -136,6 +137,7 @@ import SwiftUI
         let modal = ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].contains { !store.snapshot[$0].isNull }
             || !store.state["customization"]["control"].isNull
         return JSON(["held": inputState?.contact.held ?? false, "dragging": drag?.item["kind"].string == "tile", "popup_open": modal || !popovers.isEmpty,
+            "zen_button": zenButton.map { JSON($0).raw } ?? NSNull(),
             "expanded_panel": expansion.raw, "content_drawer": tool["placement"]["bounds"].raw,
             "drawer_connection": tool["connection"]["bounds"].raw])
     }
@@ -146,7 +148,8 @@ import SwiftUI
     func refreshChrome() {
         guard let store, !store.snapshot["layout"]["viewport"].isNull else { return }
         let next = JSON([facts.raw, store.snapshot["layout"]["viewport"].raw,
-            store.state["workspace"]["zen_mode"].raw]).stableKey
+            store.state["workspace"]["zen_mode"].raw, store.state["settings"]["zen_show_capy"].raw,
+            store.state["settings"]["zen_reveal_at_edges"].raw]).stableKey
         guard next != chromeKey else { return }; chromeKey = next
         chrome(["kind": "refresh"])
     }

@@ -32,6 +32,7 @@ import SwiftUI
     lazy var workspaceManager = WorkspaceManager(store: self)
     private var drawingWorkload: DrawingWorkload?
     lazy var layerThumbnails = LayerThumbnails(store: self)
+    let layerSwipe = LayerSwipe()
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)

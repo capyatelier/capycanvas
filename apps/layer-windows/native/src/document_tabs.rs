@@ -281,7 +281,7 @@ impl DocumentService {
                     )
                     || host.session.engine().backend().0.is_some()
                 {
-                    self.worker.retire_renderer(Renderer(Some(*gpu)));
+                    self.worker.retire_renderer(Renderer(Some(gpu)));
                 } else {
                     #[cfg(target_os = "windows")]
                     if crate::device::removed(gpu.device()) {
@@ -292,7 +292,7 @@ impl DocumentService {
                         return Ok(());
                     }
                     let previous = host.session.state().revision;
-                    let (retired, change) = host.session.replace_renderer(Renderer(Some(*gpu)))?;
+                    let (retired, change) = host.session.replace_renderer(Renderer(Some(gpu)))?;
                     self.worker.retire_renderer(retired);
                     host.apply_change(previous, change);
                     host.startup = Default::default();

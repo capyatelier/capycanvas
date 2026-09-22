@@ -1450,6 +1450,7 @@ dependencies = [
  "layer-render",
  "libc",
  "naga",
+ "objc2",
  "objc2-metal",
  "png 0.17.16",
  "pollster",
