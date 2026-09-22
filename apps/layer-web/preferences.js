@@ -68,7 +68,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     if (!context.contains(e.target)) dismissContext();
     const line = e.target.closest("[data-preference]");
     // Native text selection owns long press while an input is being edited.
-    if (e.pointerType !== "touch" || !line || e.target.closest("input,select,textarea")) return;
+    if (!["touch","pen"].includes(e.pointerType) || !line || e.target.closest("input,select,textarea")) return;
     hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       heldPointer = e.pointerId; cancelHold(); showContext(line, e.clientX, e.clientY, e.target);
     }, 500) };

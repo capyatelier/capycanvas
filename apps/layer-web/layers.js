@@ -55,7 +55,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   panel.append(header, rows, footer);
   const nameIcon = value => value.replace(/^layer-/, "").replace(/-symbolic$/, "");
   function makeRow(layer) {
-    const row = element("div", "layer-row"), record = { row, layer }; row.dataset.layer = String(layer.id);
+    const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
     const get = () => record.layer, select = mask => send({ op: "select", id: get().id, mask });
     const eye = glyphButton("eye", "Hide layer", () => dispatch({ type: "set_layer_visibility", id: get().id, visible: !get().visible }));
     eye.onpointerenter = () => { eye.title = app.action_tooltip(eye.getAttribute("aria-label"), { type: "set_layer_visibility", id: get().id, visible: !get().visible }); };
@@ -82,12 +82,21 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     name.ondblclick = () => send({ op: "begin_rename", id: get().id });
     menu(row, get); menu(mask.b, get, true);
     Object.assign(record, { eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
-    let drag, suppressClick;
+    const remove = button("Delete", e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
+    root.append(remove, row);
+    let offset = 0, drag, suppressClick;
+    const position = (value, animate = false) => {
+      offset = value; root.classList.toggle("swipe-animating", animate);
+      root.style.setProperty("--swipe", `${offset}px`);
+      remove.hidden = offset === 0; remove.disabled = !get().can_delete;
+    };
+    record.closeSwipe = () => position(0, true);
+    position(0);
     row.addEventListener("pointerdown", e => {
       if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
-      if (e.button || !e.isPrimary || e.target.closest("input") || !get().can_drop_below) return;
+      if (e.button || !e.isPrimary || e.target.closest("input") || (!get().can_drop_below && !get().can_delete)) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
-        waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false };
+        waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false, origin: offset };
       // Follow fast mouse exits before pickup without retargeting ordinary
       // button clicks. Capture the row only once movement becomes a drag.
       window.addEventListener("pointermove", move, true);
@@ -95,20 +104,29 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       window.addEventListener("pointercancel", finish, true);
     });
     row.addEventListener("workspace-context-claimed", e => {
-      if (drag?.ghost) e.preventDefault();
+      if (drag?.ghost || drag?.swiping) e.preventDefault();
       else if (drag) { drag.held = true; row.setPointerCapture(drag.pointer); }
     });
     // Keep native panning until a hold wins. Pointer capture alone cannot stop
     // the browser taking the contact for scrolling after the menu opens.
     row.addEventListener("touchmove", e => {
-      if (drag?.held && e.touches.length === 1) e.preventDefault();
+      if ((drag?.held || drag?.swiping) && e.touches.length === 1) e.preventDefault();
     }, { passive: false });
     const move = e => {
       if (!drag || drag.pointer !== e.pointerId) return;
+      const dx = e.clientX-drag.x, dy = e.clientY-drag.y;
       if (drag.waitForHold && !drag.held) {
-        if (Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 8) finish({type:"pointercancel",pointerId:e.pointerId});
+        if (!drag.swiping && Math.hypot(dx,dy) > 8) {
+          if (get().can_delete && Math.abs(dx) > Math.abs(dy) && (dx < 0 || drag.origin > 0)) {
+            drag.swiping = true; dismissContext(); row.setPointerCapture(e.pointerId);
+          } else { finish({type:"pointercancel",pointerId:e.pointerId}); return; }
+        }
+        if (drag.swiping) {
+          e.preventDefault(); position(Math.max(0,Math.min(72,drag.origin-dx)));
+        }
         return;
       }
+      if (!get().can_drop_below) return;
       if (!drag.ghost && Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 6) {
         dismissContext();
         row.setPointerCapture(e.pointerId); drag.ghost = row.cloneNode(true); drag.ghost.classList.add("layer-drag-preview");
@@ -134,12 +152,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       window.removeEventListener("pointerup", finish, true);
       window.removeEventListener("pointercancel", finish, true);
       if (row.hasPointerCapture(previous.pointer)) row.releasePointerCapture(previous.pointer);
-      if ((previous.held || previous.ghost) && e.type === "pointerup") {
+      if ((previous.held || previous.ghost || previous.swiping) && e.type === "pointerup") {
         const suppress = e => { e.preventDefault(); e.stopImmediatePropagation(); };
         suppressClick = suppress;
         row.addEventListener("click", suppress, { once: true, capture: true });
         setTimeout(() => row.removeEventListener("click", suppress, true), 400);
       }
+      if (previous.swiping) position(e.type === "pointerup" && offset >= 72*.4 ? 72 : 0, true);
       if (e.type !== "pointerup" && previous.held) dismissContext();
       if (previous.ghost) {
         previous.ghost.remove(); rows.querySelectorAll(".layer-row").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into"));
@@ -155,7 +174,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     });
     return record;
   }
-  const cancelDrags = () => { for (const r of records.values()) r.cancelDrag(); };
+  const cancelDrags = () => { for (const r of records.values()) { r.cancelDrag(); r.closeSwipe(); } };
+  const closeSwipes = e => { for (const r of records.values()) if (!r.root.contains(e.target)) r.closeSwipe(); };
+  document.addEventListener("pointerdown", closeSwipes, true);
+  const closeOnClick = e => { if (!e.target.closest(".layer-swipe-delete")) for (const r of records.values()) r.closeSwipe(); };
+  document.addEventListener("click", closeOnClick);
   window.addEventListener("blur", cancelDrags);
   const cancelOnEscape = e => { if (e.key === "Escape") cancelDrags(); };
   window.addEventListener("keydown", cancelOnEscape);
@@ -166,7 +189,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
     if (current) { opacity.update(current.opacity); blend.value = current.blend; }
-    opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask;
+    opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current;
     deleteButton.disabled = !state().layer_tools.can_delete;
     for (const { b, property, capability } of toggles) {
       const reference = capability === "reference";
@@ -177,12 +200,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const ids = new Set(state().layers.map(l => String(l.id)));
     for (const [id, record] of records) if (!ids.has(id)) {
       record.cancelDrag();
-      record.row.remove(); records.delete(id); revisions.delete(`${id}:false`); revisions.delete(`${id}:true`);
+      record.root.remove(); records.delete(id); revisions.delete(`${id}:false`); revisions.delete(`${id}:true`);
     }
     state().layers.forEach((layer, index) => {
       const id = String(layer.id); if (!records.has(id)) records.set(id, makeRow(layer));
       const r = records.get(id); r.layer = layer;
-      if (rows.children[index] !== r.row) rows.insertBefore(r.row, rows.children[index] || null);
+      if (rows.children[index] !== r.root) rows.insertBefore(r.root, rows.children[index] || null);
       const {paint_revision,mask_revision,...presentation}=layer;
       const key=JSON.stringify([presentation,view.rename_layer===layer.id],(_,value)=>typeof value==="bigint"?String(value):value);
       // Keep the latest thumbnail revisions above, but retain unchanged row
@@ -190,6 +213,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if(r.presentation===key)return;
       r.presentation=key;
       r.row.classList.toggle("selected", layer.selected);
+      if (!layer.can_delete) r.closeSwipe();
       r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.visible ? "Hide layer" : "Show layer";
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;
@@ -197,12 +221,18 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
       r.content.b.classList.toggle("layer-folder", layer.group);
       if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
-      else if(layer.content_icon) r.content.b.replaceChildren(icon(nameIcon(layer.content_icon)));
+      else if(layer.content_icon) {
+        const glyph = icon(nameIcon(layer.content_icon));
+        if (layer.content_icon_color) {
+          glyph.style.color = layer.content_icon_color; glyph.classList.add("paper-thumbnail-icon");
+          r.content.b.replaceChildren(r.content.image, glyph);
+        } else r.content.b.replaceChildren(glyph);
+      }
       else if (!r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
       r.mask.b.hidden = r.link.hidden = !layer.has_mask; r.mask.image.style.opacity = layer.mask_enabled ? 1 : .4;
       r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? "Unlink mask from layer" : "Link mask to layer";
       r.name.textContent = layer.label; r.name.title = layer.label;
-      r.meta.textContent = [layer.blend ? layer.blend_label : "", layer.opacity < 1 ? `${Math.round(layer.opacity*100)}%` : ""].filter(Boolean).join(" · ");
+      r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
       r.grip.hidden = !layer.can_drop_below;
       if (view.rename_layer === layer.id && !r.entry) {
@@ -239,7 +269,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {
-          if (mask ? !r.layer.has_mask : r.layer.group || r.layer.content_icon) continue;
+          if (mask ? !r.layer.has_mask : r.layer.group || (r.layer.content_icon && !r.layer.content_icon_color)) continue;
           const key = `${id}:${mask}`, revision = documentEpoch + ":" + String(mask ? r.layer.mask_revision : r.layer.paint_revision);
           if (revisions.get(key) === revision || pending.size >= 8) continue;
           const token = ++thumbnailRequest;
@@ -250,5 +280,5 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){cancelDrags();window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
+  return { refresh, dispose(){cancelDrags();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
 }

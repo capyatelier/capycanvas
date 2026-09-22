@@ -36,6 +36,15 @@ toolkit behavior is implicit and cannot be established from source alone.
 GTK workspace pickup now has one captured path. Native hold timing arms tile
 reordering; source classification leaves G5–G9 immediate.
 
+The filter/layer follow-up adds a common GTK tablet scroller and touch/pen
+swipe-to-delete rows without changing pickup rules. Native mouse/touch hold and
+reorder regressions pass; a Wayland tablet-v2 fixture additionally verifies pen
+tool-list scrolling and layer swipe/delete. Physical pen reorder qualification
+remains separate. Android and Web implement the same swipe presentation and
+consume shared deletion/history rules. Huion journeys cover touch/pen scrolling
+and swipe reversal/deletion; Web uses a common pen panning adapter and Android
+uses Compose scrolling. See the [validation record](../development/gtk-filter-drawer.md).
+
 The GTK [window-bar builder](window-bar.md) adds individual header-item bodies
 only while editing: the full item drags immediately with movement slop for every
 device, as explicitly requested for this placement-only editor on 2026-09-13.

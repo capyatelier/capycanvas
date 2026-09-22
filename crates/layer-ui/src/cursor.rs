@@ -180,6 +180,9 @@ impl Cursor {
 }
 
 impl CanvasCursor {
+    pub(crate) fn cancel(&mut self, scale: f32) {
+        self.mark(self.center, 8.0, 6.0, scale);
+    }
     fn mark(&mut self, center: [f32; 2], radius: f32, marker: f32, scale: f32) {
         // Align the one-point dark stroke to physical pixels. One composite
         // primitive keeps the pale surround out of intersections and the dot.

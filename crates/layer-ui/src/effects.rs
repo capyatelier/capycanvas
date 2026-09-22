@@ -5,6 +5,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 impl<B: CanvasRenderer> UiSession<B> {
+    pub(crate) fn filter_drawer_open(&self) -> bool {
+        self.state.customization.drawer.as_ref().is_some_and(|d|
+            d.columns.iter().flatten().any(|p| *p == Panel::FilterTypes))
+    }
+    pub(crate) fn open_filter_picker(&mut self) {
+        let current = self.engine.document().layer(self.engine.document().active_layer)
+            .and_then(|l| l.effect.as_ref()).and_then(|e| self.effect_catalog.get(&e.program.id));
+        self.state.filter_picker.category = current.map(|e| e.category.clone())
+            .or_else(|| self.state.filter_picker.category.clone())
+            .or_else(|| self.effect_catalog.categories().first().map(|c| c.id.clone()));
+        self.state.filter_picker.search = None;
+        self.state.adjustments = catalog(&self.effect_catalog, &self.state.filter_picker);
+    }
     /// Optional preview work yields to delivered input and unfinished edits.
     /// Apply this to completion service as well as admission: taking a preview
     /// can submit the next source-probe chunk.
@@ -22,7 +35,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         (
             doc.revision,
             doc.active_layer.0,
-            self.state.filter_catalog_revision,
+            self.state.filter_catalog_revision ^ (u64::from(self.filter_drawer_open()) << 63),
         )
     }
 
@@ -37,15 +50,22 @@ impl<B: CanvasRenderer> UiSession<B> {
             return Ok(false);
         }
         let doc = self.engine.document();
+        let replacing = self.filter_drawer_open() && doc.layer(doc.active_layer).is_some_and(|l| l.effect.is_some());
+        let Some(current) = doc.layer(doc.active_layer) else { return Ok(false); };
+        let target = if replacing {
+            doc.layers.iter().skip_while(|l| l.id != current.id).skip(1)
+                .find(|l| l.properties.parent == current.properties.parent).map(|l| l.id)
+        } else if self.filter_drawer_open() {
+            Some(current.id)
+        } else { doc.clipping_stack_top(current.id) }.ok_or("Select a layer first")?;
         let request = layer_render::FilterPreviewRequest {
             request_id,
-            target: doc
-                .clipping_stack_top(doc.active_layer)
-                .ok_or("Select a layer first")?,
+            target,
             size,
             extent: [doc.width, doc.height],
             view: self.engine.view(),
-            layers: doc.layers.iter().map(Layer::composite_snapshot).collect(),
+            layers: doc.layers.iter().filter(|l| !replacing || l.id != current.id)
+                .map(Layer::composite_snapshot).collect(),
             filters: filters
                 .into_iter()
                 .take(8)
@@ -67,6 +87,7 @@ impl<B: CanvasRenderer> UiSession<B> {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FilterPickerState {
+    pub selected: Option<Arc<str>>,
     pub category: Option<Arc<str>>,
     pub search: Option<String>,
     pub search_label: &'static str,
@@ -75,6 +96,7 @@ pub struct FilterPickerState {
 impl Default for FilterPickerState {
     fn default() -> Self {
         Self {
+            selected: None,
             category: None,
             search: None,
             search_label: "Search filters",
@@ -146,6 +168,8 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
+    CancelFilter,
+    UseCurrentColor { layer: u64, key: String },
     /// Live property editing uses the same validation as individual actions,
     /// with one history entry on release and restoration on cancellation.
     Gesture {
@@ -269,6 +293,8 @@ pub struct PropertyControl {
     pub kind: PropertyKind,
     pub value: EffectValue,
     pub default: EffectValue,
+    /// Optional shortcut alongside a color editor, supplied by shared policy.
+    pub color_action: Option<UiAction>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -327,6 +353,7 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
         kind,
         value,
         default: p.default.clone(),
+        color_action: None,
     }
 }
 /// Extend only the bundled linear algorithms, whose math is independent of
@@ -382,6 +409,17 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
             }
         }
         effect.program.label.to_string()
+    } else if layer.kind == LayerKind::Background {
+        controls.push(PropertyControl {
+            plot: Vec::new(), key: "paper_color".into(), label: "Paper color".into(),
+            section: None, kind: PropertyKind::Color,
+            value: EffectValue::Color(layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)),
+            default: EffectValue::Color(layer_core::color::RgbColor::WHITE),
+            color_action: Some(UiAction::Effect { action: EffectAction::UseCurrentColor {
+                layer: layer.id.0, key: "paper_color".into(),
+            } }),
+        });
+        String::new()
     } else {
         let mut numeric = NumericControl::percent();
         numeric.default_value = Some(1.);
@@ -393,9 +431,9 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
             kind: PropertyKind::Number { numeric },
             value: EffectValue::Number(layer.opacity),
             default: EffectValue::Number(1.),
+            color_action: None,
         });
-        if layer.kind != LayerKind::Background {
-            controls.push(PropertyControl {
+        controls.push(PropertyControl {
                 plot: Vec::new(),
                 key: "blend".into(),
                 label: "Blend mode".into(),
@@ -408,8 +446,8 @@ pub(super) fn properties(doc: &Document) -> LayerPropertiesView {
                 },
                 value: EffectValue::Choice(layer.properties.blend as u32),
                 default: EffectValue::Choice(0),
+                color_action: None,
             });
-        }
         String::new()
     };
     LayerPropertiesView {
@@ -497,7 +535,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .unwrap()
                 .clone();
             let changed = edited.effect != gesture.original.effect
-                || edited.opacity != gesture.original.opacity;
+                || edited.opacity != gesture.original.opacity
+                || edited.properties != gesture.original.properties;
             self.engine
                 .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
                 .map_err(error)?;
@@ -510,6 +549,19 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         match action {
+            EffectAction::CancelFilter => {
+                let doc = self.engine.document();
+                if let Some(layer) = doc.layer(doc.active_layer).filter(|l| l.effect.is_some()) {
+                    self.layer_action(LayerAction::Delete { id: layer.id.0 })?;
+                }
+                self.state.customization.drawer = None;
+                self.state.customization.expanded = None;
+            }
+            EffectAction::UseCurrentColor { layer, key } => {
+                return self.effect_action(EffectAction::Set {
+                    layer, key, value: EffectValue::Color(self.state.colors.definition()),
+                });
+            }
             EffectAction::Gesture { phase, action } => return self.effect_gesture_action(phase, *action),
             EffectAction::GradientStop {
                 layer,
@@ -631,28 +683,41 @@ impl<R: CanvasRenderer> UiSession<R> {
                 });
             }
             EffectAction::Insert { effect } => {
+                let choosing = self.filter_drawer_open();
                 let effect = self.effect_catalog.get(&effect).ok_or("Unknown filter")?;
                 let doc = self.engine.document();
                 let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
-                let top = doc.clipping_stack_top(current.id).unwrap();
+                let replacing = choosing && current.effect.is_some();
+                if replacing && doc.is_locked(current.id) { return Err("This layer is locked".into()); }
+                if replacing && current.effect.as_ref().is_some_and(|fx| fx.program.id == effect.program.id) {
+                    return Ok(());
+                }
+                let top = if choosing { current.id } else { doc.clipping_stack_top(current.id).unwrap() };
                 let index = doc.layers.iter().position(|l| l.id == top).unwrap();
                 let parent = current.properties.parent;
                 let depth = doc.color.depth;
                 let hdr = depth.is_float();
-                let id = self.engine.allocate_layer_id();
-                let mut layer = Layer::paint(id, effect.label());
+                let mut layer = if replacing { current.clone() } else {
+                    let clipped = choosing && current.properties.clipped;
+                    let mut layer = Layer::paint(self.engine.allocate_layer_id(), effect.label());
+                    layer.properties.clipped = clipped;
+                    layer
+                };
+                let id = layer.id;
+                layer.name = effect.label().into();
                 layer.kind = LayerKind::Effect;
                 layer.properties.parent = parent;
                 let mut instance = EffectInstance::new(float32_program(&effect.program(), depth));
                 if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
                 layer.effect = Some(Arc::new(instance));
-                self.layer_edit(Edit::Batch(vec![
+                self.layer_edit(if replacing { Edit::ReplaceLayer(Box::new(layer)) } else { Edit::Batch(vec![
                     Edit::InsertLayer { index, layer },
                     Edit::SetActiveLayer { id },
-                ]))?;
-                self.state.customization.expanded = None;
-                let layout = &mut self.state.workspace.layout;
-                layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
+                ]) })?;
+                if !choosing {
+                    self.state.customization.expanded = None;
+                    self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
+                }
             }
             EffectAction::Number {
                 layer,
@@ -698,6 +763,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     EffectValue::Number(1.)
                 } else if key == "blend" {
                     EffectValue::Choice(0)
+                } else if key == "paper_color" {
+                    EffectValue::Color(layer_core::color::RgbColor::WHITE)
                 } else {
                     return Err("Unknown property".into());
                 };
@@ -715,6 +782,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .is_some_and(|l| l.effect.is_none())
                 {
                     return match (key.as_str(), value) {
+                        ("paper_color", EffectValue::Color(color)) => {
+                            color.validate_working_spaces()?;
+                            let doc = self.engine.document();
+                            let mut layer = doc.layer(LayerId(id)).unwrap().clone();
+                            if layer.kind != LayerKind::Background || doc.is_locked(layer.id) {
+                                return Err("Select unlocked paper to change its color".into());
+                            }
+                            layer.properties.paper_color = Some(color);
+                            let edit = Edit::ReplaceLayer(Box::new(layer));
+                            if self.effect_gesture.is_some() {
+                                self.engine.preview_edit(edit).map_err(error)?;
+                            } else {
+                                self.layer_edit(edit)?;
+                            }
+                            Ok(())
+                        }
                         ("opacity", EffectValue::Number(opacity)) => {
                             self.set_layer_opacity(Some(id), opacity)
                         }

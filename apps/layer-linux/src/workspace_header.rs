@@ -1098,12 +1098,12 @@ impl Header {
                 list.append(&button);
             }
         }
-        let scroll = gtk::ScrolledWindow::builder()
+        let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .max_content_height(400)
             .propagate_natural_height(true)
             .child(&list)
-            .build();
+            .build());
         popover.set_child(Some(&scroll));
         w.watch_popover(&popover);
         popover

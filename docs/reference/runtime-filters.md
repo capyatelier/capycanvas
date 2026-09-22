@@ -58,6 +58,12 @@ original endpoint definitions. The GPU record layout and shader contract remain
 ABI 3. Individual effects decide how alpha contributes: Gradient Map uses stop
 alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
 
+For timed programs, `fx_time` supplies accumulated playback phase in seconds.
+The shared clock integrates the numeric `speed` parameter (default 1), so speed
+edits affect subsequent motion without seeking. Shaders must not multiply that
+time by speed again. With animation disabled, `time` supplies the explicit phase.
+Canvas rendering, exact artwork queries and export use the same clock snapshot.
+
 Native curves continue linearly beyond their endpoint controls. Identity curves
 preserve the input directly, including extended RGB. Gradient endpoints remain
 constant beyond their range, as an explicit color-mapping operation. Levels

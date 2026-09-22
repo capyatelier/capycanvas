@@ -253,11 +253,11 @@ pub(crate) async fn manage_for_window(
         .build();
     list.set_placeholder(Some(&empty));
     body.append(
-        &gtk::ScrolledWindow::builder()
+        &crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&list)
-            .build(),
+            .build()),
     );
     let note = gtk::Label::builder()
         .xalign(0.)

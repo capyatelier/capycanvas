@@ -88,6 +88,7 @@ impl CaptureControl {
 pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<raster::BrowserRasterEncoder>,
+    effect_clocks: effects::Clocks,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
@@ -105,6 +106,7 @@ impl WgpuRasterizer {
     }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
+            effect_clocks: self.effect_clocks.clone(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
             adapter: self.adapter.clone(),
@@ -275,6 +277,7 @@ impl SnapshotRenderer {
         if let Some(encoder) = gpu.and_then(|gpu| gpu.encoder.clone()) {
             renderer.set_browser_raster_encoder(encoder);
         }
+        if let Some(gpu) = gpu { renderer.effect_clocks = gpu.effect_clocks.clone(); }
         renderer.ensure_document_metadata(extent, &layers)?;
         let mut background = background;
         if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {

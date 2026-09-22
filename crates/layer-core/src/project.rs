@@ -341,7 +341,6 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
         || doc.height == 0
         || doc.width > limits.dimension
         || doc.height > limits.dimension
-        || doc.layers.is_empty()
         || doc.layers.len() > limits.layers
         || doc.id.len() > 1024
         || doc.revision == u64::MAX
@@ -368,14 +367,10 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     {
         return Err("Invalid project ID allocator".into());
     }
-    if doc
-        .layer(doc.active_layer)
-        .is_none_or(|l| doc.active_mask && l.mask.is_none())
+    if if doc.layers.is_empty() { doc.active_layer != LayerId(0) || doc.active_mask }
+        else { doc.layer(doc.active_layer).is_none_or(|l| doc.active_mask && l.mask.is_none()) }
     {
         return Err("Invalid editing target".into());
-    }
-    if !doc.layers.iter().any(|l| l.kind == LayerKind::Paint) {
-        return Err("Project has no paint layer".into());
     }
     if let Some(s) = &doc.selection {
         validate_selection(s, limits)?;

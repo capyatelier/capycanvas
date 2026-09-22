@@ -42,7 +42,7 @@ fn artwork(app: &adw::Application, output: &Path) {
     .map(|s| s.trim_end_matches(".svg").to_owned())
     .collect();
     names.sort();
-    assert_eq!(names.len(), 163, "audit the entire packaged bank");
+    assert_eq!(names.len(), 164, "audit the entire packaged bank");
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.set_widget_name("icon-audit-root");
     let grid = gtk::Grid::builder()

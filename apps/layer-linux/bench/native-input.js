@@ -92,12 +92,21 @@ if (nativeTest) {
 if (testExecutable && !workspaceWeb) {
     launch.splice(0, 7, testExecutable, launch[5]);
 }
+let tabletProxy;
+if (ARGV.includes('--tablet')) {
+    tabletProxy = Gio.Subprocess.new(['python3', 'apps/layer-linux/bench/tablet-proxy.py'], Gio.SubprocessFlags.NONE);
+    const socket = Gio.File.new_for_path(`${GLib.getenv('XDG_RUNTIME_DIR')}/layer-bench-tablet`);
+    for (let attempt = 0; attempt < 200 && !socket.query_exists(null); attempt++) GLib.usleep(10000);
+    if (!socket.query_exists(null)) throw Error('Tablet proxy did not start');
+    launcher.setenv('WAYLAND_DISPLAY', 'layer-bench-tablet', true);
+}
 const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
     passed = p.get_successful();
     if (capturePipeline) capturePipeline.set_state(imports.gi.Gst.State.NULL);
+    tabletProxy?.force_exit();
     loop.quit();
 });
 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
@@ -151,7 +160,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyKeyboardKeysym', '(ub)', [0xffe1, false]);
     }
     if (nativeTest || workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || tooltips || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
-        let step = 0, events = null, index = 0, previous = [0, 0], trace = [], resumeAt = 0;
+        let step = 0, events = null, index = 0, previous = [0, 0], trace = [], resumeAt = 0, pen = 0;
         const interval = Number(GLib.getenv('LAYER_NATIVE_EVENT_MS') || (workspaceMotion ? 4 : 60));
         if (!Number.isInteger(interval) || interval < 1 || interval > 1000)
             throw Error('LAYER_NATIVE_EVENT_MS must be an integer from 1 to 1000');
@@ -199,6 +208,11 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                     if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
                     else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
                         '(sudd)', [touchStream, 0, ...event.point.map(v => v * touchScale)]);
+                    return GLib.SOURCE_CONTINUE;
+                }
+                if (event.pen) {
+                    if (!tabletProxy) throw Error('Pen contacts require --tablet');
+                    GLib.file_set_contents(`${output}/pen-${pen++}.json`, JSON.stringify(event));
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.point) {

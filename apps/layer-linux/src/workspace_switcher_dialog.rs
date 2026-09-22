@@ -232,12 +232,7 @@ impl ManagerUi {
                 if w.workspaces.ui.switcher_pending.get() || picked(&row, x, y).0 {
                     return None;
                 }
-                if source.current_event_device().is_some_and(|d| {
-                    matches!(
-                        d.source(),
-                        gdk::InputSource::Touchscreen | gdk::InputSource::Pen
-                    )
-                }) && !held.get()
+                if crate::input::touch_or_pen(source) && !held.get()
                 {
                     return None;
                 }
@@ -302,12 +297,7 @@ impl ManagerUi {
                 if button {
                     return;
                 }
-                let needs_hold = g.current_event_device().is_some_and(|d| {
-                    matches!(
-                        d.source(),
-                        gdk::InputSource::Touchscreen | gdk::InputSource::Pen
-                    )
-                });
+                let needs_hold = crate::input::touch_or_pen(g);
                 // Touch/pen bodies remain available to scrolling until a hold. The handle
                 // and mouse claim immediately, preserving the grouped DragSource.
                 if !needs_hold || handle {

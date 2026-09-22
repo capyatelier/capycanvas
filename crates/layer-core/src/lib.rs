@@ -1481,6 +1481,7 @@ impl Document {
                 }
                 let id = layer.id;
                 self.validate_layer(&layer)?;
+                if self.layers.is_empty() { self.active_layer = id; self.active_mask = false; }
                 let bottom = self
                     .layers
                     .iter()
@@ -1495,20 +1496,6 @@ impl Document {
                     .iter()
                     .position(|layer| layer.id == id)
                     .ok_or(DocumentError::MissingLayer(id))?;
-                let target = &self.layers[index];
-                if target.kind == LayerKind::Background {
-                    return Err(DocumentError::ProtectedLayer(id));
-                }
-                if target.kind == LayerKind::Paint
-                    && self
-                        .layers
-                        .iter()
-                        .filter(|layer| layer.kind == LayerKind::Paint)
-                        .count()
-                        == 1
-                {
-                    return Err(DocumentError::LastPaintLayer);
-                }
                 let removed = self.layers.remove(index);
                 let selected = self.active_layer == id;
                 let mask_selected = self.active_mask;
@@ -1521,7 +1508,8 @@ impl Document {
                         .iter()
                         .find(|layer| layer.kind == LayerKind::Paint)
                         .map(|layer| layer.id)
-                        .unwrap_or(self.layers[0].id);
+                        .or_else(|| self.layers.first().map(|layer| layer.id))
+                        .unwrap_or(LayerId(0));
                 }
                 let mut inverse = vec![Edit::InsertLayer {
                     index,
@@ -2056,7 +2044,6 @@ pub enum DocumentError {
     DuplicateLayer(LayerId),
     ProtectedLayer(LayerId),
     NotDrawable(LayerId),
-    LastPaintLayer,
     EmptyStroke,
     NonFiniteStroke,
     InvalidBrush(BrushError),
@@ -2071,7 +2058,6 @@ impl fmt::Display for DocumentError {
             Self::DuplicateLayer(id) => write!(formatter, "layer {} already exists", id.0),
             Self::ProtectedLayer(id) => write!(formatter, "layer {} is protected", id.0),
             Self::NotDrawable(id) => write!(formatter, "layer {} cannot receive strokes", id.0),
-            Self::LastPaintLayer => write!(formatter, "a document needs at least one paint layer"),
             Self::EmptyStroke => write!(formatter, "a stroke needs at least one point"),
             Self::NonFiniteStroke => write!(formatter, "stroke contains non-finite input"),
             Self::InvalidBrush(error) => write!(formatter, "invalid stroke brush: {error}"),
@@ -2311,15 +2297,16 @@ mod tests {
     }
 
     #[test]
-    fn background_and_last_paint_are_protected() {
+    fn every_layer_can_be_deleted_and_restored() {
         let mut document = Document::new("study", 800, 800);
-        assert_eq!(
-            document.apply(Edit::RemoveLayer { id: LayerId(1) }),
-            Err(DocumentError::LastPaintLayer)
-        );
-        assert_eq!(
-            document.apply(Edit::RemoveLayer { id: LayerId(2) }),
-            Err(DocumentError::ProtectedLayer(LayerId(2)))
-        );
+        let paint = document.apply(document.delete_layers_edit(&[LayerId(1)]).unwrap()).unwrap();
+        assert_eq!(document.active_layer, LayerId(2));
+        let paper = document.apply(document.delete_layers_edit(&[LayerId(2)]).unwrap()).unwrap();
+        assert!(document.layers.is_empty());
+        assert_eq!(document.active_layer, LayerId(0));
+        document.apply(paper).unwrap();
+        document.apply(paint).unwrap();
+        assert_eq!(document.layers.len(), 2);
+        assert_eq!(document.active_layer, LayerId(1));
     }
 }

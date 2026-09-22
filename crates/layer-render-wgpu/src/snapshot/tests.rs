@@ -7,6 +7,48 @@ use std::io::Cursor;
 mod placement;
 
 #[test]
+fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
+    let mut doc = Document::new("Animation phase", 32, 32);
+    let program = crate::tests::fixture("domain_warp").program();
+    let mut program = (*program).clone();
+    // A uniform time signal makes this independent of the filter's appearance.
+    program.wgsl = "fn phase(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(fract(fx_time(b)/10.),.25,.5,1.);}".into();
+    program.entry = "phase".into();
+    program.passes = Arc::new([]);
+    let mut effect = EffectInstance::new(Arc::new(program));
+    effect.set("animate", layer_core::EffectValue::Toggle(true)).unwrap();
+    effect.set("speed", layer_core::EffectValue::Number(1.)).unwrap();
+    let mut filter = Layer::paint(LayerId(3), "Phase");
+    filter.kind = LayerKind::Effect;
+    filter.effect = Some(Arc::new(effect));
+    doc.layers.insert(0, filter);
+    doc.allocate_layer_id();
+    let mut live = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut before = None;
+    for (elapsed, speed, phase) in [(2.,1.,2.),(2.,2.,2.),(3.,2.,4.),(3.,0.,4.),(8.,0.,4.),(8.,2.,4.),(9.,2.,6.)] {
+        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("speed", layer_core::EffectValue::Number(speed)).unwrap();
+        live.submit(layer_render::FramePacket {
+            layers: &doc.layers, time_seconds: elapsed, document_extent: [32,32],
+            view: layer_render::ViewState { width_px:32, height_px:32, document_to_surface: [1.,0.,0.,1.,0.,0.], background_rgba_linear: [1.;4] },
+            dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: before.is_none(), composite_all: true,
+        }).unwrap();
+        let pixels = live.readback_srgb_rgba8().unwrap();
+        if let Some((previous_time, previous_pixels)) = &before {
+            if *previous_time == elapsed || speed == 0. { assert_eq!(&pixels, previous_pixels, "rate changes do not seek"); }
+            else { assert_ne!(&pixels, previous_pixels, "playback advances"); }
+        }
+        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone(), assets: Default::default() },
+            [1.;4], elapsed, Default::default(), Default::default()).unwrap();
+        let exported = capture.renderer.effect_clocks.get(&LayerId(3)).unwrap().1.clone()
+            .advance(doc.layers[0].effect.as_ref().unwrap(),elapsed);
+        assert_eq!(exported, phase);
+        let sample = capture.preview_linear_document([32,32]).unwrap().pixels[0];
+        assert!((sample[0] - phase/10.).abs()<0.01, "export phase {sample:?}");
+        before=Some((elapsed,pixels));
+    }
+}
+
+#[test]
 fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
     let mut document = Document::new("Float32 delivery", 3, 1);
     document.color.depth = SampleDepth::F32;

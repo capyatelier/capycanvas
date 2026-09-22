@@ -90,7 +90,7 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, splitFilters: Boolean = false, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
     if(panel.getString("id")=="proof") {
         ProofPanel(host,modifier,scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
         return
@@ -101,8 +101,12 @@ import kotlin.math.roundToInt
         LayerPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
         return
     }
+    if (panel.getString("id") == "filter_types") {
+        FilterTypesPanel(host, state, modifier)
+        return
+    }
     if (panel.getString("id") == "adjustments") {
-        AdjustmentPanel(host, state, modifier) { onContent(it); onHeight(it.height) }
+        AdjustmentPanel(host, state, modifier, splitFilters) { onContent(it); onHeight(it.height) }
         return
     }
     BoxWithConstraints(modifier) {

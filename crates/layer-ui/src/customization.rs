@@ -115,6 +115,7 @@ impl TileStyle {
 pub enum PanelControl {
     Brushes,
     BrushSets,
+    FilterTypes,
     SculptSets,
     Tools,
     ToolSettings,
@@ -136,6 +137,7 @@ impl PanelControl {
         match self {
             Self::Brushes => "Tool Set",
             Self::BrushSets => Panel::BrushSets.label(),
+            Self::FilterTypes => Panel::FilterTypes.label(),
             Self::SculptSets => Panel::SculptSets.label(),
             Self::Tools => Panel::Tools.label(),
             Self::ToolSettings => Panel::ToolSettings.label(),
@@ -156,6 +158,7 @@ impl PanelControl {
     pub fn available(panel: Panel) -> &'static [Self] {
         match panel {
             Panel::BrushSets => &[Self::BrushSets],
+            Panel::FilterTypes => &[Self::FilterTypes],
             Panel::SculptSets => &[Self::SculptSets],
             Panel::Tools => &[Self::Tools],
             Panel::ToolSettings => &[Self::ToolSettings],
@@ -191,6 +194,7 @@ impl PanelControl {
             | Panel::Navigator
             | Panel::ToolSettings
             | Panel::BrushSets
+            | Panel::FilterTypes
             | Panel::SculptSets
             | Panel::Tools
             | Panel::Color => Self::available(panel),
@@ -976,7 +980,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Settings => "Open application preferences",
                 CommandId::ToggleTheme => "Switch between light and dark appearance",
                 CommandId::AddLayer => "Create a new paint layer",
-                CommandId::DeleteLayer => "Delete the active paint layer",
+                CommandId::DeleteLayer => "Delete the active layer",
                 CommandId::RaiseLayer => "Move the active layer up",
                 CommandId::LowerLayer => "Move the active layer down",
                 CommandId::ResetLayout => "Restore panel docking positions",
@@ -1797,6 +1801,9 @@ impl CustomizationState {
                     ToggleHeaderDrawer { id } => ContentDrawer::for_header(layout, id)?,
                     _ => unreachable!(),
                 };
+                if !Panel::FilterTypes.available_on(platform) && drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes) {
+                    drawer.columns = vec![vec![Panel::Adjustments]];
+                }
                 // Keep the existing tool list on hosts awaiting the Tools panel.
                 if !Panel::Tools.available_on(platform) {
                     for panel in drawer.columns.iter_mut().flatten() {

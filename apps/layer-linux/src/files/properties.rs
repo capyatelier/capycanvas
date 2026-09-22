@@ -101,12 +101,12 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         }
         body.append(&group);
     }
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
         .max_content_height(450)
         .child(&body)
-        .build();
+        .build());
     let dialog = adw::AlertDialog::builder()
         .heading("Document Properties")
         .content_width(440)

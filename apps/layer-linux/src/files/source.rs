@@ -46,12 +46,12 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     content.append(&hint);
     let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color());
     content.append(&comparison.widget);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
         .max_content_height(570)
         .child(&content)
-        .build();
+        .build());
     let dialog = adw::AlertDialog::builder().heading("Repair Source Profile")
         .body(if baked {
             "This layer has pixel edits. Add a corrected original as a new layer at the same position. The existing layer keeps its edits, masks and adjustments."

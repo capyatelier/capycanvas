@@ -296,7 +296,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                 if ((row.getJSONObject("kind").getString("type") == "text" || host.editingText)
                     && down.position.x > size.width / 2) return@awaitEachGesture
                 if (currentEvent.buttons.isSecondaryPressed) { down.consume(); show(); return@awaitEachGesture }
-                if (down.type != PointerType.Touch) return@awaitEachGesture
+                if (down.type != PointerType.Touch && down.type != PointerType.Stylus && down.type != PointerType.Eraser) return@awaitEachGesture
                 val released = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)

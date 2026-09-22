@@ -1568,6 +1568,191 @@ fn native_brush_drawer_input() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_filter_drawer_input"]
+fn native_filter_drawer_input() {
+    let mut d = Driver::new("art.capycanvas.FilterDrawer");
+    let opener = d.header_tool(ToolbarControl::Panel { panel: Panel::Adjustments });
+    d.click_name(&opener);
+    let types = d.named("drawer-panel-FilterTypes");
+    let choices = d.named("drawer-panel-Adjustments");
+    assert!(types.width() < choices.width());
+    assert!(find_css(&choices, "filter-picker-header").is_some_and(|w| !w.is_visible()));
+    d.click_name("adjustment-brightness_contrast");
+    let id = state(&d.w).layer_properties.layer.unwrap();
+    assert!(state(&d.w).layers.iter().any(|l| l.id == 1 && l.drawing));
+    d.number(&d.named("property-brightness"), "20");
+    assert!(state(&d.w).customization.drawer.is_some());
+    d.click_name(&opener);
+    d.click_name(&opener);
+    assert_eq!(state(&d.w).layer_properties.layer, Some(id));
+    d.click_name("adjustment-curves");
+    assert_eq!(state(&d.w).layer_properties.layer, Some(id));
+    assert_eq!(state(&d.w).layers.len(), 3);
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&output).unwrap();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        let _warm = crate::snapshot(&d.w); pump(120);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("filters-{theme:?}.png"))).unwrap();
+    }
+    d.click_name("cancel-filter");
+    assert_eq!(state(&d.w).layers.len(), 2);
+    assert!(state(&d.w).customization.drawer.is_none());
+    d.click_name(&opener);
+    d.w.dispatch(UiAction::SelectLayer { id: 2 });
+    d.w.dispatch(UiAction::SetColor { rgba: [0.08, 0.1, 0.15, 1.] });
+    pump(100);
+    d.click_name("paper-color-bucket");
+    assert!(state(&d.w).layer_properties.controls[0].color_action.is_some());
+    let _warm = crate::snapshot(&d.w); pump(120);
+    crate::snapshot(&d.w).save_to_png(output.join("paper-properties.png")).unwrap();
+    // Native hover exercises the GPU's prohibited cursor path.
+    d.click_name(&opener);
+    d.perform(serde_json::json!([{"point":[600.,400.]}]));
+    assert_eq!(d.w.gpu.borrow_mut().as_mut().unwrap().session.canvas_cursor().unwrap().segments[0].marker, 6.);
+    d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
+    let removable = state(&d.w).layer_properties.layer.unwrap();
+    let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
+    d.click_name(&layers);
+    let row = d.named(&format!("art-layer-{removable}"));
+    let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
+    let before = row.compute_bounds(&d.w.window).unwrap().x();
+    let p = d.point(&row);
+    d.perform(serde_json::json!([{"touch":"down","point":p},
+        {"touch":"move","point":[p[0]-18.,p[1]]}, {"touch":"move","point":[p[0]-48.,p[1]]}]));
+    assert!(swipe.is_open());
+    let moved = before - row.compute_bounds(&d.w.window).unwrap().x();
+    assert!((moved - 48.).abs() < 2., "row follows the finger: {moved}");
+    d.perform(serde_json::json!([{"touch":"up"}]));
+    let _warm = crate::snapshot(&d.w); pump(120);
+    crate::snapshot(&d.w).save_to_png(output.join("layer-delete.png")).unwrap();
+    let p = d.point(&row);
+    d.perform(serde_json::json!([{"touch":"down","point":p},
+        {"touch":"move","point":[p[0]+18.,p[1]]}, {"touch":"move","point":[p[0]+65.,p[1]]}, {"touch":"up"}]));
+    assert!(!swipe.is_open(), "reverse swipe closes Delete");
+    for delete in [false, true] {
+        let row = d.named(&format!("art-layer-{removable}"));
+        let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
+        let p = d.point(&row);
+        d.perform(serde_json::json!([{"touch":"down","point":p},
+            {"touch":"move","point":[p[0]-18.,p[1]]}, {"touch":"move","point":[p[0]-65.,p[1]]}, {"touch":"up"}]));
+        assert!(swipe.is_open());
+        if delete { d.click(swipe.delete_button().upcast_ref()); }
+        else {
+            d.perform(serde_json::json!([{"point":[600.,400.]},{"down":true},{"down":false}]));
+            assert!(!swipe.is_open(), "outside click closes Delete");
+            if state(&d.w).customization.drawer.is_none() { d.click_name(&layers); }
+        }
+    }
+    assert!(!state(&d.w).layers.iter().any(|l| l.id == removable));
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    assert!(state(&d.w).layers.iter().any(|l| l.id == removable));
+    d.w.window.close();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_layer_preview_selection"]
+fn native_layer_preview_selection() {
+    let mut d = Driver::new("art.capycanvas.LayerPreviewSelection");
+    d.w.dispatch(UiAction::SetColor { rgba: [0., 1., 0., 1.] });
+    d.w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+    pump(200);
+    d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::FillSelection });
+    pump(300);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    let opener = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
+    d.click_name(&opener);
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    super::place_source::wait_layer_thumbnail(&d.w, 1);
+    for id in [2, 1, 2, 1] {
+        let row = d.named(&format!("art-layer-{id}"));
+        d.click(&find_css(&row, "layer-thumbnail").unwrap());
+        super::place_source::wait_layer_thumbnail(&d.w, 1);
+        let _warm = crate::snapshot(&d.w); pump(120);
+        let shot = crate::snapshot(&d.w);
+        let row = d.named("art-layer-1");
+        let thumb = find_css(&row, "layer-thumbnail").unwrap();
+        let p = thumb.compute_bounds(&d.w.surface).unwrap();
+        let mut bytes = vec![0; shot.width() as usize * shot.height() as usize * 4];
+        shot.download(&mut bytes, shot.width() as usize * 4);
+        let x = (p.x()+p.width()*0.5) as usize;
+        let y = (p.y()+p.height()*0.5) as usize;
+        let pixel = &bytes[(y*shot.width() as usize+x)*4..][..4];
+        shot.save_to_png(output.join(format!("thumbnail-selected-{id}.png"))).unwrap();
+        assert!(pixel[1] > 180 && pixel[0] < 80 && pixel[2] < 80, "selected {id}, thumbnail center {pixel:?}");
+    }
+    d.finish();
+}
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_panel_pen_input --tablet"]
+fn native_panel_pen_input() {
+    let mut d = Driver::new("art.capycanvas.PanelPen");
+    let opener = d.header_tool(ToolbarControl::Command { command: CommandId::DrawingBrush });
+    d.click_name(&opener);
+    let sets = state(&d.w).tool_panels.brush_sets.groups;
+    let mut longest = (0, sets[0].action.clone());
+    for set in sets {
+        d.w.dispatch(set.action.clone());
+        let count = state(&d.w).tool_set.subtools.len();
+        if count > longest.0 { longest = (count, set.action); }
+    }
+    d.w.dispatch(longest.1);
+    pump(200);
+    let tools = d.named("drawer-panel-Tools");
+    let scroll = tools.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
+    // Constrain this native viewport to make every device exercise overflow.
+    scroll.set_max_content_height(180);
+    scroll.set_propagate_natural_height(false);
+    scroll.set_height_request(180);
+    pump(200);
+    let overflow = scroll.vadjustment().upper() - scroll.vadjustment().page_size();
+    assert!(overflow > 20., "fixture has scrollable tools");
+    let bounds = scroll.compute_bounds(&d.w.window).unwrap();
+    let p = [bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height().min(160.) - 15.];
+    let input_tools = Rc::new(Cell::new(0));
+    let events = gtk::EventControllerLegacy::new();
+    events.set_propagation_phase(gtk::PropagationPhase::Capture);
+    events.connect_event(glib::clone!(#[strong] input_tools, move |_, event| {
+        if event.device_tool().is_some() { input_tools.set(input_tools.get() + 1); }
+        glib::Propagation::Proceed
+    }));
+    tools.add_controller(events);
+    for device in ["mouse", "touch", "pen"] {
+        scroll.vadjustment().set_value(0.);
+        pump(80);
+        let mut input = Vec::new();
+        if device == "mouse" { input.extend([serde_json::json!({"point":p}), serde_json::json!({"down":true})]); }
+        else { input.push(serde_json::json!({device:"down","point":p})); }
+        for delta in [18., 40., 65., 95.] {
+            let q = [p[0],p[1]-delta];
+            input.push(if device == "mouse" { serde_json::json!({"point":q}) } else { serde_json::json!({device:"move","point":q}) });
+        }
+        input.push(if device == "mouse" { serde_json::json!({"down":false}) } else { serde_json::json!({device:"up"}) });
+        d.perform(input.into());
+        if device == "mouse" { assert_eq!(scroll.vadjustment().value(), 0., "mouse choices do not pan"); }
+        else { assert!(scroll.vadjustment().value() > 40_f64.min(overflow * 0.8), "{device} scrolls choices: {}", scroll.vadjustment().value()); }
+    }
+    assert!(input_tools.get() > 0, "Wayland tablet-v2 produced real GDK tablet events");
+    d.perform(serde_json::json!([{"pen":"leave"}]));
+    d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
+    let id = state(&d.w).layer_properties.layer.unwrap();
+    let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
+    d.click_name(&layers);
+    let row = d.named(&format!("art-layer-{id}"));
+    let swipe = row.parent().unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
+    let p = d.point(&row);
+    d.perform(serde_json::json!([{"pen":"down","point":p}, {"pen":"move","point":[p[0]-20.,p[1]]},
+        {"pen":"move","point":[p[0]-64.,p[1]]},{"pen":"up"}]));
+    assert!(swipe.is_open(), "pen swipes expose Delete");
+    let p = d.point(swipe.delete_button().upcast_ref());
+    d.perform(serde_json::json!([{"pen":"down","point":p},{"pen":"up"},{"pen":"leave"}]));
+    assert!(!state(&d.w).layers.iter().any(|l| l.id == id));
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_drawer_controls_input"]
 fn native_header_drawer_controls_input() {
     let mut d = Driver::new("art.capycanvas.HeaderDrawers");

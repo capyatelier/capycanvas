@@ -383,7 +383,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         Ok(DocumentExport {
             project: self.capture_project_recovery()?,
-            background: self.state.camera.view().background_rgba_linear,
+            background: self.engine.view().background_rgba_linear,
             time: self.engine.animation_time(),
         })
     }

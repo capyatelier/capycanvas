@@ -126,12 +126,12 @@ impl Columns {
                     w.install_context(&mini, ContextTarget::Group { group: group.group });
                     content.append(&mini);
                 }
-                let scroll = gtk::ScrolledWindow::builder()
+                let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
                     .vscrollbar_policy(gtk::PolicyType::External)
                     .vexpand(true)
                     .child(&content)
-                    .build();
+                    .build());
                 scroll.set_widget_name(&format!("column-scroll-{}", c.id));
                 scroll.set_margin_bottom(WORKSPACE_SPACING as i32);
                 // A fresh GtkAdjustment initially has an empty range. Seed it

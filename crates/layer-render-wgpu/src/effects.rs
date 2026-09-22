@@ -10,8 +10,17 @@ mod preparation;
 pub(super) trait Gpu {
     fn device(&self) -> &PipelineDevice;
     fn queue(&self) -> &wgpu::Queue;
+    fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
+        layer.effect.as_ref().unwrap().time_seconds(elapsed)
+    }
 }
+pub(super) type Clocks = HashMap<LayerId, (Arc<str>, layer_core::EffectClock)>;
 impl Gpu for WgpuRasterizer {
+    fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
+        let effect = layer.effect.as_ref().unwrap();
+        self.effect_clocks.get(&layer.id).filter(|(id, _)| *id == effect.program.id)
+            .map_or_else(|| effect.time_seconds(elapsed), |(_, clock)| clock.clone().advance(effect, elapsed))
+    }
     fn device(&self) -> &PipelineDevice {
         &self.device
     }
@@ -246,7 +255,7 @@ impl Effects {
         {
             // Animation updates only one scalar per instance, never its LUTs.
             for (i, (properties, layer)) in old.properties.iter_mut().zip(layers).enumerate() {
-                let seconds = layer.effect.as_ref().unwrap().time_seconds(time);
+                let seconds = r.effect_time(layer, time);
                 if properties[3] != seconds {
                     r.queue().write_buffer(
                         &old.buffer,
@@ -266,7 +275,7 @@ impl Effects {
             .iter()
             .map(|l| l.effect.as_ref().unwrap().clone())
             .collect();
-        let properties: Vec<_> = layers.iter().map(|l| effect_properties(l, time)).collect();
+        let properties: Vec<_> = layers.iter().map(|l| effect_properties(l, r.effect_time(l, time))).collect();
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
@@ -475,7 +484,7 @@ fn effect_properties(layer: &Layer, time: f32) -> [f32; 4] {
                 m.default_coverage
             }
         }),
-        layer.effect.as_ref().unwrap().time_seconds(time),
+        time,
     ]
 }
 

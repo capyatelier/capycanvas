@@ -549,6 +549,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             || event.tool == layer_engine::ToolKind::Eraser
             || event.flags.contains(layer_engine::SampleFlags::INVERTED);
         let painting = self.layer_interaction.tool == LayerCanvasTool::Paint;
+        let blocked = self.layer_interaction.tool.draws()
+            && if painting { self.engine.document().drawing_target().is_none() }
+                else { self.engine.document().drawing_content().is_none() };
         let contact = self.interaction.pointer.is_some_and(|p| p.paint);
         let mode = if !painting {
             CursorMode::Cross
@@ -570,6 +573,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             // Contact ownership changes before queued ink is rendered, and ends
             // on release/cancel without waiting for stroke backing to finish.
             || (self.state.settings.hide_cursor_while_drawing
+                && !blocked
                 && painting
                 && contact
                 && !(self.state.settings.cursor.has_brush_size() && erasing))
@@ -579,6 +583,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scale = self
             .logical_viewport
             .map_or(1.0, |v| self.state.camera.viewport[0] as f32 / v[0]);
+        if blocked {
+            view.center = [event.surface_position.x / scale, event.surface_position.y / scale];
+            view.mode = CursorMode::Cross;
+            view.cancel(scale);
+            return true;
+        }
         let dabs = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
                 .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
@@ -1798,11 +1808,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .get(index)
             .is_some_and(|layer| layer.kind == LayerKind::Paint);
         let idle = self.require_idle().is_ok();
-        let paint_layers = document
-            .layers
-            .iter()
-            .filter(|layer| layer.kind == LayerKind::Paint)
-            .count();
+
         let enabled = match id {
             CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.state.sdr_appearance_preview.is_none() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
@@ -1863,7 +1869,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 !self.state.customization.header_editing && self.workspace_history.can_redo()
             }
             CommandId::AddLayer => idle,
-            CommandId::DeleteLayer => idle && editable && paint_layers > 1,
+            CommandId::DeleteLayer => idle && document.can_delete_layers(&[document.active_layer]),
             CommandId::RaiseLayer => idle && editable && index > 0,
             CommandId::LowerLayer => {
                 idle && editable
@@ -2027,6 +2033,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let revision = self.engine.document().revision;
         let transforming = self.operation.active();
         let was_expanded = self.state.customization.has_drawer();
+        let was_filter_drawer = self.filter_drawer_open();
         let was_zen = self.state.workspace.zen_mode;
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
         let choosing_drawing_set = matches!(&action, UiAction::SelectBrushSet { .. })
@@ -2925,6 +2932,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             self.eyedropper.cancel();
             self.region_tools.cancel();
+        }
+        if !was_filter_drawer && self.filter_drawer_open() {
+            self.open_filter_picker();
+            changed |= DOCUMENT;
         }
         if changed & LAYOUT != 0 {
             let layout = &self.state.workspace.layout;
@@ -4242,12 +4253,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.rulers.selected = None;
         }
         let doc = self.engine.document();
+        self.state.filter_picker.selected = doc.layer(doc.active_layer).and_then(|l| l.effect.as_ref())
+            .map(|e| e.program.id.clone());
         let interaction = &mut self.layer_interaction;
         if interaction.editing != Some(doc.active_layer) {
             interaction.editing = Some(doc.active_layer);
             interaction.selected = std::collections::BTreeSet::from([doc.active_layer]);
         }
         interaction.selected.retain(|id| doc.layer(*id).is_some());
+        let drawing_target = doc.drawing_target();
+        let drawing_owner = drawing_target.and_then(|id| doc.target_owner(id));
         let layer_state = |l: &layer_core::Layer| LayerState {
             id: l.id.0,
             content_icon: l.effect.as_ref().map(|fx| {
@@ -4257,8 +4272,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .get(&fx.program.id)
                         .map_or("adjustments", |e| e.icon.as_ref())
                 )
+            }).or_else(|| (l.kind == LayerKind::Background).then(|| "layer-paper-symbolic".into())),
+            content_icon_color: (l.kind == LayerKind::Background).then(|| {
+                let color = l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
+                    .linear_in(layer_core::color::RgbSpace::Srgb).unwrap_or([1.; 4]);
+                let luminance = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+                self.state.settings.palette(if luminance < 0.35 { Theme::Dark } else { Theme::Light }, self.state.platform).text
             }),
             label: l.name.to_string(),
+            description: {
+                let mut parts = Vec::new();
+                if l.properties.blend != layer_core::LayerBlend::Normal { parts.push(l.properties.blend.label().to_string()); }
+                if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
+                parts.join(" · ")
+            },
+            can_delete: doc.can_delete_layers(&[l.id]),
             editable: l.kind == LayerKind::Paint,
             visible: l.visible,
             opacity: l.opacity,
@@ -4269,13 +4297,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 "layer-selection-checked-symbolic"
             } else if doc.reference_layers.contains(&l.id) {
                 "layer-reference-symbolic"
-            } else if l.id == doc.active_layer && (l.kind == LayerKind::Paint || doc.active_mask) {
+            } else if drawing_owner.is_some_and(|owner| owner.id == l.id) {
                 "layer-brush-symbolic"
             } else {
                 "layer-selection-empty-symbolic"
             },
             editing: l.id == doc.active_layer,
-            mask_selected: l.id == doc.active_layer && doc.active_mask,
+            drawing: drawing_owner.is_some_and(|owner| owner.id == l.id),
+            mask_selected: l.id == doc.active_layer && (doc.active_mask
+                || l.mask.as_ref().is_some_and(|m| drawing_target == Some(m.id))),
             has_mask: l.mask.is_some(),
             mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
             mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
@@ -4301,7 +4331,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .wrapping_add(u64::from(l.asset.is_some()))
                 .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
                 .wrapping_add(if l.kind == LayerKind::Background {
-                    u64::from(l.opacity.to_bits())
+                    l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
+                        .linear_in(doc.color.space).expect("validated paper color").iter()
+                        .fold(u64::from(l.opacity.to_bits()), |h, c| h.wrapping_mul(4099).wrapping_add(u64::from(c.to_bits())))
                 } else {
                     0
                 })
@@ -8216,7 +8248,7 @@ mod tests {
                 assert_eq!(s.engine.document().layers[0].id, top);
             }
             s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-            assert!(!s.state.layer_tools.can_delete, "paper is protected");
+            assert!(s.state.layer_tools.can_delete, "unlocked paper can be deleted");
         }
     }
 
@@ -8522,7 +8554,8 @@ mod tests {
                 .iter()
                 .any(|l| l.id == 2 && l.selected && l.editing)
         );
-        assert!(s.state.layer_tools.controls.opacity);
+        assert!(!s.state.layer_tools.controls.opacity);
+        assert!(s.state.layer_tools.controls.edit_lock);
         assert!(!s.state.layer_tools.controls.mask);
         assert!(!s.state.layer_tools.controls.blend);
         assert!(!s.state.layer_tools.controls.move_layer);
@@ -13579,7 +13612,7 @@ mod tests {
                 let layer = app.engine.document().active_layer.0;
                 let initial = if effect == "curves" {
                     EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
-                } else if effect == "split_tone" {
+                } else if matches!(effect, "split_tone" | "paper") {
                     EffectValue::Color(color([0.5, 0.25, 0.75, 1.]))
                 } else if effect != "gradient_map" {
                     EffectValue::Number(0.5)
@@ -13631,7 +13664,7 @@ mod tests {
                             EffectAction::Set {
                                 layer,
                                 key: key.clone(),
-                                value: if effect == "split_tone" {
+                                value: if matches!(effect, "split_tone" | "paper") {
                                     EffectValue::Color(color([position, 0.25, 0.75, 1.]))
                                 } else {
                                     EffectValue::Number(position)
@@ -14030,7 +14063,7 @@ mod tests {
         let mut app = session();
         assert_eq!(app.state.tabs.len(), 1);
         assert!(!app.command(CommandId::Undo).enabled);
-        assert!(!app.command(CommandId::DeleteLayer).enabled);
+        assert!(app.command(CommandId::DeleteLayer).enabled);
         for choice in brush_catalog() {
             let change = app
                 .dispatch(UiAction::SelectBrush { id: choice.id })
@@ -17203,6 +17236,10 @@ mod tests {
         app.dispatch(serde_json::from_str(&value).unwrap()).unwrap();
         assert_eq!(app.state.workspace.layout.bands.len(), 4);
         assert!(serde_json::to_value(&app.state).unwrap()["commands"].is_array());
+    }
+    mod filter_drawer_tests {
+        use super::*;
+        include!("filter_drawer_tests.rs");
     }
     mod column_stack_tests {
         use super::*;

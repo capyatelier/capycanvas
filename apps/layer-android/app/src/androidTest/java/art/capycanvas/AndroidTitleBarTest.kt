@@ -722,6 +722,101 @@ class AndroidTitleBarTest {
         tap(brush); checkColumns("brush_sets")
     }
 
+    @Test fun filterDrawerLayersAndPenScrolling() {
+        send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        fun header(panel: String) = "header-control-" + entries().first {
+            it.getJSONObject("item").objectOrNull("control")?.optString("panel") == panel
+        }.getInt("id")
+        fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+        fun layer(op: String, id: Long) = action(obj("type" to "layer", "action" to obj("op" to op, "id" to id, "mask" to false)))
+        val filters=header("adjustments")
+        tap(filters)
+        assertEquals("[[\"filter_types\"],[\"adjustments\"],[\"properties\"]]",drawer()!!.getJSONArray("columns").toString())
+        val choices=state().array("adjustments").objects().take(2)
+        val count=state().array("layers").length()
+        var selected=0L
+        for((i,device) in listOf(MotionEvent.TOOL_TYPE_MOUSE,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS).withIndex()) {
+            tool=device
+            val id=choices[i%2].getString("id")
+            waitFor("Visible filter $id") { (node("adjustment-$id")?.second?.boundsInRoot?.height ?: 0f)>0 }
+            tap("adjustment-$id")
+            waitFor("Selected filter $id") { state().getJSONObject("filter_picker").optString("selected")==id }
+            val next=state().getJSONObject("layer_properties").getLong("layer")
+            if(selected!=0L)assertEquals(selected,next) else selected=next
+            assertEquals(count+1,state().array("layers").length())
+            assertEquals(id,state().getJSONObject("filter_picker").getString("selected"))
+            assertTrue(state().array("layers").objects().first { it.getLong("id")==1L }.getBoolean("drawing"))
+        }
+        tap(filters);assertNull(drawer());tap(filters)
+        assertEquals(selected,state().getJSONObject("layer_properties").getLong("layer"))
+        for(theme in listOf("light","dark")) { action(obj("type" to "set_theme","theme" to theme));shot("filter-drawer-$theme") }
+        tap("cancel-filter");assertNull(drawer());assertEquals(count,state().array("layers").length())
+        tap(filters)
+        layer("select",2)
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(.06,.08,.12,1.0))))
+        tap("paper-color-bucket")
+        val paper=state().array("layers").objects().first { it.getLong("id")==2L }
+        assertEquals("layer-paper-symbolic",paper.getString("content_icon"))
+        assertFalse(paper.getString("description").contains("Protected"))
+        assertFalse(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
+        shot("paper-properties")
+        tap(header("layers"))
+        fun swipe(id: Long, dx: Float) {
+            down("layer-row-$id");val start=point
+            for(i in 1..5)event(MotionEvent.ACTION_MOVE,start+Offset(dx*density*i/5,0f))
+            event(MotionEvent.ACTION_UP);idle()
+        }
+        tool=MotionEvent.TOOL_TYPE_MOUSE
+        swipe(1,-90f)
+        assertNull("Mouse row drag does not reveal Delete",node("layer-delete-1"))
+        for((id,device) in listOf(1L to MotionEvent.TOOL_TYPE_STYLUS,2L to MotionEvent.TOOL_TYPE_FINGER)) {
+            tool=device
+            swipe(id,-90f)
+            waitFor("Delete revealed") { node("layer-delete-$id")!=null }
+            assertTrue(bounds("layer-delete-$id").width>=70*density)
+            swipe(id,90f)
+            waitFor("Reverse closes Delete") { node("layer-delete-$id")==null }
+            swipe(id,-90f)
+            shot("layer-delete-$id")
+            tap("layer-delete-$id")
+            assertFalse(state().array("layers").objects().any { it.getLong("id")==id })
+        }
+        assertEquals(0,state().array("layers").length())
+        action(obj("type" to "invoke","command" to "undo"))
+        action(obj("type" to "invoke","command" to "undo"))
+        assertEquals(2,state().array("layers").length())
+        // Constrain the native viewport so this small catalog actually overflows.
+        instrumentation.runOnMainSync { host.resize((1200*density).toInt(),(450*density).toInt(),density) }
+        idle()
+        val brush="header-control-"+entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("command")=="drawing_brush" }.getInt("id")
+        tap(brush)
+        if(drawer()==null)tap(brush)
+        val sets=state().getJSONObject("tool_panels").getJSONObject("brush_sets").array("groups").objects()
+        var longest=sets.first();var size=0
+        for(set in sets) {
+            action(set.getJSONObject("action"))
+            val count=state().getJSONObject("tool_set").array("subtools").length()
+            if(count>size){size=count;longest=set}
+        }
+        action(longest.getJSONObject("action"))
+        val first="subtool-"+state().getJSONObject("tool_set").array("subtools").getJSONObject(0).getString("label")
+        for(device in listOf(MotionEvent.TOOL_TYPE_MOUSE,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS)) {
+            tool=device
+            // Reopen to reset the native scroll position before each contact.
+            tap(brush);tap(brush)
+            waitFor("Tools shown") { (node(first)?.second?.boundsInRoot?.height ?: 0f)>0 }
+            val before=bounds(first).top
+            down(first);val start=point
+            for(i in 1..6)event(MotionEvent.ACTION_MOVE,start+Offset(0f,-35*density*i))
+            event(MotionEvent.ACTION_UP);idle()
+            val after=node(first)?.second?.boundsInRoot
+            if(device==MotionEvent.TOOL_TYPE_MOUSE)assertEquals(before,after!!.top,1f)
+            else assertTrue("Touch and pen scroll tool choices ($device): $before -> $after",after==null || after.height==0f || after.top<before-10*density)
+        }
+        shot("pen-tools-scroll")
+        android.util.Log.i("FilterAcceptance","PASS: three panels, replacement/reopen/cancel, paper color, mouse/touch/pen, reversible swipe, final layer deletion/undo, tool scrolling")
+    }
+
     @Test fun keyboardContextHoldAndFocusLossKeepTheirOwnership() {
         restore(); startEditor(); tool = MotionEvent.TOOL_TYPE_MOUSE
         tap("header-item-1")

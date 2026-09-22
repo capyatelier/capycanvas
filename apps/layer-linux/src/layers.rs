@@ -35,6 +35,7 @@ pub struct LayerPanel {
 #[derive(Clone)]
 struct Row {
     id: Cell<u64>,
+    swipe: crate::swipe_row::SwipeRow,
     content_image: gtk::Picture,
     effect_icon: gtk::Image,
     mask_image: gtk::Picture,
@@ -488,6 +489,7 @@ impl LayerPanel {
                 let grip = crate::icons::image("layer-grip-symbolic");
                 grip.set_pixel_size(12);
                 grip.add_css_class("dim-label");
+                grip.add_css_class("drag-immediate");
                 root.append(&grip);
                 for (b, kind) in [
                     (&eye, 0),
@@ -781,11 +783,26 @@ impl LayerPanel {
                     #[upgrade_or] None,
                     move || Some((owner.borrow().upgrade()?, row_state(&item)?.id))
                 ));
-                item.set_child(Some(&root));
+                let other_rows = Rc::downgrade(&rows);
+                let swipe = crate::swipe_row::SwipeRow::new(&root,
+                    glib::clone!(#[weak] item, #[strong] owner, move || {
+                        if let (Some(row), Some(w)) = (row_state(&item), owner.borrow().upgrade()) {
+                            action(&w, A::Delete { id: row.id });
+                        }
+                    }),
+                    move |opened| {
+                        if let Some(rows) = other_rows.upgrade() {
+                            for row in rows.borrow().values() {
+                                if row.swipe != *opened && row.swipe.is_open() { row.swipe.reveal(false); }
+                            }
+                        }
+                    });
+                item.set_child(Some(&swipe));
                 rows.borrow_mut().insert(
                     item.as_ptr() as usize,
                     Row {
                         id: Cell::new(0),
+                        swipe,
                         content_image,
                         effect_icon,
                         mask_image,
@@ -834,7 +851,9 @@ impl LayerPanel {
             move |_, item| {
                 if let Some(row) = rows.borrow().get(&(item.as_ptr() as usize)) {
                     crate::files::drop::clear_row(&row.root);
-                    row.id.set(0);
+                    // Selection can rebind the same row. Keep its image until
+                    // refresh sees a different ID; detached rows are not polled.
+                    row.swipe.reset();
                 }
             }
         ));
@@ -842,13 +861,13 @@ impl LayerPanel {
         let view = gtk::ListView::new(Some(selection), Some(factory));
         view.set_single_click_activate(false);
         view.add_css_class("layer-list");
-        let list = gtk::ScrolledWindow::builder()
+        let list = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .min_content_height(0)
             .child(&view)
-            .build();
+            .build());
         root.append(&list);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         footer.add_css_class("layer-footer");
@@ -910,6 +929,20 @@ impl LayerPanel {
         *self.owner.borrow_mut() = Rc::downgrade(w);
         w.watch_popover(self.context.upcast_ref());
         if self.root == w.layer_panel.root {
+            let click = gtk::GestureClick::new();
+            click.set_button(0);
+            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            for release in [false, true] {
+                let close = glib::clone!(#[weak] w, move |g: &gtk::GestureClick, _: i32, x: f64, y: f64| {
+                    let Some(widget) = g.widget() else { return; };
+                    let extra: Vec<_> = w.drawers().iter().filter_map(|d| d.layers()).collect();
+                    for panel in std::iter::once(&w.layer_panel).chain(extra.iter().map(|p| p.as_ref())) {
+                        panel.close_swipes_at(&widget, [x, y], release);
+                    }
+                });
+                if release { click.connect_released(close); } else { click.connect_pressed(close); }
+            }
+            w.window.add_controller(click);
             glib::timeout_add_local(
                 std::time::Duration::from_millis(120),
                 glib::clone!(
@@ -1128,6 +1161,16 @@ impl LayerPanel {
             move |_| action(&w, A::ReferenceSelection)
         ));
     }
+
+    fn close_swipes_at(&self, widget: &gtk::Widget, point: [f64; 2], release: bool) {
+        for row in self.rows.borrow().values().filter(|r| r.swipe.is_open()) {
+            let local = widget.compute_point(&row.swipe, &gtk::graphene::Point::new(point[0] as f32, point[1] as f32));
+            let picked = local.and_then(|p| row.swipe.pick(p.x() as f64, p.y() as f64, gtk::PickFlags::DEFAULT));
+            let delete = row.swipe.delete_button();
+            let on_delete = picked.as_ref().is_some_and(|p| p == delete || p.is_ancestor(delete));
+            if picked.is_none() || (release && !on_delete) { row.swipe.reveal(false); }
+        }
+    }
     pub fn refresh(&self, state: &UiState) {
         self.updating.set(true);
         // Update only changed rows; list virtualization bounds GTK widget count.
@@ -1264,7 +1307,7 @@ impl LayerPanel {
             for (mask, target, revision, picture) in [
                 (
                     false,
-                    state.content_icon.is_none().then_some(state.id),
+                    (state.content_icon.is_none() || state.content_icon_color.is_some()).then_some(state.id),
                     state.paint_revision,
                     &row.content_image,
                 ),
@@ -1338,21 +1381,19 @@ fn active(w: &Workspace) -> Option<u64> {
 impl Row {
     fn refresh(&self, s: &LayerState) {
         if self.id.replace(s.id) != s.id {
+            self.swipe.reset();
             self.name_stack.set_visible_child_name("name");
             self.name_entry.set_text("");
             self.content_image.set_paintable(None::<&gdk::Paintable>);
             self.mask_image.set_paintable(None::<&gdk::Paintable>);
         }
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
+        self.swipe.set_can_delete(s.can_delete);
         self.effect_icon.set_visible(s.content_icon.is_some());
-        self.content_image.set_visible(s.content_icon.is_none());
-        crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
+        self.content_image.set_visible(s.content_icon.is_none() || s.content_icon_color.is_some());
+        crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
         self.name.set_text(&s.label);
-        self.name.set_tooltip_text(Some(if s.editable {
-            &s.label
-        } else {
-            "Paper is protected; select a paint layer to draw"
-        }));
+        self.name.set_tooltip_text(Some(&s.label));
         self.thumbnails
             .set_margin_start((s.depth * 8).min(24) as i32);
         if s.selected {
@@ -1363,12 +1404,10 @@ impl Row {
         self.content_frame
             .set_visible(s.editing && !s.mask_selected);
         self.mask_frame.set_visible(s.mask_selected);
-        let drawing_target = s.editing && (s.editable || s.mask_selected);
+        let drawing_target = s.drawing;
         crate::icons::set_button(&self.selection, s.selection_icon);
         self.selection
-            .set_tooltip_text(Some(if s.editing && !s.editable && !s.mask_selected {
-                "Paper is selected and protected; select a paint layer to draw"
-            } else if drawing_target && s.reference {
+            .set_tooltip_text(Some(if drawing_target && s.reference {
                 "Drawing target · Reference layer · Click to select"
             } else if drawing_target {
                 "Drawing target · Click to select"
@@ -1421,11 +1460,7 @@ impl Row {
         } else {
             self.content.remove_css_class("layer-folder");
             self.content.set_child(Some(&self.content_preview));
-            self.content.set_tooltip_text(Some(if s.editable {
-                "Edit layer content"
-            } else {
-                "Paper is protected; select a paint layer to draw"
-            }));
+            self.content.set_tooltip_text(Some("Select layer content"));
         }
         crate::icons::set(
             &self.lock,
@@ -1437,24 +1472,12 @@ impl Row {
         );
         self.lock
             .set_opacity(if s.locked || s.alpha_locked { 1. } else { 0. });
-        self.lock.set_tooltip_text(Some(if !s.editable {
-            "Paper is protected; select a paint layer to draw"
-        } else if s.locked {
+        self.lock.set_tooltip_text(Some(if s.locked {
             "Editing locked"
         } else {
             "Alpha locked"
         }));
-        let mut parts = Vec::new();
-        if !s.editable {
-            parts.push("Protected".into());
-        }
-        if s.blend != 0 {
-            parts.push(s.blend_label.clone());
-        }
-        if s.opacity < 1. {
-            parts.push(format!("{}%", (s.opacity * 100.).round() as u32));
-        }
-        self.meta.set_text(&parts.join(" · "));
-        self.meta.set_visible(!parts.is_empty());
+        self.meta.set_text(&s.description);
+        self.meta.set_visible(!s.description.is_empty());
     }
 }

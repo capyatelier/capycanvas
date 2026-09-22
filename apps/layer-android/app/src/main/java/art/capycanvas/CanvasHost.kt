@@ -35,6 +35,7 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
 /** Platform ownership and transport, not application policy. The UI never waits
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
+    internal val layerSwipe=LayerSwipe()
     internal val proof=ProofController(this)
     internal val hdr=HdrController(this)
     companion object {

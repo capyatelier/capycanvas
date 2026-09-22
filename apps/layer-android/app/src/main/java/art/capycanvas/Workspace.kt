@@ -130,7 +130,20 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 // obstructions and desktop window captions independently of bars.
                 val workspaceInsets = WindowInsets.displayCutout
                     .union(WindowInsets.waterfall).union(WindowInsets.captionBar)
-                Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(workspaceInsets)) {
+                Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(workspaceInsets).pointerInput(host) {
+                    awaitEachGesture {
+                        val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                        val swipe=host.layerSwipe
+                        val onDelete=swipe.owner!=null && swipe.bounds.contains(down.position) && down.position.x>=swipe.bounds.right-swipe.offset
+                        if(!swipe.bounds.contains(down.position))swipe.close()
+                        var moved=false
+                        do {
+                            val change=awaitPointerEvent(PointerEventPass.Initial).changes.find { it.id==down.id } ?: break
+                            moved=moved || (change.position-down.position).getDistance()>viewConfiguration.touchSlop
+                            if(!change.pressed) { if(!moved && !onDelete)swipe.close(); break }
+                        } while(true)
+                    }
+                }) {
                     Box(if (snapshot?.objectOrNull("preferences") != null) Modifier.clearAndSetSemantics {} else Modifier) {
                         Workspace(host, snapshot)
                     }

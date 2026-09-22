@@ -74,8 +74,9 @@ impl<B: CanvasRenderer> UiSession<B> {
             *end
         };
         let doc = self.engine.document();
-        let layer = doc.layer(doc.active_layer)?;
-        let offset = doc.layer_offset(doc.active_layer);
+        let id = doc.drawing_content()?;
+        let layer = doc.layer(id)?;
+        let offset = doc.layer_offset(id);
         let local = |p: Point| Point {
             x: p.x - offset.x,
             y: p.y - offset.y,

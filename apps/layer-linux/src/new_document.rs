@@ -178,12 +178,12 @@ pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<
     for child in [group.upcast_ref::<gtk::Widget>(), note.upcast_ref()] {
         content.append(child);
     }
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
         .max_content_height(450)
         .child(&content)
-        .build();
+        .build());
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
     body.append(&scroll);
     body.append(&buttons);

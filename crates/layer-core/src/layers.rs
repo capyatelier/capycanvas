@@ -325,7 +325,7 @@ mod organization_tests {
         assert!(doc.ungroup_layer_edit(LayerId(10)).is_err());
     }
     #[test]
-    fn bulk_edits_protect_clipping_stacks_locks_and_last_paint_layer() {
+    fn bulk_edits_protect_clipping_stacks_and_locks() {
         let mut doc = Document::new("clipping", 100, 100);
         let mut clip = Layer::paint(LayerId(3), "Shade");
         clip.properties.clipped = true;
@@ -336,7 +336,7 @@ mod organization_tests {
         .unwrap();
         assert!(doc.delete_layers_edit(&[LayerId(1)]).is_err());
         assert!(doc.group_layers_edit(&[LayerId(1)], LayerId(10)).is_err());
-        assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_err());
+        assert!(doc.delete_layers_edit(&[LayerId(1), LayerId(3)]).is_ok());
         doc.apply(Edit::InsertLayer {
             index: 0,
             layer: Layer::paint(LayerId(4), "Other"),
@@ -406,6 +406,9 @@ pub struct LayerProperties {
     pub locked: bool,
     pub clipped: bool,
     pub blend: LayerBlend,
+    /// Absent in older documents: use the canvas's default paper color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper_color: Option<color::RgbColor>,
 }
 
 /// Immutable coverage survives subsequent edits, undo and renderer recreation.
@@ -985,8 +988,8 @@ impl Document {
         }
         let ids = self.layer_subtrees(roots);
         for &id in &ids {
-            let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-            if self.is_locked(id) || layer.kind == LayerKind::Background {
+            self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
+            if self.is_locked(id) {
                 return Err(DocumentError::ProtectedLayer(id));
             }
         }
@@ -1000,13 +1003,6 @@ impl Document {
             return Err(DocumentError::InvalidLayerOperation(
                 "Include the clipped layers above this base",
             ));
-        }
-        if !self
-            .layers
-            .iter()
-            .any(|l| l.kind == LayerKind::Paint && !ids.contains(&l.id))
-        {
-            return Err(DocumentError::LastPaintLayer);
         }
         Ok(ids)
     }
@@ -1183,6 +1179,34 @@ impl Document {
             .filter(|_| self.active_mask)
             .map_or(self.active_layer, |m| m.id)
     }
+    /// Drawing can pass through filters while selection and property editing
+    /// stay on the selected layer. Only that layer's own mask takes precedence.
+    pub fn drawing_target(&self) -> Option<LayerId> {
+        let mut layer = self.layer(self.active_layer)?;
+        if self.is_locked(layer.id) {
+            return None;
+        }
+        if let Some(mask) = &layer.mask
+            && (self.active_mask || layer.kind == LayerKind::Effect)
+        {
+            return Some(mask.id);
+        }
+        while layer.kind == LayerKind::Effect {
+            layer = if layer.properties.clipped {
+                self.layer(self.clipping_base(layer.id)?)?
+            } else {
+                self.layers.iter()
+                    .skip_while(|next| next.id != layer.id).skip(1)
+                    .find(|next| next.properties.parent == layer.properties.parent)?
+            };
+        }
+        (layer.kind == LayerKind::Paint && !self.is_locked(layer.id)).then_some(layer.id)
+    }
+
+    /// Fill/figure tools currently operate on ordinary content, not masks.
+    pub fn drawing_content(&self) -> Option<LayerId> {
+        self.drawing_target().filter(|id| self.layer(*id).is_some())
+    }
     pub fn target_raster(&self, target: LayerId) -> Option<&raster::RasterRevision> {
         let owner = self.target_owner(target)?;
         if owner.id == target {
@@ -1228,6 +1252,11 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
+        if let Some(color) = layer.properties.paper_color {
+            if layer.kind != LayerKind::Background || color.validate_working_spaces().is_err() {
+                return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
+            }
+        }
         if layer.asset.is_some() && layer.source.is_some()
             || (!matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion)
                 && (layer.asset.is_some() || layer.source.is_some()))

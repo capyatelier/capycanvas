@@ -1072,6 +1072,7 @@ impl Workspace {
                 (Panel::Sizes, scroll(&sizes)),
                 (Panel::Layers, layer_panel.root.clone().upcast()),
                 (Panel::Adjustments, effects.adjustments.clone().upcast()),
+                (Panel::FilterTypes, effects.filter_types.clone().upcast()),
                 (Panel::Properties, scroll(&effects.properties)),
                 (Panel::Stats, scroll(&effects.stats)),
                 (Panel::Navigator, navigator.root.clone().upcast()),
@@ -1169,6 +1170,7 @@ impl Workspace {
         brushes.append(brush_list);
         self.customization
             .track(Panel::Brushes, PanelControl::Brushes, brush_list);
+        self.customization.track(Panel::FilterTypes, PanelControl::FilterTypes, &self.effects.filter_types);
         self.customization.track(Panel::BrushSets, PanelControl::BrushSets, &self.brush_sets.root);
         self.customization.track(Panel::SculptSets, PanelControl::SculptSets, &self.sculpt_sets.root);
         self.customization.track(Panel::Tools, PanelControl::Tools, &self.subtools.root);
@@ -2611,12 +2613,12 @@ impl Workspace {
                     let tab_bar = gtk::Overlay::new();
                     tab_bar.set_child(Some(&labels));
                     tab_bar.add_overlay(&tab_joins);
-                    let scroll = gtk::ScrolledWindow::builder()
+                    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                         .hscrollbar_policy(gtk::PolicyType::External)
                         .vscrollbar_policy(gtk::PolicyType::Never)
                         .hexpand(true)
                         .child(&tab_bar)
-                        .build();
+                        .build());
                     header.append(&scroll);
                     let grip = tiles::grip();
                     grip.set_size_request(20, 24);
@@ -2969,6 +2971,7 @@ impl Workspace {
     }
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
+        if !widget.has_css_class("drag-hold") && !widget.has_css_class("drag-row") { widget.add_css_class("drag-immediate"); }
         if matches!(target, DragTarget::Dock(_) | DragTarget::Header(_)) {
             widget.set_cursor_from_name(Some(if widget.has_css_class("drag-hold") {
                 "default"
@@ -3451,11 +3454,11 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
     widget.set_margin_bottom(value);
 }
 pub(crate) fn scroll(child: &impl IsA<gtk::Widget>) -> gtk::Widget {
-    gtk::ScrolledWindow::builder()
+    crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .child(child)
-        .build()
+        .build())
         .upcast()
 }
 pub(crate) fn selected(widget: &impl IsA<gtk::Widget>, selected: bool) {

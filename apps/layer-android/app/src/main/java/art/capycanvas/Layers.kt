@@ -1,6 +1,9 @@
 package art.capycanvas
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -57,6 +60,15 @@ private data class PreviewRequest(val id: Long, val key: String, val target: Lon
 private data class LayerDrag(val id: Long, val top: Float, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f)
 private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 
+/** Transient native gesture state, shared by retained layer panels in this window. */
+internal class LayerSwipe {
+    var owner by mutableStateOf<Any?>(null)
+    var offset by mutableFloatStateOf(0f)
+    var tracking by mutableStateOf(false)
+    var bounds = Rect.Zero
+    fun close() { owner=null; offset=0f; tracking=false }
+}
+
 /** The native view translates the shared layer model; no layer policy lives here. */
 @Composable internal fun LayerPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
@@ -75,6 +87,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     val currentLayers by rememberUpdatedState(layers)
     val list = rememberLazyListState()
     val epoch = state.getJSONObject("document_file").optLong("epoch")
+    LaunchedEffect(epoch) { host.layerSwipe.close() }
     val images = remember(epoch) { mutableStateMapOf<String, ImageBitmap>() }
     val bounds = remember { mutableMapOf<Long, Rect>() }
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
@@ -101,7 +114,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
             val requests = currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
                 listOf(false, true).mapNotNull { mask ->
-                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || !layer.isNull("content_icon")) return@mapNotNull null
+                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || (!layer.isNull("content_icon") && layer.isNull("content_icon_color"))) return@mapNotNull null
                     val key = "${layer.getLong("id")}:$mask"
                     val revision = layer.getLong(if (mask) "mask_revision" else "paint_revision")
                     if (revisions[key] == revision || pending.values.any { it.key == key }) null
@@ -226,14 +239,25 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     var holdEligible by remember { mutableStateOf(false) }
     var maskBounds by remember { mutableStateOf(Rect.Zero) }
     val focused=LocalWindowInfo.current.isWindowFocused
+    val swipe=host.layerSwipe
+    val swipeOwner=remember { Any() }
+    var rowBounds by remember { mutableStateOf(Rect.Zero) }
+    val shift by animateFloatAsState(if(swipe.owner===swipeOwner) swipe.offset else 0f,
+        tween(if(swipe.owner===swipeOwner && swipe.tracking) 0 else 150),label="Layer swipe")
+    DisposableEffect(swipeOwner) { onDispose { if(swipe.owner===swipeOwner)swipe.close() } }
+    LaunchedEffect(focused,layer.optBoolean("can_delete")) {
+        if((!focused || !layer.optBoolean("can_delete")) && swipe.owner===swipeOwner)swipe.close()
+    }
     val density=LocalDensity.current.density
     fun select(mask:Boolean=false) = host.layer(obj("op" to "select","id" to id,"mask" to mask))
     fun openContext(mask:Boolean) {
         if (!focused || (contactActive && !contactMenus)) return
         if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; context(mask,origin+press) }
     }
-    Row(modifier.fillMaxWidth().heightIn(min=40.dp).then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned { origin=it.boundsInRoot().topLeft }
-        .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
+    Box(modifier.fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned {
+            rowBounds=it.boundsInRoot(); origin=rowBounds.topLeft
+            if(swipe.owner===swipeOwner)swipe.bounds=rowBounds
+        }
         .drawWithContent {
             drawContent()
             when(highlight) { 1 -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
@@ -251,6 +275,8 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 val secondary=currentEvent.buttons.isSecondaryPressed
                 contactMenus=down.type!=PointerType.Mouse || secondary
                 var dragging=false
+                var swiping=false
+                val swipeStart=if(swipe.owner===swipeOwner)swipe.offset else 0f
                 var released=false
                 var remaining=viewConfiguration.longPressTimeoutMillis
                 var eventTime=down.uptimeMillis
@@ -272,20 +298,46 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     val moved=(change.position-down.position).getDistance()>viewConfiguration.touchSlop
                     // Touch and pen keep native scrolling until a stationary
                     // hold wins. Explicit grips and mouse bodies are immediate.
-                    if (!directDrag && !longPressed && moved) holdEligible=false
+                    if (!directDrag && !longPressed && moved && holdEligible) {
+                        holdEligible=false
+                        val delta=change.position-down.position
+                        if(row.getBoolean("can_delete") && kotlin.math.abs(delta.x)>kotlin.math.abs(delta.y) && (delta.x<0 || swipeStart>0)) {
+                            swiping=true; swipe.owner=swipeOwner; swipe.bounds=rowBounds; swipe.tracking=true
+                            cancelContext()
+                        }
+                    }
+                    if(swiping) {
+                        change.consume()
+                        swipe.offset=(swipeStart-(change.position.x-down.position.x)).coerceIn(0f,72*density)
+                        if(!change.pressed) { released=true; break }
+                        continue
+                    }
                     if (!secondary && row.getBoolean("can_drop_below") && (directDrag || longPressed) && !dragging && change.pressed &&
                         moved) { dragging=true; holdEligible=false }
                     if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
                     if (longPressed) change.consume()
                     if (!change.pressed) { released=true; break }
                 } while(true) } finally {
+                    if(swiping) {
+                        swipe.tracking=false
+                        if(released && swipe.offset>=72*density*.4f)swipe.offset=72*density else swipe.close()
+                    }
                     if(dragging)drag(origin+down.position,true,true)
                     if(!released)cancelContext()
                     longPressed=false; holdEligible=false; contactActive=false; contactMenus=true; held(false)
                 }
             }
         }.combinedClickable(onClick={select()},onLongClick={openContext(false)}))
-        .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
+        ) {
+        if(shift>0f) Box(Modifier.matchParentSize(),contentAlignment=Alignment.CenterEnd) {
+            Box(Modifier.width((shift/density).dp).fillMaxHeight().background(Color(0xffc62828))
+                .testTag("layer-delete-$id").clickable(enabled=layer.getBoolean("can_delete")) {
+                    swipe.close(); host.layer(obj("op" to "delete","id" to id))
+                },contentAlignment=Alignment.Center) { Text("Delete",color=Color.White,maxLines=1) }
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min=40.dp).offset { IntOffset(-shift.roundToInt(),0) }
+            .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
+            .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
         LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.getBoolean("visible"))"Hide layer" else "Show layer",
             action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
         LayerButton(host,iconName(layer.getString("selection_icon")),"Select layer without changing drawing target",
@@ -310,8 +362,10 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     }
                 },contentAlignment=Alignment.Center) {
                 if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open","Expand or collapse group",Modifier.size(28.dp))
-                else if(!mask && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp))
-                else images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                else {
+                if(mask || layer.isNull("content_icon") || !layer.isNull("content_icon_color")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                if(!mask && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=if(layer.isNull("content_icon_color")) colors.text else Color(android.graphics.Color.parseColor(layer.getString("content_icon_color"))))
+                }
             }
             }
         }
@@ -333,10 +387,11 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 DisposableEffect(id) { onDispose { host.editingText=false } }
             } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
-            val meta=listOf(if(layer.getInt("blend")!=0)layer.getString("blend_label") else "",if(layer.number("opacity")<1f)"${(layer.number("opacity")*100).roundToInt()}%" else "").filter { it.isNotEmpty() }.joinToString(" · ")
+            val meta=layer.getString("description")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
         SharedIcon("grip","Drag layer",Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
+        }
     }
 }

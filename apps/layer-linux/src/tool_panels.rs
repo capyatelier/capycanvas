@@ -192,7 +192,7 @@ pub fn icon_label(text: &str, icon: &str) -> gtk::Box {
     aligned_icon_label(text, icon, 0.0)
 }
 
-fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Box {
+pub(crate) fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_valign(gtk::Align::Center);
     row.append(&crate::icons::image(&format!("layer-{}-symbolic", icon)));

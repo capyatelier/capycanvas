@@ -882,6 +882,7 @@ pub struct WgpuRasterizer {
     validated_effects: Option<effects::Effects>,
     layer_style_records: std::collections::HashMap<LayerId, u32>,
     artwork_frame: Option<Arc<artwork::Frame>>,
+    effect_clocks: effects::Clocks,
     last_time_seconds: f32,
     filter_source_epoch: u64,
     image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
@@ -1247,6 +1248,7 @@ impl WgpuRasterizer {
             validated_effects: None,
             layer_style_records: std::collections::HashMap::new(),
             artwork_frame: None,
+            effect_clocks: Default::default(),
             last_time_seconds: 0.,
             filter_source_epoch: 0,
             canvas_preview: canvas_preview::CanvasOverview::new(),
@@ -3577,6 +3579,17 @@ impl CanvasRenderer for WgpuRasterizer {
         self.transform_damage.clear();
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
+        }
+        // One playback clock per document layer serves canvas, exact queries
+        // and snapshot workers, independent of fused chains and capture regions.
+        self.effect_clocks.retain(|id, _| packet.layers.iter().any(|l| l.id == *id && l.effect.is_some()));
+        for layer in packet.layers {
+            if let Some(effect) = &layer.effect {
+                let clock = self.effect_clocks.entry(layer.id)
+                    .or_insert_with(|| (effect.program.id.clone(), Default::default()));
+                if clock.0 != effect.program.id { *clock = (effect.program.id.clone(), Default::default()); }
+                clock.1.advance(effect, packet.time_seconds);
+            }
         }
         self.last_time_seconds = packet.time_seconds;
         if packet.reset_layers

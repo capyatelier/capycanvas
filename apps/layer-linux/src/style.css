@@ -121,6 +121,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .layer-icon image { -gtk-icon-size: 16px; }
 .layer-list { background: transparent; }
 .layer-list > row { padding: 0; margin: 0; border-radius: 0; }
+.dock-panel button.layer-swipe-delete { border-radius: 0; padding: 0 8px; background: #c01c28; color: white; }
 .layer-row { min-height: 36px; padding: 2px 6px; border-radius: 0; }
 .layer-row.selected { background: alpha(var(--accent-bg-color), .22); }
 .layers-panel button.layer-column { min-width: 24px; }

@@ -34,11 +34,12 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     updateZen();
   });
   const target = (node, value) => { node.dataset.context = JSON.stringify(value); return node; };
+  const menuKey = model => JSON.stringify(model, (_, value) => typeof value === "bigint" ? String(value) : value);
   // The same recursive Rust menu drives both the header and contextual menus.
   // Submenus replace their parent page, as in GTK's sliding popover menus.
   function renderMenu(container, model, close, parents = []) {
     container.menuPath=[...parents.map(p=>p.title),model.title].slice(1);
-    container.menuModelKey=JSON.stringify(parents[0]||model);
+    container.menuModelKey=menuKey(parents[0]||model);
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
     container.replaceChildren();
@@ -71,7 +72,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (container === context && context.matches(":popover-open")) positionPopup(context);
   }
   function refreshMenu(container,model,close) {
-    if(container.menuModelKey===JSON.stringify(model))return;
+    if(container.menuModelKey===menuKey(model))return;
     const parents=[];
     for(const title of container.menuPath||[]) {
       const item=model.sections.flat().find(i=>i.label===title&&i.sections?.some(s=>s.length));
@@ -195,6 +196,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           const command = state().commands.find((c) => c.id === node.dataset.command);
           node.textContent = command.label; node.disabled = !command.enabled;
         } }; break;
+      case "filter_types":
       case "adjustments":
       case "properties":
       case "stats":

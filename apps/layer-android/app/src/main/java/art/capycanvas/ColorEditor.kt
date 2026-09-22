@@ -35,16 +35,16 @@ internal fun documentRgbSpace(host: CanvasHost): String =
 private fun colorEpoch(host: CanvasHost): Long =
     host.panelContent?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
 
-@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, onChange: (JSONObject) -> Unit) {
+@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, swatchOnly: Boolean = false, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     val preview = remember(value.toString()) {
         JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString())).getJSONObject(0)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, Modifier.weight(1f))
+        if(!swatchOnly) Text(label, Modifier.weight(1f))
         Button(onClick = { editing = JSONObject(value.toString()) }, enabled = enabled,
-            modifier = Modifier.size(56.dp, 32.dp).testTag("property-color-$label"), contentPadding = PaddingValues(0.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = displayColor(preview))) { Text("…") }
+            modifier = (if(swatchOnly) Modifier.fillMaxWidth().height(36.dp) else Modifier.size(56.dp, 32.dp)).testTag("property-color-$label"), contentPadding = PaddingValues(0.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = displayColor(preview))) { if(!swatchOnly) Text("…") }
     }
     if (!preview.getBoolean("in_gamut")) Text("Outside sRGB preview gamut", style = MaterialTheme.typography.labelSmall)
     editing?.let { color -> ColorEditorDialog(host, color, { editing = null }) { selected -> editing = null; onChange(selected) } }

@@ -151,6 +151,7 @@ impl Body {
             Self::Proof(v) => v.root.clone().upcast(),
             Self::Effects(panel, v) => match panel {
                 Panel::Adjustments => v.adjustments.clone().upcast(),
+                Panel::FilterTypes => v.filter_types.clone().upcast(),
                 Panel::Properties => v.properties.clone().upcast(),
                 _ => v.stats.clone().upcast(),
             },
@@ -269,17 +270,19 @@ impl View {
                     }
                     Panel::Layers => {
                         let v = Rc::new(LayerPanel::new());
+                        margins(&v.root, PANEL_CONTENT_INSET as i32);
                         v.bind(w);
                         v.root.set_height_request(360);
                         Body::Layers(v)
                     }
-                    Panel::Adjustments | Panel::Properties | Panel::Stats => {
+                    Panel::FilterTypes | Panel::Adjustments | Panel::Properties | Panel::Stats => {
                         let v = effects
-                            .get_or_insert_with(|| Rc::new(EffectPanels::new()))
+                            .get_or_insert_with(|| Rc::new(EffectPanels::with_filter_types(drawer.columns.iter().flatten().any(|p| *p == Panel::FilterTypes))))
                             .clone();
                         if *panel == Panel::Adjustments {
                             v.adjustments.set_height_request(440);
                         }
+                        if *panel == Panel::FilterTypes { v.filter_types.set_height_request(440); }
                         Body::Effects(*panel, v)
                     }
                 };
@@ -351,12 +354,12 @@ impl View {
                     labels.append(&button);
                     tab_buttons.push(button);
                 }
-                let header_clip = gtk::ScrolledWindow::builder()
+                let header_clip = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::External)
                     .vscrollbar_policy(gtk::PolicyType::Never)
                     .hexpand(true)
                     .child(&labels)
-                    .build();
+                    .build());
                 header.append(&header_clip);
                 tab_clip = Some(header_clip);
                 let grip = tiles::grip();

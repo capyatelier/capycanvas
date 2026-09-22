@@ -290,6 +290,17 @@ struct CursorVertex {
         white = alpha - dark;
     }
     let clip = window_coverage(logical_surface(v.position.xy));
+    if v.line.z > 5.5 {
+        let radius = v.line.x - scale;
+        let ring = abs(length(v.local) - radius) - scale;
+        let slash = max(abs(v.local.x + v.local.y) * 0.70710678 - scale,
+            length(v.local) - radius);
+        let d = min(ring, slash);
+        let ink = clamp(0.5 - d, 0., 1.);
+        let halo = clamp(scale + 0.5 - d, 0., 1.);
+        return view_store(vec4<f32>(vec3<f32>(0.75, 0.025, 0.02) * ink
+            + vec3<f32>(halo - ink), halo) * clip);
+    }
     return view_store(vec4<f32>(vec3<f32>(white), alpha) * clip);
 }
 

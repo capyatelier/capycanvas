@@ -15,6 +15,7 @@ import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
 import { installTooltips } from "./tooltips.js";
+import { installPenScrolling } from "./pen-scroll.js";
 
 // The static packager fills this map with fingerprinted resource filenames.
 const assetPaths = {};
@@ -53,6 +54,7 @@ let compilerScheduled = false, compilerFailed = false, compilerEpoch = 0;
 let compilerResumeAt = 0, compilerResumeTimer;
 const startupTimes = { canvas: null, document: null, brush: null, complete: null };
 installTooltips();
+installPenScrolling();
 let startupNotice;
 let firstCanvasRendered = false;
 let servicingRequests = false;
@@ -706,16 +708,16 @@ function buildPanels() {
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
     contentChanged:panelContentChanged});
 }
-function contentPanel(id) {
+function contentPanel(id, splitPicker=false) {
   const panel=element("div",`panel ${id}-panel`);
   if(id==="proof") {
     panel.disposePanel=documents.mountProof(panel);panel.refreshPanel=()=>{};
   } else if(id==="layers") {
     const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
-  } else if(["adjustments","properties","stats"].includes(id)) {
-    const copies=new Map(["adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
-    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,contentChanged:()=>{}});
+  } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
+    const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
+    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,contentChanged:()=>{},splitPicker});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else {
     for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));

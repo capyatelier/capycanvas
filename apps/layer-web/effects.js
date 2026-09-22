@@ -9,7 +9,7 @@ export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=
   const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
   return libraryOnly ? app.load_filter_library(manifest,modules,mode) : app.load_filter_package(manifest,modules,mode);
 }
-export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged}) {
+export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false}) {
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
   const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
@@ -20,11 +20,16 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   const categoryIcon=element("span","filter-category-icon");
   pickerHeader.append(categoryIcon,category,search,searchButton);adjustments.append(pickerHeader,list);
+  const types=element("div","filter-types");types.dataset.control="filter_types";
+  const typeList=element("div","filter-type-list"),cancel=button("Cancel",()=>send({op:"cancel_filter"}),"cancel-filter");
+  types.append(typeList,cancel);panels.get("filter_types")?.append(types);
+  pickerHeader.hidden=splitPicker;
   const rows=new Map();let visibleIds=null,catalogRevision=null;
   function refreshPicker(){
     const s=state(),picker=s.filter_picker;
     if(catalogRevision!==s.filter_catalog_revision){
       catalogRevision=s.filter_catalog_revision;visibleIds=null;rows.clear();
+      typeList.replaceChildren(...s.filter_categories.map(c=>{const b=button("",()=>pickerAction({op:"category",category:c.id}),"filter-type");b.dataset.category=c.id??"";b.append(icon(c.icon),element("span","",c.label));return b;}));
       category.replaceChildren(...s.filter_categories.map(c=>{const option=element("option","",c.label);option.value=c.id??"";return option;}));
     }
     category.hidden=picker.search!=null;category.value=picker.category??"";
@@ -33,10 +38,12 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     if(categoryIcon.firstChild?.dataset.asset!==categoryGlyph)categoryIcon.replaceChildren(icon(categoryGlyph));
     search.hidden=picker.search==null;search.placeholder=picker.search_label;searchButton.title=picker.search_label;
     if(search.value!==(picker.search??""))search.value=picker.search??"";
+    for(const b of typeList.children)b.setAttribute("aria-pressed",String(b.dataset.category===(picker.category??"")));
+    for(const [id,row] of rows)row.node.setAttribute("aria-pressed",String(picker.selected===id));
     const ids=s.adjustments.map(c=>c.id).join(",");if(ids===visibleIds)return;visibleIds=ids;
     const children=[];let section;
     for(const choice of s.adjustments){
-      if(section!==choice.category){const heading=element("h3","filter-category",choice.category_label);heading.prepend(icon(choice.category_icon));children.push(heading);section=choice.category;}
+      if(!splitPicker&&section!==choice.category){const heading=element("h3","filter-category",choice.category_label);heading.prepend(icon(choice.category_icon));children.push(heading);section=choice.category;}
       let row=rows.get(choice.id);
       if(!row){
         const node=button("",()=>dispatch(choice.action),"filter-row"),canvas=element("canvas"),label=element("span","",choice.label);
@@ -48,7 +55,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
         if(choice.animated){const mark=icon("animation");mark.classList.add("filter-animation");mark.setAttribute("aria-hidden","true");label.prepend(mark);}
         node.append(canvas,label);row={node,canvas,key:null};rows.set(choice.id,row);
       }
-      children.push(row.node);
+      row.node.setAttribute("aria-pressed",String(picker.selected===choice.id));children.push(row.node);
     }
     if(!children.length)children.push(element("p","dim",picker.empty_label));list.replaceChildren(...children);contentChanged("adjustments");
   }
@@ -106,7 +113,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   function refresh(){
     refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
-    const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind,c.label,c.section])]);
+    const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind,c.label,c.section,c.color_action])],(_,v)=>typeof v==="bigint"?String(v):v);
     if(schema!==next){
       schema=next;body.replaceChildren();fields.clear();
       const curves=view.controls.filter(c=>c.kind.kind==="curve");let curveBox;
@@ -126,7 +133,9 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
         else if(c.kind.kind==="curve"){field=curveEditor(view.layer,c.key);field.node.dataset.key=c.key;field.node.toggleAttribute("hidden",c!==curves[0]);curveBox.append(field.node);}
         else if(c.kind.kind==="toggle"){const n=element("input");n.type="checkbox";n.onchange=()=>change(n.checked);field={node:row(c.label,n),update:c=>n.checked=c.value.value,disable:x=>n.disabled=x};}
         else if(c.kind.kind==="choice"){const n=element("select");c.kind.options.forEach((label,i)=>{const o=element("option","",label);o.value=i;n.append(o);});n.onchange=()=>change(Number(n.value));field={node:row(c.label,n),update:c=>n.value=c.value.value,disable:x=>n.disabled=x};}
-        else if(c.kind.kind==="color"){const n=colorButton({app,label:c.label,element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});field={node:row(c.label,n.node),update:c=>n.update(c.value.value),disable:n.disable};}
+        else if(c.kind.kind==="color"){const n=colorButton({app,label:c.label,element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});const line=c.color_action?element("div","paper-color-property"):row(c.label,n.node);let bucket;
+          if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action="paper-color-bucket";bucket.title="Use selected color";bucket.append(icon("fill"));line.append(n.node,bucket);}
+          field={node:line,update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;}};}
         else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
         if(field){if(c.kind.kind!=="curve")body.append(field.node);fields.set(c.key,field);}
       }

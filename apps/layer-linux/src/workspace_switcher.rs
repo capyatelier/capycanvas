@@ -8,13 +8,13 @@ pub(super) fn build() -> (gtk::Box, gtk::Box) {
     root.add_css_class("workspace-switcher");
     root.set_valign(gtk::Align::Center);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::External)
         .vscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_width(true)
         .max_content_width(420)
         .child(&buttons)
-        .build();
+        .build());
     root.append(&scroll);
     (root, buttons)
 }

@@ -859,3 +859,18 @@ body[data-theme="light"] #header.header-editing .header-item { background:transp
 .drawing-dragging, .drawing-dragging * { cursor:grabbing !important; }
 .document-transition { position:fixed; inset:0; z-index:11000; cursor:progress; }
 .document-transition > span { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); border-radius:8px; padding:8px 16px; background:var(--bg); }
+
+.filter-types { display:flex; flex-direction:column; min-height:424px; gap:8px; }
+.filter-type-list { display:flex; flex-direction:column; gap:2px; flex:1; }
+.filter-types .filter-type { display:flex; align-items:center; gap:6px; min-height:44px; padding:0 6px; text-align:left; }
+.filter-types .cancel-filter { align-self:flex-start; }
+.paper-color-property { display:flex; gap:6px; }
+.paper-color-property > :first-child { flex:1; min-width:0; height:36px; }
+.drawer-column > .layers-panel { padding:8px; }
+
+.layer-swipe { position: relative; overflow: hidden; flex: none; --swipe: 0px; }
+.layer-swipe > .layer-row { transform: translateX(calc(-1 * var(--swipe))); touch-action: pan-y; }
+.layer-swipe.swipe-animating > .layer-row { transition: transform 150ms ease-out; }
+.panel button.layer-swipe-delete { position: absolute; inset: 0 0 0 auto; width: 72px; height: 100%; border: 0; border-radius: 0; color: white; background: #c62828; clip-path: inset(0 0 0 calc(72px - var(--swipe))); }
+.layer-swipe.swipe-animating > .layer-swipe-delete { transition: clip-path 150ms ease-out; }
+.layer-thumbnail .paper-thumbnail-icon { position: absolute; inset: 3px; width: 24px; height: 24px; }

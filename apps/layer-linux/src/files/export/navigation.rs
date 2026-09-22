@@ -10,10 +10,10 @@ pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk
     body.set_margin_end(18);
     body.set_margin_top(18);
     body.set_margin_bottom(18);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .child(body).build();
+        .child(body).build());
     scroll.set_widget_name(&format!("export-{tag}-scroll"));
     toolbar.set_content(Some(&scroll));
     let page = adw::NavigationPage::builder().title(title).tag(tag).child(&toolbar).build();

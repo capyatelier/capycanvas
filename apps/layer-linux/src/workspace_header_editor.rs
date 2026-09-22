@@ -13,7 +13,7 @@ pub(super) struct Editor {
 }
 impl Editor {
     pub fn new() -> Self {
-        let root = gtk::ScrolledWindow::new();
+        let root = crate::input::pen_scroller(gtk::ScrolledWindow::new());
         root.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         root.set_propagate_natural_height(true);
         root.set_widget_name("header-editor");

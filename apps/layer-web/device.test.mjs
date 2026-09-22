@@ -1,3 +1,4 @@
+import {checkFilterDrawer} from "./filter-drawer.test.mjs";
 import {checkBrushDrawers} from "./brush-drawers.test.mjs";
 import {checkContactBrushes} from "./contact-brushes.test.mjs";
 import {checkUiUpdates,checkSettingsUpdates} from "./ui-updates.test.mjs";
@@ -89,7 +90,9 @@ try {
     workspaceIsolation={original,created,capture};
   }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--contact-brushes")) {
+  if (process.argv.includes("--filter-drawer")) {
+    await checkFilterDrawer({call,evaluate,settle});assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--contact-brushes")) {
     await checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL);
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--pen")) {

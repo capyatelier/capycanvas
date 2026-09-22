@@ -322,12 +322,12 @@ pub(crate) fn show(w: &Rc<Workspace>) {
     let expander = gtk::Expander::builder().label("Details").child(&details).build();
     expander.set_widget_name("histogram-details");
     body.append(&expander);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
         .max_content_height(720)
         .child(&body)
-        .build();
+        .build());
     toolbar.set_content(Some(&scroll));
     window.set_content(Some(&toolbar));
     let state = Rc::new(Inspector {

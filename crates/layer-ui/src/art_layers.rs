@@ -44,6 +44,10 @@ impl LayerCanvasTool {
     pub fn picks_color(self) -> bool {
         matches!(self, Self::PickVisible | Self::PickLayer)
     }
+    pub fn draws(self) -> bool {
+        matches!(self, Self::Paint | Self::LassoFill | Self::Region { fill: true, .. }
+            | Self::Gradient { .. } | Self::Figure { .. })
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayersView {
@@ -74,10 +78,10 @@ impl LayerControls {
         let unlocked = !doc.is_locked(l.id);
         let editable = l.kind != LayerKind::Background;
         Self {
-            opacity: unlocked,
+            opacity: editable && unlocked,
             blend: editable && unlocked,
             alpha_lock: l.kind == LayerKind::Paint && unlocked,
-            edit_lock: editable && !l.properties.parent.is_some_and(|p| doc.is_locked(p)),
+            edit_lock: !l.properties.parent.is_some_and(|p| doc.is_locked(p)),
             clip: editable
                 && unlocked
                 && (l.properties.clipped || doc.clipping_base(l.id).is_some()),
@@ -883,20 +887,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::New { group, clipped } => {
                 let doc = self.engine.document();
-                let active = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
-                if clipped && !matches!(active.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+                let active = doc.layer(doc.active_layer);
+                if clipped && !active.is_some_and(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage)) {
                     return Err("Choose a paint layer to clip to".into());
                 }
-                let parent = if active.kind == LayerKind::Group {
-                    Some(active.id)
-                } else {
-                    active.properties.parent
-                };
+                let parent = active.and_then(|l| if l.kind == LayerKind::Group { Some(l.id) } else { l.properties.parent });
                 if parent.is_some_and(|p| doc.is_locked(p)) {
                     return Err("The destination group is locked".into());
                 }
-                let index = doc.layers.iter().position(|l| l.id == active.id).unwrap()
-                    + usize::from(active.kind == LayerKind::Group);
+                let index = active.map_or(0, |active| doc.layers.iter().position(|l| l.id == active.id).unwrap()
+                    + usize::from(active.kind == LayerKind::Group));
                 let id = self.engine.allocate_layer_id();
                 let mut layer = Layer::paint(id, if group { "Group" } else { "Layer" });
                 layer.name = format!("{} {}", if group { "Group" } else { "Layer" }, id.0).into();
@@ -992,8 +992,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .layer(LayerId(id))
                     .ok_or("Unknown layer")?
                     .clone();
-                if layer.kind == LayerKind::Background
-                    || layer
+                if layer
                         .properties
                         .parent
                         .is_some_and(|p| self.engine.document().is_locked(p))
@@ -1711,9 +1710,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let controls = LayerControls::for_layer(doc, layer);
                 match self.layer_interaction.tool {
                     LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
-                    LayerCanvasTool::LassoFill if !controls.fill => return Ok(()),
-                    LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
-                        if !controls.fill || doc.active_mask =>
+                    LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
+                        if doc.drawing_content().is_none() =>
                     {
                         return Ok(());
                     }
@@ -1833,7 +1831,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             alpha_locked: self
                 .engine
                 .document()
-                .layer(self.engine.document().active_layer)
+                .drawing_content().and_then(|id| self.engine.document().layer(id))
                 .is_some_and(|l| l.properties.alpha_locked),
         }
     }
@@ -1846,7 +1844,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         transparent: bool,
     ) -> Result<(), String> {
         let doc = self.engine.document();
-        let offset = doc.layer_offset(doc.active_layer);
+        let target = doc.drawing_content().ok_or("Select a drawing layer")?;
+        let offset = doc.layer_offset(target);
         let local = |p: Point| Point {
             x: p.x - offset.x,
             y: p.y - offset.y,
@@ -1874,7 +1873,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             colors,
             radial,
             alpha_locked: doc
-                .layer(doc.active_layer)
+                .layer(target)
                 .is_some_and(|l| l.properties.alpha_locked),
         };
         self.paint_operation(doc.selection.clone(), kind)
@@ -1885,9 +1884,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         selection: Option<Selection>,
         kind: layer_core::LayerOperationKind,
     ) -> Result<(), String> {
-        let id = self.engine.document().active_layer;
+        let id = self.engine.document().drawing_content().ok_or("Select a drawing layer")?;
         let layer = self.editable_layer(id.0)?;
-        if layer.kind != LayerKind::Paint || self.engine.document().active_mask {
+        if layer.kind != LayerKind::Paint {
             return Err("Select a paint layer's content to fill".into());
         }
         let offset = self.engine.document().layer_offset(id);

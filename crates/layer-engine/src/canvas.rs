@@ -223,7 +223,19 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn view(&self) -> ViewState {
-        self.view
+        let mut view = self.view;
+        if let Some(color) = self.document().layers.iter()
+            .find(|l| l.kind == layer_core::LayerKind::Background)
+            .and_then(|l| l.properties.paper_color)
+        {
+            view.background_rgba_linear = color.linear_in(self.document().color.space)
+                .expect("validated paper color");
+        } else if !self.document().layers.iter().any(|l| l.kind == layer_core::LayerKind::Background) {
+            view.background_rgba_linear = if self.document().color.paint_descriptor().alpha == layer_core::color::AlphaAssociation::None {
+                [1.; 4]
+            } else { [0.; 4] };
+        }
+        view
     }
 
     pub fn backend(&self) -> &B {
@@ -335,7 +347,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target = self
             .active_stroke
             .as_ref()
-            .map_or(self.document().active_target(), |s| s.layer_id);
+            .map_or_else(|| self.document().drawing_target().unwrap_or(self.document().active_target()), |s| s.layer_id);
         let offset = self.document().layer_offset(target);
         // Stroke dynamics run in layer-local coordinates; outlines are returned
         // in document coordinates, including for translated layers.
@@ -956,7 +968,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     ) -> Result<(), EngineError<B::Error>> {
         let packet = FramePacket {
             time_seconds,
-            view: self.view,
+            view: self.view(),
             document_extent: [self.editor.document().width, self.editor.document().height],
             layers: &self.editor.document().layers,
             dabs: &self.dabs,
@@ -1202,7 +1214,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target_id = self
             .active_stroke
             .as_ref()
-            .map_or(self.document().active_target(), |s| s.layer_id);
+            .map_or_else(|| self.document().drawing_target().unwrap_or(self.document().active_target()), |s| s.layer_id);
         let offset = self.document().layer_offset(target_id);
         transform.surface_to_document[4] -= offset.x;
         transform.surface_to_document[5] -= offset.y;
@@ -1214,7 +1226,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_some() {
                     self.cancel_active();
                 }
-                let layer_id = self.document().active_target();
+                let Some(layer_id) = self.document().drawing_target() else {
+                    return Ok(());
+                };
                 let Some(owner) = self.document().target_owner(layer_id) else {
                     return Ok(());
                 };

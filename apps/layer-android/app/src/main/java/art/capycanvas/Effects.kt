@@ -41,7 +41,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
 
 /** Category/search decisions and preview sampling are shared Rust policy. Only
  * visible row geometry and native bitmap presentation belong to this view. */
-@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, onContent: (PanelContentSize) -> Unit = {}) {
+@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier, splitPicker: Boolean = false, onContent: (PanelContentSize) -> Unit = {}) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val picker = state.getJSONObject("filter_picker")
@@ -51,10 +51,10 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
     var rowHeight by remember { mutableFloatStateOf(64f) }
     var categoryHeight by remember { mutableFloatStateOf(36f) }
     var emptyHeight by remember { mutableFloatStateOf(36f) }
-    val categoryCount = choices.filterIndexed { i, choice -> i == 0 || choices[i - 1].getString("category") != choice.getString("category") }.size
+    val categoryCount = if(splitPicker) 0 else choices.filterIndexed { i, choice -> i == 0 || choices[i - 1].getString("category") != choice.getString("category") }.size
     val listHeight = if (choices.isEmpty()) emptyHeight else choices.size * rowHeight + categoryCount * categoryHeight + (choices.size + categoryCount - 1) * 2f
-    val fixedHeight = headerHeight + 18f // Native outer padding and header/list gap.
-    val measured = if (headerHeight > 0f) PanelContentSize(fixedHeight + listHeight, fixedHeight, rowHeight + 2f) else null
+    val fixedHeight = if(splitPicker) 12f else headerHeight + 18f // Native outer padding and header/list gap.
+    val measured = if (splitPicker || headerHeight > 0f) PanelContentSize(fixedHeight + listHeight, fixedHeight, rowHeight + 2f) else null
     SideEffect { measured?.let(onContent) }
     val currentChoices by rememberUpdatedState(choices)
     val list = rememberLazyListState()
@@ -74,7 +74,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
         }.collect { (ids, size) -> cache.update(previewView, ids, size) }
     }
     Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if(!splitPicker) Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { headerHeight = it.height / density }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (search == null) SharedIcon(categories.firstOrNull { it.optString("id") == picker.optString("category") }?.getString("icon") ?: "adjustments", null)
             Box(Modifier.weight(1f)) {
                 if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
@@ -95,7 +95,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             var category: String? = null
             choices.forEach { choice ->
                 val id = choice.getString("id")
-                if(category != choice.getString("category")) {
+                if(!splitPicker && category != choice.getString("category")) {
                     category = choice.getString("category")
                     item("category-$category") {
                         Row(Modifier.onSizeChanged { categoryHeight = it.height / density }.padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -107,13 +107,14 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 item(id) {
                     HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth().onSizeChanged { rowHeight = it.height / density }) {
                         Column(Modifier.fillMaxWidth().testTag("adjustment-$id").clip(RoundedCornerShape(6.dp))
+                            .background(if(picker.optString("selected")==id) colors.active else Color.Transparent)
                             .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
                             val image = cache.images[id]?.image
                             if(image != null) Image(image, null, Modifier.fillMaxWidth().height(40.dp).testTag("filter-preview-$id"), contentScale = ContentScale.FillBounds)
                             else Spacer(Modifier.fillMaxWidth().height(40.dp))
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                                SharedIcon(choice.getString("icon"), null, Modifier.padding(end = 6.dp).size(16.dp).testTag("filter-icon-$id"))
                                 if(choice.getBoolean("animated")) SharedIcon("animation", choice.getString("tooltip"), Modifier.padding(end = 4.dp).size(12.dp).alpha(.55f))
+                                SharedIcon(choice.getString("icon"), null, Modifier.padding(end = 6.dp).size(16.dp).testTag("filter-icon-$id"))
                                 Text(choice.getString("label"), maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.text)
                             }
                         }
@@ -122,6 +123,26 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             }
             if(choices.isEmpty()) item { Text(picker.getString("empty_label"), Modifier.onSizeChanged { emptyHeight = it.height / density }.padding(8.dp), color = colors.secondary) }
         }
+    }
+}
+
+@Composable internal fun FilterTypesPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier) {
+    val picker=state.getJSONObject("filter_picker")
+    Column(modifier.padding(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            state.array("filter_categories").objects().forEach { category ->
+                item(category.optString("id")) {
+                    Row(Modifier.fillMaxWidth().heightIn(min=44.dp).testTag("filter-type-${category.optString("id")}")
+                        .background(if(category.optString("id")==picker.optString("category")) LocalPalette.current.active else Color.Transparent)
+                        .clickable { host.dispatch(obj("type" to "filter_picker","action" to obj("op" to "category","category" to category.get("id")))) }.padding(horizontal=6.dp),
+                        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        SharedIcon(category.getString("icon"),null)
+                        Text(category.getString("label"),maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        TextButton(onClick={host.effect(obj("op" to "cancel_filter"))},modifier=Modifier.testTag("cancel-filter")) { Text("Cancel") }
     }
 }
 
@@ -174,7 +195,11 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                     Text(label,Modifier.weight(1f))
                     Box(Modifier.weight(1f)){PropertyChoice(label,kind.array("options").values().map{it.toString()},(value as Number).toInt(),enabled){change(it)}}
                 }
-                "color" -> ManagedColorButton(host,label,value as JSONObject,enabled) { change(it) }
+                "color" -> if(control.isNull("color_action")) ManagedColorButton(host,label,value as JSONObject,enabled) { change(it) }
+                    else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { ManagedColorButton(host,label,value as JSONObject,enabled,swatchOnly=true) { change(it) } }
+                        Box(Modifier.size(40.dp,36.dp).testTag("paper-color-bucket").clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill","Use selected color") }
+                    }
                 "gradient" -> GradientControl(host,layer,control,enabled)
             }
         }

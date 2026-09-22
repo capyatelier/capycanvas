@@ -172,11 +172,11 @@ impl ToolbarManagerUi {
         self.empty.set_vexpand(true);
         contents.append(&self.empty);
         body.append(
-            &gtk::ScrolledWindow::builder()
+            &crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .vexpand(true)
                 .child(&contents)
-                .build(),
+                .build()),
         );
         self.list.connect_row_selected(glib::clone!(
             #[weak]
@@ -758,10 +758,10 @@ impl Customization {
                     }
                     body.append(&list);
                 }
-                let scroll = gtk::ScrolledWindow::builder()
+                let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
                     .child(&body)
-                    .build();
+                    .build());
                 scroll.add_css_class("panel-configuration");
                 root.set_configuration(Some(scroll.upcast_ref()));
                 root.add_css_class("expanded-panel");
@@ -1195,6 +1195,7 @@ impl Workspace {
             | PanelControl::Navigator
             | PanelControl::ToolSettings
             | PanelControl::SculptSets
+            | PanelControl::FilterTypes
             | PanelControl::BrushSets
             | PanelControl::Tools
             | PanelControl::ColorWheel => {

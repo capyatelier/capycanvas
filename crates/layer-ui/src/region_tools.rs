@@ -141,14 +141,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return;
                 };
                 let doc = self.engine.document();
-                let Some(target) = doc.layer(doc.active_layer) else {
-                    return;
-                };
-                if fill && (!LayerControls::for_layer(doc, target).fill || doc.active_mask) {
+                if fill && doc.drawing_content().is_none() {
                     return;
                 }
+                let source_layer = doc.drawing_target().unwrap_or(doc.active_target());
                 let (basis, extent) = if source == RegionSource::Editing {
-                    (doc.layer_transform(doc.active_layer), doc.target_extent(doc.active_layer))
+                    (doc.layer_transform(source_layer), doc.target_extent(source_layer))
                 } else { (layer_core::Affine::IDENTITY, [doc.width, doc.height]) };
                 let Some(inverse) = basis.inverse() else { return; };
                 point = inverse.map(point);
@@ -166,7 +164,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     source: match source {
                         RegionSource::Visible => layer_render::RegionSource::Composite,
                         RegionSource::Editing => {
-                            layer_render::RegionSource::Layer(doc.active_layer)
+                            layer_render::RegionSource::Layer(source_layer)
                         }
                         RegionSource::Reference => {
                             if doc.reference_layers.is_empty() {

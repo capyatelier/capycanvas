@@ -163,12 +163,13 @@ fn install_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId)
     widget.add_controller(click);
     let hold = gtk::GestureLongPress::new();
     hold.set_name(Some("preference-context-hold"));
-    hold.set_touch_only(true);
+    hold.set_touch_only(false);
     hold.set_propagation_phase(gtk::PropagationPhase::Capture);
     hold.connect_pressed(glib::clone!(
         #[weak]
         w,
         move |gesture, x, y| {
+            if !crate::input::touch_or_pen(gesture) { return; }
             gesture.set_state(gtk::EventSequenceState::Claimed);
             if let Some(widget) = gesture.widget() {
                 show_reset_menu(&w, &widget, id, x, y);
@@ -391,11 +392,11 @@ impl Preferences {
         empty.add_css_class("dim-label");
         empty.set_visible(false);
         sidebar_body.append(&empty);
-        let scroll = gtk::ScrolledWindow::builder()
+        let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&sidebar_body)
             .vexpand(true)
-            .build();
+            .build());
         sidebar_view.set_content(Some(&scroll));
         content_view.set_content(Some(&stack));
         let content_page = adw::NavigationPage::new(&content_view, "Appearance");

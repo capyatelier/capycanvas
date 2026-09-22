@@ -30,6 +30,52 @@ pub(crate) fn touch_or_pen(gesture: &impl IsA<gtk::Gesture>) -> bool {
     })
 }
 
+/// GTK's built-in kinetic scrolling only accepts touchscreen sequences. Give
+/// tablet contacts the same pre-hold scrolling path, using native slop and
+/// gesture arbitration so held rows and explicit handles keep their capture.
+pub(crate) fn pen_scroller(scroll: gtk::ScrolledWindow) -> gtk::ScrolledWindow {
+    let drag = gtk::GestureDrag::new();
+    drag.set_button(1);
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let origin = Rc::new(Cell::new([0.; 2]));
+    drag.connect_drag_begin(glib::clone!(#[weak] scroll, #[strong] origin, move |g, x, y| {
+        let pen = g.current_event().is_some_and(|e| e.device_tool().is_some()
+            || e.device().is_some_and(|d| d.source() == gdk::InputSource::Pen));
+        let mut target = scroll.pick(x, y, gtk::PickFlags::DEFAULT);
+        let mut direct = false;
+        while let Some(widget) = target {
+            if widget == scroll { break; }
+            direct |= widget.has_css_class("drag-immediate")
+                || widget.has_css_class("workspace-reorder-handle")
+                || widget.has_css_class("document-tab")
+                || widget.is::<gtk::Range>() || widget.is::<gtk::Editable>()
+                || widget.is::<gtk::DrawingArea>() || widget.is::<crate::number_control::NumberControl>();
+            if let Some(inner) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+                direct |= [inner.hadjustment(), inner.vadjustment()].iter()
+                    .any(|a| a.upper() - a.lower() > a.page_size());
+            }
+            target = widget.parent();
+        }
+        if !pen || direct { g.set_state(gtk::EventSequenceState::Denied); return; }
+        origin.set([scroll.hadjustment().value(), scroll.vadjustment().value()]);
+    }));
+    drag.connect_drag_update(glib::clone!(#[weak] scroll, #[strong] origin, move |g, dx, dy| {
+        if !scroll.drag_check_threshold(0, 0, dx as i32, dy as i32) { return; }
+        let (axis, delta, adjustment) = if dx.abs() > dy.abs() {
+            (0, dx, scroll.hadjustment())
+        } else { (1, dy, scroll.vadjustment()) };
+        if adjustment.upper() - adjustment.lower() <= adjustment.page_size() {
+            g.set_state(gtk::EventSequenceState::Denied);
+            return;
+        }
+        g.set_state(gtk::EventSequenceState::Claimed);
+        adjustment.set_value((origin.get()[axis] - delta)
+            .clamp(adjustment.lower(), (adjustment.upper() - adjustment.page_size()).max(adjustment.lower())));
+    }));
+    scroll.add_controller(drag);
+    scroll
+}
+
 #[derive(Default)]
 pub struct Input {
     sequence: Cell<u64>,

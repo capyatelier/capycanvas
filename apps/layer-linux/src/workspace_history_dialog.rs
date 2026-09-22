@@ -144,12 +144,12 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     error.add_css_class("error");
     error.set_visible(false);
     body.append(
-        &gtk::ScrolledWindow::builder()
+        &crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .width_request(340)
             .height_request(360)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&list)
-            .build(),
+            .build()),
     );
     body.append(&error);
     dialog.set_extra_child(Some(&body));

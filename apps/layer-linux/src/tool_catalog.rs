@@ -18,11 +18,11 @@ impl ToolCatalog {
         let choices = gtk::ListBox::new();
         choices.set_selection_mode(gtk::SelectionMode::None);
         choices.add_css_class("boxed-list");
-        let scroll = gtk::ScrolledWindow::builder()
+        let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .child(&choices)
-            .build();
+            .build());
         root.append(&scroll);
         let empty = gtk::Label::new(Some("No matching tools"));
         empty.add_css_class("dim-label");

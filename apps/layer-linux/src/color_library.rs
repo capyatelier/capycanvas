@@ -287,13 +287,13 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
     content.append(&validation);
     let rows = adw::PreferencesGroup::new();
     content.append(&rows);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .propagate_natural_height(true)
         .max_content_height(540)
         .child(&content)
-        .build();
+        .build());
     dialog.set_extra_child(Some(&scroll));
     let library = Rc::new(Library {
         workspace: Rc::downgrade(workspace),

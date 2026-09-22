@@ -79,21 +79,21 @@ impl ManagerUi {
         list.add_css_class("boxed-list");
         list.set_widget_name("workspace-manager-items");
         sidebar.append(
-            &gtk::ScrolledWindow::builder()
+            &crate::input::pen_scroller(gtk::ScrolledWindow::builder()
                 .vexpand(true)
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .child(&list)
-                .build(),
+                .build()),
         );
         let details = gtk::Box::new(gtk::Orientation::Vertical, 12);
         details.set_widget_name("workspace-manager-details");
         details.set_margin_start(18);
         details.set_margin_end(8);
         split.set_start_child(Some(&sidebar));
-        let details_view = gtk::ScrolledWindow::builder()
+        let details_view = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&details)
-            .build();
+            .build());
         split.set_end_child(Some(&details_view));
         body.append(&split);
         let apply = gtk::Button::with_label("Switch to Workspace");

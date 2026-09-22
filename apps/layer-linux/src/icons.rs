@@ -13,10 +13,10 @@ pub fn register() {
     });
 }
 
-fn paintable(name: &str) -> Option<gtk::Svg> {
+fn paintable(name: &str, color: Option<layer_ui::HexColor>) -> Option<gtk::Svg> {
     register();
     PAINTABLES.with_borrow_mut(|cache| {
-        let cache_key = name.to_owned();
+        let cache_key = format!("{name}:{color:?}");
         if let Some(svg) = cache.get(&cache_key) {
             return Some(svg.clone());
         }
@@ -27,7 +27,7 @@ fn paintable(name: &str) -> Option<gtk::Svg> {
         .ok()?;
         let mut source = std::str::from_utf8(&bytes)
             .expect("SVG is UTF-8")
-            .replace("currentColor", "url(#gpa:foreground)");
+            .replace("currentColor", &color.map_or_else(|| "url(#gpa:foreground)".into(), |c| c.to_string()));
         if name == "layer-color-symbolic" {
             source = source.replace("#33d17a", "url(#gpa:success)");
         }
@@ -61,13 +61,14 @@ pub fn name(image: &gtk::Image) -> Option<glib::GString> {
 }
 
 pub fn set(image: &gtk::Image, icon: Option<&str>) {
-    if name(image).as_deref() == icon {
-        return;
-    }
+    set_colored(image, icon, None);
+}
+
+pub fn set_colored(image: &gtk::Image, icon: Option<&str>, color: Option<layer_ui::HexColor>) {
     if let Some(icon) = icon.filter(|n| n.starts_with("layer-"))
-        && let Some(svg) = paintable(icon)
+        && let Some(svg) = paintable(icon, color)
     {
-        image.set_paintable(Some(&svg));
+        if image.paintable().as_ref() != Some(svg.upcast_ref()) { image.set_paintable(Some(&svg)); }
         image.set_widget_name(icon);
     } else {
         image.set_icon_name(icon);

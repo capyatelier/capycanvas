@@ -213,13 +213,13 @@ fn choose_with_intensity(
     content.append(&group);
     if !hdr { content.append(&comparison); }
     content.append(&validation);
-    let scroll = gtk::ScrolledWindow::builder()
+    let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .propagate_natural_height(true)
         .max_content_height(540)
         .child(&content)
-        .build();
+        .build());
     dialog.set_extra_child(Some(&scroll));
     let form = Rc::new(Form {
         editor: RefCell::new(editor),

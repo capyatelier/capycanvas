@@ -243,7 +243,30 @@ pub struct EffectInstance {
     pub program: Arc<EffectProgram>,
     pub values: Vec<EffectValue>,
 }
+/// Playback integrates elapsed time at the previous rate. Changing a speed
+/// therefore changes future motion without seeking through the animation.
+#[derive(Clone, Default)]
+pub struct EffectClock {
+    previous: Option<(f32, f32, bool)>,
+    phase: f32,
+}
+impl EffectClock {
+    pub fn advance(&mut self, effect: &EffectInstance, elapsed: f32) -> f32 {
+        let animated = effect.animated();
+        let rate = effect.playback_rate();
+        match self.previous {
+            Some((time, speed, true)) if animated && elapsed >= time => self.phase += (elapsed - time) * speed,
+            Some((time, _, false)) if animated && elapsed >= time => {},
+            _ => self.phase = effect.time_seconds(elapsed),
+        }
+        self.previous = Some((elapsed, rate, animated));
+        self.phase
+    }
+}
 impl EffectInstance {
+    pub fn playback_rate(&self) -> f32 {
+        match self.value("speed") { Some(EffectValue::Number(speed)) if self.program.time => *speed, _ => 1. }
+    }
     pub fn damage_radius(&self) -> Option<u32> {
         self.program.passes.iter().try_fold(0u32, |radius, pass| {
             radius.checked_add(pass.sampling.radius(self)?)
@@ -254,7 +277,7 @@ impl EffectInstance {
     }
     pub fn time_seconds(&self, elapsed: f32) -> f32 {
         if self.animated() {
-            elapsed
+            elapsed * self.playback_rate()
         } else if let Some(EffectValue::Number(time)) = self.value("time") {
             *time
         } else {

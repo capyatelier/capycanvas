@@ -14,6 +14,11 @@ use std::{
 };
 
 pub struct EffectPanels {
+    pub filter_types: gtk::Box,
+    type_list: gtk::Box,
+    type_buttons: RefCell<Vec<gtk::Button>>,
+    cancel_filter: gtk::Button,
+    split_picker: bool,
     pub adjustments: gtk::Box,
     picker_body: gtk::Box,
     picker_scroller: gtk::ScrolledWindow,
@@ -84,10 +89,23 @@ impl EffectPanels {
         self.preview_request.get()
     }
     pub fn new() -> Self {
+        Self::with_filter_types(false)
+    }
+    pub fn with_filter_types(split_picker: bool) -> Self {
+        let filter_types = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let type_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let types_scroll = crate::workspace::scroll(&type_list);
+        types_scroll.set_vexpand(true);
+        filter_types.append(&types_scroll);
+        let cancel_filter = gtk::Button::with_label("Cancel");
+        cancel_filter.set_widget_name("cancel-filter");
+        cancel_filter.set_halign(gtk::Align::Start);
+        filter_types.append(&cancel_filter);
         let adjustments = gtk::Box::new(gtk::Orientation::Vertical, 6);
         adjustments.add_css_class("filter-picker");
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         header.add_css_class("filter-picker-header");
+        header.set_visible(!split_picker);
         let category = gtk::DropDown::from_strings(&[]);
         category.set_hexpand(true);
         let category_icon = crate::icons::image("layer-adjustments-symbolic");
@@ -104,11 +122,11 @@ impl EffectPanels {
         header.append(&search_button);
         let picker_body = gtk::Box::new(gtk::Orientation::Vertical, 2);
         picker_body.add_css_class("filter-picker-body");
-        let scroller = gtk::ScrolledWindow::builder()
+        let scroller = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .child(&picker_body)
-            .build();
+            .build());
         scroller.add_css_class("filter-picker-scroll");
         adjustments.append(&header);
         adjustments.append(&scroller);
@@ -158,6 +176,11 @@ impl EffectPanels {
             }
         ));
         Self {
+            filter_types,
+            type_list,
+            type_buttons: Default::default(),
+            cancel_filter,
+            split_picker,
             adjustments,
             picker_body,
             picker_scroller: scroller,
@@ -190,6 +213,9 @@ impl EffectPanels {
         if self.picker_bound.replace(true) {
             return;
         }
+        self.cancel_filter.connect_clicked(glib::clone!(#[weak] w, move |_| {
+            w.dispatch(UiAction::Effect { action: EffectAction::CancelFilter });
+        }));
         // One producer services every projection, including open drawers.
         if Rc::ptr_eq(self, &w.effects) {
             let weak = Rc::downgrade(w);
@@ -287,6 +313,22 @@ impl EffectPanels {
             self.picker_rows.borrow_mut().clear();
             self.preview_loaded.borrow_mut().clear();
             *self.picker_categories.borrow_mut() = state.filter_categories.clone();
+            while let Some(child) = self.type_list.first_child() { self.type_list.remove(&child); }
+            let mut buttons = self.type_buttons.borrow_mut();
+            buttons.clear();
+            for choice in &state.filter_categories {
+                let category = choice.id.clone();
+                let button = w.action_button(&choice.label, UiAction::FilterPicker {
+                    action: FilterPickerAction::Category { category },
+                });
+                button.add_css_class("flat");
+                button.add_css_class("tool-group");
+                button.set_widget_name(&format!("filter-type-{}", choice.id.as_deref().unwrap_or("all")));
+                button.set_height_request(44);
+                button.set_child(Some(&crate::tool_panels::aligned_icon_label(&choice.label, choice.icon, 0.)));
+                self.type_list.append(&button);
+                buttons.push(button);
+            }
             self.category.set_model(Some(&gtk::StringList::new(
                 &state
                     .filter_categories
@@ -296,6 +338,14 @@ impl EffectPanels {
             )));
         }
         let picker = &state.filter_picker;
+        for (button, choice) in self.type_buttons.borrow().iter().zip(&state.filter_categories) {
+            if choice.id == picker.category { button.add_css_class("selected-tool"); }
+            else { button.remove_css_class("selected-tool"); }
+        }
+        for (id, (button, _)) in self.picker_rows.borrow().iter() {
+            if picker.selected.as_ref() == Some(id) { button.add_css_class("selected-tool"); }
+            else { button.remove_css_class("selected-tool"); }
+        }
         self.category.set_visible(picker.search.is_none());
         self.category_icon.set_visible(picker.search.is_none());
         if let Some(choice) = state
@@ -331,7 +381,7 @@ impl EffectPanels {
         let mut category = None;
         let mut rows = self.picker_rows.borrow_mut();
         for choice in &state.adjustments {
-            if category.as_ref() != Some(&choice.category) {
+            if !self.split_picker && category.as_ref() != Some(&choice.category) {
                 let heading =
                     crate::tool_panels::icon_label(&choice.category_label, choice.category_icon);
                 heading.add_css_class("filter-category");
@@ -350,16 +400,13 @@ impl EffectPanels {
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 let caption = gtk::Box::new(gtk::Orientation::Horizontal, 4);
                 caption.set_halign(gtk::Align::End);
-                caption.append(&crate::icons::image(&format!(
-                    "layer-{}-symbolic",
-                    choice.icon
-                )));
                 if choice.animated {
                     let icon = crate::icons::image("layer-animation-symbolic");
                     icon.set_pixel_size(12);
                     icon.add_css_class("dim-label");
                     caption.append(&icon);
                 }
+                caption.append(&crate::icons::image(&format!("layer-{}-symbolic", choice.icon)));
                 caption.append(&label);
                 body.append(&picture);
                 body.append(&caption);
@@ -379,6 +426,8 @@ impl EffectPanels {
                 (button, picture)
             });
             self.picker_body.append(&row.0);
+            if picker.selected.as_ref() == Some(&choice.id) { row.0.add_css_class("selected-tool"); }
+            else { row.0.remove_css_class("selected-tool"); }
         }
         if ids.is_empty() {
             let empty = gtk::Label::new(Some(picker.empty_label));
@@ -460,7 +509,7 @@ impl EffectPanels {
     }
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
         self.bind(w, state);
-        if self.adjustments.parent().is_some() {
+        if self.adjustments.parent().is_some() || self.filter_types.parent().is_some() {
             self.refresh_picker(w, state);
         }
         if self.properties.parent().is_none() {
@@ -548,6 +597,7 @@ impl EffectPanels {
                     let field = match &control.kind {
                         PropertyKind::Number { numeric } => {
                             let input = NumberControl::new(numeric.clone(), &control.label, "");
+                            input.set_widget_name(&format!("property-{}", control.key));
                             input.connect_value_changed(move |i| {
                                 dispatch(EffectValue::Number(i.value() as f32))
                             });
@@ -577,7 +627,17 @@ impl EffectPanels {
                             let input = crate::color_editor::ColorButton::new();
                             input.widget.set_widget_name(&format!("effect-color-{}", control.key));
                             input.bind(w, move |_, color| dispatch(EffectValue::Color(color)));
-                            target.append(&row(&control.label, &input.widget));
+                            if let Some(action) = &control.color_action {
+                                let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                                input.widget.set_hexpand(true);
+                                input.widget.set_height_request(36);
+                                line.append(&input.widget);
+                                let bucket = w.action_button("Use selected color", action.clone());
+                                bucket.set_widget_name("paper-color-bucket");
+                                crate::icons::set_button(&bucket, "layer-fill-symbolic");
+                                line.append(&bucket);
+                                target.append(&line);
+                            } else { target.append(&row(&control.label, &input.widget)); }
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {

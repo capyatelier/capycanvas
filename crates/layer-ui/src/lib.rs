@@ -324,6 +324,7 @@ pub fn ui_catalog() -> UiCatalog {
             "stats",
             "brush",
             "drawing-tools",
+            "paper",
             "sculpt",
             "paint",
             "watercolor",
@@ -918,7 +919,10 @@ pub struct BrushState {
 pub struct LayerState {
     pub id: u64,
     pub content_icon: Option<String>,
+    pub content_icon_color: Option<HexColor>,
     pub label: String,
+    pub description: String,
+    pub can_delete: bool,
     pub editable: bool,
     pub visible: bool,
     pub opacity: f32,
@@ -928,6 +932,7 @@ pub struct LayerState {
     pub selection_icon: &'static str,
     /// Content/mask target, independent of the selected row set.
     pub editing: bool,
+    pub drawing: bool,
     pub has_mask: bool,
     pub mask_enabled: bool,
     pub mask_linked: bool,

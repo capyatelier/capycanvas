@@ -152,7 +152,7 @@ fn brush_drawer_upgrade_only_replaces_untouched_defaults() {
         let previous = layer_ui::WorkspacePreset::legacy_painter_paint_drawer_layout(platform);
         let mut saved = serde_json::to_value(previous.clone()).unwrap();
         saved["panels"].as_array_mut().unwrap().retain(|panel|
-            panel["id"] != "brush_sets" && panel["id"] != "tools" && panel["id"] != "sculpt_sets");
+            !["brush_sets", "tools", "sculpt_sets", "filter_types"].iter().any(|id| panel["id"] == *id));
         let old: layer_ui::DockLayout = serde_json::from_value(saved).unwrap();
         assert_eq!(old, previous);
         let mut working = layer_ui::WorkspacePreset::Painter.working_state();

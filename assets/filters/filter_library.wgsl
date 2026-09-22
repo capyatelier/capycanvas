@@ -104,7 +104,7 @@ fn capy_vignette(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let mask=smoothstep(radius*(1.-soft),radius,d);return vec4<f32>(c.rgb*exp2(-2.*mask*fx_parameter(b,0u).x/100.),c.a);
 }
 fn capy_film_grain(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let size=fx_parameter(b,1u).x;let frame=u32(floor(fx_time(b)*24.*fx_parameter(b,3u).x));
+    let size=fx_parameter(b,1u).x;let frame=u32(floor(fx_time(b)*24.));
     var grain=vec3<f32>(fx_random(p/size,frame));if fx_parameter(b,2u).x>.5{grain=vec3<f32>(grain.x,fx_random(p/size,frame+13u),fx_random(p/size,frame+37u));}
     let rgb=fx_rgb(c);let l=fx_luma(rgb);let amplitude=(.15+.85*sqrt(max(0.,l*(1.-l))*4.))*fx_parameter(b,0u).x/250.;
     return fx_rgba(rgb+(grain-.5)*amplitude,c.a);
@@ -160,7 +160,7 @@ fn capy_ripple(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let center=fx_extent()*vec2<f32>(fx_parameter(b,3u).x,fx_parameter(b,4u).x)/100.;let delta=p-center;let radius=length(delta);
     // Reduce each term before subtracting: long-running time must not erase
     // the spatial phase. Keep sin inside WGSL's specified accuracy interval.
-    let phase=fract(radius/fx_parameter(b,1u).x)-fract(fx_time(b)*fx_parameter(b,2u).x);
+    let phase=fract(radius/fx_parameter(b,1u).x)-fract(fx_time(b));
     let wave=sin(2.*FX_PI*(phase-floor(phase+.5)));
     return fx_sample(p+delta/max(radius,1.)*wave*fx_parameter(b,0u).x);
 }
@@ -170,7 +170,7 @@ fn capy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return fx_sample(p+mix(coarse,fine,rough)*fx_parameter(b,0u).x);
 }
 fn capy_rainy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let scale=fx_parameter(b,1u).x;let time=fx_time(b)*fx_parameter(b,3u).x;let grid=p/vec2<f32>(scale,scale*1.5);
+    let scale=fx_parameter(b,1u).x;let time=fx_time(b);let grid=p/vec2<f32>(scale,scale*1.5);
     let cell=floor(grid);let seed=fx_random(cell,17u);let phase=fract(time*.35+seed);
     let center=vec2<f32>(.25+.5*fx_random(cell,31u),phase);let delta=fract(grid)-center;
     let enabled=1.-step(fx_parameter(b,2u).x/100.,seed);
@@ -183,7 +183,7 @@ fn capy_rainy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return vec4<f32>(rgb,source.a);
 }
 fn capy_vhs(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let time=fx_time(b)*fx_parameter(b,3u).x;let frame=u32(floor(time*24.));let distance=fx_parameter(b,0u).x;
+    let time=fx_time(b);let frame=u32(floor(time*24.));let distance=fx_parameter(b,0u).x;
     let jitter=(fx_random(vec2<f32>(floor(p.y/7.),0.),frame)*2.-1.)*distance;
     let q=p+vec2<f32>(jitter,0.);let red=fx_sample(q+vec2<f32>(distance*.3,0.));let green=fx_sample(q);let blue=fx_sample(q-vec2<f32>(distance*.3,0.));
     let alpha=max(red.a,max(green.a,blue.a));var rgb=vec3<f32>(red.r,green.g,blue.b);
@@ -203,18 +203,18 @@ fn capy_crt(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return vec4<f32>(rgb,alpha);
 }
 fn capy_heat_haze(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let q=p/fx_parameter(b,1u).x+vec2<f32>(0.,-fx_time(b)*fx_parameter(b,2u).x);let detail=fx_parameter(b,3u).x/100.;
+    let q=p/fx_parameter(b,1u).x+vec2<f32>(0.,-fx_time(b));let detail=fx_parameter(b,3u).x/100.;
     let noise=mix(fx_noise(q,13u),fx_noise(q*3.7,47u),detail*.5);let side=fx_noise(q+11.7,29u);
     let amount=fx_parameter(b,0u).x*smoothstep(0.,1.,p.y/fx_extent().y);
     return fx_sample(p+vec2<f32>(noise,side*.35)*amount);
 }
 fn capy_iridescence(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let rgb=fx_rgb(c);let l=fx_luma(rgb);let thickness=l*2.+fx_noise(p/fx_parameter(b,1u).x,7u)*.35+fx_time(b)*fx_parameter(b,2u).x;
+    let rgb=fx_rgb(c);let l=fx_luma(rgb);let thickness=l*2.+fx_noise(p/fx_parameter(b,1u).x,7u)*.35+fx_time(b);
     let film=.5+.5*cos(thickness*vec3<f32>(5.1,6.4,7.2)+vec3<f32>(0.,1.,2.));
     return fx_rgba(mix(rgb,fx_preserve_luma(film,l),fx_parameter(b,0u).x/100.),c.a);
 }
 fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let octaves=u32(fx_parameter(b,2u).x);let time=fx_time(b)*fx_parameter(b,3u).x;let q=p/fx_parameter(b,1u).x+vec2<f32>(time*.17,-time*.23);
+    let octaves=u32(fx_parameter(b,2u).x);let time=fx_time(b);let q=p/fx_parameter(b,1u).x+vec2<f32>(time*.17,-time*.23);
     let bend=vec2<f32>(fx_fbm(q,octaves,3u),fx_fbm(q+19.3,octaves,31u));
     let warp=vec2<f32>(fx_fbm(q+bend*1.4,octaves,71u),fx_fbm(q+bend*1.4+7.9,octaves,113u));
     return fx_sample(p+warp*fx_parameter(b,0u).x);

@@ -148,7 +148,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
             const view=customization.view(panel),toolbarPanel=state().workspace.layout.panels.find(p=>p.id===panel)?.content.kind==="toolbar";
             let child;
             if(toolbarPanel){child=toolbar(panel);child.dataset.drawerToolbar=panel;}
-            else child=contentPanel(panel);
+            else child=contentPanel(panel,drawer.columns.flat().includes("filter_types"));
             body.append(child);
           }
           root.append(body);return body;

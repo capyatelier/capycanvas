@@ -407,6 +407,7 @@ pub enum Panel {
     Commands,
     Brushes,
     BrushSets,
+    FilterTypes,
     SculptSets,
     Tools,
     ToolSettings,
@@ -429,6 +430,7 @@ impl From<Panel> for String {
             Panel::Commands => "commands".into(),
             Panel::Brushes => "brushes".into(),
             Panel::BrushSets => "brush_sets".into(),
+            Panel::FilterTypes => "filter_types".into(),
             Panel::SculptSets => "sculpt_sets".into(),
             Panel::Tools => "tools".into(),
             Panel::ToolSettings => "tool_settings".into(),
@@ -452,6 +454,7 @@ impl TryFrom<String> for Panel {
             "commands" => Self::Commands,
             "brushes" => Self::Brushes,
             "brush_sets" => Self::BrushSets,
+            "filter_types" => Self::FilterTypes,
             "sculpt_sets" => Self::SculptSets,
             "tools" => Self::Tools,
             "tool_settings" => Self::ToolSettings,
@@ -490,7 +493,7 @@ impl Panel {
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {
         match self {
-            Self::BrushSets | Self::SculptSets => 160.,
+            Self::BrushSets | Self::SculptSets | Self::FilterTypes => 160.,
             Self::Tools | Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
             Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
                 254.
@@ -502,7 +505,7 @@ impl Panel {
 
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::BrushSets | Self::SculptSets | Self::Tools) {
+        if matches!(self, Self::FilterTypes | Self::BrushSets | Self::SculptSets | Self::Tools) {
             return matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Generic);
         }
         if self == Self::Proof { return crate::color_management::enabled(platform) || platform == crate::Platform::Generic; }
@@ -542,7 +545,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
@@ -558,6 +561,7 @@ impl Panel {
         Self::BrushSets,
         Self::Tools,
         Self::SculptSets,
+        Self::FilterTypes,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -565,6 +569,7 @@ impl Panel {
             Self::Commands => "Commands",
             Self::Brushes => "Tool Set",
             Self::BrushSets => "Brushes",
+            Self::FilterTypes => "Filter Type",
             Self::SculptSets => "Sculpting",
             Self::Tools => "Tools",
             Self::ToolSettings => "Tool",
@@ -585,6 +590,7 @@ impl Panel {
             Self::Commands => "menu",
             Self::Brushes => "brush",
             Self::BrushSets => "drawing-tools",
+            Self::FilterTypes => "adjustments",
             Self::SculptSets => "sculpt",
             Self::Tools => "brush",
             Self::ToolSettings => "settings",
@@ -846,6 +852,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::Stats
                 | Panel::ToolSettings
                 | Panel::BrushSets
+                | Panel::FilterTypes
                 | Panel::SculptSets
                 | Panel::Tools
                 | Panel::Color
@@ -1256,7 +1263,7 @@ impl DockLayout {
                 // Loading an older registry appends newly available panels.
                 // Match that order so untouched defaults remain recognizable.
                 let index = layout.panels.iter().position(|p|
-                    matches!(p.id, Panel::BrushSets | Panel::SculptSets | Panel::Tools)).unwrap_or(layout.panels.len());
+                    matches!(p.id, Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::FilterTypes)).unwrap_or(layout.panels.len());
                 layout.panels.insert(index, config);
             }
         }
@@ -1823,7 +1830,7 @@ impl DockLayout {
         let group = next.allocate()?;
         let band = next.allocate()?;
         let edge = match panel {
-            Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
+            Panel::FilterTypes | Panel::BrushSets | Panel::SculptSets | Panel::Tools | Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
             Panel::Layers
             | Panel::Adjustments
             | Panel::Properties
@@ -2228,7 +2235,7 @@ impl DockLayout {
                 .iter()
                 .map(|p| match p {
                     Panel::Layers => LAYERS_MIN_WIDTH,
-                    Panel::BrushSets | Panel::SculptSets => BRUSH_SETS_MIN_WIDTH,
+                    Panel::BrushSets | Panel::SculptSets | Panel::FilterTypes => BRUSH_SETS_MIN_WIDTH,
                     Panel::Tools | Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
                     Panel::Navigator => 192.0,
                     Panel::Color => 4.0 * TILE_SIZE,
