@@ -226,52 +226,133 @@ test("the pinned zune-core notice preserves its complete alternative and rejects
   assert.throws(() => dependencyNotices([{...notice,used_by:[{crate:{...crate,version:"0.4.13"}}]}]), /Revalidate/);
 });
 
-test("worker stays in scope and deletes only its own obsolete caches", async (t) => {
-  const dir = fixture(t), { version } = writeWorker(dir);
-  const scope = "https://example.test/draw/", prefix = `capycanvas:${scope}:`;
-  const handlers = {}, deleted = [], fetched = [], cached = [];
-  let claimed = false;
+// Exercise the worker's event contract with separate HTTP and Cache Storage
+// responses. pwa.test.mjs complements these failure/race cases in a real browser.
+function workerFixture(t) {
+  const dir = fixture(t), {version} = writeWorker(dir);
+  const scope = "https://example.test/draw/", prefix = `capycanvas:${scope}:`, current = prefix + version;
+  const stores = new Map(), handlers = {}, deleted = [], requests = [], installed = [];
+  const state = {clients: [], skipped: false, claimed: false, failInstall: false,
+    network: async () => new Response("fresh HTML", {headers: {"Content-Type": "text/html"}})};
+  const put = (key, path, body) => {
+    if (!stores.has(key)) stores.set(key, new Map());
+    stores.get(key).set(new URL(path, scope).href, body);
+  };
   runInNewContext(readFileSync(join(dir, "sw.js"), "utf8"), {
-    URL, Request, Response,
-    self: { registration: { scope }, addEventListener: (name, fn) => { handlers[name] = fn; },
-      clients: { claim: async () => { claimed = true; } } },
+    URL, Request, Response, AbortController, setTimeout, clearTimeout,
+    fetch: async (request, options) => { requests.push({request, options}); return state.network(request, options); },
+    self: {registration: {scope}, addEventListener: (name, fn) => {handlers[name] = fn;},
+      skipWaiting: async () => {state.skipped = true;},
+      clients: {claim: async () => {state.claimed = true;}, matchAll: async () => state.clients}},
     caches: {
-      keys: async () => [prefix + "old", prefix + version, "unrelated", "capycanvas:https://example.test/draw/nested/:old"],
-      delete: async (key) => { deleted.push(key); },
-      open: async () => ({ addAll: async (requests) => { cached.push(...requests); },
-        match: async (url) => { fetched.push(url); return new Response("cached"); } }),
+      keys: async () => [...stores.keys()],
+      delete: async key => {deleted.push(key); return stores.delete(key);},
+      match: async (url, {cacheName}) => {
+        const body = stores.get(cacheName)?.get(url);
+        return body === undefined ? undefined : new Response(body);
+      },
+      open: async key => {
+        if (!stores.has(key)) stores.set(key, new Map());
+        return {addAll: async requests => {
+          installed.push(...requests);
+          if (state.failInstall) throw Error("incomplete deployment");
+          for (const request of requests) put(key, request.url, "complete package");
+        }};
+      },
     },
   });
-  let pending;
-  handlers.install({ waitUntil: (promise) => { pending = promise; } });
-  await pending;
-  assert.ok(cached.every((request) => request.url.startsWith(scope) && request.cache === "reload" && request.integrity));
-  handlers.activate({ waitUntil: (promise) => { pending = promise; } });
-  await pending;
-  assert.deepEqual(deleted, [prefix + "old"]);
-  assert.ok(claimed);
-  function request(url, method = "GET") {
-    let response;
-    handlers.fetch({ request: { url, method }, respondWith: (promise) => { response = promise; } });
+  const lifetime = async name => {
+    let pending;
+    handlers[name]({waitUntil: promise => {pending = promise;}});
+    await pending;
+  };
+  async function request(path, options = {}) {
+    let response; const pending = [];
+    const request = {url: new URL(path, scope).href, method: "GET", mode: "cors", ...options};
+    handlers.fetch({request, resultingClientId: "arriving", respondWith: promise => {response = promise;},
+      waitUntil: promise => pending.push(promise)});
+    await Promise.all(pending);
     return response;
   }
-  assert.equal(await (await request(scope + "?installed")).text(), "cached");
-  assert.deepEqual(fetched, [scope + "index.html"]);
-  assert.equal(request("https://example.test/other/app.js"), undefined);
-  assert.equal(request(scope + "user-project.json"), undefined);
-  assert.equal(request(scope + "app.js", "POST"), undefined);
+  return {scope, prefix, current, state, stores, put, request, lifetime, deleted, requests, installed};
+}
+
+test("complete installation activates automatically without deleting open tabs' assets", async t => {
+  const w = workerFixture(t);
+  w.put(w.prefix + "old", "index.html", "old");
+  w.state.clients = [{id: "drawing", url: w.scope}];
+  await w.lifetime("install"); await w.lifetime("activate");
+  assert.ok(w.state.skipped && w.state.claimed);
+  assert.deepEqual(w.deleted, []);
+  assert.ok(w.installed.every(r => r.url.startsWith(w.scope) && r.cache === "reload" && r.integrity));
 });
 
-test("failed precache installation removes only the incomplete new version", async (t) => {
-  const dir = fixture(t), { version } = writeWorker(dir), handlers = {}, deleted = [];
-  const scope = "https://example.test/";
-  runInNewContext(readFileSync(join(dir, "sw.js"), "utf8"), {
-    URL, Request, self: { registration: { scope }, addEventListener: (name, fn) => { handlers[name] = fn; } },
-    caches: { open: async () => ({ addAll: async () => { throw new Error("incomplete deployment"); } }),
-      delete: async (name) => { deleted.push(name); } },
+test("startup and refresh revalidate HTML without replacing the complete offline fallback", async t => {
+  const w = workerFixture(t);
+  w.put(w.current, "index.html", "complete offline HTML");
+  for (const path of ["./", "index.html", "./?refresh=123"]) {
+    assert.equal(await (await w.request(path, {mode: "navigate"})).text(), "fresh HTML");
+  }
+  assert.ok(w.requests.every(({options}) => options.cache === "no-cache"));
+  assert.equal(w.stores.get(w.current).get(w.scope + "index.html"), "complete offline HTML");
+  for (const network of [async () => {throw Error("offline");},
+    async () => new Response("down", {status: 503}), async () => new Response("missing", {status: 404}),
+    async () => new Response("not HTML", {headers: {"Content-Type": "text/plain"}})]) {
+    w.state.network = network;
+    assert.equal(await (await w.request("./", {mode: "navigate"})).text(), "complete offline HTML");
+  }
+  w.stores.delete(w.current);
+  assert.equal((await w.request("./", {mode: "navigate"})).status, 503);
+});
+
+test("a stalled network navigation times out to the offline package", async t => {
+  const w = workerFixture(t);
+  w.put(w.current, "index.html", "offline");
+  w.state.network = (_, {signal}) => new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {once: true});
   });
-  let pending;
-  handlers.install({ waitUntil: (promise) => { pending = promise; } });
-  await assert.rejects(pending, /incomplete deployment/);
-  assert.deepEqual(deleted, [`capycanvas:${scope}:${version}`]);
+  assert.equal(await (await w.request("./", {mode: "navigate"})).text(), "offline");
+  assert.ok(w.requests[0].options.signal.aborted);
+});
+
+test("old and new fingerprinted resources coexist, including before a new worker installs", async t => {
+  const w = workerFixture(t), old = "assets/old.11111111111111111111.js", fresh = "assets/new.22222222222222222222.js";
+  w.put(w.prefix + "old", old, "old bytes");
+  w.put(w.current, "index.html", "complete HTML");
+  // A neighboring installation must never satisfy this worker's requests.
+  w.put("capycanvas:" + w.scope + "nested/:other", fresh, "neighbor bytes");
+  w.state.network = async () => new Response("new network bytes");
+  assert.equal(await (await w.request(old)).text(), "old bytes");
+  assert.equal(await (await w.request(fresh)).text(), "new network bytes");
+  assert.equal(w.requests.length, 1);
+  assert.equal(await w.request("user-project.json"), undefined);
+  assert.equal(await w.request("assets/unversioned.js"), undefined);
+  assert.equal(await w.request("https://example.test/other/assets/x.11111111111111111111.js"), undefined);
+  assert.equal(await w.request(old, {method: "POST"}), undefined);
+});
+
+test("obsolete releases are collected only at a cold navigation, never a newer install or neighboring app", async t => {
+  const w = workerFixture(t), old = w.prefix + "old", neighbor = "capycanvas:" + w.scope + "nested/:old", newer = w.prefix + "installing";
+  for (const key of [old, neighbor, w.current, newer]) w.put(key, "index.html", key);
+  w.state.clients = [{id: "old-page", url: w.scope}];
+  await w.request("./", {mode: "navigate"});
+  assert.deepEqual(w.deleted, []);
+  w.state.clients = [{id: "arriving", url: w.scope}];
+  await w.request("./", {mode: "navigate"});
+  assert.deepEqual(w.deleted, [old]);
+  assert.ok(w.stores.has(neighbor) && w.stores.has(w.current) && w.stores.has(newer));
+});
+
+test("failed installation neither activates nor deletes a previously usable cache", async t => {
+  const w = workerFixture(t), old = w.prefix + "old";
+  w.put(old, "index.html", "old");
+  w.state.failInstall = true;
+  await assert.rejects(w.lifetime("install"), /incomplete deployment/);
+  assert.deepEqual(w.deleted, [w.current]);
+  assert.ok(w.stores.has(old));
+  assert.equal(w.state.skipped, false);
+  // Reinstalling a retained release (rollback) must not destroy its old cache.
+  w.put(w.current, "index.html", "retained rollback");
+  await assert.rejects(w.lifetime("install"), /incomplete deployment/);
+  assert.equal(w.stores.get(w.current).get(w.scope + "index.html"), "retained rollback");
 });

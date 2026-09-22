@@ -21,7 +21,9 @@ export async function servePackage() {
   // A real changed JS/CSS release, not merely a changed HTML comment. Old URLs
   // stay immutable; only the updated HTML/worker point at the new fingerprints.
   for (const [type, suffix] of [["js", '\nglobalThis.capyTestRelease = "updated";'], ["css", "\n:root { --capy-test-release: updated; }"]]) {
-    const old = html.match(new RegExp(`assets/[^"/]+\\.[0-9a-f]{20}\\.${type}`))[0];
+    // Change the app entry point, not workspace-preload.js (also imported by
+    // app.js). Renaming that dependency alone would create an invalid fixture.
+    const old = html.match(new RegExp(`assets/${type === "js" ? "app" : "style"}\\.[0-9a-f]{20}\\.${type}`))[0];
     const data = readFileSync(join(update, old), "utf8") + suffix;
     const path = old.replace(/\.[0-9a-f]{20}\./, `.${createHash("sha256").update(data).digest("hex").slice(0, 20)}.`);
     writeFileSync(join(update, path), data);
@@ -31,12 +33,13 @@ export async function servePackage() {
   writeFileSync(join(update, "index.html"), html);
   writeWorker(update);
   const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png" };
-  const state = { online: true, update: false, broken: false, requests: [] };
+  const state = { online: true, update: false, broken: false, requests: [], htmlRequests: [] };
   const server = createServer((req, res) => {
     const pathname = decodeURIComponent(new URL(req.url, "http://local").pathname);
     const nested = pathname.startsWith("/nested/capy/");
     let path = pathname.slice(nested ? "/nested/capy/".length : 1) || "index.html";
     state.requests.push(pathname);
+    if (path === "index.html") state.htmlRequests.push({pathname, cacheControl: req.headers["cache-control"]});
     if (!state.online) { res.writeHead(503); res.end(); return; }
     let directory = state.update && !nested ? join(fixture, "update") : source;
     if(path.startsWith("runtime-filter/")){directory=filterFixture;path=path.slice("runtime-filter/".length);}
@@ -45,7 +48,7 @@ export async function servePackage() {
     try {
       const body = state.broken && path.endsWith(".wasm") ? Buffer.from("mismatched release") : readFileSync(file);
       res.writeHead(200, { "Content-Type": mime[extname(file)] || "text/plain",
-        "Cache-Control": path.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache" });
+        "Cache-Control": path.startsWith("assets/") ? "public, max-age=31536000, immutable" : path === "apple-touch-icon.png" ? "no-cache" : "max-age=600" });
       res.end(body);
     } catch { res.writeHead(404); res.end(); }
   });
@@ -260,7 +263,8 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
   };
   const reload = async () => {
     const previous = await evaluate("performance.timeOrigin");
-    await call("Page.reload", { ignoreCache: true }); await ready(previous);
+    // Ordinary reload: a hard reload can bypass the worker in Chrome.
+    await call("Page.reload"); await ready(previous);
   };
   const offline = async (value) => {
     host.state.online = !value;
@@ -338,39 +342,77 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
 
   await navigate(host.url);
   await call("Network.setCacheDisabled", { cacheDisabled: false });
-  const previousAssets = await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]");
+  const previousAssets = await evaluate("[document.querySelector('script[src*=\"/app.\"]').src, document.querySelector('link[rel=stylesheet]').href]");
   assert.equal(await evaluate("globalThis.capyTestRelease ?? null"), null);
-  const snapshot = "JSON.stringify(layerApp.state(),(_,v)=>typeof v==='bigint'?String(v):v)";
-  const before = await evaluate(snapshot);
+  // Focus, viewport and status revisions can legitimately change in another
+  // tab. Compare drawing identity/content revisions and document tabs instead.
+  const snapshot = "JSON.stringify({drawing:layerApp.app.recovery_document(),tabs:layerApp.app.document_tabs(0)},(_,v)=>typeof v==='bigint'?String(v):v)";
   const keys = await evaluate("caches.keys()");
-  host.state.update = true;
-  host.state.broken = true;
-  // A mismatched asset returned with HTTP 200 must fail integrity checking,
-  // leaving the old active version untouched.
-  assert.equal(await evaluate(`(async()=>{const r=await navigator.serviceWorker.getRegistration();const seen=new Promise(resolve=>r.addEventListener('updatefound',()=>{const w=r.installing;w.addEventListener('statechange',()=>{if(w.state==='redundant')resolve(w.state)})},{once:true}));await r.update();return seen})()`), "redundant");
-  assert.deepEqual(await evaluate("caches.keys()"), keys);
-  host.state.broken = false;
-  await evaluate(`(async()=>{const r=await navigator.serviceWorker.getRegistration();const seen=new Promise(resolve=>r.addEventListener('updatefound',()=>{const w=r.installing;w.addEventListener('statechange',()=>{if(w.state==='installed')resolve(true)})},{once:true}));await r.update();return seen})()`);
-  assert.ok(await evaluate("navigator.serviceWorker.getRegistration().then(r=>!!r.waiting)"));
-  assert.equal(await evaluate(snapshot), before, "Waiting update must not change the live session");
-  assert.equal(await evaluate("globalThis.capyTestRelease ?? null"), null);
-  assert.deepEqual(await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]"), previousAssets);
-  await call("Page.navigate", { url: "about:blank" });
-  // The old worker has no clients now; activation occurs without forcing reloads.
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  // Keep a second old editor open throughout deployment and refresh. It must
+  // retain both its live state and lazily requested old JS/CSS, even offline.
+  const {targetId} = await call("Target.createTarget", {url: host.url});
+  const {sessionId} = await call("Target.attachToTarget", {targetId, flatten: true});
+  const oldEvaluate = async expression => {
+    const result = await call("Runtime.evaluate", {expression, returnByValue: true, awaitPromise: true}, sessionId);
+    if (result.exceptionDetails) throw Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result.result.value;
+  };
+  const wait = async (evaluate, expression) => {
+    const start = Date.now();
+    while (Date.now() - start < 25000) {
+      if (await evaluate(expression)) return;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw Error(`Timed out: ${expression}`);
+  };
+  try {
+    await wait(oldEvaluate, "!!window.layerApp && layerApp.startupTimes.complete !== null && !!navigator.serviceWorker.controller");
+    await oldEvaluate("window.capyOldController=navigator.serviceWorker.controller");
+    const oldTime = await oldEvaluate("performance.timeOrigin"), oldState = await oldEvaluate(snapshot);
+    await call("Page.bringToFront");
+    host.state.update = true;
+    host.state.broken = true;
+    // A mismatched asset returned with HTTP 200 must fail integrity checking,
+    // leaving the old complete offline version untouched.
+    assert.equal(await evaluate(`(async()=>{const r=await navigator.serviceWorker.getRegistration();const seen=new Promise(resolve=>r.addEventListener('updatefound',()=>{const w=r.installing;w.addEventListener('statechange',()=>{if(w.state==='redundant')resolve(w.state)})},{once:true}));await r.update();return seen})()`), "redundant");
+    assert.deepEqual(await evaluate("caches.keys()"), keys);
+    host.state.broken = false;
+    const requestsBefore = host.state.htmlRequests.length;
+    // No explicit update(), skip-waiting message, or hard reload: this is the
+    // user's normal refresh, with GitHub Pages' ten-minute HTTP cache enabled.
+    await reload();
+    assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "Normal refresh executes fresh fingerprinted JS");
+    assert.equal(await evaluate("getComputedStyle(document.documentElement).getPropertyValue('--capy-test-release').trim()"), "updated");
+    assert.ok(host.state.htmlRequests.slice(requestsBefore).some(r => /no-cache|max-age=0/.test(r.cacheControl)), "HTML is revalidated despite a fresh HTTP cache entry");
+    await wait(oldEvaluate, "navigator.serviceWorker.controller !== window.capyOldController");
+    assert.equal(await oldEvaluate("performance.timeOrigin"), oldTime, "Worker activation must not reload another drawing");
+    assert.equal(await oldEvaluate(snapshot), oldState, "Worker activation preserves the old editor state");
+    assert.equal(await oldEvaluate("globalThis.capyTestRelease ?? null"), null);
+    assert.equal(await evaluate("navigator.serviceWorker.getRegistration().then(r=>!!r.waiting)"), false);
+    const nextAssets = await evaluate("[document.querySelector('script[src*=\"/app.\"]').src, document.querySelector('link[rel=stylesheet]').href]");
+    assert.ok(nextAssets.every((url, i) => url !== previousAssets[i]));
+    assert.ok((await evaluate("caches.keys()")).includes(keys.find(key => key.startsWith(`capycanvas:${host.url}:`))), "Open old tabs retain their package");
+    await offline(true);
+    await call("Network.enable", {}, sessionId);
+    await call("Network.setCacheDisabled", {cacheDisabled: true}, sessionId);
+    // The server is also unavailable, so old resource reads must use retained
+    // Cache Storage; neither the HTTP cache nor network can mask a deletion.
+    assert.ok(await oldEvaluate(`Promise.all(${JSON.stringify(previousAssets)}.map(url=>fetch(url,{cache:'no-store'}).then(r=>r.ok))).then(results=>results.every(Boolean))`));
+    await call("Network.setCacheDisabled", { cacheDisabled: true });
+    await reload();
+    assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "The complete new release starts offline");
+    await offline(false);
+  } finally {
+    await call("Target.closeTarget", {targetId});
+  }
+  // After all old clients leave, a new navigation can collect obsolete releases.
+  await call("Page.navigate", {url: "about:blank"});
+  await new Promise(resolve => setTimeout(resolve, 500));
   await navigate(host.url);
-  assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "Updated fingerprinted JS actually executes");
-  assert.equal(await evaluate("getComputedStyle(document.documentElement).getPropertyValue('--capy-test-release').trim()"), "updated", "Updated fingerprinted CSS actually applies");
-  const nextAssets = await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]");
-  assert.ok(nextAssets.every((url, i) => url !== previousAssets[i]), "HTML points at new JS/CSS URLs");
+  await wait(evaluate, `caches.keys().then(keys=>keys.filter(k=>k.startsWith(${JSON.stringify(`capycanvas:${host.url}:`)})).length===1)`);
   const currentKeys = await evaluate("caches.keys()");
-  assert.equal(currentKeys.filter((key) => key.startsWith(`capycanvas:${host.url}:`)).length, 1);
-  assert.ok(currentKeys.includes(keys.find((key) => key.startsWith(`capycanvas:${host.url}nested/capy/:`))), "Root update must preserve the subpath installation");
-  await offline(true);
-  await call("Network.setCacheDisabled", { cacheDisabled: true });
-  await reload();
-  assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "The upgraded app also starts offline without HTTP cache");
-  await offline(false);
+  assert.ok(currentKeys.includes(keys.find(key => key.startsWith(`capycanvas:${host.url}nested/capy/:`))), "Root cleanup preserves the subpath installation");
+
   assert.ok(!filesIn(host.source).some((path) => /\.rs$|\.d\.ts$|\.map$|\.toml$/.test(path)));
-  console.log("PWA fingerprinted JS/CSS upgrade, failed-update recovery, deferred activation and scope isolation: passed");
+  console.log("PWA normal-refresh upgrade, failed-update recovery, live old-tab assets, offline restart and scoped cleanup: passed");
 }

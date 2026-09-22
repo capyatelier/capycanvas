@@ -118,8 +118,8 @@ resizing), and captures both fullscreen themes. It also checks
 cold offline Wasm startup with HTTP cache disabled, real GPU ink, all brush
 previews in both themes, nonselectable canvas/cursor artwork, real touch taps
 without sticky hover and switching back to mouse/pen hover, integrity-mismatched
-update recovery, waiting updates that preserve the live session, activation after
-leaving the old page, and isolation between
+update recovery, ordinary-refresh updates with a second old editor still open,
+automatic activation without reloading that editor, and isolation between
 installations on different paths. The test never installs an OS app, injects OS
 pointer events, touches an existing browser profile or deploys anything.
 Packaging/unit checks do not need a GPU; the browser test does. OS-specific
@@ -128,10 +128,12 @@ device testing.
 
 The update fixture changes actual JS and CSS, including their SHA filenames,
 HTML references and service-worker version. It serves assets with one-year
-immutable caching, checks that the old app stays intact while an update waits,
-and verifies the new JS executes and CSS applies after activation, including
-another cold offline start. Unit tests cover hash reproducibility, dependency
-invalidation, artwork/Wasm changes and worker-only updates.
+immutable caching and HTML with GitHub Pages' ten-minute HTTP lifetime. It checks
+that one normal refresh executes new JS and applies new CSS, while the other
+editor keeps its state and can fetch old assets offline. It also checks another
+offline start and cleanup after the old clients leave. Unit tests cover hash
+reproducibility, dependency invalidation, navigation failures/timeouts, scoped
+cache retention, artwork/Wasm changes and worker-only updates.
 
 ## Runtime and updates
 
@@ -265,21 +267,42 @@ after deploying and reopening the updated app. An already-installed icon may
 need to be removed and added again; do not discard an unsaved drawing.
 
 After the first successful online install, the worker precaches the whole
-package. Runtime assets are served from that complete version; failed or
-integrity-mismatched installs retain the previous working version. New workers
-wait for the old app's tabs/windows to close: no `skipWaiting`, forced reload or
-mid-drawing JS/Wasm replacement. Cache names include the exact installation
-scope; cleanup never deletes a neighboring app's cache. Unknown URLs, APIs,
+package. The worker also applies to ordinary browser tabs; Home Screen/PWA
+installation is not required. On startup or ordinary refresh, `/` and
+`index.html` navigations fetch HTML with `cache: "no-cache"`, explicitly
+revalidating GitHub Pages' ten-minute HTTP cache. A network error, non-HTML/error
+response or five-second timeout falls back to the active worker's complete
+package. Network HTML never overwrites that fallback: its dependencies might
+still be unavailable during deployment. GitHub must finish publishing the
+release before clients can retrieve it.
+
+Fingerprint-named assets are read from the current or retained packages by
+exact URL; a new hash missing from those caches goes to the network. This lets
+new HTML load before its worker finishes installing. Only a successful,
+integrity-checked precache publishes a new complete offline release. Failed
+installs retain the previous one.
+
+New workers call `skipWaiting()` after successful installation and claim clients,
+but never reload or navigate an open editor. Its loaded JS/Wasm and drawing stay
+in place until the user refreshes. Old package caches remain available for lazy
+asset requests from open tabs, including tabs running the previous worker's
+cache-only HTML policy. Cleanup occurs on a cold navigation with no other
+clients under the scope; an outgoing page still alive during refresh postpones
+cleanup. It deletes only caches created before the active package, preserving
+concurrent new installs and neighboring installations. Unknown URLs, APIs,
 non-GET requests and user data are not cached by this worker.
+
 Registration uses `updateViaCache: "none"` and precaching uses reload requests
-with content integrity, so the worker update does not trust stale HTTP cache
-entries. Filename hashes do not force an open drawing to reload. See the
+with content integrity. Keep `sw.js` at its stable URL. The first rollout from
+the older cache-only worker can need an additional ordinary refresh after the
+replacement worker activates; later releases use network-first navigation.
+There is no update dialog or forced mid-drawing reload. See the
 [service-worker lifecycle](https://web.dev/articles/service-worker-lifecycle).
 
-**Offline app availability is not document autosave.** The current drawing is
-still in memory; reloading or closing the app discards it. Applied preferences
-retain their existing localStorage persistence. Browser storage can be evicted,
-so offline availability is not guaranteed permanent storage for artwork.
+**Offline app availability is separate from drawing recovery.** Save drawings
+before refreshing. Recovery checkpoints and preferences use separate browser
+storage that this worker never clears; storage eviction and failed checkpoints
+mean they are not a substitute for saved project files.
 
 The development launcher remains `./apps/layer-web/run.sh`. It deliberately
 does not register a worker or cache development files. Use different origins
