@@ -21,6 +21,7 @@ remains at its existing path while implementation work continues.
 - [Apple implementation goal and acceptance tracker](apple-acceptance.md).
 - [iPadOS design review](ipados-design-review.md).
 - [Native Windows implementation](windows-implementation.md).
+- [Vulkan rendering with native Windows presentation — deferred investigation, 2026-09-22](windows-vulkan-presentation-20260922.md).
 - [Native and web workspace implementation](ui-implementation.md).
 - [GTK + Wayland canvas subsurface: feasibility proof](wayland-subsurface-feasibility.md).
 - [Android UI before canvas shaders](android-first-ui.md).

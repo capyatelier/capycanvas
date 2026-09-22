@@ -9,6 +9,10 @@ The Windows client uses C++/WinRT and WinUI 3 controls. Its Rust bridge uses
 `NativeHost` and the shared wgpu D3D12 renderer, presenting through a
 `SwapChainPanel`.
 
+The [Vulkan/native presentation investigation](../history/windows-vulkan-presentation-20260922.md)
+records measured backend differences, shared-buffer feasibility probes and the
+remaining latency experiment. Implementation and any backend switch are deferred.
+
 ## Prerequisites
 
 Install Rust stable for `x86_64-pc-windows-msvc`, Visual Studio C++ Build Tools
