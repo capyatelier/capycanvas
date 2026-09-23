@@ -240,6 +240,15 @@ impl NumericControl {
     /// Short toolbar readout. Omit fractional digits at three digits and above;
     /// the editable expression and stored value retain their full precision.
     pub fn compact_text(&self, value: f64) -> String {
+        let text = self.compact_value(value);
+        if self.unit.is_empty() {
+            text
+        } else {
+            format!("{text} {}", self.unit)
+        }
+    }
+    /// Value only, for hosts that present the unit beside the field's icon.
+    pub fn compact_value(&self, value: f64) -> String {
         let shown = value * self.scale;
         let digits = if (shown * 10.).round().abs() >= 1000.
             || self.integer_above.is_some_and(|v| value > v)
@@ -524,9 +533,10 @@ mod compact_tests {
             (999.2, "999"),
             (2048., "2048"),
         ] {
-            assert_eq!(spec.compact_text(value), expected);
+            assert_eq!(spec.compact_text(value), format!("{expected} px"));
+            assert_eq!(spec.compact_value(value), expected);
         }
-        assert_eq!(NumericControl::percent().compact_text(1.), "100");
-        assert_eq!(NumericControl::percent().compact_text(0.999), "99.9");
+        assert_eq!(NumericControl::percent().compact_text(1.), "100 %");
+        assert_eq!(NumericControl::percent().compact_text(0.999), "99.9 %");
     }
 }

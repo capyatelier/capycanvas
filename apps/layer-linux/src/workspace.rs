@@ -3436,6 +3436,18 @@ impl Workspace {
                 let point = w
                     .event_point(controller)
                     .or_else(|| w.workspace_drag.borrow().as_ref().map(|d| d.point));
+                if phase == ContactPhase::Down
+                    && let Some(point) = point
+                    && let Some(focus) = gtk::prelude::GtkWindowExt::focus(&w.window)
+                    && let Some(number) = focus.ancestor(crate::number_control::NumberControl::static_type())
+                        .and_downcast::<crate::number_control::NumberControl>()
+                    && !w.surface.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT)
+                        .is_some_and(|picked| picked == focus || picked.is_ancestor(&focus)
+                            || focus.parent().is_some_and(|entry| picked == entry || picked.is_ancestor(&entry)))
+                    && number.dismiss_toolbar_edit()
+                {
+                    gtk::prelude::GtkWindowExt::set_focus(&w.window, None::<&gtk::Widget>);
+                }
                 let starting = phase == ContactPhase::Down && w.workspace_drag.borrow().is_none();
                 let handled =
                     point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence));

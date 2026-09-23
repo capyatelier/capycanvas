@@ -578,7 +578,7 @@ fn options_preferences_round_trip_and_undo_without_losing_controls() {
     let p = drawer
         .placement(&after, [1600., 1000.], &[300., 200.])
         .unwrap();
-    assert!(p.detached && p.connection().is_none());
+    assert!(p.connection().is_some());
     assert_eq!(
         p.anchor.width,
         after.panel(Panel::Commands).unwrap().tile_style.size()[0]

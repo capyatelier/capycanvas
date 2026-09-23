@@ -194,20 +194,24 @@ window, label, text { font-size: var(--ui-text-size); }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
 .toolbar-component { padding: 0; }
-.toolbar-component button { min-width: 0; min-height: 24px; padding: 2px 5px; font-feature-settings: "tnum"; }
 .toolbar-component .option-action button, .toolbar-component > box > button { padding: 0; min-width: 0; min-height: 0; border-radius: 6px; }
-.toolbar-component dropdown > button, .toolbar-component spinbutton { min-height: 24px; padding: 2px 6px; border-radius: 6px; background: alpha(currentColor, .07); color: inherit; }
 .toolbar-component dropdown { margin: 0; }
 .toolbar-component.vertical-component dropdown > button { padding: 2px; }
 .toolbar-component.vertical-component.labeled-component dropdown > button { padding-left: 8px; padding-right: 6px; }
 .toolbar-component .number-control { margin: 0; }
 .toolbar-component .toolbar-number scale { min-width: 56px; padding: 0 2px; }
-.toolbar-component .toolbar-number .number-value, .toolbar-component .number-entry { padding: 2px 4px; min-height: 24px; border-radius: 6px; background: alpha(currentColor, .07); }
-.toolbar-component .number-compact label, .toolbar-component .number-entry { font-size: 11px; }
-.toolbar-component .number-compact .number-value { min-width: 28px; }
-.toolbar-component.vertical-component .number-compact .number-value { min-width: 0; min-height: 0; padding: 1px 2px; }
-.toolbar-component.vertical-component.labeled-component .number-compact .number-value { padding: 2px 6px; }
-.toolbar-component .slider-readout .number-value { background: transparent; padding: 2px; }
+.toolbar-component { --toolbar-number-size: var(--ui-text-size); }
+.toolbar-component.vertical-component.medium-component { --toolbar-number-size: calc(var(--ui-text-size) * 1.15); }
+.toolbar-component.vertical-component.large-component { --toolbar-number-size: calc(var(--ui-text-size) * 1.3); }
+.toolbar-component .number-readout, .toolbar-component .number-entry { font-size: var(--toolbar-number-size); }
+.toolbar-component .number-unit { font-size: calc(var(--toolbar-number-size) * .8); }
+.toolbar-component .toolbar-number .number-value, .toolbar-component .number-entry { min-width: 0; min-height: 24px; padding: 0 4px; }
+.toolbar-component.vertical-component .number-compact .number-value { min-width: 0; min-height: 0; padding: 3px 4px; background: var(--input-bg); }
+.toolbar-component.vertical-component.small-component .number-compact .number-value { padding: 1px 2px; }
+.toolbar-component.vertical-component.large-component .number-compact .number-value { padding: 4px 6px; }
+.toolbar-component .slider-readout .number-value { min-width: 0; padding: 0 4px; background: transparent; }
+.toolbar-component.vertical-component .slider-readout { padding-top: 6px; }
+.toolbar-component.vertical-component .slider-readout .number-value { padding: 2px; background: transparent; }
 .brush-track { min-width: 0; min-height: 0; padding: 0; margin: 0 2px; }
 .vertical-component .brush-track { margin: 2px 0; }
 .brush-track trough, .brush-track highlight { min-height: 16px; min-width: 16px; border: none; background: transparent; box-shadow: none; }

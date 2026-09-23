@@ -243,15 +243,7 @@ fn native_toolbar_components_input() {
             d.w.dispatch(UiAction::SetBrushSize { value: 2047.9 });
             pump(80);
             let cap = d.named(&format!("tile-{size}"));
-            let readout = cap
-                .clone()
-                .downcast::<gtk::Button>()
-                .unwrap()
-                .child()
-                .unwrap()
-                .last_child()
-                .unwrap()
-                .last_child()
+            let readout = find_css(&cap, "number-readout")
                 .unwrap()
                 .downcast::<gtk::Label>()
                 .unwrap();
@@ -722,16 +714,18 @@ fn native_toolbar_options_presentation_input() {
         );
         let image = descendant::<gtk::Image>(&button).unwrap();
         assert!(image.is_mapped());
-        let label = button
-            .first_child()
-            .unwrap()
-            .last_child()
-            .unwrap()
-            .last_child()
+        let label = find_css(&button, "number-readout")
             .unwrap()
             .downcast::<gtk::Label>()
             .unwrap();
-        assert_eq!(label.text(), "2048");
+        assert_eq!(
+            label.text(),
+            if style.label_lines() > 0 {
+                "2048 px"
+            } else {
+                "2048"
+            }
+        );
         assert!(
             label.layout().pixel_size().0 <= label.width(),
             "four digits fit {style:?}"
@@ -784,7 +778,34 @@ fn compact_edge_gestures(d: &mut Driver, devices: &[&str]) {
             (EdgeAlignment::End, viewport[1] - 20.),
         ] {
             let a = toolbar_grip(d, panel);
-            drag(d, device, a, [viewport[0] - 8., y], false);
+            // Approach through the broad target and inspect the live preview,
+            // instead of teleporting directly into a near-edge target.
+            let event = |phase: &str, p: [f32; 2]| match device {
+                "touch" => serde_json::json!({"touch":phase,"point":p}),
+                "pen" => serde_json::json!({"pen":phase,"point":p}),
+                _ => match phase {
+                    "down" => serde_json::json!({"point":p,"down":true}),
+                    "up" => serde_json::json!({"down":false}),
+                    _ => serde_json::json!({"point":p}),
+                },
+            };
+            if device == "pen" {
+                d.perform(serde_json::json!([event("move", a)]));
+            }
+            let mut events = vec![event("down", a)];
+            for distance in [140., 70., 38., 28., 20.] {
+                events.push(event("move", [viewport[0] - distance, y]));
+            }
+            d.perform(serde_json::Value::Array(events));
+            assert!(
+                matches!(d.w.drop_hint.borrow().as_ref().map(|h| &h.target),
+                Some(DockTarget::CompactEdge { edge: Edge::Right, alignment: a }) if *a == alignment),
+                "{device}: near-edge preview at a usable contact distance"
+            );
+            d.perform(serde_json::json!([event("up", [viewport[0] - 20., y])]));
+            if device == "pen" {
+                d.perform(serde_json::json!([{"pen":"leave"}]));
+            }
             let view = state(&d.w);
             let band = view
                 .workspace
@@ -936,5 +957,192 @@ fn native_compact_toolbar_edges_input() {
 fn native_compact_toolbar_edges_pen_input() {
     let mut d = Driver::new("art.capycanvas.CompactEdgesPen");
     compact_edge_gestures(&mut d, &["pen"]);
+    d.finish();
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_visual_audit_input"]
+fn native_toolbar_visual_audit_input() {
+    let mut d = Driver::new("art.capycanvas.ToolbarVisualAudit");
+    let styles = [
+        TileStyle::Small,
+        TileStyle::Medium,
+        TileStyle::Large,
+        TileStyle::MediumLabeled,
+        TileStyle::Labeled,
+    ];
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for edge in [Edge::Top, Edge::Left] {
+            restore(&d, WorkspacePreset::Painter);
+            let panel = brush_panel(&d);
+            let size = component_id(&d, ToolbarControl::BrushSizeSlider);
+            d.w.dispatch(UiAction::MovePanel {
+                panel,
+                target: DockTarget::Edge { edge, outer: true },
+                viewport: [1600., 1000.],
+            });
+            for style in styles {
+                d.w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTileStyle { panel, style },
+                });
+                d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
+                pump(180);
+                d.capture_canvas(&format!("audit-slider-{theme:?}-{edge:?}-{style:?}.png"));
+                let number = d.named(&format!("component-value-{size}"));
+                let label = find_css(&number, "number-readout")
+                    .unwrap()
+                    .downcast::<gtk::Label>()
+                    .unwrap();
+                let b = label.compute_bounds(&d.w.window).unwrap();
+                let slider = d.named(&format!("component-slider-{size}"));
+                let s = slider.compute_bounds(&d.w.window).unwrap();
+                assert!(
+                    label.layout().pixel_size().0 <= label.width(),
+                    "slider digits fit {edge:?} {style:?}"
+                );
+                if edge == Edge::Top {
+                    assert_eq!(label.text(), "2048 px");
+                    assert!(
+                        (b.y() + b.height() / 2. - s.y() - s.height() / 2.).abs() < 2.,
+                        "horizontal slider/value centers agree: {style:?} {b:?} {s:?}"
+                    );
+                } else {
+                    assert!(number.width() as f32 <= style.size()[0]);
+                    assert!(b.y() >= number.compute_bounds(&d.w.window).unwrap().y() + 5.);
+                    assert_eq!(
+                        find_css(&number, "number-unit").unwrap().is_mapped(),
+                        style != TileStyle::Small
+                    );
+                }
+            }
+        }
+        restore(&d, WorkspacePreset::Photographer);
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::Brush,
+        });
+        for edge in [Edge::Top, Edge::Left] {
+            d.w.dispatch(UiAction::MovePanel {
+                panel: Panel::Commands,
+                target: DockTarget::Edge { edge, outer: true },
+                viewport: [1600., 1000.],
+            });
+            let mut prior_font_height = 0;
+            for style in styles {
+                d.w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTileStyle {
+                        panel: Panel::Commands,
+                        style,
+                    },
+                });
+                d.w.dispatch(UiAction::SetBrushSize { value: 2048. });
+                pump(180);
+                d.capture_canvas(&format!("audit-options-{theme:?}-{edge:?}-{style:?}.png"));
+                let number = d.named("toolbar-setting-size");
+                let label = find_css(&number, "number-readout")
+                    .unwrap()
+                    .downcast::<gtk::Label>()
+                    .unwrap();
+                let button = find_css(&number, "number-value").unwrap();
+                if number.is_mapped() {
+                    if edge == Edge::Left {
+                        assert!(
+                            number.width() as f32 <= style.size()[0],
+                            "native number must not grow outside its tile: {style:?}, {}, value {:?}, entry {:?}, label {:?}",
+                            number.width(),
+                            button.measure(gtk::Orientation::Horizontal, -1),
+                            find_css(&number, "number-entry")
+                                .unwrap()
+                                .measure(gtk::Orientation::Horizontal, -1),
+                            label.measure(gtk::Orientation::Horizontal, -1)
+                        );
+                    }
+                    let face = button.first_child().unwrap();
+                    let b = button.compute_bounds(&d.w.window).unwrap();
+                    let f = face.compute_bounds(&d.w.window).unwrap();
+                    assert!(
+                        (b.y() + b.height() / 2. - f.y() - f.height() / 2.).abs() < 2.,
+                        "numeric face centered: {edge:?} {style:?} {b:?} {f:?}"
+                    );
+                    assert!(
+                        label.layout().pixel_size().0 <= label.width(),
+                        "option digits fit {edge:?} {style:?}"
+                    );
+                    let readout = label.compute_bounds(&number).unwrap();
+                    assert!(
+                        readout.x() >= 0. && readout.x() + readout.width() <= number.width() as f32,
+                        "readout stays inside its field: {edge:?} {style:?} {readout:?} width {}",
+                        number.width()
+                    );
+                    if edge == Edge::Left && style.label_lines() == 0 {
+                        let height = label.layout().pixel_size().1;
+                        assert!(
+                            height > prior_font_height,
+                            "vertical readout grows with tile size"
+                        );
+                        prior_font_height = height;
+                    }
+                }
+            }
+        }
+        // A compact text edit occupies the same box and a tap on non-focusable
+        // toolbar space retires it, just like a tap on another native input.
+        restore(&d, WorkspacePreset::Photographer);
+        d.w.dispatch(UiAction::Invoke {
+            command: CommandId::Brush,
+        });
+        pump(150);
+        let options = component_id(&d, ToolbarControl::TOOL_OPTIONS);
+        d.w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetToolOptionsStyle {
+                panel: Panel::Commands,
+                tile: options,
+                style: ToolOptionsStyle {
+                    text: false,
+                    sliders: true,
+                },
+            },
+        });
+        pump(150);
+        let number = d.named("toolbar-setting-size");
+        let before = number.compute_bounds(&d.w.window).unwrap();
+        let button = find_css(&number, "number-value").unwrap();
+        let row = number.parent().unwrap();
+        let icon = find_css(&row, "option-icon").unwrap();
+        let scale = descendant::<gtk::Scale>(&number).unwrap();
+        let icon_bounds = icon.compute_bounds(&d.w.window).unwrap();
+        let scale_bounds = scale.compute_bounds(&d.w.window).unwrap();
+        let value_bounds = button.compute_bounds(&d.w.window).unwrap();
+        assert!(icon.is_mapped() && scale.is_mapped());
+        assert!(icon_bounds.x() + icon_bounds.width() <= scale_bounds.x());
+        assert!(scale_bounds.x() + scale_bounds.width() <= value_bounds.x());
+        assert!(!descendant::<gtk::Image>(&button).unwrap().is_mapped());
+        d.capture_canvas(&format!("audit-icon-slider-value-{theme:?}.png"));
+        let p = d.point(&button);
+        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        let entry = find_css(&number, "number-entry").unwrap();
+        assert!(entry.is_mapped());
+        assert!(
+            descendant::<gtk::Popover>(&number).is_none_or(|p| !p.is_visible()),
+            "a value tap edits inline without a popup"
+        );
+        let after = number.compute_bounds(&d.w.window).unwrap();
+        assert!(
+            (before.width() - after.width()).abs() < 1.,
+            "editing keeps its footprint"
+        );
+        d.capture_canvas(&format!("audit-edit-{theme:?}.png"));
+        let bar = number.parent().unwrap().parent().unwrap();
+        let b = bar.compute_bounds(&d.w.window).unwrap();
+        let p = [b.x() + b.width() - 80., b.y() + b.height() / 2.];
+        d.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"up"}]));
+        assert!(!entry.is_mapped(), "tap outside ends numeric edit");
+        assert!(
+            !gtk::prelude::GtkWindowExt::focus(&d.w.window)
+                .is_some_and(|f| f == entry || f.is_ancestor(&entry))
+        );
+        d.click_name(&format!("tile-{options}"));
+        d.capture_canvas(&format!("audit-drawer-{theme:?}.png"));
+    }
     d.finish();
 }

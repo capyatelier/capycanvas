@@ -127,6 +127,13 @@ mod imp {
                 let visible = b.width >= 1.0 && b.height >= 1.0;
                 child.set_child_visible(visible);
                 if visible {
+                    let mut content = child.first_child();
+                    while let Some(w) = content {
+                        if let Some(number) = w.downcast_ref::<NumberControl>() {
+                            number.fit_width(b.width.floor() as i32);
+                        }
+                        content = w.next_sibling();
+                    }
                     child.allocate(
                         b.width.floor() as i32,
                         b.height.floor() as i32,
@@ -247,12 +254,30 @@ impl ComponentBody {
         if old_axis == vertical && old_style == style {
             return;
         }
+        for class in ["small-component", "medium-component", "large-component"] {
+            self.remove_css_class(class);
+        }
+        self.add_css_class(match style {
+            TileStyle::Small => "small-component",
+            TileStyle::Medium | TileStyle::MediumLabeled => "medium-component",
+            TileStyle::Large | TileStyle::Labeled => "large-component",
+        });
         if vertical {
             self.add_css_class("vertical-component");
         } else {
             self.remove_css_class("vertical-component");
         }
         if self.imp().slider.get() {
+            if let Some(number) = self
+                .imp()
+                .children
+                .borrow()
+                .first()
+                .and_then(|cap| cap.first_child())
+                .and_downcast::<NumberControl>()
+            {
+                number.set_face(false, "", vertical, 0, style != TileStyle::Small);
+            }
             if let Some(scale) = self
                 .imp()
                 .children
@@ -297,11 +322,14 @@ impl ComponentBody {
                 if w.has_css_class("option-label") {
                     w.set_visible(text);
                 }
+                if w.has_css_class("option-icon") {
+                    w.set_visible(!vertical && !text);
+                }
                 if let Some(number) = w.downcast_ref::<NumberControl>() {
                     let title = row.tooltip_text().unwrap_or_default();
                     number.set_slider_visible(!vertical && self.imp().options.get().sliders);
                     number.set_face(
-                        !text,
+                        vertical,
                         if vertical && labeled { &title } else { "" },
                         vertical && !labeled,
                         if vertical {
@@ -309,6 +337,7 @@ impl ComponentBody {
                         } else {
                             16
                         },
+                        self.imp().style.get() != TileStyle::Small,
                     );
                     number.set_vexpand(vertical);
                     number.set_valign(if vertical {
@@ -368,6 +397,7 @@ impl Component {
         let root: ComponentBody = glib::Object::new();
         root.set_overflow(gtk::Overflow::Hidden);
         root.add_css_class("toolbar-component");
+        root.add_css_class("small-component");
         root.add_css_class("customizable-target");
         root.update_property(&[gtk::accessible::Property::Label(
             &tool_choice(tile.control).label,
@@ -701,6 +731,7 @@ impl Component {
         context: ToolbarContext,
     ) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        row.add_css_class("panel-control-row");
         row.add_css_class("customizable-target");
         row.set_valign(gtk::Align::Center);
         let field = match option {
@@ -709,6 +740,11 @@ impl Component {
                 label.add_css_class("option-label");
                 row.set_tooltip_text(Some(f.label));
                 row.append(&label);
+                let icon =
+                    crate::icons::image(&format!("layer-{}-symbolic", tool_setting_icon(f.id)));
+                icon.add_css_class("option-icon");
+                icon.set_visible(false);
+                row.append(&icon);
                 let number = NumberControl::compact(f.numeric.clone(), f.label);
                 number.set_icon(tool_setting_icon(f.id));
                 number.add_css_class("toolbar-number");
@@ -826,6 +862,7 @@ fn choice_factory(compact: bool, face: bool, icon_size: i32) -> gtk::SignalListI
             gtk::Align::Fill
         });
         row.set_hexpand(true);
+        row.set_valign(gtk::Align::Center);
         let image = crate::icons::image("layer-settings-symbolic");
         image.set_pixel_size(icon_size);
         row.append(&image);

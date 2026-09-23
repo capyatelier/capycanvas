@@ -31,7 +31,9 @@ a checkerboard. Values remain horizontal in both orientations.
 Click the value to edit an expression inline. Drag a number up/down with touch
 or pen, or scroll over it with a mouse. Size is logarithmic, 0.5–2048 px, and
 snaps to whole pixels above 32. Compact readouts omit decimals at three digits
-and above; exact entry retains the shared numeric precision. Opacity is a
+and above; exact entry retains the shared numeric precision. Horizontal
+readouts show units. Small vertical controls omit units; larger vertical
+controls show them separately where needed to keep the value legible. Opacity is a
 percentage. Short allocations reduce the track before the value editor.
 Tool, document and workspace changes cancel unfinished text. Numeric edits do not create workspace-layout history entries.
 
@@ -43,14 +45,18 @@ size, selection combination and sampling-source choices, numeric fields, then
 remaining actions/toggles. A tool switch changes the form,
 not the toolbar allocation or canvas size. Value changes retain native editors.
 
-Horizontal numeric fields include inline sliders and editable values. Vertical
+Horizontal numeric fields use label/icon, slider, then editable value, with
+the label/icon outside the value field. Editing stays within the same footprint;
+a tap outside accepts valid text and ends editing. Inputs and dropdowns use the
+panel controls' typography and colors. Vertical
 options stack icon choices and editable icon/value boxes. Labeled tile styles
 put the icon beside the label and value; the other styles stack icon and value.
+Values grow with medium/large tiles, and only oversized numbers shrink to fit.
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
 shorter form fields. GTK supplies natural sizes and theme spacing; Rust fits
 complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
 including actions that did not fit. The drawer aligns to its right edge with a
-small gap and rounded corners. Multiple
+standard gap, connector and corner treatment of other tool drawers. Multiple
 horizontal Tool Options components share remaining space in their lane. Vertical components shrink before moving to another column. Components stay
 atomic; child fields are never independent drop destinations.
 
@@ -99,6 +105,9 @@ GTK native-input regressions run through
   drawer sliders, inline exact values, and cleanup on close.
 - `--native-test=native_toolbar_options_presentation_input`: display preferences,
   tile action dimensions, dropdown alignment, and four-digit values in every style.
+- `--native-test=native_toolbar_visual_audit_input`: both themes, all tile sizes,
+  both orientations, label/value alignment and clipping, separate horizontal
+  icons, inline editing and outside-tap dismissal, and drawer appearance.
 
 Use the release test executable through `LAYER_NATIVE_TEST_EXECUTABLE` when
 iterating. The tablet proxy exercises GDK pen input, not physical tablet hardware;

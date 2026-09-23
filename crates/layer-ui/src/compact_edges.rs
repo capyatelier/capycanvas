@@ -280,6 +280,25 @@ impl DockLayout {
         if !toolbar {
             return None;
         }
+        // Existing tab/column insertion surfaces keep their native hit areas.
+        // Compact anchors occupy the free edge, not the controls of a sidebar.
+        if resolved.collapsed.iter().any(|c| {
+            Bounds {
+                y: c.bounds.y - WORKSPACE_SPACING,
+                height: c.bounds.height + WORKSPACE_SPACING * 2.,
+                ..c.bounds
+            }
+            .contains(point[0], point[1])
+        }) || resolved.groups.iter().any(|g| {
+            g.tabs_visible
+                && Bounds {
+                    height: TAB_BAR_HEIGHT,
+                    ..g.bounds
+                }
+                .contains(point[0], point[1])
+        }) {
+            return None;
+        }
         // Existing region ends stay stack targets, including in the small gap
         // outside the root. Each toolbar remains independently draggable.
         for group in resolved.groups.iter().rev() {
@@ -326,11 +345,19 @@ impl DockLayout {
             width: resolved.viewport[0],
             height: (self.workspace_height(resolved.viewport[1]) - top).max(0.),
         };
-        if !bounds.contains(point[0], point[1]) {
+        if point[0] < 0.
+            || point[0] > bounds.width
+            || point[1] < top
+            || point[1] > resolved.viewport[1]
+        {
             return None;
         }
+        // Native footer/status insets must not create a dead strip between a
+        // bottom target and the window edge. Keep title-bar targets separate.
+        let point = [point[0], point[1].min(bounds.y + bounds.height)];
         let (distance, edge) = nearest_edge(bounds, point[0], point[1]);
-        if distance > 14. {
+        let compact_reach = WORKSPACE_SPACING * 4.;
+        if distance > compact_reach {
             // A compact bar's body must not mask the broader full-edge target.
             // End stacking was already considered above.
             return (distance <= PANEL_SNAP_DISTANCE
@@ -350,7 +377,7 @@ impl DockLayout {
         } else {
             point[1] - bounds.y
         };
-        let reach = 32_f32.min(length / 6.);
+        let reach = 48_f32.min(length / 6.);
         let (alignment, offset) = if coordinate <= reach * 2. {
             (EdgeAlignment::Start, 0.)
         } else if coordinate >= length - reach * 2. {
@@ -361,7 +388,7 @@ impl DockLayout {
             return None;
         };
         let mut hint = slice(bounds, axis, offset, reach * 2.);
-        hint = hint.strip(edge, 6.);
+        hint = hint.strip(edge, compact_reach);
         Some(DropHint {
             target: DockTarget::CompactEdge { edge, alignment },
             bounds: hint,
@@ -623,5 +650,22 @@ mod tests {
         ));
         l.move_panel(VIEWPORT, source, hint.target).unwrap();
         assert!(l.compact_band(l.panel_group(source).unwrap()).is_none());
+    }
+    #[test]
+    fn compact_targets_cover_practical_edge_approaches_and_native_footer() {
+        let mut l = layout();
+        let source = add(&mut l, 2, Edge::Left, EdgeAlignment::Center);
+        l.bottom_inset = 36.;
+        let r = resolved(&l, VIEWPORT);
+        let item = DockItem::Panel { panel: source };
+        for (point, edge, alignment) in [
+            ([1180., 450.], Edge::Right, EdgeAlignment::Center),
+            ([1180., 88.], Edge::Right, EdgeAlignment::Start),
+            ([1198., 828.], Edge::Right, EdgeAlignment::End),
+            ([600., 898.], Edge::Bottom, EdgeAlignment::Center),
+        ] {
+            let hint = l.compact_edge_drop_hint(&r, item, point).unwrap();
+            assert_eq!(hint.target, DockTarget::CompactEdge { edge, alignment });
+        }
     }
 }

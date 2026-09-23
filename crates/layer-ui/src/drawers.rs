@@ -86,9 +86,6 @@ pub struct DrawerPlacement {
     pub bounds: Bounds,
     pub anchor: Bounds,
     pub direction: Edge,
-    /// A separated options drawer keeps all corners rounded and has no bridge.
-    #[serde(default)]
-    pub detached: bool,
     /// Column bounds are local to the drawer; scroll overflow within each one.
     pub columns: Vec<Bounds>,
 }
@@ -112,7 +109,6 @@ impl DrawerPlacement {
     /// Ancestor clipping must not round off a tile's connected corners.
     /// Only flatten container corners actually reached by the originating tile.
     pub fn source_corners(&self, container: Bounds) -> [bool; 4] {
-        if self.detached { return [false; 4]; }
         let a = self.anchor;
         let b = container;
         let facing = match self.direction {
@@ -136,7 +132,6 @@ impl DrawerPlacement {
         })
     }
     pub fn connection(&self) -> Option<DrawerConnection> {
-        if self.detached { return None; }
         let a = self.anchor;
         let b = self.bounds;
         let vertical = matches!(self.direction, Edge::Top | Edge::Bottom);
@@ -595,7 +590,6 @@ impl ContentDrawer {
             bounds,
             anchor,
             direction,
-            detached: options.is_some(),
             columns,
         })
     }
@@ -893,7 +887,6 @@ mod tests {
                     bounds,
                     anchor,
                     direction,
-                    detached: false,
                     columns: vec![],
                 };
                 let facing = match direction {

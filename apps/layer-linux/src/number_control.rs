@@ -23,6 +23,10 @@ mod imp {
         pub face: OnceCell<gtk::Box>,
         pub icon: OnceCell<gtk::Image>,
         pub title: OnceCell<gtk::Label>,
+        pub unit: OnceCell<gtk::Label>,
+        pub icon_row: OnceCell<gtk::Box>,
+        pub caption: OnceCell<gtk::Box>,
+        pub separate_unit: Cell<bool>,
         pub interaction_end_pending: Cell<bool>,
     }
     #[glib::object_subclass]
@@ -45,37 +49,7 @@ mod imp {
             })
         }
     }
-    impl WidgetImpl for NumberControl {
-        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
-            self.parent_size_allocate(width, height, baseline);
-            if self.compact.get() && !self.slider.get().is_some_and(|s| s.is_visible()) {
-                if let (Some(label), Some(face), Some(icon)) =
-                    (self.value_label.get(), self.face.get(), self.icon.get())
-                {
-                    let available = self.display.get().unwrap().width();
-                    let icon_width = if icon.is_visible()
-                        && face.orientation() == gtk::Orientation::Horizontal
-                    {
-                        icon.pixel_size() + face.spacing()
-                    } else {
-                        0
-                    };
-                    let available = (available - icon_width).max(1);
-                    let text_width = label
-                        .create_pango_layout(Some(&label.text()))
-                        .pixel_size()
-                        .0
-                        .max(1);
-                    let scale = (available as f64 / text_width as f64).min(1.);
-                    if (self.readout_scale.replace(scale) - scale).abs() > 0.001 {
-                        let attrs = gtk::pango::AttrList::new();
-                        attrs.insert(gtk::pango::AttrFloat::new_scale(scale));
-                        label.set_attributes(Some(&attrs));
-                    }
-                }
-            }
-        }
-    }
+    impl WidgetImpl for NumberControl {}
     impl BoxImpl for NumberControl {}
 }
 glib::wrapper! {
@@ -100,9 +74,57 @@ impl NumberControl {
         }
         control
     }
-    /// Compact toolbar presentation; units remain in the tooltip and accessible value.
+    /// Compact toolbar presentation using the same editor as panel controls.
     pub fn compact(spec: NumericControl, title: &str) -> Self {
         Self::build(spec, title, "", true, true)
+    }
+    /// GtkBox's layout manager owns allocation. The tile owner supplies its
+    /// final width before allocating the row, so native minimum sizes cannot
+    /// expand the readout beyond the tile. All measurements include theme CSS.
+    pub fn fit_width(&self, width: i32) {
+        let imp = self.imp();
+        if !imp.compact.get() || imp.slider.get().is_some_and(|s| s.is_visible()) {
+            return;
+        }
+        let label = imp.value_label.get().unwrap();
+        let face = imp.face.get().unwrap();
+        let display = imp.display.get().unwrap();
+        let horizontal = gtk::Orientation::Horizontal;
+        let inset = (display.measure(horizontal, -1).0 - face.measure(horizontal, -1).0).max(0);
+        let icon = imp.icon_row.get().unwrap();
+        let icon_width = if icon.is_visible() && face.orientation() == horizontal {
+            icon.measure(horizontal, -1).0 + face.spacing()
+        } else {
+            0
+        };
+        let available = (width - inset - icon_width).max(1);
+        // Use the label's shaped text (including tabular digits), and verify
+        // the scaled glyphs: font hinting rounds individual glyph advances.
+        let layout = label.layout().copy();
+        layout.set_width(-1);
+        let base = layout
+            .attributes()
+            .and_then(|a| a.copy())
+            .unwrap_or_default();
+        base.change(gtk::pango::AttrFloat::new_scale(1.));
+        layout.set_attributes(Some(&base));
+        let text_width = layout.pixel_size().0.max(1);
+        let mut scale = (available as f64 / text_width as f64).min(1.);
+        loop {
+            let attrs = base.copy().unwrap();
+            attrs.change(gtk::pango::AttrFloat::new_scale(scale));
+            layout.set_attributes(Some(&attrs));
+            let overflow = layout.pixel_size().0 - available;
+            if overflow <= 0 || scale <= 0.01 {
+                break;
+            }
+            scale = (scale - (overflow as f64 / text_width as f64).max(0.01)).max(0.01);
+        }
+        if (imp.readout_scale.replace(scale) - scale).abs() > 0.001 {
+            let attrs = gtk::pango::AttrList::new();
+            attrs.insert(gtk::pango::AttrFloat::new_scale(scale));
+            label.set_attributes(Some(&attrs));
+        }
     }
     pub fn value_button(&self) -> gtk::Button {
         self.imp().display.get().unwrap().clone()
@@ -123,7 +145,14 @@ impl NumberControl {
             crate::icons::set(image, Some(&format!("layer-{icon}-symbolic")));
         }
     }
-    pub fn set_face(&self, show_icon: bool, title: &str, stacked: bool, icon_size: i32) {
+    pub fn set_face(
+        &self,
+        show_icon: bool,
+        title: &str,
+        stacked: bool,
+        icon_size: i32,
+        show_units: bool,
+    ) {
         let imp = self.imp();
         if let Some(label) = imp.value_label.get() {
             label.set_attributes(None);
@@ -133,17 +162,38 @@ impl NumberControl {
             image.set_visible(show_icon);
             image.set_pixel_size(icon_size);
         }
+        if let Some(row) = imp.icon_row.get() {
+            row.set_visible(show_icon);
+        }
         if let Some(label) = imp.title.get() {
             label.set_text(title);
             label.set_visible(!title.is_empty());
         }
         if let Some(face) = imp.face.get() {
+            face.set_spacing(if stacked { 0 } else { 4 });
             face.set_orientation(if stacked {
                 gtk::Orientation::Vertical
             } else {
                 gtk::Orientation::Horizontal
             });
         }
+        imp.separate_unit.set(stacked);
+        if let Some(unit) = imp.unit.get() {
+            let parent = if show_icon && stacked {
+                imp.icon_row.get().unwrap()
+            } else {
+                imp.caption.get().unwrap()
+            };
+            if unit.parent().as_ref() != Some(parent.upcast_ref()) {
+                unit.parent()
+                    .and_downcast::<gtk::Box>()
+                    .unwrap()
+                    .remove(unit);
+                parent.append(unit);
+            }
+            unit.set_visible(stacked && show_units && !self.spec().unit.is_empty());
+        }
+        self.set_value(self.value());
         if let Some(stack) = imp.stack.get() {
             stack.set_halign(gtk::Align::Fill);
             stack.set_valign(gtk::Align::Fill);
@@ -236,22 +286,38 @@ impl NumberControl {
         } else {
             let display = gtk::Button::new();
             let value_label = gtk::Label::new(None);
+            value_label.add_css_class("number-readout");
             value_label.set_xalign(if compact { 0.5 } else { 1.0 });
             if compact {
-                let face = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                let face = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 face.set_halign(gtk::Align::Center);
+                face.set_valign(gtk::Align::Center);
                 let icon = crate::icons::image("layer-settings-symbolic");
                 icon.set_visible(false);
                 icon.set_pixel_size(14);
                 let title_label = gtk::Label::new(None);
                 title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 title_label.set_visible(false);
-                face.append(&icon);
+                let icon_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+                icon_row.set_halign(gtk::Align::Center);
+                icon_row.set_valign(gtk::Align::Center);
+                icon_row.set_visible(false);
+                icon_row.append(&icon);
+                face.append(&icon_row);
                 let caption = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                caption.set_valign(gtk::Align::Center);
                 caption.append(&title_label);
                 caption.append(&value_label);
+                let unit = gtk::Label::new(Some(&spec.unit));
+                unit.add_css_class("number-unit");
+                unit.add_css_class("dim-label");
+                unit.set_visible(false);
+                caption.append(&unit);
                 face.append(&caption);
                 display.set_child(Some(&face));
+                control.imp().unit.set(unit).unwrap();
+                control.imp().caption.set(caption).unwrap();
+                control.imp().icon_row.set(icon_row).unwrap();
                 control.imp().face.set(face).unwrap();
                 control.imp().icon.set(icon).unwrap();
                 control.imp().title.set(title_label).unwrap();
@@ -288,14 +354,14 @@ impl NumberControl {
                 .unwrap_or(1) as i32;
                 value_label.set_width_chars(if compact { 0 } else { chars });
                 value_label.set_max_width_chars(if compact { -1 } else { chars });
-                entry.set_width_chars(chars);
-                entry.set_max_width_chars(chars);
+                entry.set_width_chars(if compact { 1 } else { chars });
+                entry.set_max_width_chars(if compact { 1 } else { chars });
             }
-            gtk::prelude::EditableExt::set_alignment(&entry, 1.0);
+            gtk::prelude::EditableExt::set_alignment(&entry, if compact { 0.5 } else { 1.0 });
             entry.add_css_class("number-entry");
             let stack = gtk::Stack::new();
-            stack.set_hhomogeneous(inline && !compact);
-            stack.set_vhomogeneous(false);
+            stack.set_hhomogeneous(inline);
+            stack.set_vhomogeneous(compact);
             stack.set_halign(gtk::Align::End);
             stack.set_valign(gtk::Align::Center);
             stack.add_named(&display, Some("value"));
@@ -557,7 +623,11 @@ impl NumberControl {
         imp.value.set(value);
         if let Some(label) = imp.value_label.get() {
             label.set_text(&if imp.compact.get() {
-                self.spec().compact_text(value)
+                if imp.separate_unit.get() {
+                    self.spec().compact_value(value)
+                } else {
+                    self.spec().compact_text(value)
+                }
             } else {
                 result.text.clone()
             });
@@ -630,6 +700,16 @@ impl NumberControl {
     }
     pub fn cancel_edit(&self) {
         self.finish(true);
+    }
+    /// A click away accepts valid text and retires invalid unfinished input.
+    /// It does not claim the contact from the next control or the canvas.
+    pub fn dismiss_toolbar_edit(&self) -> bool {
+        if !self.imp().compact.get() {
+            return false;
+        }
+        self.finish(false);
+        self.finish(true);
+        true
     }
     fn apply(&self, op: NumericOperation) -> bool {
         match self.spec().resolve(self.value(), op) {
