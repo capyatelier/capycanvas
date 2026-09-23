@@ -11,10 +11,14 @@ pub(super) struct Accounting {
     roots: HashSet<u64>,
     tiles: HashSet<u64>,
     sources: color::source::SourceAccounting,
+    selections: HashSet<usize>,
 }
 impl Accounting {
     pub fn new(document: &Document) -> Self {
         let mut result = Self::default();
+        for selection in document.selection.iter().chain(document.layers.iter().filter_map(|l| l.selection.as_ref())) {
+            result.charge_selection(selection);
+        }
         for layer in &document.layers {
             if let Some(source) = &layer.source {
                 result.sources.charge(source);
@@ -33,6 +37,9 @@ impl Accounting {
 
     pub fn charge(&mut self, entry: &HistoryEntry) -> usize {
         let mut bytes = entry.metadata_bytes;
+        let mut selections = Vec::new();
+        entry.edit.selection_roots(&mut selections);
+        for selection in selections { bytes = bytes.saturating_add(self.charge_selection(selection)); }
         let mut sources = Vec::new();
         entry.edit.source_roots(&mut sources);
         for source in sources {
@@ -65,6 +72,21 @@ impl Accounting {
             }
         }
         bytes
+    }
+
+    fn charge_selection(&mut self, selection: &Selection) -> usize {
+        match &selection.shape {
+            SelectionShape::Pixels(pixels) => {
+                if self.selections.insert(pixels.words().as_ptr() as usize) {
+                    pixels.words().len().saturating_mul(4)
+                } else { 0 }
+            }
+            SelectionShape::Contours(paths) => paths.iter().map(|path| {
+                if self.selections.insert(path.as_ptr() as usize) {
+                    path.len().saturating_mul(std::mem::size_of::<Point>())
+                } else { 0 }
+            }).fold(0usize, usize::saturating_add),
+        }
     }
 }
 

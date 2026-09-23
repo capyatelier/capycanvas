@@ -411,264 +411,6 @@ pub struct LayerProperties {
     pub paper_color: Option<color::RgbColor>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SelectionMode {
-    #[default]
-    New,
-    Add,
-    Subtract,
-    Intersect,
-}
-
-/// Immutable coverage survives subsequent edits, undo and renderer recreation.
-/// Legacy masks pack eight 0..4 coverage samples per word; refined masks pack
-/// four 0..255 coverage bytes. Rows pad their final word with zero coverage.
-/// Pixels are produced by the GPU; this type validates and retains their data.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SelectionPixels {
-    /// Older projects store four coverage samples in each nibble. Feathered
-    /// selections retain full 8-bit coverage, four pixels per word.
-    #[serde(default)]
-    byte_coverage: bool,
-    extent: [u32; 2],
-    bounds: [u32; 4],
-    words: Arc<[u32]>,
-}
-impl SelectionPixels {
-    pub fn new(
-        extent: [u32; 2],
-        bounds: [u32; 4],
-        words: impl Into<Arc<[u32]>>,
-    ) -> Result<Self, DocumentError> {
-        Self::with_coverage(extent, bounds, words.into(), false)
-    }
-    pub fn bytes(extent: [u32; 2], bounds: [u32; 4], words: impl Into<Arc<[u32]>>) -> Result<Self, DocumentError> {
-        Self::with_coverage(extent, bounds, words.into(), true)
-    }
-    fn with_coverage(extent: [u32; 2], bounds: [u32; 4], words: Arc<[u32]>, byte_coverage: bool) -> Result<Self, DocumentError> {
-        let value = Self { extent, bounds, words, byte_coverage };
-        value.validate()?;
-        Ok(value)
-    }
-    pub(crate) fn validate(&self) -> Result<(), DocumentError> {
-        let [w, h] = self.extent;
-        let [x0, y0, x1, y1] = self.bounds;
-        let words = &self.words;
-        if w == 0 || h == 0 || x0 > x1 || y0 > y1 || x1 > w || y1 > h
-            || u64::from(w.div_ceil(self.pixels_per_word())) * u64::from(h) != words.len() as u64
-            // Reject values >4 with eight parallel nibble comparisons.
-            || (!self.byte_coverage && words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0))
-        {
-            return Err(DocumentError::InvalidLayerOperation(
-                "Invalid selection coverage",
-            ));
-        }
-        Ok(())
-    }
-    pub fn pixels_per_word(&self) -> u32 { if self.byte_coverage { 4 } else { 8 } }
-    pub fn coverage_format(&self) -> u32 { if self.byte_coverage { 2 } else { 1 } }
-    pub fn extent(&self) -> [u32; 2] {
-        self.extent
-    }
-    pub fn bounds(&self) -> [u32; 4] {
-        self.bounds
-    }
-    pub fn words(&self) -> &[u32] {
-        &self.words
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum SelectionShape {
-    /// Even/odd interiors support holes and disjoint islands.
-    Contours(Arc<[Arc<[Point]>]>),
-    Pixels(Arc<SelectionPixels>),
-}
-
-/// Geometry or immutable GPU-produced coverage. Affine placement and inversion are
-/// metadata, so layer-local stroke snapshots never duplicate a selection image.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Selection {
-    pub shape: SelectionShape,
-    pub affine: crate::Affine,
-    pub inverted: bool,
-}
-impl Selection {
-    pub fn polygon(points: Vec<Point>) -> Result<Self, DocumentError> {
-        if points.len() < 3 || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
-            return Err(DocumentError::InvalidLayerOperation(
-                "A selection needs a closed area",
-            ));
-        }
-        Ok(Self {
-            shape: SelectionShape::Contours(vec![points.into()].into()),
-            affine: crate::Affine::IDENTITY,
-            inverted: false,
-        })
-    }
-    pub fn pixels(pixels: Arc<SelectionPixels>) -> Self {
-        Self {
-            shape: SelectionShape::Pixels(pixels),
-            affine: crate::Affine::IDENTITY,
-            inverted: false,
-        }
-    }
-    pub fn contours(&self) -> &[Arc<[Point]>] {
-        match &self.shape {
-            SelectionShape::Contours(paths) => paths,
-            SelectionShape::Pixels(_) => &[],
-        }
-    }
-    /// Conservative local bounds, including one pixel for boundary sampling.
-    pub fn bounds(&self) -> Rect {
-        let mut bounds = Rect::EMPTY;
-        match &self.shape {
-            SelectionShape::Contours(paths) => {
-                for p in paths.iter().flat_map(|c| c.iter()) {
-                    bounds.include_circle(*p, 1.);
-                }
-            }
-            SelectionShape::Pixels(pixels) => {
-                let [x0, y0, x1, y1] = pixels.bounds;
-                if x0 != x1 && y0 != y1 {
-                    bounds.include_circle(
-                        Point {
-                            x: x0 as f32,
-                            y: y0 as f32,
-                        },
-                        1.,
-                    );
-                    bounds.include_circle(
-                        Point {
-                            x: x1 as f32,
-                            y: y1 as f32,
-                        },
-                        1.,
-                    );
-                }
-            }
-        }
-        self.affine.bounds(bounds)
-    }
-    pub fn translated(&self, delta: Point) -> Self {
-        Self {
-            shape: self.shape.clone(),
-            affine: self.affine.then(crate::Affine::translation(delta)),
-            inverted: self.inverted,
-        }
-    }
-    /// Compose placement without modifying geometry or resampling coverage.
-    /// GPU consumers sample the immutable source only when they need pixels.
-    pub fn transformed(&self, affine: crate::Affine) -> Result<Self, DocumentError> {
-        let affine = self.affine.then(affine);
-        if affine.inverse().is_none() {
-            return Err(DocumentError::InvalidLayerOperation(
-                "Invalid selection transform",
-            ));
-        }
-        Ok(Self {
-            shape: self.shape.clone(),
-            affine,
-            inverted: self.inverted,
-        })
-    }
-}
-
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
-    #[test]
-    fn affine_placement_keeps_source_and_composes_with_local_offsets() {
-        let pixels = Arc::new(SelectionPixels::new([8, 1], [2, 0, 4, 1], vec![0x4400]).unwrap());
-        let original = Selection::pixels(pixels.clone());
-        let transform = crate::Affine::around(
-            Point { x: 2., y: 3. },
-            [2., -3.],
-            0.4,
-            Point { x: 5., y: 7. },
-        );
-        let placed = original
-            .transformed(transform)
-            .unwrap()
-            .translated(Point { x: -12., y: 21. });
-        let SelectionShape::Pixels(shared) = &placed.shape else {
-            panic!("pixels")
-        };
-        assert!(Arc::ptr_eq(shared, &pixels));
-        assert_eq!(
-            placed.bounds(),
-            transform
-                .then(crate::Affine::translation(Point { x: -12., y: 21. }))
-                .bounds(original.bounds())
-        );
-        let restored = placed
-            .transformed(placed.affine.inverse().unwrap())
-            .unwrap();
-        for (a, b) in restored.affine.0.into_iter().zip(crate::Affine::IDENTITY.0) {
-            assert!((a - b).abs() < 0.0001);
-        }
-        assert!(original.transformed(crate::Affine([0.; 6])).is_err());
-        assert_eq!(original.affine, crate::Affine::IDENTITY);
-    }
-    #[test]
-    fn packed_coverage_validation_checks_all_nibbles_and_dimensions() {
-        for value in 0..16 {
-            for shift in (0..32).step_by(4) {
-                assert_eq!(
-                    SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![value << shift]).is_ok(),
-                    value <= 4
-                );
-            }
-        }
-        for (extent, bounds, words) in [
-            ([0, 1], [0, 0, 0, 1], vec![]),
-            ([9, 1], [0, 0, 9, 1], vec![0]),
-            ([1, 1], [0, 0, 2, 1], vec![0]),
-            ([1, 1], [1, 0, 0, 1], vec![0]),
-            ([u32::MAX, u32::MAX], [0, 0, 1, 1], vec![0]),
-        ] {
-            assert!(SelectionPixels::new(extent, bounds, words).is_err());
-        }
-    }
-    #[test]
-    fn translating_and_inverting_share_immutable_selection_storage() {
-        let pixels = Arc::new(SelectionPixels::new([8, 1], [2, 0, 4, 1], vec![0x4400]).unwrap());
-        let original = Selection::pixels(pixels.clone());
-        let mut moved = original.translated(Point { x: -2., y: 7.5 });
-        moved.inverted = true;
-        let SelectionShape::Pixels(shared) = &moved.shape else {
-            panic!("pixels")
-        };
-        assert!(Arc::ptr_eq(shared, &pixels));
-        assert!(!original.inverted);
-        assert_eq!(original.affine, crate::Affine::IDENTITY);
-        assert_eq!(
-            moved.bounds(),
-            Rect {
-                min: Point { x: -1., y: 6.5 },
-                max: Point { x: 3., y: 9.5 }
-            }
-        );
-
-        let polygon = Selection::polygon(vec![
-            Point { x: 1., y: 1. },
-            Point { x: 5., y: 1. },
-            Point { x: 5., y: 5. },
-        ])
-        .unwrap();
-        let moved = polygon.translated(Point { x: 10., y: -4. });
-        assert!(Arc::ptr_eq(&polygon.contours()[0], &moved.contours()[0]));
-        assert_eq!(
-            moved.bounds(),
-            Rect {
-                min: Point { x: 10., y: -4. },
-                max: Point { x: 16., y: 2. }
-            }
-        );
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerMask {
     /// Unique image identity, allocated from the document layer-ID allocator.
@@ -978,7 +720,7 @@ impl Document {
         let i = self.layers.iter().position(|l| l.id == id)?;
         self.layers[i + 1..]
             .iter()
-            .find(|l| l.properties.parent == layer.properties.parent && !l.properties.clipped)
+            .find(|l| l.is_artwork() && l.properties.parent == layer.properties.parent && !l.properties.clipped)
             .filter(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
             .map(|l| l.id)
     }
@@ -991,7 +733,7 @@ impl Document {
             self.layers[..index]
                 .iter()
                 .rev()
-                .filter(|l| l.properties.parent == parent)
+                .filter(|l| l.is_artwork() && l.properties.parent == parent)
                 .take_while(|l| l.properties.clipped)
                 .last()
                 .map_or(id, |l| l.id),
@@ -1216,7 +958,7 @@ impl Document {
             } else {
                 self.layers.iter()
                     .skip_while(|next| next.id != layer.id).skip(1)
-                    .find(|next| next.properties.parent == layer.properties.parent)?
+                    .find(|next| next.is_artwork() && next.properties.parent == layer.properties.parent)?
             };
         }
         (layer.kind == LayerKind::Paint && !self.is_locked(layer.id)).then_some(layer.id)
@@ -1228,6 +970,7 @@ impl Document {
     }
     pub fn target_raster(&self, target: LayerId) -> Option<&raster::RasterRevision> {
         let owner = self.target_owner(target)?;
+        if !owner.is_artwork() { return None; }
         if owner.id == target {
             Some(&owner.raster)
         } else {
@@ -1237,7 +980,7 @@ impl Document {
     pub fn target_raster_mut(&mut self, target: LayerId) -> Option<&mut raster::RasterRevision> {
         for layer in &mut self.layers {
             if layer.id == target {
-                return Some(&mut layer.raster);
+                return layer.is_artwork().then_some(&mut layer.raster);
             }
             if let Some(mask) = &mut layer.mask
                 && mask.id == target
@@ -1271,6 +1014,19 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
+        if (layer.kind == LayerKind::Selection) != layer.selection.is_some() {
+            return Err(DocumentError::InvalidLayerOperation("Invalid Selection Layer coverage"));
+        }
+        if let Some(selection) = &layer.selection {
+            selection.validate()?;
+            if layer.mask.is_some() || !layer.raster.is_empty()
+                || !layer.pending_operations.is_empty() || layer.properties.clipped
+                || layer.properties.alpha_locked || layer.properties.blend != LayerBlend::Normal
+                || layer.opacity != 1.
+            {
+                return Err(DocumentError::InvalidLayerOperation("Selection Layers cannot contain artwork"));
+            }
+        }
         if let Some(color) = layer.properties.paper_color {
             if layer.kind != LayerKind::Background || color.validate_working_spaces().is_err() {
                 return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
@@ -1322,7 +1078,7 @@ impl Document {
             || !layer.properties.offset.y.is_finite()
             || layer.properties.placement.inverse().is_none()
             || (layer.properties.placement != Affine::IDENTITY
-                && !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion))
+                && !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage | LayerKind::AiSuggestion | LayerKind::Selection))
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid layer value"));
         }

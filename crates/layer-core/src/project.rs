@@ -289,18 +289,9 @@ fn asset_references(document: &Document) -> Result<BTreeMap<AssetId, ProjectAsse
 }
 
 fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<(), String> {
-    if selection.affine.inverse().is_none() {
-        return Err("Invalid selection transform".into());
-    }
+    selection.validate().map_err(|e| e.to_string())?;
     match &selection.shape {
-        SelectionShape::Contours(paths) => {
-            if paths
-                .iter()
-                .any(|p| p.len() < 3 || p.iter().any(|v| !v.x.is_finite() || !v.y.is_finite()))
-            {
-                return Err("Invalid selection contour".into());
-            }
-        }
+        SelectionShape::Contours(_) => (),
         SelectionShape::Pixels(p) => {
             p.validate().map_err(|e| e.to_string())?;
             if p.extent().iter().any(|v| *v > limits.dimension) {
@@ -374,8 +365,16 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
     {
         return Err("Invalid editing target".into());
     }
-    if let Some(s) = &doc.selection {
-        validate_selection(s, limits)?;
+    let mut selection_bytes = 0u64;
+    for selection in doc.selection.iter().chain(doc.layers.iter().filter_map(|l| l.selection.as_ref())) {
+        validate_selection(selection, limits)?;
+        selection_bytes = selection_bytes.saturating_add(match &selection.shape {
+            SelectionShape::Pixels(p) => p.words().len() as u64 * 4,
+            SelectionShape::Contours(paths) => paths.iter().map(|p| p.len() as u64 * 8).sum(),
+        });
+    }
+    if selection_bytes > limits.raster_bytes {
+        return Err("Selection coverage exceeds the project memory limit".into());
     }
     rulers::validate_rulers(&doc.rulers).map_err(|e| e.to_string())?;
     for id in &doc.reference_layers {

@@ -120,7 +120,7 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
             .find_map(|l| l.target_operations(b.layer_id))
             .and_then(|operations| operations.get(index as usize))
             .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-    }) || packet.layers.iter().any(|l| {
+    }) || packet.layers.iter().filter(|l| l.is_artwork()).any(|l| {
         l.mask.is_some()
             || l.source.is_some()
             || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
